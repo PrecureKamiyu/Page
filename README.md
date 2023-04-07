@@ -1,2 +1,2 @@
 # Page
-It is test, temporarily. 
+It is a test, temporarily. 

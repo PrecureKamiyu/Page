@@ -1,2 +1,2 @@
-edit: 
+edit:
 	vim index.html art

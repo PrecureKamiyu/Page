@@ -1,0 +1,942 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:mbp="Kindle">
+  <head>
+    <title>C++ Concurrency in Action, Second Edition</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+  <link href="stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+<h2 class="part" id="ch02">Chapter 2. <a id="ch02__title" class="calibre3"></a>Managing threads
+      </h2>
+      
+      <p class="noind"><a id="iddle2497" class="calibre4"></a><i class="calibre6">This chapter covers</i></p>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22">Starting threads, and various ways of specifying code to run on a new thread</li>
+         
+         <li class="calibre22">Waiting for a thread to finish versus leaving it to run</li>
+         
+         <li class="calibre22">Uniquely identifying threads</li>
+         
+      </ul>
+      
+      <p class="noind">OK, so you’ve decided to use concurrency for your application. In particular, you’ve decided to use multiple threads. What
+         now? How do you launch these threads, check that they’ve finished, and keep tabs on them? The C++ Standard Library makes most
+         thread-management tasks relatively easy, with almost everything managed through the <kbd class="calibre17">std::thread</kbd> object associated with a given thread, as you’ll see. For those tasks that aren’t so straightforward, the library provides
+         the flexibility to build what you need from the basic building blocks.
+      </p>
+      
+      <p class="noind">In this chapter, I’ll start by covering the basics: launching a thread, waiting for it to finish, or running it in the background.
+         We’ll then look at passing additional parameters to the thread function when it’s launched and how to transfer ownership of
+         a thread from one <kbd class="calibre17">std::thread</kbd> object to another. Finally, we’ll look at choosing the number of threads to use and identifying particular threads.
+      </p>
+      
+      
+      
+      <h3 id="ch02lev1sec1" class="chapter"><a id="ch02lev1sec1__title" class="calibre3"></a>2.1. Basic thread management
+      </h3>
+      
+      <p class="noind"><a id="iddle1575" class="calibre4"></a><a id="iddle2516" class="calibre4"></a><a id="iddle2519" class="calibre4"></a>Every C++ program has at least one thread, which is started by the C++ runtime: the thread running <kbd class="calibre17">main()</kbd>. Your program can then launch additional threads that have another function as the entry point. These threads then run concurrently
+         with each other and with the initial thread. In the same way that the program exits when it returns from <kbd class="calibre17">main()</kbd>, when the specified entry point function returns, the thread exits. As you’ll see, if you have a <kbd class="calibre17">std::thread</kbd> object for a thread, you can wait for it to finish; but first you have to start it, so let’s look at launching threads.
+      </p>
+      
+      
+      <h4 id="ch02lev2sec1" class="calibre23">2.1.1. <a id="ch02lev2sec1__title" class="calibre4"></a>Launching a thread
+      </h4>
+      
+      <p class="noind">As you saw in <a href="kindle_split_011.html#ch01" class="calibre4">chapter 1</a>, threads are started by constructing a <kbd class="calibre17">std::thread</kbd> object that specifies the task to run on that thread. In the simplest case, that task is a plain, ordinary <kbd class="calibre17">void</kbd>-returning function that takes no parameters. This function runs on its own thread until it returns, and then the thread stops.
+         At the other extreme, the task could be a function object that takes additional parameters and performs a series of independent
+         operations that are specified through some kind of messaging system while it’s running, and the thread stops only when it’s
+         signaled to do so, again via some kind of messaging system. It doesn’t matter what the thread is going to do or where it’s
+         launched from, but starting a thread using the C++ Standard Library always boils down to constructing a <kbd class="calibre17">std::thread</kbd> object:
+      </p>
+      
+      <pre id="PLd0e1711" class="calibre5">void do_some_work();
+std::thread my_thread(do_some_work);</pre>
+      
+      <p class="noind">This is about as simple as it gets. Of course, you have to make sure that the <kbd class="calibre17">&lt;thread&gt;</kbd> header is included so the compiler can see the definition of the <kbd class="calibre17">std::thread</kbd> class. As with much of the C++ Standard Library, <kbd class="calibre17">std::thread</kbd> works with any callable type, so you can pass an instance of a class with a function call operator to the <kbd class="calibre17">std::thread</kbd> constructor instead:
+      </p>
+      
+      <pre id="PLd0e1732" class="calibre5">class background_task
+{
+public:
+    void operator()() const
+    {
+        do_something();
+        do_something_else();
+    }
+};
+background_task f;
+std::thread my_thread(f);</pre>
+      
+      <p class="noind">In this case, the supplied function object is copied into the storage belonging to the newly created thread of execution and
+         invoked from there. It’s therefore essential that the copy behaves equivalently to the original, or the result may not be
+         what’s expected.
+      </p>
+      
+      <p class="noind"><a id="iddle1504" class="calibre4"></a><a id="iddle1673" class="calibre4"></a>One thing to consider when passing a function object to the thread constructor is to avoid what’s dubbed “C++’s most vexing
+         parse.” If you pass a temporary rather than a named variable, the syntax can be the same as that of a function declaration,
+         in which case the compiler interprets it as such, rather than an object definition. For example,
+      </p>
+      
+      <pre id="PLd0e1755" class="calibre5">std::thread my_thread(background_task());</pre>
+      
+      <p class="noind">declares a <kbd class="calibre17">my_thread</kbd> function that takes a single parameter (of type <kbd class="calibre17">pointer-to-a-function-taking-no-parameters-and-returning-a-background_task-object</kbd>) and returns a <kbd class="calibre17">std::thread</kbd> object, rather than launching a new thread. You can avoid this by naming your function object as shown previously, by using
+         an extra set of parentheses, or by using the new uniform initialization syntax; for example:
+      </p>
+      
+      <pre id="PLd0e1773" class="calibre5">std::thread my_thread(<b class="calibre24">(</b>background_task()<b class="calibre24">)</b>);
+std::thread my_thread<b class="calibre24">{</b>background_task()<b class="calibre24">}</b>;</pre>
+      
+      <p class="noind">In the first example, the extra parentheses prevent interpretation as a function declaration, allowing <kbd class="calibre17">my_thread</kbd> to be declared as a variable of type <kbd class="calibre17">std::thread</kbd>. The second example uses the new uniform initialization syntax with braces rather than parentheses, and thus would also declare
+         a variable.
+      </p>
+      
+      <p class="noind">One type of callable object that avoids this problem is a <i class="calibre6">lambda expression</i>. This is a new feature from C++11 which allows you to write a local function, possibly capturing some local variables and
+         avoiding the need to pass additional arguments (see <a href="#ch02lev1sec2" class="calibre4">section 2.2</a>). For full details on lambda expressions, see <a href="kindle_split_022.html#app01" class="calibre4">appendix A</a>, <a href="kindle_split_022.html#app01lev1sec5" class="calibre4">section A.5</a>. The previous example can be written using a lambda expression as follows:
+      </p>
+      
+      <pre id="PLd0e1815" class="calibre5">std::thread my_thread([]{
+    do_something();
+    do_something_else();
+});</pre>
+      
+      <p class="noind">Once you’ve started your thread, you need to explicitly decide whether to wait for it to finish (by joining with it—see <a href="#ch02lev2sec2" class="calibre4">section 2.1.2</a>) or leave it to run on its own (by detaching it—see <a href="#ch02lev2sec3" class="calibre4">section 2.1.3</a>). If you don’t decide before the <kbd class="calibre17">std::thread</kbd> object is destroyed, then your program is terminated (the <kbd class="calibre17">std::thread</kbd> destructor calls <kbd class="calibre17">std::terminate()</kbd>). It’s therefore imperative that you ensure that the thread is correctly joined or detached, even in the presence of exceptions.
+         See <a href="#ch02lev2sec3" class="calibre4">section 2.1.3</a> for a technique to handle this scenario. Note that you only have to make this decision before the <kbd class="calibre17">std::thread</kbd> object is destroyed—the thread itself may well have finished long before you join with it or detach it, and if you detach
+         it, then if the thread is still running, it will continue to do so, and may continue running long after the <kbd class="calibre17">std::thread</kbd> object is destroyed; it will only stop running when it finally returns from the thread function.
+      </p>
+      
+      <p class="noind">If you don’t wait for your thread to finish, you need to ensure that the data accessed by the thread is valid until the thread
+         has finished with it. This isn’t a new problem—even in single-threaded code it’s undefined behavior to access an object after
+         it’s been destroyed—but the use of threads provides an additional opportunity to encounter such lifetime issues.
+      </p>
+      
+      <p class="noind">One situation in which you can encounter such problems is when the thread function holds pointers or references to local variables
+         and the thread hasn’t finished when the function exits. The following listing shows an example of such a scenario.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch02ex01">Listing 2.1. <a id="ch02ex01__title" class="calibre4"></a>A function that returns while a thread still has access to local variables
+      </h5>
+      <pre id="PLd0e1860" class="calibre5">struct func
+{
+    int&amp; i;
+    func(int&amp; i_):i(i_){}
+    void operator()()
+    {
+        for(unsigned j=0;j&lt;1000000;++j)
+        {
+            do_something(i);        <b class="calibre24"><i class="calibre6">1</i></b>
+        }
+    }
+};
+void oops()
+{
+    int some_local_state=0;
+    func my_func(some_local_state);
+    std::thread my_thread(my_func);
+    my_thread.detach();             <b class="calibre24"><i class="calibre6">2</i></b>
+}                                   <b class="calibre24"><i class="calibre6">3</i></b></pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> Potential access to dangling reference</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Don’t wait for thread to finish</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">3</i> New thread might still be running</b></li>
+         
+      </ul>
+      
+      <p class="noind">In this case, the new thread associated with <kbd class="calibre17">my_thread</kbd> will probably still be running when <kbd class="calibre17">oops</kbd> exits, because you’ve explicitly decided not to wait for it by calling <kbd class="calibre17">detach()</kbd>. If the thread is still running, you have the scenario shown in <a href="#ch02table01" class="calibre4">table 2.1</a>: the next call to <kbd class="calibre17">do_something(i)</kbd> will access an already destroyed variable. This is like normal single-threaded code—allowing a pointer or reference to a
+         local variable to persist beyond the function exit is never a good idea—but it’s easier to make the mistake with multithreaded
+         code, because it isn’t necessarily immediately apparent that this has happened.
+      </p>
+      
+      <h5 class="notetitle" id="ch02table01">Table 2.1. <a id="ch02table01__title" class="calibre4"></a>Accessing a local variable with a detached thread after it has been destroyed
+      </h5>
+      <table cellspacing="5" frame="hsides" rules="groups" cellpadding="8" width="100%" class="calibre25">
+         <colgroup span="2" class="calibre8">
+            <col width="300" class="calibre9"/>
+            <col width="300" class="calibre9"/>
+         </colgroup>
+         <thead class="calibre26">
+            <tr class="calibre11">
+               <th class="doctablecell1" scope="col" valign="top">
+                  <p class="noind">Main thread</p>
+               </th>
+               <th class="doctablecell1" scope="col" valign="top">
+                  <p class="noind">New thread</p>
+               </th>
+            </tr>
+         </thead>
+         <tbody class="calibre10">
+            <tr class="calibre11">
+               <td class="doctablecell">Constructs my_func with reference to some_local_state</td>
+               <td class="doctablecell"> </td>
+            </tr>
+            <tr class="calibre11">
+               <td class="doctablecell">Starts new thread my_thread</td>
+               <td class="doctablecell"> </td>
+            </tr>
+            <tr class="calibre11">
+               <td class="doctablecell"> </td>
+               <td class="doctablecell"><i class="calibre6">Started</i></td>
+            </tr>
+            <tr class="calibre11">
+               <td class="doctablecell"> </td>
+               <td class="doctablecell"><a id="iddle1286" class="calibre4"></a><a id="iddle1496" class="calibre4"></a><a id="iddle1498" class="calibre4"></a><a id="iddle2536" class="calibre4"></a>Calls func::operator()
+               </td>
+            </tr>
+            <tr class="calibre11">
+               <td class="doctablecell">Detaches my_thread</td>
+               <td class="doctablecell">Running func::operator(); may call do_something with reference to some_local_state</td>
+            </tr>
+            <tr class="calibre11">
+               <td class="doctablecell">Destroys some_local_state</td>
+               <td class="doctablecell">Still running</td>
+            </tr>
+            <tr class="calibre11">
+               <td class="doctablecell">Exits oops</td>
+               <td class="doctablecell">Still running func::operator(); may call do_something with reference to some_local_state =&gt; undefined behavior</td>
+            </tr>
+         </tbody>
+      </table>
+      
+      <p class="noind">One common way to handle this scenario is to make the thread function self-contained and copy the data into the thread rather
+         than sharing the data. If you use a callable object for your thread function, that object is copied into the thread, so the
+         original object can be destroyed immediately. But you still need to be wary of objects containing pointers or references,
+         such as in <a href="#ch02ex01" class="calibre4">listing 2.1</a>. In particular, it’s a bad idea to create a thread within a function that has access to the local variables in that function,
+         unless the thread is guaranteed to finish before the function exits.
+      </p>
+      
+      <p class="noind">Alternatively, you can ensure that the thread has completed execution before the function exits by <i class="calibre6">joining</i> with the thread.
+      </p>
+      
+      
+      
+      <h4 id="ch02lev2sec2" class="calibre23">2.1.2. <a id="ch02lev2sec2__title" class="calibre4"></a>Waiting for a thread to complete
+      </h4>
+      
+      <p class="noind">If you need to wait for a thread to complete, you can do this by calling <kbd class="calibre17">join()</kbd> on the associated <kbd class="calibre17">std::thread</kbd> instance. In the case of <a href="#ch02ex01" class="calibre4">listing 2.1</a>, replacing the call to <kbd class="calibre17">my_thread.detach()</kbd> before the closing brace of the function body with a call to <kbd class="calibre17">my_thread.join()</kbd> would therefore be sufficient to ensure that the thread was finished before the function was exited and thus before the local
+         variables were destroyed. In this case, it would mean there was little point in running the function on a separate thread,
+         because the first thread wouldn’t be doing anything useful in the meantime, but in real code the original thread would either
+         have work to do or would have launched several threads to do useful work before waiting for all of them to complete.
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">join()</kbd> is a simple and brute-force technique—either you wait for a thread to finish or you don’t. If you need more fine-grained
+         control over waiting for a thread, such as to check whether a thread is finished, or to wait only a certain period of time,
+         then you have to use alternative mechanisms such as condition variables and futures, which we’ll look at in <a href="kindle_split_014.html#ch04" class="calibre4">chapter 4</a>. The act of calling <kbd class="calibre17">join()</kbd> also cleans up any storage associated with the thread, so the <kbd class="calibre17">std::thread</kbd> object is no longer associated with the now-finished thread; it isn’t associated with any thread. This means that you can
+         call <kbd class="calibre17">join()</kbd> only once for a given thread; once you’ve called <kbd class="calibre17">join()</kbd>, the <kbd class="calibre17">std::thread</kbd> object is no longer joinable, and <kbd class="calibre17">joinable()</kbd> will return <kbd class="calibre17">false</kbd>.
+      </p>
+      
+      
+      
+      
+      <h4 id="ch02lev2sec3" class="calibre23">2.1.3. <a id="ch02lev2sec3__title" class="calibre4"></a>Waiting in exceptional circumstances
+      </h4>
+      
+      <p class="noind"><a id="iddle1356" class="calibre4"></a><a id="iddle1841" class="calibre4"></a><a id="iddle1863" class="calibre4"></a><a id="iddle2576" class="calibre4"></a>As mentioned earlier, you need to ensure that you’ve called either <kbd class="calibre17">join()</kbd> or <kbd class="calibre17">detach()</kbd> before a <kbd class="calibre17">std::thread</kbd> object is destroyed. If you’re detaching a thread, you can usually call <kbd class="calibre17">detach()</kbd> immediately after the thread has been started, so this isn’t a problem. But if you’re intending to wait for the thread, you
+         need to carefully pick the place in the code where you call <kbd class="calibre17">join()</kbd>. This means that the call to <kbd class="calibre17">join()</kbd> is liable to be skipped if an exception is thrown after the thread has been started but before the call to <kbd class="calibre17">join()</kbd>.
+      </p>
+      
+      <p class="noind">To avoid your application being terminated when an exception is thrown, you therefore need to make a decision about what to
+         do in this case. In general, if you were intending to call <kbd class="calibre17">join()</kbd> in a non-exceptional case, you also need to call <kbd class="calibre17">join()</kbd> in the presence of an exception to avoid accidental lifetime problems. The next listing shows some simple code that does
+         just that.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch02ex02">Listing 2.2. <a id="ch02ex02__title" class="calibre4"></a>Waiting for a thread to finish
+      </h5>
+      <pre id="PLd0e2204" class="calibre5">struct func;            <b class="calibre24"><i class="calibre6">1</i></b>
+void f()
+{
+    int some_local_state=0;
+    func my_func(some_local_state);
+    std::thread t(my_func);
+    try
+    {
+        do_something_in_current_thread();
+    }
+    catch(...)
+    {
+        t.join();
+        throw;
+    }
+    t.join();
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> See definition in <a href="#ch02ex01" class="calibre4">listing 2.1</a></b></li>
+         
+      </ul>
+      
+      <p class="noind">The code in <a href="#ch02ex02" class="calibre4">listing 2.2</a> uses a <kbd class="calibre17">try</kbd>/<kbd class="calibre17">catch</kbd> block to ensure that a thread with access to local state is finished before the function exits, whether the function exits
+         normally, or by an exception. The use of <kbd class="calibre17">try</kbd>/<kbd class="calibre17">catch</kbd> blocks is verbose, and it’s easy to get the scope slightly wrong, so this isn’t an ideal scenario. If it’s important to ensure
+         that the thread completes before the function exits—whether because it has a reference to other local variables or for any
+         other reason—then it’s important to ensure this is the case for all possible exit paths, whether normal or exceptional, and
+         it’s desirable to provide a simple, concise mechanism for doing so.
+      </p>
+      
+      <p class="noind">One way of doing this is to use the standard Resource Acquisition Is Initialization (RAII) idiom and provide a class that
+         does the <kbd class="calibre17">join()</kbd> in its destructor, as in the following listing. See how it simplifies the <kbd class="calibre17">f()</kbd> function.
+      </p>
+      
+      
+      <p class="noind"></p>
+      
+      
+      <h5 class="notetitle" id="ch02ex03">Listing 2.3. <a id="ch02ex03__title" class="calibre4"></a>Using RAII to wait for a thread to complete
+      </h5>
+      <pre id="PLd0e2258" class="calibre5">class thread_guard
+{
+    std::thread&amp; t;
+public:
+    explicit thread_guard(std::thread&amp; t_):
+        t(t_)
+    {}
+    ~thread_guard()
+    {
+        if(t.joinable())
+        {
+            t.join();
+        }
+    }
+    thread_guard(thread_guard const&amp;)=delete;
+    thread_guard&amp; operator=(thread_guard const&amp;)=delete;
+};
+struct func;          <b class="calibre24"><i class="calibre6">1</i></b>
+void f()
+{
+    int some_local_state=0;
+    func my_func(some_local_state);
+    std::thread t(my_func);
+    thread_guard g(t);
+    do_something_in_current_thread();
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><a id="iddle1499" class="calibre4"></a><a id="iddle2338" class="calibre4"></a><a id="iddle2487" class="calibre4"></a><a id="iddle2526" class="calibre4"></a><b class="calibre24"><i class="calibre6">1</i> See definition in <a href="#ch02ex01" class="calibre4">listing 2.1</a></b></li>
+         
+      </ul>
+      
+      <p class="noind">When the execution of the current thread reaches the end of <kbd class="calibre17">f</kbd>, the local objects are destroyed in reverse order of construction. Consequently, the <kbd class="calibre17">thread_guard</kbd> object, <kbd class="calibre17">g</kbd>, is destroyed first, and the thread is joined with, in the destructor. This even happens if the function exits because <kbd class="calibre17">do_something_in_current_thread</kbd> throws an exception.
+      </p>
+      
+      <p class="noind">The destructor of <kbd class="calibre17">thread_guard</kbd> in <a href="#ch02ex03" class="calibre4">listing 2.3</a> first tests to see if the <kbd class="calibre17">std::thread</kbd> object is <kbd class="calibre17">joinable()</kbd> before calling <kbd class="calibre17">join()</kbd>. This is important, because <kbd class="calibre17">join()</kbd> can be called only once for a given thread of execution, so it would be a mistake to do so if the thread had already been
+         joined.
+      </p>
+      
+      <p class="noind">The copy constructor and copy-assignment operators are marked <kbd class="calibre17">=delete</kbd> to ensure that they’re not automatically provided by the compiler. Copying or assigning such an object would be dangerous,
+         because it might then outlive the scope of the thread it was joining. By declaring them as deleted, any attempt to copy a
+         <kbd class="calibre17">thread_guard</kbd> object will generate a compilation error. See <a href="kindle_split_022.html#app01" class="calibre4">appendix A</a>, <a href="kindle_split_022.html#app01lev1sec2" class="calibre4">section A.2</a>, for more about deleted functions.
+      </p>
+      
+      <p class="noind">If you don’t need to wait for a thread to finish, you can avoid this exception-safety issue by <i class="calibre6">detaching</i> it. This breaks the association of the thread with the <kbd class="calibre17">std::thread</kbd> object and ensures that <kbd class="calibre17">std::terminate()</kbd> won’t be called when the <kbd class="calibre17">std::thread</kbd> object is destroyed, even though the thread is still running in the background.
+      </p>
+      
+      
+      
+      
+      <h4 id="ch02lev2sec4" class="calibre23">2.1.4. <a id="ch02lev2sec4__title" class="calibre4"></a>Running threads in the background
+      </h4>
+      
+      <p class="noind"><a id="iddle1233" class="calibre4"></a><a id="iddle1287" class="calibre4"></a><a id="iddle1288" class="calibre4"></a>Calling <kbd class="calibre17">detach()</kbd> on a <kbd class="calibre17">std::thread</kbd> object leaves the thread to run in the background, with no direct means of communicating with it. It’s no longer possible
+         to wait for that thread to complete; if a thread becomes detached, it isn’t possible to obtain a <kbd class="calibre17">std::thread</kbd> object that references it, so it can no longer be joined. Detached threads truly run in the background; ownership and control
+         are passed over to the C++ Runtime Library, which ensures that the resources associated with the thread are correctly reclaimed
+         when the thread exits.
+      </p>
+      
+      <p class="noind">Detached threads are often called <i class="calibre6">daemon threads</i> after the UNIX concept of a <i class="calibre6">daemon process</i> that runs in the background without any explicit user interface. Such threads are typically long-running; they run for almost
+         the entire lifetime of the application, performing a background task such as monitoring the filesystem, clearing unused entries
+         out of object caches, or optimizing data structures. At the other extreme, it may make sense to use a detached thread where
+         there’s another mechanism for identifying when the thread has completed or where the thread is used for a fire-and-forget
+         task.
+      </p>
+      
+      <p class="noind">As you’ve saw in <a href="#ch02lev2sec2" class="calibre4">section 2.1.2</a>, you detach a thread by calling the <kbd class="calibre17">detach()</kbd> member function of the <kbd class="calibre17">std::thread</kbd> object. After the call completes, the <kbd class="calibre17">std::thread</kbd> object is no longer associated with the actual thread of execution and is therefore no longer joinable:
+      </p>
+      
+      <pre id="PLd0e2428" class="calibre5">std::thread t(do_background_work);
+t.detach();
+assert(!t.joinable());</pre>
+      
+      <p class="noind">In order to detach the thread from a <kbd class="calibre17">std::thread</kbd> object, there must be a thread to detach: you can’t call <kbd class="calibre17">detach()</kbd> on a <kbd class="calibre17">std::thread</kbd> object with no associated thread of execution. This is exactly the same requirement as for <kbd class="calibre17">join()</kbd>, and you can check it in exactly the same way—you can only call <kbd class="calibre17">t.detach()</kbd> for a <kbd class="calibre17">std::thread</kbd> object <kbd class="calibre17">t</kbd> when <kbd class="calibre17">t.joinable()</kbd> returns <kbd class="calibre17">true</kbd>.
+      </p>
+      
+      <p class="noind">Consider an application such as a word processor that can edit multiple documents at once. There are many ways to handle this,
+         both at the UI level and internally. One way that’s increasingly common at the moment is to have multiple, independent, top-level
+         windows, one for each document being edited. Although these windows appear to be completely independent, each with its own
+         menus, they’re running within the same instance of the application. One way to handle this internally is to run each document-editing
+         window in its own thread; each thread runs the same code but with different data relating to the document being edited and
+         the corresponding window properties. Opening a new document therefore requires starting a new thread. The thread handling
+         the request isn’t going to care about waiting for that other thread to finish, because it’s working on an unrelated document,
+         so this makes it a prime candidate for running a detached thread.
+      </p>
+      
+      <p class="noind">The following listing shows a simple code outline for this approach.</p>
+      
+      
+      <p class="noind"></p>
+      
+      
+      <h5 class="notetitle" id="ch02ex04">Listing 2.4. <a id="ch02ex04__title" class="calibre4"></a>Detaching a thread to handle other documents
+      </h5>
+      <pre id="PLd0e2475" class="calibre5">void edit_document(std::string const&amp; filename)
+{
+    open_document_and_display_gui(filename);
+    while(!done_editing())
+    {
+        user_command cmd=get_user_input();
+        if(cmd.type==open_new_document)
+        {
+            std::string const new_name=get_filename_from_user();
+            std::thread t(edit_document,new_name);
+            t.detach();
+        }
+        else
+        {
+            process_user_input(cmd);
+        }
+    }
+}</pre>
+      
+      <p class="noind"><a id="iddle1021" class="calibre4"></a><a id="iddle1100" class="calibre4"></a><a id="iddle1313" class="calibre4"></a><a id="iddle2524" class="calibre4"></a>If the user chooses to open a new document, you prompt them for the document to open, start a new thread to open that document,
+         and then detach it. Because the new thread is doing the same operation as the current thread but on a different file, you
+         can reuse the same function (<kbd class="calibre17">edit_document</kbd>) with the newly chosen filename as the supplied argument.
+      </p>
+      
+      <p class="noind">This example also shows a case where it’s helpful to pass arguments to the function used to start a thread: rather than just
+         passing the name of the function to the <kbd class="calibre17">std::thread</kbd> constructor, you also pass in the filename parameter. Although other mechanisms could be used to do this, such as using a
+         function object with member data instead of an ordinary function with parameters, the C++ Standard Library provides you with
+         an easy way of doing it.
+      </p>
+      
+      
+      
+      
+      <h3 id="ch02lev1sec2" class="chapter"><a id="ch02lev1sec2__title" class="calibre3"></a>2.2. Passing arguments to a thread function
+      </h3>
+      
+      <p class="noind">As shown in <a href="#ch02ex04" class="calibre4">listing 2.4</a>, passing arguments to the callable object or function is fundamentally as simple as passing additional arguments to the <kbd class="calibre17">std::thread</kbd> constructor. But it’s important to bear in mind that by default, the arguments are copied into internal storage, where they
+         can be accessed by the newly created thread of execution, and then passed to the callable object or function as rvalues as
+         if they were temporaries. This is done even if the corresponding parameter in the function is expecting a reference. Here’s
+         an example:
+      </p>
+      
+      <pre id="PLd0e2533" class="calibre5">void f(int i,std::string const&amp; s);
+std::thread t(f,3,"hello");</pre>
+      
+      <p class="noind">This creates a new thread of execution associated with <kbd class="calibre17">t</kbd>, which calls <kbd class="calibre17">f(3,"hello")</kbd>. Note that even though <kbd class="calibre17">f</kbd> takes a <kbd class="calibre17">std::string</kbd> as the second parameter, the string literal is passed as a <kbd class="calibre17">char const*</kbd> and converted to a <kbd class="calibre17">std::string</kbd> only in the context of <a id="iddle1877" class="calibre4"></a><a id="iddle2337" class="calibre4"></a><a id="iddle2605" class="calibre4"></a>the new thread. This is particularly important when the argument supplied is a pointer to an automatic variable, as follows:
+      </p>
+      
+      <pre id="PLd0e2577" class="calibre5">void f(int i,std::string const&amp; s);
+void oops(int some_param)
+{
+    char buffer[1024];
+    sprintf(buffer, "%i",some_param);
+    <b class="calibre24">std::thread t(f,3,buffer);</b>
+    t.detach();
+}</pre>
+      
+      <p class="noind">In this case, it’s the pointer to the local variable <kbd class="calibre17">buffer</kbd> that’s passed through to the new thread and there’s a significant chance that the <kbd class="calibre17">oops</kbd> function will exit before the buffer has been converted to a <kbd class="calibre17">std::string</kbd> on the new thread, thus leading to undefined behavior. The solution is to cast to <kbd class="calibre17">std::string</kbd> before passing the buffer to the <kbd class="calibre17">std::thread</kbd> constructor:
+      </p>
+      
+      <pre id="PLd0e2604" class="calibre5">void f(int i,std::string const&amp; s);
+void not_oops(int some_param)
+{
+    char buffer[1024];
+    sprintf(buffer,"%i",some_param);
+    <b class="calibre24">std::thread t(f,3,std::string(buffer));</b>      <b class="calibre24"><i class="calibre6">1</i></b>
+    t.detach();
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> Using std::string avoids dangling pointer</b></li>
+         
+      </ul>
+      
+      <p class="noind">In this case, the problem is that you were relying on the implicit conversion of the pointer to the buffer into the <kbd class="calibre17">std::string</kbd> object expected as a function parameter, but this conversion happens too late because the <kbd class="calibre17">std::thread</kbd> constructor copies the supplied values as is, without converting to the expected argument type.
+      </p>
+      
+      <p class="noind">It’s not possible to get the reverse scenario: the object is copied, and you wanted a non-<kbd class="calibre17">const</kbd> reference, because this won’t compile. You might try this if the thread is updating a data structure that’s passed in by
+         reference; for example:
+      </p>
+      
+      <pre id="PLd0e2642" class="calibre5">void update_data_for_widget(widget_id w,widget_data&amp; data);
+void oops_again(widget_id w)
+{
+    widget_data data;
+    std::thread t(update_data_for_widget,w,data);
+    display_status();
+    t.join();
+    process_widget_data(data);
+}</pre>
+      
+      <p class="noind">Although <kbd class="calibre17">update_data_for_widget</kbd> expects the second parameter to be passed by reference, the <kbd class="calibre17">std::thread</kbd> constructor doesn’t know that; it’s oblivious to the types of the arguments expected by the function and blindly copies the
+         supplied values. But <a id="iddle1626" class="calibre4"></a><a id="iddle1627" class="calibre4"></a><a id="iddle2033" class="calibre4"></a><a id="iddle2190" class="calibre4"></a><a id="iddle2405" class="calibre4"></a>the internal code passes copied arguments as rvalues in order to work with move-only types, and will thus try to call <kbd class="calibre17">update_data_for_widget</kbd> with an rvalue. This will fail to compile because you can’t pass an rvalue to a function that expects a non-<kbd class="calibre17">const</kbd> reference. For those of you familiar with <kbd class="calibre17">std::bind</kbd>, the solution will be readily apparent: you need to wrap the arguments that need to be references in <kbd class="calibre17">std::ref</kbd>. In this case, if you change the thread invocation to
+      </p>
+      
+      <pre id="PLd0e2696" class="calibre5">std::thread t(update_data_for_widget,w,<b class="calibre24">std::ref(data)</b>);</pre>
+      
+      <p class="noind">then <kbd class="calibre17">update_data_for_widget</kbd> will be correctly passed a reference to <kbd class="calibre17">data</kbd> rather than a temporary copy of <kbd class="calibre17">data</kbd>, and the code will now compile successfully.
+      </p>
+      
+      <p class="noind">If you’re familiar with <kbd class="calibre17">std::bind</kbd>, the parameter-passing semantics will be unsurprising, because both the operation of the <kbd class="calibre17">std::thread</kbd> constructor and the operation of <kbd class="calibre17">std::bind</kbd> are defined in terms of the same mechanism. This means that, for example, you can pass a member function pointer as the function,
+         provided you supply a suitable object pointer as the first argument:
+      </p>
+      
+      <pre id="PLd0e2729" class="calibre5">class X
+{
+public:
+    void do_lengthy_work();
+};
+X my_x;
+std::thread t(&amp;X::do_lengthy_work,&amp;my_x);</pre>
+      
+      <p class="noind">This code will invoke <kbd class="calibre17">my_x.do_lengthy_work()</kbd> on the new thread, because the address of <kbd class="calibre17">my_x</kbd> is supplied as the object pointer. You can also supply arguments to such a member function call: the third argument to the
+         <kbd class="calibre17">std::thread</kbd> constructor will be the first argument to the member function, and so forth.
+      </p>
+      
+      <p class="noind">Another interesting scenario for supplying arguments is where the arguments can’t be copied but can only be <i class="calibre6">moved</i>: the data held within one object is transferred over to another, leaving the original object empty. An example of such a
+         type is <kbd class="calibre17">std::unique_ptr</kbd>, which provides automatic memory management for dynamically allocated objects. Only one <kbd class="calibre17">std::unique_ptr</kbd> instance can point to a given object at a time, and when that instance is destroyed, the pointed-to object is deleted. The
+         <i class="calibre6">move constructor</i> and <i class="calibre6">move assignment operator</i> allow the ownership of an object to be transferred around between <kbd class="calibre17">std::unique_ptr</kbd> instances (see <a href="kindle_split_022.html#app01" class="calibre4">appendix A</a>, <a href="kindle_split_022.html#app01lev2sec1" class="calibre4">section A.1.1</a>, for more on move semantics). Such a transfer leaves the source object with a <kbd class="calibre17">NULL</kbd> pointer. This moving of values allows objects of this type to be accepted as function parameters or returned from functions.
+         Where the source object is temporary, the move is automatic, but where the source is a named value, the transfer must be requested
+         directly by invoking <kbd class="calibre17">std::move()</kbd>. The following example shows the use of <kbd class="calibre17">std::move</kbd> to transfer ownership of a dynamic object into a thread:
+      </p>
+      
+      <pre id="PLd0e2783" class="calibre5">void process_big_object(std::unique_ptr&lt;big_object&gt;);
+std::unique_ptr&lt;big_object&gt; p(new big_object);
+p-&gt;prepare_data(42);
+std::thread t(process_big_object,std::move(p));</pre>
+      
+      <p class="noind"><a id="iddle1737" class="calibre4"></a><a id="iddle2161" class="calibre4"></a><a id="iddle2339" class="calibre4"></a><a id="iddle2535" class="calibre4"></a>By specifying <kbd class="calibre17">std::move(p)</kbd> in the <kbd class="calibre17">std::thread</kbd> constructor, the ownership of <kbd class="calibre17">big_object</kbd> is transferred first into internal storage for the newly created thread and then into <kbd class="calibre17">process_big_object</kbd>.
+      </p>
+      
+      <p class="noind">Several of the classes in the C++ Standard Library exhibit the same ownership semantics as <kbd class="calibre17">std::unique_ptr</kbd>, and <kbd class="calibre17">std::thread</kbd> is one of them. Though <kbd class="calibre17">std::thread</kbd> instances don’t own a dynamic object in the same way as <kbd class="calibre17">std::unique_ptr</kbd> does, they do own a resource: each instance is responsible for managing a thread of execution. This ownership can be transferred
+         between instances, because instances of <kbd class="calibre17">std::thread</kbd> are movable, even though they aren’t copyable. This ensures that only one object is associated with a particular thread of
+         execution at any one time while allowing programmers the option of transferring that ownership between objects.
+      </p>
+      
+      
+      
+      <h3 id="ch02lev1sec3" class="chapter"><a id="ch02lev1sec3__title" class="calibre3"></a>2.3. Transferring ownership of a thread
+      </h3>
+      
+      <p class="noind">Suppose you want to write a function that creates a thread to run in the background, but passes ownership of the new thread
+         back to the calling function rather than waiting for it to complete; or maybe you want to do the reverse: create a thread
+         and pass ownership in to some function that should wait for it to complete. In either case, you need to transfer ownership
+         from one place to another.
+      </p>
+      
+      <p class="noind">This is where the move support of <kbd class="calibre17">std::thread</kbd> comes in. As described in the previous section, many resource-owning types in the C++ Standard Library, such as <kbd class="calibre17">std::ifstream</kbd> and <kbd class="calibre17">std::unique_ptr</kbd>, are movable but not copyable, and <kbd class="calibre17">std::thread</kbd> is one of them. This means that the ownership of a particular thread of execution can be moved between <kbd class="calibre17">std::thread</kbd> instances, as in the following example. The example shows the creation of two threads of execution and the transfer of ownership
+         of those threads among three <kbd class="calibre17">std::thread</kbd> instances, <kbd class="calibre17">t1</kbd>, <kbd class="calibre17">t2</kbd>, and <kbd class="calibre17">t3</kbd>:
+      </p>
+      
+      <pre id="PLd0e2890" class="calibre5">void some_function();
+void some_other_function();
+std::thread t1(some_function);
+std::thread t2=std::move(t1);
+t1=std::thread(some_other_function);
+std::thread t3;
+t3=std::move(t2);
+t1=std::move(t3);          <b class="calibre24"><i class="calibre6">1</i></b></pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> This assignment will terminate the program!</b></li>
+         
+      </ul>
+      
+      <p class="noind">First, a new thread is started and associated with <kbd class="calibre17">t1</kbd>. Ownership is then transferred over to <kbd class="calibre17">t2</kbd> when <kbd class="calibre17">t2</kbd> is constructed, by invoking <kbd class="calibre17">std::move()</kbd> to explicitly move ownership. At this point, <kbd class="calibre17">t1</kbd> no longer has an associated thread of execution; the thread running <kbd class="calibre17">some_function</kbd> is now associated with <kbd class="calibre17">t2</kbd>.
+      </p>
+      
+      <p class="noind">Then, a new thread is started and associated with a temporary <kbd class="calibre17">std::thread</kbd> object. The subsequent transfer of ownership into <kbd class="calibre17">t1</kbd> doesn’t require a call to <kbd class="calibre17">std::move()</kbd> to <a id="iddle1884" class="calibre4"></a>explicitly move ownership, because the owner is a temporary object—moving from temporaries is automatic and implicit.
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">t3</kbd> is default-constructed, which means that it’s created without any associated thread of execution. Ownership of the thread
+         currently associated with <kbd class="calibre17">t2</kbd> is transferred into <kbd class="calibre17">t3</kbd>, again with an explicit call to <kbd class="calibre17">std::move()</kbd>, because <kbd class="calibre17">t2</kbd> is a named object. After all these moves, <kbd class="calibre17">t1</kbd> is associated with the thread running <kbd class="calibre17">some_other_function</kbd>, <kbd class="calibre17">t2</kbd> has no associated thread, and <kbd class="calibre17">t3</kbd> is associated with the thread running <kbd class="calibre17">some_function</kbd>.
+      </p>
+      
+      <p class="noind">The final move transfers ownership of the thread running <kbd class="calibre17">some_function</kbd> back to <kbd class="calibre17">t1</kbd> where it started. But in this case <kbd class="calibre17">t1</kbd> already had an associated thread (which was running <kbd class="calibre17">some_other_function</kbd>), so s<kbd class="calibre17">td::terminate()</kbd> is called to terminate the program. This is done for consistency with the <kbd class="calibre17">std::thread</kbd> destructor. You saw in <a href="#ch02lev2sec1" class="calibre4">section 2.1.1</a> that you must explicitly wait for a thread to complete or detach it before destruction, and the same applies to assignment:
+         you can’t just drop a thread by assigning a new value to the <kbd class="calibre17">std::thread</kbd> object that manages it.
+      </p>
+      
+      <p class="noind">The move support in <kbd class="calibre17">std::thread</kbd> means that ownership can readily be transferred out of a function, as shown in the following listing.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch02ex05">Listing 2.5. <a id="ch02ex05__title" class="calibre4"></a>Returning a <kbd class="calibre17">std::thread</kbd> from a function
+      </h5>
+      <pre id="PLd0e3023" class="calibre5">std::thread f()
+{
+    void some_function();
+    return std::thread(some_function);
+}
+std::thread g()
+{
+    void some_other_function(int);
+    std::thread t(some_other_function,42);
+    return t;
+}</pre>
+      
+      <p class="noind">Likewise, if ownership should be transferred into a function, it can accept an instance of <kbd class="calibre17">std::thread</kbd> by value as one of the parameters, as shown here:
+      </p>
+      
+      <pre id="PLd0e3035" class="calibre5">void f(std::thread t);
+void g()
+{
+    void some_function();
+    f(std::thread(some_function));
+    std::thread t(some_function);
+    f(std::move(t));
+}</pre>
+      
+      <p class="noind">One benefit of the move support of <kbd class="calibre17">std::thread</kbd> is that you can build on the <kbd class="calibre17">thread_guard</kbd> class from <a href="#ch02ex03" class="calibre4">listing 2.3</a> and have it take ownership of the thread. This avoids any unpleasant consequences should the <kbd class="calibre17">thread_guard</kbd> object outlive the thread it was referencing, and it also means that no one else can join or detach the thread once ownership
+         has been transferred into the object. Because this would primarily be <a id="iddle1501" class="calibre4"></a><a id="iddle2488" class="calibre4"></a>aimed at ensuring that threads are completed before a scope is exited, I named this class <kbd class="calibre17">scoped_thread</kbd>. The implementation is shown in the following listing, along with a simple example.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch02ex06">Listing 2.6. <a id="ch02ex06__title" class="calibre4"></a><kbd class="calibre17">scoped_thread</kbd> and example usage
+      </h5>
+      <pre id="PLd0e3076" class="calibre5">class scoped_thread
+{
+    std::thread t;
+public:
+    explicit scoped_thread(std::thread t_):
+        t(std::move(t_))
+    {
+        if(!t.joinable())
+            throw std::logic_error("No thread");
+    }
+    ~scoped_thread()
+    {
+        t.join();
+    }
+    scoped_thread(scoped_thread const&amp;)=delete;
+    scoped_thread&amp; operator=(scoped_thread const&amp;)=delete;
+};
+struct func;           <b class="calibre24"><i class="calibre6">1</i></b>
+void f()
+{
+    int some_local_state;
+    scoped_thread t{std::thread(func(some_local_state))};
+    do_something_in_current_thread();
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> See <a href="#ch02ex01" class="calibre4">listing 2.1</a></b></li>
+         
+      </ul>
+      
+      <p class="noind">The example is similar to <a href="#ch02ex03" class="calibre4">listing 2.3</a>, but the new thread is passed in directly to <kbd class="calibre17">scoped_thread</kbd> rather than having to create a separate named variable for it. When the initial thread reaches the end of <kbd class="calibre17">f</kbd>, the <kbd class="calibre17">scoped_thread</kbd> object is destroyed and then joins with the thread supplied to the constructor. Whereas with the <kbd class="calibre17">thread_guard</kbd> class from <a href="#ch02ex03" class="calibre4">listing 2.3</a> the destructor had to check that the thread was still joinable, you can do that in the constructor and throw an exception
+         if it’s not.
+      </p>
+      
+      <p class="noind">One of the proposals for C++17 was for a <kbd class="calibre17">joining_thread</kbd> class that would be similar to <kbd class="calibre17">std::thread</kbd>, except that it would automatically join in the destructor much like <kbd class="calibre17">scoped_thread</kbd> does. This didn’t get consensus in the committee, so it wasn’t accepted into the standard (though it’s still on track for
+         C++20 as <kbd class="calibre17">std::jthread</kbd>), but it’s relatively easy to write. One possible implementation is shown in the next listing.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch02ex07">Listing 2.7. <a id="ch02ex07__title" class="calibre4"></a>A <kbd class="calibre17">joining_thread</kbd> class
+      </h5>
+      <pre id="PLd0e3143" class="calibre5">class joining_thread
+{
+    std::thread t;
+public:
+    joining_thread() noexcept=default;
+    template&lt;typename Callable,typename ... Args&gt;
+    explicit joining_thread(Callable&amp;&amp; func,Args&amp;&amp; ... args):
+        t(std::forward&lt;Callable&gt;(func),std::forward&lt;Args&gt;(args)...)
+    {}
+    explicit joining_thread(std::thread t_) noexcept:
+        t(std::move(t_))
+    {}
+    joining_thread(joining_thread&amp;&amp; other) noexcept:
+        t(std::move(other.t))
+    {}
+    joining_thread&amp; operator=(joining_thread&amp;&amp; other) noexcept
+    {
+        if(joinable())
+            join();
+        t=std::move(other.t);
+        return *this;
+    }
+    joining_thread&amp; operator=(std::thread other) noexcept
+    {
+        if(joinable())
+            join();
+        t=std::move(other);
+        return *this;
+    }
+    ~joining_thread() noexcept
+    {
+        if(joinable())
+            join();
+    }
+    void swap(joining_thread&amp; other) noexcept
+    {
+        t.swap(other.t);
+    }
+    std::thread::id get_id() const noexcept{
+        return t.get_id();
+    }
+    bool joinable() const noexcept
+    {
+        return t.joinable();
+    }
+    void join()
+    {
+        t.join();
+    }
+    void detach()
+    {
+        t.detach();
+    }
+    std::thread&amp; as_thread() noexcept
+    {
+        return t;
+    }
+    const std::thread&amp; as_thread() const noexcept
+    {
+        return t;
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1873" class="calibre4"></a><a id="iddle1940" class="calibre4"></a><a id="iddle2265" class="calibre4"></a><a id="iddle2355" class="calibre4"></a><a id="iddle2406" class="calibre4"></a><a id="iddle2499" class="calibre4"></a>The move support in <kbd class="calibre17">std::thread</kbd> also allows for containers of <kbd class="calibre17">std::thread</kbd> objects, if those containers are move-aware (like the updated <kbd class="calibre17">std::vector&lt;&gt;</kbd>). This means that you can write code like that in the following listing, which spawns a number of threads and then waits
+         for them to finish.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch02ex08">Listing 2.8. <a id="ch02ex08__title" class="calibre4"></a>Spawns some threads and waits for them to finish
+      </h5>
+      <pre id="PLd0e3203" class="calibre5">void do_work(unsigned id);
+void f()
+{
+    std::vector&lt;std::thread&gt; threads;
+    for(unsigned i=0;i&lt;20;++i)
+    {
+        threads.emplace_back(do_work,i);     <b class="calibre24"><i class="calibre6">1</i></b>
+    }
+    for(auto&amp; entry: threads)                <b class="calibre24"><i class="calibre6">2</i></b>
+        entry.join();
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> Spawns threads</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Calls join() on each thread in turn</b></li>
+         
+      </ul>
+      
+      <p class="noind">If the threads are being used to subdivide the work of an algorithm, this is often what’s required; before returning to the
+         caller, all threads must have finished. The simple structure of <a href="#ch02ex08" class="calibre4">listing 2.8</a> implies that the work done by the threads is self-contained, and the result of their operations is purely the side effects
+         on shared data. If <kbd class="calibre17">f()</kbd> were to return a value to the caller that depended on the results of the operations performed by these threads, then as written,
+         this return value would have to be determined by examining the shared data after the threads had terminated. Alternative schemes
+         for transferring the results of operations between threads are discussed in <a href="kindle_split_014.html#ch04" class="calibre4">chapter 4</a>.
+      </p>
+      
+      <p class="noind">Putting <kbd class="calibre17">std::thread</kbd> objects in a <kbd class="calibre17">std::vector</kbd> is a step toward automating the management of those threads: rather than creating separate variables for those threads and
+         joining with them directly, they can be treated as a group. You can take this a step further by creating a dynamic number
+         of threads determined at runtime, rather than creating a fixed number, as in <a href="#ch02ex08" class="calibre4">listing 2.8</a>.
+      </p>
+      
+      
+      
+      <h3 id="ch02lev1sec4" class="chapter"><a id="ch02lev1sec4__title" class="calibre3"></a>2.4. Choosing the number of threads at runtime
+      </h3>
+      
+      <p class="noind">One feature of the C++ Standard Library that helps here is <kbd class="calibre17">std::thread::hardware_concurrency()</kbd>. This function returns an indication of the number of threads that can truly run concurrently for a given execution of a
+         program. On a multicore system it might be the number of CPU cores, for example. This is only a hint, and the function <a id="iddle1463" class="calibre4"></a><a id="iddle1733" class="calibre4"></a>might return <kbd class="calibre17">0</kbd> if this information isn’t available, but it can be a useful guide for splitting a task among threads.
+      </p>
+      
+      <p class="noind"><a href="#ch02ex09" class="calibre4">Listing 2.9</a> shows a simple implementation of a parallel version of <kbd class="calibre17">std::accumulate</kbd>. In real code you’ll probably want to use the parallel version of <kbd class="calibre17">std::reduce</kbd> described in <a href="kindle_split_020.html#ch10" class="calibre4">chapter 10</a>, rather than implementing it yourself, but this illustrates the basic idea. It divides the work among the threads, with a
+         minimum number of elements per thread in order to avoid the overhead of too many threads. Note that this implementation assumes
+         that none of the operations will throw an exception, even though exceptions are possible; the <kbd class="calibre17">std::thread</kbd> constructor will throw if it can’t start a new thread of execution, for example. Handling exceptions in such an algorithm
+         is beyond the scope of this simple example and will be covered in <a href="kindle_split_018.html#ch08" class="calibre4">chapter 8</a>.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch02ex09">Listing 2.9. <a id="ch02ex09__title" class="calibre4"></a>A naïve parallel version of <kbd class="calibre17">std::accumulate</kbd></h5>
+      <pre id="PLd0e3317" class="calibre5">template&lt;typename Iterator,typename T&gt;
+struct accumulate_block
+{
+    void operator()(Iterator first,Iterator last,T&amp; result)
+    {
+        result=std::accumulate(first,last,result);
+    }
+};
+template&lt;typename Iterator,typename T&gt;
+T parallel_accumulate(Iterator first,Iterator last,T init)
+{
+    unsigned long const length=std::distance(first,last);
+    if(!length)
+        return init;
+    unsigned long const min_per_thread=25;
+    unsigned long const max_threads=
+        (length+min_per_thread-1)/min_per_thread;
+    unsigned long const hardware_threads=
+        std::thread::hardware_concurrency();
+    unsigned long const num_threads=
+        std::min(hardware_threads!=0?hardware_threads:2,max_threads);
+    unsigned long const block_size=length/num_threads;
+    std::vector&lt;T&gt; results(num_threads);
+    std::vector&lt;std::thread&gt;  threads(num_threads-1);
+    Iterator block_start=first;
+    for(unsigned long i=0;i&lt;(num_threads-1);++i)
+    {
+        Iterator block_end=block_start;
+        std::advance(block_end,block_size);
+        threads[i]=std::thread(
+            accumulate_block&lt;Iterator,T&gt;(),
+            block_start,block_end,std::ref(results[i]));
+        block_start=block_end;
+    }
+    accumulate_block&lt;Iterator,T&gt;()(
+        block_start,last,results[num_threads-1]);
+
+    for(auto&amp; entry: threads)
+           entry.join();
+    return std::accumulate(results.begin(),results.end(),init);
+}</pre>
+      
+      <p class="noind"><a id="iddle1282" class="calibre4"></a><a id="iddle1388" class="calibre4"></a><a id="iddle1468" class="calibre4"></a><a id="iddle1758" class="calibre4"></a><a id="iddle1865" class="calibre4"></a>Although this is a long function, it’s straightforward. If the input range is empty, you return the initial value supplied
+         as the <kbd class="calibre17">init</kbd> parameter value. Otherwise, there’s at least one element in the range, so you can divide the number of elements to process
+         by the minimum block size in order to give the maximum number of threads. This is to avoid creating 32 threads on a 32-core
+         machine when you have only five values in the range.
+      </p>
+      
+      <p class="noind">The number of threads to run is the minimum of your calculated maximum and the number of hardware threads. You don’t want
+         to run more threads than the hardware can support (which is called <i class="calibre6">oversubscription</i>), because the context switching will mean that more threads will decrease the performance. If the call to <kbd class="calibre17">std::thread:: hardware_concurrency()</kbd> returned <kbd class="calibre17">0</kbd>, you’d substitute a number of your choice; in this case I’ve chosen <kbd class="calibre17">2</kbd>. You don’t want to run too many threads because that would slow things down on a single-core machine, but likewise you don’t
+         want to run too few because you’d be passing up the available concurrency.
+      </p>
+      
+      <p class="noind">The number of entries for each thread to process is the length of the range divided by the number of threads. If you’re worrying
+         about cases where the number doesn’t divide evenly, don’t—you’ll handle that later.
+      </p>
+      
+      <p class="noind">Now that you know how many threads you have, you can create a <kbd class="calibre17">std::vector&lt;T&gt;</kbd> for the intermediate results and a <kbd class="calibre17">std::vector&lt;std::thread&gt;</kbd> for the threads. Note that you need to launch one fewer thread than <kbd class="calibre17">num_threads</kbd>, because you already have one.
+      </p>
+      
+      <p class="noind">Launching the threads is a simple loop: advance the <kbd class="calibre17">block_end</kbd> iterator to the end of the current block and launch a new thread to accumulate the results for this block. The start of the
+         next block is the end of this one.
+      </p>
+      
+      <p class="noind">After you’ve launched all the threads, this thread can then process the final block. This is where you take account of any
+         uneven division: you know the end of the final block must be <kbd class="calibre17">last</kbd>, and it doesn’t matter how many elements are in that block.
+      </p>
+      
+      <p class="noind">Once you’ve accumulated the results for the last block, you can wait for all the threads you spawned with <kbd class="calibre17">std::for_each</kbd>, as in <a href="#ch02ex08" class="calibre4">listing 2.8</a>, and then add up the results with a final call to <kbd class="calibre17">std::accumulate</kbd>.
+      </p>
+      
+      <p class="noind">Before you leave this example, it’s worth pointing out that where the addition operator for the type <kbd class="calibre17">T</kbd> isn’t associative (such as for <kbd class="calibre17">float</kbd> or <kbd class="calibre17">double</kbd>), the results of this <kbd class="calibre17">parallel_accumulate</kbd> may vary from those of <kbd class="calibre17">std::accumulate</kbd> because of the grouping of the range into blocks. Also, the requirements on the iterators are slightly more stringent: they
+         must be at least <i class="calibre6">forward iterators</i>, whereas <kbd class="calibre17">std::accumulate</kbd> can work with single-pass <i class="calibre6">input iterators</i>, and <kbd class="calibre17">T</kbd> must be <i class="calibre6">default-constructible</i> so that you can create the <kbd class="calibre17">results</kbd> vector. These sorts of requirement changes are common with parallel algorithms; by their nature they’re different in order
+         to make them parallel, and <a id="iddle1432" class="calibre4"></a><a id="iddle2507" class="calibre4"></a>this has consequences for the results and requirements. Implementing parallel algorithms is covered in more depth in <a href="kindle_split_018.html#ch08" class="calibre4">chapter 8</a>, and <a href="kindle_split_020.html#ch10" class="calibre4">chapter 10</a> covers the standard supplied ones from C++17 (the equivalent to the <kbd class="calibre17">parallel_accumulate</kbd> described here being the parallel form of <kbd class="calibre17">std::reduce</kbd>). It’s also worth noting that because you can’t return a value directly from a thread, you must pass in a reference to the
+         relevant entry in the <kbd class="calibre17">results</kbd> vector. Alternative ways of returning results from threads are addressed through the use of futures in <a href="kindle_split_014.html#ch04" class="calibre4">chapter 4</a>.
+      </p>
+      
+      <p class="noind">In this case, all the information required by each thread was passed in when the thread was started, including the location
+         in which to store the result of its calculation. This isn’t always the case; sometimes it’s necessary to be able to identify
+         the threads in some way for part of the processing. You could pass in an identifying number, such as the value of <kbd class="calibre17">i</kbd> in <a href="#ch02ex08" class="calibre4">listing 2.8</a>, but if the function that needs the identifier is several levels deep in the call stack and could be called from any thread,
+         it’s inconvenient to have to do it that way. When we were designing the C++ Standard Library we foresaw this need, so each
+         thread has a unique identifier.
+      </p>
+      
+      
+      
+      <h3 id="ch02lev1sec5" class="chapter"><a id="ch02lev1sec5__title" class="calibre3"></a>2.5. Identifying threads
+      </h3>
+      
+      <p class="noind">Thread identifiers are of type <kbd class="calibre17">std::thread::id</kbd> and can be retrieved in two ways. First, the identifier for a thread can be obtained from its associated <kbd class="calibre17">std::thread</kbd> object by calling the <kbd class="calibre17">get_id()</kbd> member function. If the <kbd class="calibre17">std::thread</kbd> object doesn’t have an associated thread of execution, the call to <kbd class="calibre17">get_id()</kbd> returns a default-constructed <kbd class="calibre17">std::thread::id</kbd> object, which indicates “not any thread.” Alternatively, the identifier for the current thread can be obtained by calling
+         <kbd class="calibre17">std::this_thread:: get_id()</kbd>, which is also defined in the <kbd class="calibre17">&lt;thread&gt;</kbd> header.
+      </p>
+      
+      <p class="noind">Objects of type <kbd class="calibre17">std::thread::id</kbd> can be freely copied and compared; they wouldn’t be of much use as identifiers otherwise. If two objects of type <kbd class="calibre17">std::thread::id</kbd> are equal, they represent the same thread, or both are holding the “not any thread” value. If two objects aren’t equal, they
+         represent different threads, or one represents a thread and the other is holding the “not any thread” value.
+      </p>
+      
+      <p class="noind">The C++ Standard Library doesn’t limit you to checking whether thread identifiers are the same or not; objects of type <kbd class="calibre17">std::thread::id</kbd> offer the complete set of comparison operators, which provide a total ordering for all distinct values. This allows them
+         to be used as keys in associative containers, or sorted, or compared in any other way that you as a programmer may see fit.
+         The comparison operators provide a total order for all non-equal values of <kbd class="calibre17">std::thread::id</kbd>, so they behave as you’d intuitively expect: if <kbd class="calibre17">a&lt;b</kbd> and <kbd class="calibre17">b&lt;c</kbd>, then <kbd class="calibre17">a&lt;c</kbd>, and so forth. The Standard Library also provides <kbd class="calibre17">std::hash&lt;std::thread::id&gt;</kbd> so that values of type <kbd class="calibre17">std::thread::id</kbd> can be used as keys in the new unordered associative containers too.
+      </p>
+      
+      <p class="noind">Instances of <kbd class="calibre17">std::thread::id</kbd> are often used to check whether a thread needs to perform some operation. For example, if threads are used to divide work,
+         as in <a href="#ch02ex09" class="calibre4">listing 2.9</a>, the initial thread that launched the others might need to perform its work slightly differently in the middle of the algorithm.
+         In this case it could store the result of <kbd class="calibre17">std::this_thread::get_id()</kbd> before launching the other threads, and then the core part of the algorithm (which is common to all threads) could check
+         its own thread ID against the stored value:
+      </p>
+      
+      <pre id="PLd0e3568" class="calibre5">std::thread::id master_thread;
+void some_core_part_of_algorithm()
+{
+    if(std::this_thread::get_id()==master_thread)
+    {
+        do_master_thread_work();
+    }
+    do_common_work();
+}</pre>
+      
+      <p class="noind">Alternatively, the <kbd class="calibre17">std::thread::id</kbd> of the current thread could be stored in a data structure as part of an operation. Later operations on that same data structure
+         could then check the stored ID against the ID of the thread performing the operation to determine what operations are permitted/required.
+      </p>
+      
+      <p class="noind">Similarly, thread IDs could be used as keys into associative containers where specific data needs to be associated with a
+         thread and alternative mechanisms such as thread-local storage aren’t appropriate. Such a container could, for example, be
+         used by a controlling thread to store information about each of the threads under its control or for passing information between
+         threads.
+      </p>
+      
+      <p class="noind">The idea is that <kbd class="calibre17">std::thread::id</kbd> will suffice as a generic identifier for a thread in most circumstances; it’s only if the identifier has semantic meaning
+         associated with it (such as being an index into an array) that alternatives should be necessary. You can even write out an
+         instance of <kbd class="calibre17">std::thread::id</kbd> to an output stream such as <kbd class="calibre17">std::cout</kbd>:
+      </p>
+      
+      <pre id="PLd0e3595" class="calibre5">std::cout&lt;&lt;std::this_thread::get_id();</pre>
+      
+      <p class="noind">The exact output you get is strictly implementation-dependent; the only guarantee given by the standard is that thread IDs
+         that compare as equal should produce the same output, and those that aren’t equal should give different output. This is therefore
+         primarily useful for debugging and logging, but the values have no semantic meaning, so there’s not much more that could be
+         said anyway.
+      </p>
+      
+      
+      
+      <h3 id="ch02lev1sec6" class="chapter"><a id="ch02lev1sec6__title" class="calibre3"></a>Summary
+      </h3>
+      
+      <p class="noind">In this chapter, I covered the basics of thread management with the C++ Standard Library: starting threads, waiting for them
+         to finish, and <i class="calibre6">not</i> waiting for them to finish because you want them to run in the background. We also saw how to pass arguments into the thread
+         function when a thread is started, how to transfer the responsibility for managing a thread from one part of the code to another,
+         and how groups of threads can be used to divide work. Finally, we discussed identifying threads in order to associate data
+         or behavior with specific threads that’s inconvenient to associate through alternative means. Although you can do quite a
+         lot with purely independent threads that each operate on separate data, sometimes it’s desirable to share data among threads
+         while they’re running. <a href="kindle_split_013.html#ch03" class="calibre4">Chapter 3</a> discusses the issues surrounding sharing data directly among threads, and <a href="kindle_split_014.html#ch04" class="calibre4">chapter 4</a> covers more general issues surrounding synchronizing operations with and without shared data.
+      </p>
+      
+      
+      
+      
+      <div class="calibre13" id="calibre_pb_16"></div>
+</body></html>

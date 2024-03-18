@@ -1,0 +1,1586 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:mbp="Kindle">
+  <head>
+    <title>C++ Concurrency in Action, Second Edition</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+  <link href="stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+<h2 class="part" id="ch03">Chapter 3. <a id="ch03__title" class="calibre3"></a>Sharing data between threads
+      </h2>
+      
+      <p class="noind"><a id="iddle1241" class="calibre4"></a><a id="iddle2528" class="calibre4"></a><i class="calibre6">This chapter covers</i></p>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22">Problems with sharing data between threads</li>
+         
+         <li class="calibre22">Protecting data with mutexes</li>
+         
+         <li class="calibre22">Alternative facilities for protecting shared data</li>
+         
+      </ul>
+      
+      <p class="noind">One of the key benefits of using threads for concurrency is the potential to easily and directly share data between them,
+         so now that we’ve covered starting and managing threads, let’s look at the issues surrounding shared data.
+      </p>
+      
+      <p class="noind">Imagine for a moment that you’re sharing an apartment with a friend. There’s only one kitchen and one bathroom. Unless you’re
+         particularly friendly, you can’t both use the bathroom at the same time, and if your roommate occupies the bathroom for a
+         long time, it can be frustrating if you need to use it. Likewise, though it might be possible to both cook meals at the same
+         time, if you have a combined oven and grill, it’s not going to end well if one of you tries to grill some sausages at the
+         same time as the other is baking a cake. Furthermore, we all know the frustration of sharing a space and getting halfway through
+         a task only to find that someone has borrowed something we need or changed something from the way we left it.
+      </p>
+      
+      <p class="noind">It’s the same with threads. If you’re sharing data between threads, you need to have rules for which thread can access which
+         bit of data when, and how any updates <a id="iddle1072" class="calibre4"></a><a id="iddle1242" class="calibre4"></a><a id="iddle1494" class="calibre4"></a><a id="iddle2530" class="calibre4"></a>are communicated to the other threads that care about that data. The ease with which data can be shared between multiple threads
+         in a single process is not only a benefit—it can also be a big drawback. Incorrect use of shared data is one of the biggest
+         causes of concurrency-related bugs, and the consequences can be far worse than sausage-flavored cakes.
+      </p>
+      
+      <p class="noind">This chapter is about sharing data safely between threads in C++, avoiding the potential problems that can arise, and maximizing
+         the benefits.
+      </p>
+      
+      
+      <h3 id="ch03lev1sec1" class="chapter"><a id="ch03lev1sec1__title" class="calibre3"></a>3.1. Problems with sharing data between threads
+      </h3>
+      
+      <p class="noind">When it comes down to it, the problems with sharing data between threads are all due to the consequences of modifying data.
+         <i class="calibre6">If all shared data is read-only, there’s no problem, because the data read by one thread is unaffected by whether or not another
+            thread is reading the same data.</i> But if data is shared between threads, and one or more threads start modifying the data, there’s a lot of potential for trouble.
+         In this case, you must take care to ensure that everything works out OK.
+      </p>
+      
+      <p class="noind">One concept that’s widely used to help programmers reason about their code is <i class="calibre6">invariants</i>—statements that are always true about a particular data structure, such as “this variable contains the number of items in
+         the list.” These invariants are often broken during an update, especially if the data structure is of any complexity or the
+         update requires modification of more than one value.
+      </p>
+      
+      <p class="noind">Consider a doubly linked list, where each node holds a pointer to both the next node in the list and the previous one. One
+         of the invariants is that if you follow a “next” pointer from one node (A) to another (B), the “previous” pointer from that
+         node (B) points back to the first node (A). In order to remove a node from the list, the nodes on either side have to be updated
+         to point to each other. Once one has been updated, the invariant is broken until the node on the other side has been updated
+         too; after the update has completed, the invariant holds again.
+      </p>
+      
+      <p class="noind">The steps in deleting an entry from such a list are shown in <a href="#ch03fig01" class="calibre4">figure 3.1</a>:
+      </p>
+      
+      <p class="calibre19"></p>
+      <ol class="calibre27">
+         
+         <li class="calibre22">Identify the node to delete: N.</li>
+         
+         <li class="calibre22">Update the link from the node prior to N to point to the node after N.</li>
+         
+         <li class="calibre22">Update the link from the node after N to point to the node prior to N.</li>
+         
+         <li class="calibre22">Delete node N.</li>
+         
+      </ol>
+      
+      
+      
+      <h5 class="notetitle" id="ch03fig01">Figure 3.1. <a id="ch03fig01__title" class="calibre4"></a>Deleting a node from a doubly linked list
+      </h5>
+      
+      <p class="center1"><img alt="" src="03fig01_alt.jpg" class="calibre2"/></p>
+      
+      
+      <p class="noind">As you can see in <a href="#ch03fig01" class="calibre4">figure 3.1</a>, between steps b and c, the links going in one direction are inconsistent with the links going in the opposite direction,
+         and the invariant is broken.
+      </p>
+      
+      <p class="noind">The simplest potential problem with modifying data that’s shared between threads is that of broken invariants. If you don’t
+         do anything special to ensure otherwise, if one thread is reading the doubly linked list while another is removing a node,
+         it’s quite possible for the reading thread to see the list with a node only partially removed (because only one of the links
+         has been changed, as in step b of <a href="#ch03fig01" class="calibre4">figure 3.1</a>), so the invariant is broken. The consequences of this broken invariant can vary; if the other <a id="iddle1832" class="calibre4"></a>thread is reading the list items from left to right in the diagram, it will skip the node being deleted. On the other hand,
+         if the second thread is trying to delete the rightmost node in the diagram, it might end up permanently corrupting the data
+         structure and eventually crashing the program. Whatever the outcome, this is an example of one of the most common causes of
+         bugs in concurrent code: a <i class="calibre6">race condition</i>.
+      </p>
+      
+      
+      <h4 id="ch03lev2sec1" class="calibre23">3.1.1. <a id="ch03lev2sec1__title" class="calibre4"></a>Race conditions
+      </h4>
+      
+      <p class="noind">Suppose you’re buying tickets to see a movie at the movie theater. If it’s a big theater, multiple cashiers will be taking
+         money so more than one person can buy tickets at the same time. If someone at another cashier’s desk is also buying tickets
+         for the same <a id="iddle1248" class="calibre4"></a><a id="iddle1801" class="calibre4"></a><a id="iddle1839" class="calibre4"></a><a id="iddle2596" class="calibre4"></a>movie as you are, which seats are available for you to choose from depends on whether the other person books first or you
+         do. If there are only a few seats left, this difference can be quite crucial: it might literally be a race to see who gets
+         the last tickets. This is an example of a <i class="calibre6">race condition</i>: which seats you get (or even whether you get tickets) depends on the relative ordering of the two purchases.
+      </p>
+      
+      <p class="noind">In concurrency, a race condition is anything where the outcome depends on the relative ordering of execution of operations
+         on two or more threads; the threads race to perform their respective operations. Most of the time, this is quite benign because
+         all possible outcomes are acceptable, even though they may change with different relative orderings. For example, if two threads
+         are adding items to a queue for processing, it generally doesn’t matter which item gets added first, provided that the invariants
+         of the system are maintained. It’s when the race condition leads to broken invariants that there’s a problem, such as with
+         the doubly linked list example mentioned. When talking about concurrency, the term <i class="calibre6">race condition</i> is usually used to mean a <i class="calibre6">problematic</i> race condition; benign race conditions aren’t so interesting and aren’t a cause of bugs. The C++ Standard also defines the
+         term <i class="calibre6">data race</i> to mean the specific type of race condition that arises because of concurrent modification to a single object (see <a href="kindle_split_015.html#ch05lev2sec2" class="calibre4">section 5.1.2</a> for details); data races cause the dreaded <i class="calibre6">undefined behavior</i>.
+      </p>
+      
+      <p class="noind">Problematic race conditions typically occur where completing an operation requires modification of two or more distinct pieces
+         of data, such as the two link pointers in the example. Because the operation must access two separate pieces of data, these
+         must be modified in separate instructions, and another thread could potentially access the data structure when only one of
+         them has been completed. Race conditions can often be hard to find and hard to duplicate because the window of opportunity
+         is small. If the modifications are done as consecutive CPU instructions, the chance of the problem exhibiting on any one run-through
+         is small, even if the data structure is being accessed by another thread concurrently. As the load on the system increases,
+         and the number of times the operation is performed increases, the chance of the problematic execution sequence occurring also
+         increases. It’s almost inevitable that such problems will show up at the most inconvenient time. Because race conditions are
+         generally timing-sensitive, they can often disappear entirely when the application is run under the debugger, because the
+         debugger affects the timing of the program, even if only slightly.
+      </p>
+      
+      <p class="noind">If you’re writing multithreaded programs, race conditions can easily be the bane of your existence; a great deal of the complexity
+         in writing software that uses concurrency comes from avoiding problematic race conditions.
+      </p>
+      
+      
+      
+      <h4 id="ch03lev2sec2" class="calibre23">3.1.2. <a id="ch03lev2sec2__title" class="calibre4"></a>Avoiding problematic race conditions
+      </h4>
+      
+      <p class="noind">There are several ways to deal with problematic race conditions. The simplest option is to wrap your data structure with a
+         protection mechanism to ensure that only the thread performing a modification can see the intermediate states where the invariants
+         are broken. From the point of view of other threads accessing that data structure, such <a id="iddle1243" class="calibre4"></a><a id="iddle1663" class="calibre4"></a><a id="iddle1664" class="calibre4"></a><a id="iddle1671" class="calibre4"></a><a id="iddle1907" class="calibre4"></a><a id="iddle1928" class="calibre4"></a><a id="iddle2408" class="calibre4"></a><a id="iddle2531" class="calibre4"></a><a id="iddle2603" class="calibre4"></a>modifications either haven’t started or have completed. The C++ Standard Library provides several of these mechanisms, which
+         are described in this chapter.
+      </p>
+      
+      <p class="noind">Another option is to modify the design of your data structure and its invariants so that modifications are done as a series
+         of indivisible changes, each of which preserves the invariants. This is generally referred to as <i class="calibre6">lock-free programming</i> and is difficult to get right. If you’re working at this level, the nuances of the memory model and identifying which threads
+         can potentially see which set of values can get complicated. The memory model is covered in <a href="kindle_split_015.html#ch05" class="calibre4">chapter 5</a>, and lock-free programming is discussed in <a href="kindle_split_017.html#ch07" class="calibre4">chapter 7</a>.
+      </p>
+      
+      <p class="noind">Another way of dealing with race conditions is to handle the updates to the data structure as a <i class="calibre6">transaction</i>, just as updates to a database are done within a transaction. The required series of data modifications and reads is stored
+         in a transaction log and then committed in a single step. If the commit can’t proceed because the data structure has been
+         modified by another thread, the transaction is restarted. This is termed <i class="calibre6">software transactional memory (STM)</i>, and it’s an active research area at the time of writing. It won’t be covered in this book, because there’s no direct support
+         for STM in C++ (though there is a Technical Specification for Transactional Memory Extensions to C++<sup class="calibre18">[<a href="#ch03fn01" class="calibre4">1</a>]</sup>). But the basic idea of doing something privately and then committing in a single step is something that I’ll come back to
+         later.
+      </p>
+      <blockquote class="smaller">
+         <p class="calibre19"><sup class="calibre20"><a id="ch03fn01" class="calibre4">1</a></sup> 
+            </p><div class="calibre15">ISO/IEC TS 19841:2015—Technical Specification for C++ Extensions for Transactional Memory <a href="http://www.iso.org/iso/home/store/catalogue_tc/catalogue_detail.htm?csnumber=66343" class="calibre4">http://www.iso.org/iso/home/store/catalogue_tc/catalogue_detail.htm?csnumber=66343</a>.
+            </div>
+         <p class="calibre19"></p>
+      </blockquote>
+      
+      <p class="noind">The most basic mechanism for protecting shared data provided by the C++ Standard is the <i class="calibre6">mutex</i>, so we’ll look at that first.
+      </p>
+      
+      
+      
+      
+      <h3 id="ch03lev1sec2" class="chapter"><a id="ch03lev1sec2__title" class="calibre3"></a>3.2. Protecting shared data with mutexes
+      </h3>
+      
+      <p class="noind">So, you have a shared data structure such as the linked list from the previous section, and you want to protect it from race
+         conditions and the potential broken invariants that can ensue. Wouldn’t it be nice if you could mark all the pieces of code
+         that access the data structure as <i class="calibre6">mutually exclusive</i>, so that if any thread was running one of them, any other thread that tried to access that data structure had to wait until
+         the first thread was finished? That would make it impossible for a thread to see a broken invariant except when it was the
+         thread doing the modification.
+      </p>
+      
+      <p class="noind">Well, this isn’t a fairy tale wish—it’s precisely what you get if you use a synchronization primitive called a <i class="calibre6">mutex</i> (<i class="calibre6">mut</i>ual <i class="calibre6">ex</i>clusion). Before accessing a shared data structure, you <i class="calibre6">lock</i> the mutex associated with that data, and when you’ve finished accessing the data structure, you <i class="calibre6">unlock</i> the mutex. The Thread Library then ensures that once one thread has locked a specific mutex, all other threads that try to
+         lock the same mutex have to wait until the thread that successfully locked the mutex unlocks it. This ensures that all threads
+         see a self-consistent view of the shared data, without any broken invariants.
+      </p>
+      
+      <p class="noind">Mutexes are the most general of the data-protection mechanisms available in C++, but they’re not a silver bullet; it’s important
+         to structure your code to protect the right <a id="iddle1011" class="calibre4"></a><a id="iddle1514" class="calibre4"></a><a id="iddle1518" class="calibre4"></a><a id="iddle1662" class="calibre4"></a><a id="iddle1913" class="calibre4"></a><a id="iddle2171" class="calibre4"></a><a id="iddle2600" class="calibre4"></a>data (see <a href="#ch03lev2sec4" class="calibre4">section 3.2.2</a>) and avoid race conditions inherent in your interfaces (see <a href="#ch03lev2sec5" class="calibre4">section 3.2.3</a>). Mutexes also come with their own problems in the form of a <i class="calibre6">deadlock</i> (see <a href="#ch03lev2sec6" class="calibre4">section 3.2.4</a>) and protecting either too much or too little data (see <a href="#ch03lev2sec10" class="calibre4">section 3.2.8</a>). Let’s start with the basics.
+      </p>
+      
+      
+      <h4 id="ch03lev2sec3" class="calibre23">3.2.1. <a id="ch03lev2sec3__title" class="calibre4"></a>Using mutexes in C++
+      </h4>
+      
+      <p class="noind">In C++, you create a mutex by constructing an instance of <kbd class="calibre17">std::mutex</kbd>, lock it with a call to the <kbd class="calibre17">lock()</kbd> member function, and unlock it with a call to the <kbd class="calibre17">unlock()</kbd> member function. But it isn’t recommended practice to call the member functions directly, because this means that you have
+         to remember to call <kbd class="calibre17">unlock()</kbd> on every code path out of a function, including those due to exceptions. Instead, the Standard C++ Library provides the <kbd class="calibre17">std::lock_guard</kbd> class template, which implements that RAII idiom for a mutex; it locks the supplied mutex on construction and unlocks it
+         on destruction, ensuring a locked mutex is always correctly unlocked. The following listing shows how to protect a list that
+         can be accessed by multiple threads using <kbd class="calibre17">std::mutex</kbd>, along with <kbd class="calibre17">std::lock_guard</kbd>. Both of these are declared in the <kbd class="calibre17">&lt;mutex&gt;</kbd> header.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03ex01">Listing 3.1. <a id="ch03ex01__title" class="calibre4"></a>Protecting a list with a mutex
+      </h5>
+      <pre id="PLd0e4098" class="calibre5">#include &lt;list&gt;
+#include &lt;mutex&gt;
+#include &lt;algorithm&gt;
+std::list&lt;int&gt; some_list;                            <b class="calibre24"><i class="calibre6">1</i></b>
+std::mutex some_mutex;                               <b class="calibre24"><i class="calibre6">2</i></b>
+void add_to_list(int new_value)
+{
+    std::lock_guard&lt;std::mutex&gt; guard(some_mutex);   <b class="calibre24"><i class="calibre6">3</i></b>
+    some_list.push_back(new_value);
+}
+bool list_contains(int value_to_find)
+{
+    std::lock_guard&lt;std::mutex&gt; guard(some_mutex);   <b class="calibre24"><i class="calibre6">4</i></b>
+    return std::find(some_list.begin(),some_list.end(),value_to_find)
+        != some_list.end();
+}</pre>
+      
+      <p class="noind">In <a href="#ch03ex01" class="calibre4">listing 3.1</a>, there’s a single global variable <b class="calibre24"><i class="calibre6">1</i></b>, and it’s protected with a corresponding global instance of <kbd class="calibre17">std::mutex</kbd> <b class="calibre24"><i class="calibre6">2</i></b>. The use of <kbd class="calibre17">std::lock_guard&lt;std::mutex&gt;</kbd> in <kbd class="calibre17">add_to_list()</kbd> <b class="calibre24"><i class="calibre6">3</i></b>, and again in <kbd class="calibre17">list_contains()</kbd> <b class="calibre24"><i class="calibre6">4</i></b>, means that the accesses in these functions are mutually exclusive: <kbd class="calibre17">list_contains()</kbd> will never see the list partway through a modification by <kbd class="calibre17">add_to_list()</kbd>.
+      </p>
+      
+      <p class="noind">C++17 has a new feature called class template argument deduction, which means that for simple class templates like <kbd class="calibre17">std::lock_guard</kbd>, the template argument list can often be omitted. <b class="calibre24"><i class="calibre6">3</i></b> and <b class="calibre24"><i class="calibre6">4</i></b> can be reduced to
+      </p>
+      
+      <pre id="PLd0e4174" class="calibre5">std::lock_guard guard(some_mutex);</pre>
+      
+      <p class="noind"><a id="iddle1125" class="calibre4"></a><a id="iddle1669" class="calibre4"></a><a id="iddle1914" class="calibre4"></a>on a C++17 compiler. As we will see in <a href="#ch03lev2sec6" class="calibre4">section 3.2.4</a>, C++17 also introduces an enhanced version of lock guard called <kbd class="calibre17">std::scoped_lock</kbd>, so in a C++17 environment, this may well be written as
+      </p>
+      
+      <pre id="PLd0e4217" class="calibre5">std::scoped_lock guard(some_mutex);</pre>
+      
+      <p class="noind">For clarity of code and compatibility with older compilers, I’ll continue to use <kbd class="calibre17">std::lock_guard</kbd> and specify the template arguments in other code snippets.
+      </p>
+      
+      <p class="noind">Although there are occasions where this use of global variables is appropriate, in the majority of cases it’s common to group
+         the mutex and the protected data together in a class rather than use global variables. This is a standard application of object-oriented
+         design rules: by putting them in a class, you’re clearly marking them as related, and you can encapsulate the functionality
+         and enforce the protection. In this case, the <kbd class="calibre17">add_to_list</kbd> and <kbd class="calibre17">list_contains</kbd> functions would become member functions of the class, and the mutex and protected data would both become <kbd class="calibre17">private</kbd> members of the class, making it much easier to identify which code has access to the data and thus which code needs to lock
+         the mutex. If all the member functions of the class lock the mutex before accessing any other data members and unlock it when
+         done, the data is nicely protected from all comers.
+      </p>
+      
+      <p class="noind">Well, that’s not <i class="calibre6">quite</i> true, as the astute among you will have noticed: if one of the member functions returns a pointer or reference to the protected
+         data, then it doesn’t matter that the member functions all lock the mutex in a nice, orderly fashion, because you’ve blown
+         a big hole in the protection. <i class="calibre6">Any code that has access to that pointer or reference can now access (and potentially modify) the protected data without locking
+            the mutex.</i> Protecting data with a mutex therefore requires careful interface design to ensure that the mutex is locked before there’s
+         any access to the protected data and that there are no backdoors.
+      </p>
+      
+      
+      
+      <h4 id="ch03lev2sec4" class="calibre23">3.2.2. <a id="ch03lev2sec4__title" class="calibre4"></a>Structuring code for protecting shared data
+      </h4>
+      
+      <p class="noind">As you’ve seen, protecting data with a mutex is not quite as easy as slapping an <kbd class="calibre17">std::lock_guard</kbd> object in every member function; one stray pointer or reference, and all that protection is for nothing. At one level, checking
+         for stray pointers or references is easy; as long as none of the member functions return a pointer or reference to the protected
+         data to their caller either via their return value or via an out parameter, the data is safe. If you dig a little deeper,
+         it’s not that straightforward—nothing ever is. As well as checking that the member functions don’t pass out pointers or references
+         to their callers, it’s also important to check that they don’t pass these pointers or references <i class="calibre6">in</i> to functions they call that aren’t under your control. This is just as dangerous: those functions might store the pointer
+         or reference in a place where it can later be used without the protection of the mutex. Particularly dangerous in this regard
+         are functions that are supplied at runtime via a function argument or other means, as in the next listing.
+      </p>
+      
+      
+      <p class="noind"></p>
+      
+      
+      <h5 class="notetitle" id="ch03ex02">Listing 3.2. <a id="ch03ex02__title" class="calibre4"></a>Accidentally passing out a reference to protected data
+      </h5>
+      <pre id="PLd0e4270" class="calibre5">class some_data
+{
+    int a;
+    std::string b;
+public:
+    void do_something();
+};
+class data_wrapper
+{
+private:
+    some_data data;
+    std::mutex m;
+public:
+    template&lt;typename Function&gt;
+    void process_data(Function func)
+    {
+        std::lock_guard&lt;std::mutex&gt; l(m);
+        func(data);                           <b class="calibre24"><i class="calibre6">1</i></b>
+    }
+};
+some_data* unprotected;
+void malicious_function(some_data&amp; protected_data)
+{
+    unprotected=&amp;protected_data;
+}
+data_wrapper x;
+void foo()
+{
+    x.process_data(malicious_function);       <b class="calibre24"><i class="calibre6">2</i></b>
+    unprotected-&gt;do_something();              <b class="calibre24"><i class="calibre6">3</i></b>
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><a id="iddle1385" class="calibre4"></a><a id="iddle1396" class="calibre4"></a><a id="iddle1577" class="calibre4"></a><a id="iddle1809" class="calibre4"></a><b class="calibre24"><i class="calibre6">1</i> Pass “protected” data to user-supplied function</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Pass in a malicious function</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">3</i> Unprotected access to protected data</b></li>
+         
+      </ul>
+      
+      <p class="noind">In this example, the code in <kbd class="calibre17">process_data</kbd> looks harmless enough, nicely protected with <kbd class="calibre17">std::lock_guard</kbd>, but the call to the user-supplied <kbd class="calibre17">func</kbd> function <b class="calibre24"><i class="calibre6">1</i></b> means that <kbd class="calibre17">foo</kbd> can pass in <kbd class="calibre17">malicious_function</kbd> to bypass the protection <b class="calibre24"><i class="calibre6">2</i></b> and then call <kbd class="calibre17">do_something()</kbd> without the mutex being locked <b class="calibre24"><i class="calibre6">3</i></b>.
+      </p>
+      
+      <p class="noind">Fundamentally, the problem with this code is that it hasn’t done what you set out to do: mark all the pieces of code that
+         access the data structure as <i class="calibre6">mutually exclusive</i>. In this case, it missed the code in <kbd class="calibre17">foo()</kbd> that calls <kbd class="calibre17">unprotected-&gt;do_something()</kbd>. Unfortunately, this part of the problem isn’t something the C++ Thread Library can help you with; it’s up to you as programmers
+         to lock the right mutex to protect your data. On the upside, you have a guideline to follow, which will help you in these
+         cases: <i class="calibre6">Don’t pass pointers and references to protected data outside the scope of the lock, whether by returning them from a function,
+            storing them in externally visible memory, or passing them as arguments to user-supplied functions.</i></p>
+      
+      <p class="noind"><a id="iddle1315" class="calibre4"></a><a id="iddle1470" class="calibre4"></a><a id="iddle1668" class="calibre4"></a><a id="iddle1777" class="calibre4"></a><a id="iddle1817" class="calibre4"></a><a id="iddle1834" class="calibre4"></a><a id="iddle1911" class="calibre4"></a><a id="iddle1923" class="calibre4"></a><a id="iddle2336" class="calibre4"></a><a id="iddle2570" class="calibre4"></a>Although this is a common mistake when trying to use mutexes to protect shared data, it’s far from the only potential pitfall.
+         As you’ll see in the next section, it’s still possible to have race conditions, even when data is protected with a mutex.
+      </p>
+      
+      
+      
+      <h4 id="ch03lev2sec5" class="calibre23">3.2.3. <a id="ch03lev2sec5__title" class="calibre4"></a>Spotting race conditions inherent in interfaces
+      </h4>
+      
+      <p class="noind">Just because you’re using a mutex or other mechanism to protect shared data, it doesn’t mean you’re protected from race conditions;
+         you still have to ensure that the appropriate data is protected. Consider the doubly linked list example again. In order for
+         a thread to safely delete a node, you need to ensure that you’re preventing concurrent accesses to three nodes: the node being
+         deleted and the nodes on either side. If you protected access to the pointers of each node individually, you’d be no better
+         off than with code that used no mutexes, because the race condition could still happen—it’s not the individual nodes that
+         need protecting for the individual steps but the whole data structure, for the whole delete operation. The easiest solution
+         in this case is to have a single mutex that protects the entire list, as in <a href="#ch03ex01" class="calibre4">listing 3.1</a>.
+      </p>
+      
+      <p class="noind">Just because individual operations on the list are safe, you’re not out of the woods yet; you can still get race conditions,
+         even with a simple interface. Consider a stack data structure like the <kbd class="calibre17">std::stack</kbd> container adapter shown in <a href="#ch03ex03" class="calibre4">listing 3.3</a>. Aside from the constructors and <kbd class="calibre17">swap()</kbd>, there are only five things you can do to a <kbd class="calibre17">std::stack</kbd>: you can <kbd class="calibre17">push()</kbd> a new element onto the stack, <kbd class="calibre17">pop()</kbd> an element off the stack, read the <kbd class="calibre17">top()</kbd> element, check whether it’s <kbd class="calibre17">empty()</kbd>, and read the number of elements—the <kbd class="calibre17">size()</kbd> of the stack. If you change <kbd class="calibre17">top()</kbd> so that it returns a copy rather than a reference (so you’re following the guideline from <a href="#ch03lev2sec4" class="calibre4">section 3.2.2</a>) and protect the internal data with a mutex, this interface is still inherently subject to race conditions. This problem
+         is not unique to a mutex-based implementation; it’s an interface problem, so the race conditions would still occur with a
+         lock-free implementation.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03ex03">Listing 3.3. <a id="ch03ex03__title" class="calibre4"></a>The interface to the std::stack container adapter
+      </h5>
+      <pre id="PLd0e4502" class="calibre5">template&lt;typename T,typename Container=std::deque&lt;T&gt; &gt;
+class stack
+{
+public:
+    <b class="calibre24">explicit stack(const Container&amp;);</b>
+    <b class="calibre24">explicit stack(Container&amp;&amp; = Container());</b>
+    <b class="calibre24">template &lt;class Alloc&gt; explicit stack(const Alloc&amp;);</b>
+    <b class="calibre24">template &lt;class Alloc&gt; stack(const Container&amp;, const Alloc&amp;);</b>
+    <b class="calibre24">template &lt;class Alloc&gt; stack(Container&amp;&amp;, const Alloc&amp;);</b>
+    <b class="calibre24">template &lt;class Alloc&gt; stack(stack&amp;&amp;, const Alloc&amp;);</b>
+    bool empty() const;
+    size_t size() const;
+    T&amp; top();
+    T const&amp; top() const;
+    void push(T const&amp;);
+    void push(T&amp;&amp;);
+    void pop();
+    void swap(stack&amp;&amp;);
+    template &lt;class... Args&gt; void emplace(Args&amp;&amp;... args);    <b class="calibre24"><i class="calibre6">1</i></b>
+};</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><a id="iddle1301" class="calibre4"></a><b class="calibre24"><i class="calibre6">1</i> New in C++14</b></li>
+         
+      </ul>
+      
+      <p class="noind">The problem here is that the results of <kbd class="calibre17">empty()</kbd> and <kbd class="calibre17">size()</kbd> can’t be relied on. Although they might be correct at the time of the call, once they’ve returned, other threads are free
+         to access the stack and might <kbd class="calibre17">push()</kbd> new elements onto or <kbd class="calibre17">pop()</kbd> the existing ones off of the stack before the thread that called <kbd class="calibre17">empty()</kbd> or <kbd class="calibre17">size()</kbd> could use that information.
+      </p>
+      
+      <p class="noind">In particular, if the <kbd class="calibre17">stack</kbd> instance is <i class="calibre6">not shared</i>, it’s safe to check for <kbd class="calibre17">empty()</kbd> and then call <kbd class="calibre17">top()</kbd> to access the top element if the stack is not empty, as follows:
+      </p>
+      
+      <pre id="PLd0e4583" class="calibre5">stack&lt;int&gt; s;
+if(!s.empty())                  <b class="calibre24"><i class="calibre6">1</i></b>
+{
+    int const value=s.top();    <b class="calibre24"><i class="calibre6">2</i></b>
+    s.pop();                    <b class="calibre24"><i class="calibre6">3</i></b>
+    do_something(value);
+}</pre>
+      
+      <p class="noind">Not only is it safe in single-threaded code, it’s expected: calling <kbd class="calibre17">top()</kbd> on an empty stack is undefined behavior. With a shared <kbd class="calibre17">stack</kbd> object, <i class="calibre6">this call sequence is no longer safe</i>, because there might be a call to <kbd class="calibre17">pop()</kbd> from another thread that removes the last element in between the call to <kbd class="calibre17">empty()</kbd> <b class="calibre24"><i class="calibre6">1</i></b> and the call to <kbd class="calibre17">top()</kbd> <b class="calibre24"><i class="calibre6">2</i></b>. This is therefore a classic race condition, and the use of a mutex internally to protect the stack contents doesn’t prevent
+         it; it’s a consequence of the interface.
+      </p>
+      
+      <p class="noind">What’s the solution? Well, this problem happens as a consequence of the design of the interface, so the solution is to change
+         the interface. But that still begs the question: what changes need to be made? In the simplest case, you could declare that
+         <kbd class="calibre17">top()</kbd> will throw an exception if there aren’t any elements in the stack when it’s called. Though this directly addresses this issue,
+         it makes for more cumbersome programming, because now you need to be able to catch an exception, even if the call to <kbd class="calibre17">empty()</kbd> returned <kbd class="calibre17">false</kbd>. This makes the call to <kbd class="calibre17">empty()</kbd> an optimization to avoid the overhead of throwing an exception if the stack is already empty (though if the state changes
+         between the call to <kbd class="calibre17">empty()</kbd> and the call to <kbd class="calibre17">top()</kbd>, then the exception will still be thrown), rather than a necessary part of the design.
+      </p>
+      
+      <p class="noind">If you look closely at the previous snippet, there’s also potential for another race condition, but this time between the
+         call to <kbd class="calibre17">top()</kbd> <b class="calibre24"><i class="calibre6">2</i></b> and the call to <kbd class="calibre17">pop()</kbd> <b class="calibre24"><i class="calibre6">3</i></b>. Consider two threads running the previous snippet of code and both referencing the same <kbd class="calibre17">stack</kbd> object, <kbd class="calibre17">s</kbd>. This isn’t an unusual situation; when using threads for performance, it’s quite common to have several threads running the
+         same code on different data, and a shared <kbd class="calibre17">stack</kbd> object is ideal for dividing work between them (though more commonly, a queue is used for this purpose—see the examples in
+         <a href="kindle_split_016.html#ch06" class="calibre4">chapters 6</a> and <a href="kindle_split_017.html#ch07" class="calibre4">7</a>). Suppose that initially the stack has two elements, so you don’t have to worry about the <a id="iddle2031" class="calibre4"></a><a id="iddle2617" class="calibre4"></a>race between <kbd class="calibre17">empty()</kbd> and <kbd class="calibre17">top()</kbd> on either thread, and consider the potential execution patterns.
+      </p>
+      
+      <p class="noind">If the stack is protected by a mutex internally, only one thread can be running a stack member function at any one time, so
+         the calls get nicely interleaved, but the calls to <kbd class="calibre17">do_something()</kbd> can run concurrently. One possible execution is shown in <a href="#ch03table01" class="calibre4">table 3.1</a>.
+      </p>
+      
+      <h5 class="notetitle" id="ch03table01">Table 3.1. <a id="ch03table01__title" class="calibre4"></a>A possible ordering of operations on a stack from two threads
+      </h5>
+      <table cellspacing="5" frame="hsides" rules="groups" cellpadding="8" width="100%" class="calibre25">
+         <colgroup span="4" class="calibre8">
+            <col width="100" class="calibre9"/>
+            <col width="280" class="calibre9"/>
+            <col width="100" class="calibre9"/>
+            <col width="280" class="calibre9"/>
+         </colgroup>
+         <thead class="calibre26">
+            <tr class="calibre11">
+               <th class="doctablecell1" scope="col" valign="top" colspan="2">
+                  <p class="noind">Thread A</p>
+               </th>
+               <th class="doctablecell1" scope="col" valign="top" colspan="2">
+                  <p class="noind">Thread B</p>
+               </th>
+            </tr>
+         </thead>
+         <tbody class="calibre10">
+            <tr class="calibre11">
+               <td class="doctablecell" colspan="2">if(!s.empty())</td>
+               <td class="doctablecell"> </td>
+               <td class="doctablecell"> </td>
+            </tr>
+            <tr class="calibre11">
+               <td class="doctablecell"> </td>
+               <td class="doctablecell"> </td>
+               <td class="doctablecell" colspan="2">if(!s.empty())</td>
+            </tr>
+            <tr class="calibre11">
+               <td class="doctablecell"> </td>
+               <td class="doctablecell">int const value=s.top();</td>
+               <td class="doctablecell"> </td>
+               <td class="doctablecell"> </td>
+            </tr>
+            <tr class="calibre11">
+               <td class="doctablecell"> </td>
+               <td class="doctablecell"> </td>
+               <td class="doctablecell"> </td>
+               <td class="doctablecell">int const value=s.top();</td>
+            </tr>
+            <tr class="calibre11">
+               <td class="doctablecell"> </td>
+               <td class="doctablecell">s.pop();</td>
+               <td class="doctablecell"> </td>
+               <td class="doctablecell"> </td>
+            </tr>
+            <tr class="calibre11">
+               <td class="doctablecell"> </td>
+               <td class="doctablecell">do_something(value);</td>
+               <td class="doctablecell"> </td>
+               <td class="doctablecell">s.pop();</td>
+            </tr>
+            <tr class="calibre11">
+               <td class="doctablecell"> </td>
+               <td class="doctablecell"> </td>
+               <td class="doctablecell"> </td>
+               <td class="doctablecell">do_something(value);</td>
+            </tr>
+         </tbody>
+      </table>
+      
+      <p class="noind">As you can see, if these are the only threads running, there’s nothing in between the two calls to <kbd class="calibre17">top()</kbd> to modify the stack, so both threads will see the same value. Not only that, but there are no calls to <kbd class="calibre17">top()</kbd> between the calls to <kbd class="calibre17">pop()</kbd>. Consequently, one of the two values on the stack is discarded without ever having been read, whereas the other is processed
+         twice. This is yet another race condition and far more insidious than the undefined behavior of the <kbd class="calibre17">empty()</kbd>/<kbd class="calibre17">top()</kbd> race; there’s never anything obviously wrong going on, and the consequences of the bug are likely far removed from the cause,
+         although they obviously depend on exactly what <kbd class="calibre17">do_something()</kbd> does.
+      </p>
+      
+      <p class="noind">This calls for a more radical change to the interface, one that combines the calls to <kbd class="calibre17">top()</kbd> and <kbd class="calibre17">pop()</kbd> under the protection of the mutex. Tom Cargill<sup class="calibre18">[<a href="#ch03fn02" class="calibre4">2</a>]</sup> pointed out that a combined call can lead to issues if the copy constructor for the objects on the stack can throw an exception.
+         This problem was dealt with fairly comprehensively from an exception-safety point of view by Herb Sutter,<sup class="calibre18">[<a href="#ch03fn03" class="calibre4">3</a>]</sup> but the potential for race conditions brings something new to the mix.
+      </p>
+      <blockquote class="smaller">
+         <p class="calibre19"><sup class="calibre20"><a id="ch03fn02" class="calibre4">2</a></sup> 
+            </p><div class="calibre15">Tom Cargill, “Exception Handling: A False Sense of Security,” in C++ Report 6, no. 9 (November–December 1994). Also available
+               at <a href="http://www.informit.com/content/images/020163371x/supplements/Exception_Handling_Article.html" class="calibre4">http://www.informit.com/content/images/020163371x/supplements/Exception_Handling_Article.html</a>.
+            </div>
+         <p class="calibre19"></p>
+      </blockquote>
+      <blockquote class="smaller">
+         <p class="calibre19"><sup class="calibre20"><a id="ch03fn03" class="calibre4">3</a></sup> 
+            </p><div class="calibre15">Herb Sutter, Exceptional C++: 47 Engineering Puzzles, Programming Problems, and Solutions (Addison Wesley Professional, 1999).</div>
+         <p class="calibre19"></p>
+      </blockquote>
+      
+      <p class="noind">For those of you who aren’t aware of the issue, consider <kbd class="calibre17">stack&lt;vector&lt;int&gt;&gt;</kbd>. Now, a <kbd class="calibre17">vector</kbd> is a dynamically sized container, so when you copy a <kbd class="calibre17">vector</kbd>, the library has to allocate some more memory from the heap in order to copy the contents. If the system is heavily loaded
+         or there are significant resource constraints, this memory <a id="iddle1471" class="calibre4"></a><a id="iddle1472" class="calibre4"></a><a id="iddle1776" class="calibre4"></a><a id="iddle1787" class="calibre4"></a><a id="iddle1835" class="calibre4"></a><a id="iddle1836" class="calibre4"></a><a id="iddle1837" class="calibre4"></a><a id="iddle1853" class="calibre4"></a><a id="iddle1878" class="calibre4"></a><a id="iddle2162" class="calibre4"></a><a id="iddle2163" class="calibre4"></a>allocation can fail, so the copy constructor for <kbd class="calibre17">vector</kbd> might throw a <kbd class="calibre17">std::bad_alloc</kbd> exception. This is likely if the <kbd class="calibre17">vector</kbd> contains a lot of elements. If the <kbd class="calibre17">pop()</kbd> function was defined to return the value popped, as well as remove it from the stack, you have a potential problem: the value
+         being popped is returned to the caller only <i class="calibre6">after</i> the stack has been modified, but the process of copying the data to return to the caller might throw an exception. If this
+         happens, the data popped is lost; it has been removed from the stack, but the copy was unsuccessful! The designers of the
+         <kbd class="calibre17">std::stack</kbd> interface helpfully split the operation in two: get the top element (<kbd class="calibre17">top()</kbd>) and then remove it from the stack (<kbd class="calibre17">pop()</kbd>), so that if you can’t safely copy the data, it stays on the stack. If the problem was lack of heap memory, maybe the application
+         can free some memory and try again.
+      </p>
+      
+      <p class="noind">Unfortunately, it’s precisely this split that you’re trying to avoid in eliminating the race condition! Thankfully, there
+         are alternatives, but they aren’t without cost.
+      </p>
+      
+      
+      <h5 class="notetitle" id="ch03lev3sec1"><a id="ch03lev3sec1__title" class="calibre4"></a>Option 1: Pass in a reference
+      </h5>
+      
+      <p class="noind">The first option is to pass a reference to a variable in which you want to receive the popped value as an argument in the
+         call to <kbd class="calibre17">pop()</kbd>:
+      </p>
+      
+      <pre id="PLd0e5026" class="calibre5">std::vector&lt;int&gt; result;
+some_stack.pop(result);</pre>
+      
+      <p class="noind">This works well for many cases, but it has the distinct disadvantage that it requires the calling code to construct an instance
+         of the stack’s value type prior to the call, in order to pass this in as the target. For some types this is impractical, because
+         constructing an instance is expensive in terms of time or resources. For other types this isn’t always possible, because the
+         constructors require parameters that aren’t necessarily available at this point in the code. Finally, it requires that the
+         stored type be assignable. This is an important restriction: many user-defined types do not support assignment, though they
+         may support move construction or even copy construction (and allow return by value).
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03lev3sec2"><a id="ch03lev3sec2__title" class="calibre4"></a>Option 2: Require a no-throw copy constructor or move constructor
+      </h5>
+      
+      <p class="noind">There’s only an exception safety problem with a value-returning <kbd class="calibre17">pop()</kbd> if the return by value can throw an exception. Many types have copy constructors that don’t throw exceptions, and with the
+         new rvalue-reference support in the C++ Standard (see <a href="kindle_split_022.html#app01" class="calibre4">appendix A</a>, <a href="kindle_split_022.html#app01lev1sec1" class="calibre4">section A.1</a>), many more types will have a move constructor that doesn’t throw exceptions, even if their copy constructor does. One valid
+         option is to restrict the use of your thread-safe stack to those types that can safely be returned by value without throwing
+         an exception.
+      </p>
+      
+      <p class="noind">Although this is safe, it’s not ideal. Even though you can detect at compile time the existence of a copy or move constructor
+         that doesn’t throw an exception using the <kbd class="calibre17">std::is_nothrow_copy_constructible</kbd> and <kbd class="calibre17">std::is_nothrow_move_constructible</kbd> type traits, it’s quite limiting. There are many more user-defined types with copy constructors that can throw and don’t
+         have move constructors than there are types with copy and/or move constructors that can’t throw (although this might change
+         as people <a id="iddle1473" class="calibre4"></a><a id="iddle1778" class="calibre4"></a><a id="iddle1818" class="calibre4"></a><a id="iddle1838" class="calibre4"></a><a id="iddle2320" class="calibre4"></a><a id="iddle2419" class="calibre4"></a><a id="iddle2553" class="calibre4"></a>get used to the rvalue-reference support in C++11). It would be unfortunate if such types couldn’t be stored in your thread-safe
+         stack.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03lev3sec3"><a id="ch03lev3sec3__title" class="calibre4"></a>Option 3: Return a pointer to the popped item
+      </h5>
+      
+      <p class="noind">The third option is to return a pointer to the popped item rather than return the item by value. The advantage here is that
+         pointers can be freely copied without throwing an exception, so you’ve avoided Cargill’s exception problem. The disadvantage
+         is that returning a pointer requires a means of managing the memory allocated to the object, and for simple types such as
+         integers, the overhead of such memory management can exceed the cost of returning the type by value. For any interface that
+         uses this option, <kbd class="calibre17">std::shared_ptr</kbd> would be a good choice of pointer type; not only does it avoid memory leaks, because the object is destroyed once the last
+         pointer is destroyed, but the library is in full control of the memory allocation scheme and doesn’t have to use <kbd class="calibre17">new</kbd> and <kbd class="calibre17">delete</kbd>. This can be important for optimization purposes: requiring that each object in the stack be allocated separately with <kbd class="calibre17">new</kbd> would impose quite an overhead compared to the original non-thread-safe version.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03lev3sec4"><a id="ch03lev3sec4__title" class="calibre4"></a>Option 4: Provide both option 1 and either option 2 or 3
+      </h5>
+      
+      <p class="noind">Flexibility should never be ruled out, especially in generic code. If you’ve chosen option 2 or 3, it’s relatively easy to
+         provide option 1 as well, and this provides users of your code the ability to choose whichever option is most appropriate
+         for them at little additional cost.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03lev3sec5"><a id="ch03lev3sec5__title" class="calibre4"></a>Example definition of a thread-safe stack
+      </h5>
+      
+      <p class="noind"><a href="#ch03ex04" class="calibre4">Listing 3.4</a> shows the class definition for a stack with no race conditions in the interface and that implements options 1 and 3: there
+         are two overloads of <kbd class="calibre17">pop()</kbd>, one that takes a reference to a location in which to store the value and one that returns <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd>. It has a simple interface, with only two functions: <kbd class="calibre17">push()</kbd> and <kbd class="calibre17">pop()</kbd>.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03ex04">Listing 3.4. <a id="ch03ex04__title" class="calibre4"></a>An outline class definition for a thread-safe stack
+      </h5>
+      <pre id="PLd0e5172" class="calibre5">#include &lt;exception&gt;
+#include &lt;memory&gt;                                                    <b class="calibre24"><i class="calibre6">1</i></b>
+struct empty_stack: std::exception
+{
+    const char* what() const noexcept;
+};
+template&lt;typename T&gt;
+class threadsafe_stack
+{
+public:
+    threadsafe_stack();
+    threadsafe_stack(const threadsafe_stack&amp;);
+    threadsafe_stack&amp; operator=(const threadsafe_stack&amp;) = delete;   <b class="calibre24"><i class="calibre6">2</i></b>
+    void push(T new_value);
+    std::shared_ptr&lt;T&gt; pop();
+    void pop(T&amp; value);
+    bool empty() const;
+};</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><a id="iddle1316" class="calibre4"></a><b class="calibre24"><i class="calibre6">1</i> For std::shared_ptr&lt;&gt;</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Assignment operator is deleted</b></li>
+         
+      </ul>
+      
+      <p class="noind">By paring down the interface you allow for maximum safety; even operations on the whole stack are restricted. The stack itself
+         can’t be assigned, because the assignment operator is deleted <b class="calibre24"><i class="calibre6">2</i></b> (see <a href="kindle_split_022.html#app01" class="calibre4">appendix A</a>, <a href="kindle_split_022.html#app01lev1sec2" class="calibre4">section A.2</a>), and there’s no <kbd class="calibre17">swap()</kbd> function. It can, however, be copied, assuming the stack elements can be copied. The <kbd class="calibre17">pop()</kbd> functions throw an <kbd class="calibre17">empty_stack</kbd> exception if the stack is empty, so everything still works even if the stack is modified after a call to <kbd class="calibre17">empty()</kbd>. As mentioned in the description of option 3, the use of <kbd class="calibre17">std::shared_ptr</kbd> allows the stack to take care of the memory-allocation issues and avoid excessive calls to <kbd class="calibre17">new</kbd> and <kbd class="calibre17">delete</kbd> if desired. Your five stack operations have now become three: <kbd class="calibre17">push()</kbd>, <kbd class="calibre17">pop()</kbd>, and <kbd class="calibre17">empty()</kbd>. Even <kbd class="calibre17">empty()</kbd> is superfluous. This simplification of the interface allows for better control over the data; you can ensure that the mutex
+         is locked for the entirety of an operation. The following listing shows a simple implementation that’s a wrapper around <kbd class="calibre17">std::stack&lt;&gt;</kbd>.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03ex05">Listing 3.5. <a id="ch03ex05__title" class="calibre4"></a>A fleshed-out class definition for a thread-safe stack
+      </h5>
+      <pre id="PLd0e5265" class="calibre5">#include &lt;exception&gt;
+#include &lt;memory&gt;
+#include &lt;mutex&gt;
+#include &lt;stack&gt;
+struct empty_stack: std::exception
+{
+    const char* what() const throw();
+};
+template&lt;typename T&gt;
+class threadsafe_stack
+{
+private:
+    std::stack&lt;T&gt; data;
+    mutable std::mutex m;
+public:
+    threadsafe_stack(){}
+    threadsafe_stack(const threadsafe_stack&amp; other)
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(other.m);
+        data=other.data;                                                <b class="calibre24"><i class="calibre6">1</i></b>
+    }
+    threadsafe_stack&amp; operator=(const threadsafe_stack&amp;) = delete;
+    void push(T new_value)
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(m);
+        data.push(std::move(new_value));
+    }
+    std::shared_ptr&lt;T&gt; pop()
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(m);
+        if(data.empty()) throw empty_stack();                           <b class="calibre24"><i class="calibre6">2</i></b>
+        std::shared_ptr&lt;T&gt; const res(std::make_shared&lt;T&gt;(data.top()));  <b class="calibre24"><i class="calibre6">3</i></b>
+        data.pop();
+        return res;
+    }
+    void pop(T&amp; value)
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(m);
+        if(data.empty()) throw empty_stack();
+        value=data.top();
+        data.pop();
+    }
+    bool empty() const
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(m);
+        return data.empty();
+    }
+};</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><a id="iddle1779" class="calibre4"></a><a id="iddle2571" class="calibre4"></a><b class="calibre24"><i class="calibre6">1</i> Copy performed in constructor body</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Check for empty before trying to pop value</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">3</i> Allocate return value before modifying stack</b></li>
+         
+      </ul>
+      
+      <p class="noind">This stack implementation is <i class="calibre6">copyable</i>—the copy constructor locks the mutex in the source object and then copies the internal stack. You do the copy in the constructor
+         body <b class="calibre24"><i class="calibre6">1</i></b> rather than the member initializer list in order to ensure that the mutex is held across the copy.
+      </p>
+      
+      <p class="noind">As the discussion of <kbd class="calibre17">top()</kbd> and <kbd class="calibre17">pop()</kbd> shows, problematic race conditions in interfaces arise because of locking at too small a granularity; the protection doesn’t
+         cover the entirety of the desired operation. Problems with mutexes can also arise from locking at too large a granularity;
+         the extreme situation is a single global mutex that protects all shared data. In a system where there’s a significant amount
+         of shared data, this can eliminate any performance benefits of concurrency, because the threads are forced to run one at a
+         time, even when they’re accessing different bits of data. The first versions of the Linux kernel that were designed to handle
+         multi-processor systems used a single global kernel lock. Although this worked, it meant that a two-processor system typically
+         had much worse performance than two single-processor systems, and performance on a four-processor system was nowhere near
+         that of four single-processor systems. There was too much contention for the kernel, so the threads running on the additional
+         processors were unable to perform useful work. Later revisions of the Linux kernel have moved to a more fine-grained locking
+         scheme, so the performance of a four-processor system is much nearer the ideal of four times that of a single-processor system,
+         because there’s far less contention.
+      </p>
+      
+      <p class="noind">One issue with fine-grained locking schemes is that sometimes you need more than one mutex locked in order to protect all
+         the data in an operation. As described <a id="iddle1263" class="calibre4"></a><a id="iddle1269" class="calibre4"></a><a id="iddle1665" class="calibre4"></a><a id="iddle1908" class="calibre4"></a><a id="iddle2168" class="calibre4"></a>previously, sometimes the right thing to do is increase the granularity of the data covered by the mutexes, so that only one
+         mutex needs to be locked. But sometimes that’s undesirable, such as when the mutexes are protecting separate instances of
+         a class. In this case, locking at the next level up would mean either leaving the locking to the user or having a single mutex
+         that protected all instances of that class, neither of which is particularly desirable.
+      </p>
+      
+      <p class="noind">If you end up having to lock two or more mutexes for a given operation, there’s another potential problem lurking in the wings:
+         <i class="calibre6">deadlock</i>. This is almost the opposite of a race condition: rather than two threads racing to be first, each one is waiting for the
+         other, so neither makes any progress.
+      </p>
+      
+      
+      
+      
+      <h4 id="ch03lev2sec6" class="calibre23">3.2.4. <a id="ch03lev2sec6__title" class="calibre4"></a>Deadlock: the problem and a solution
+      </h4>
+      
+      <p class="noind">Imagine that you have a toy that comes in two parts, and you need both parts to play with it—a toy drum and drumstick, for
+         example. Now imagine that you have two small children, both of whom like playing with it. If one of them gets both the drum
+         and the drumstick, that child can merrily play the drum until tiring of it. If the other child wants to play, they have to
+         wait, however sad that makes them. Now imagine that the drum and the drumstick are buried (separately) in the toy box, and
+         your children both decide to play with them at the same time, so they go rummaging in the toy box. One finds the drum and
+         the other finds the drumstick. Now they’re stuck; unless one decides to be nice and let the other play, each will hold on
+         to whatever they have and demand that they be given the other piece, so neither gets to play.
+      </p>
+      
+      <p class="noind">Now imagine that you have not children arguing over toys but threads arguing over locks on mutexes: each of a pair of threads
+         needs to lock both of a pair of mutexes to perform some operation, and each thread has one mutex and is waiting for the other.
+         Neither thread can proceed, because each is waiting for the other to release its mutex. This scenario is called <i class="calibre6">deadlock</i>, and it’s the biggest problem with having to lock two or more mutexes in order to perform an operation.
+      </p>
+      
+      <p class="noind">The common advice for avoiding deadlock is to always lock the two mutexes in the same order: if you always lock mutex A before
+         mutex B, then you’ll never deadlock. Sometimes this is straightforward, because the mutexes are serving different purposes,
+         but other times it’s not so simple, such as when the mutexes are each protecting a separate instance of the same class. Consider,
+         for example, an operation that exchanges data between two instances of the same class; in order to ensure that the data is
+         exchanged correctly, without being affected by concurrent modifications, the mutexes on both instances must be locked. But
+         if a fixed order is chosen (for example, the mutex for the instance supplied as the first parameter, then the mutex for the
+         instance supplied as the second parameter), this can backfire: all it takes is for two threads to try to exchange data between
+         the same two instances with the parameters swapped, and you have deadlock!
+      </p>
+      
+      <p class="noind">Thankfully, the C++ Standard Library has a cure for this in the form of <kbd class="calibre17">std::lock</kbd>—a function that can lock two or more mutexes at once without risk of <a id="iddle1941" class="calibre4"></a><a id="iddle2250" class="calibre4"></a><a id="iddle2270" class="calibre4"></a><a id="iddle2420" class="calibre4"></a><a id="iddle2615" class="calibre4"></a>deadlock. The example in the next listing shows how to use this for a simple swap operation.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03ex06">Listing 3.6. <a id="ch03ex06__title" class="calibre4"></a>Using <kbd class="calibre17">std::lock()</kbd> and <kbd class="calibre17">std::lock_guard</kbd> in a swap operation
+      </h5>
+      <pre id="PLd0e5456" class="calibre5">class some_big_object;
+void swap(some_big_object&amp; lhs,some_big_object&amp; rhs);
+class X
+{
+private:
+    some_big_object some_detail;
+    std::mutex m;
+public:
+    X(some_big_object const&amp; sd):some_detail(sd){}
+    friend void swap(X&amp; lhs, X&amp; rhs)
+    {
+        if(&amp;lhs==&amp;rhs)
+            return;
+        std::lock(lhs.m,rhs.m);                                     <b class="calibre24"><i class="calibre6">1</i></b>
+        std::lock_guard&lt;std::mutex&gt; lock_a(lhs.m,std::adopt_lock);  <b class="calibre24"><i class="calibre6">2</i></b>
+        std::lock_guard&lt;std::mutex&gt; lock_b(rhs.m,std::adopt_lock);  <b class="calibre24"><i class="calibre6">3</i></b>
+        swap(lhs.some_detail,rhs.some_detail);
+    }
+};</pre>
+      
+      <p class="noind">First, the arguments are checked to ensure they are different instances, because attempting to acquire a lock on <kbd class="calibre17">std::mutex</kbd> when you already hold it is undefined behavior. (A mutex that does permit multiple locks by the same thread is provided in
+         the form of <kbd class="calibre17">std::recursive_mutex</kbd>. See <a href="#ch03lev2sec13" class="calibre4">section 3.3.3</a> for details.) Then, the call to <kbd class="calibre17">std::lock()</kbd> <b class="calibre24"><i class="calibre6">1</i></b> locks the two mutexes, and two <kbd class="calibre17">std::lock_guard</kbd> instances are constructed <b class="calibre24"><i class="calibre6">2</i></b> and <b class="calibre24"><i class="calibre6">3</i></b>, one for each mutex. The <kbd class="calibre17">std::adopt_lock</kbd> parameter is supplied in addition to the mutex to indicate to the <kbd class="calibre17">std::lock_guard</kbd> objects that the mutexes are already locked, and they should adopt the ownership of the existing lock on the mutex rather
+         than attempt to lock the mutex in the constructor.
+      </p>
+      
+      <p class="noind">This ensures that the mutexes are correctly unlocked on function exit in the general case where the protected operation might
+         throw an exception; it also allows for a simple return. Also, it’s worth noting that locking either <kbd class="calibre17">lhs.m</kbd> or <kbd class="calibre17">rhs.m</kbd> inside the call to <kbd class="calibre17">std::lock</kbd> can throw an exception; in this case, the exception is propagated out of <kbd class="calibre17">std::lock</kbd>. If <kbd class="calibre17">std::lock</kbd> has successfully acquired a lock on one mutex and an exception is thrown when it tries to acquire a lock on the other mutex,
+         this first lock is released automatically: <kbd class="calibre17">std::lock</kbd> provides all-or-nothing semantics with regard to locking the supplied mutexes.
+      </p>
+      
+      <p class="noind">C++17 provides additional support for this scenario, in the form of a new RAII template, <kbd class="calibre17">std::scoped_lock&lt;&gt;</kbd>. This is exactly equivalent to <kbd class="calibre17">std::lock_guard&lt;&gt;</kbd>, except that it is a <i class="calibre6">variadic template</i>, accepting a <i class="calibre6">list</i> of mutex types as template parameters, and a <i class="calibre6">list</i> of mutexes as constructor arguments. The mutexes supplied to the constructor are locked using the same algorithm as <kbd class="calibre17">std::lock</kbd>, so that when the constructor <a id="iddle1264" class="calibre4"></a><a id="iddle1266" class="calibre4"></a><a id="iddle1267" class="calibre4"></a><a id="iddle1557" class="calibre4"></a><a id="iddle1561" class="calibre4"></a><a id="iddle1679" class="calibre4"></a><a id="iddle2609" class="calibre4"></a>completes they are all locked, and they are then all unlocked in the destructor. The <kbd class="calibre17">swap()</kbd> operation from <a href="#ch03ex06" class="calibre4">listing 3.6</a> can be rewritten as follows:
+      </p>
+      
+      <pre id="PLd0e5616" class="calibre5">void swap(X&amp; lhs, X&amp; rhs)
+    {
+        if(&amp;lhs==&amp;rhs)
+            return;
+        std::scoped_lock guard(lhs.m,rhs.m);       <b class="calibre24"><i class="calibre6">1</i></b>
+        swap(lhs.some_detail,rhs.some_detail);
+    }</pre>
+      
+      <p class="noind">This example uses another feature added with C++17: automatic deduction of class template parameters. If you have a C++17
+         compiler (which is likely if you’re using <kbd class="calibre17">std::scoped_lock</kbd>, because that is a C++17 library facility), the C++17 implicit class template parameter deduction mechanism will choose the
+         correct mutex types from the types of the objects passed to the constructor at object <b class="calibre24"><i class="calibre6">1</i></b>. This line is equivalent to the fully specified version:
+      </p>
+      
+      <pre id="PLd0e5636" class="calibre5">std::scoped_lock&lt;std::mutex,std::mutex&gt; guard(lhs.m,rhs.m);</pre>
+      
+      <p class="noind">The existence of <kbd class="calibre17">std::scoped_lock</kbd> means that most of the cases where you would have used <kbd class="calibre17">std::lock</kbd> prior to C++17 can now be written using <kbd class="calibre17">std::scoped_lock</kbd>, with less potential for mistakes, which can only be a good thing!
+      </p>
+      
+      <p class="noind">Although <kbd class="calibre17">std::lock</kbd> (and <kbd class="calibre17">std::scoped_lock&lt;&gt;</kbd>) can help you avoid deadlock in those cases where you need to acquire two or more locks together, it doesn’t help if they’re
+         acquired separately. In that case, you have to rely on your discipline as developers to ensure you don’t get deadlock. This
+         isn’t easy: deadlocks are one of the nastiest problems to encounter in multithreaded code and are often unpredictable, with
+         everything working fine the majority of the time. There are, however, some relatively simple rules that can help you to write
+         deadlock-free code.
+      </p>
+      
+      
+      
+      <h4 id="ch03lev2sec7" class="calibre23">3.2.5. <a id="ch03lev2sec7__title" class="calibre4"></a>Further guidelines for avoiding deadlock
+      </h4>
+      
+      <p class="noind">Deadlock doesn’t only occur with locks, although that’s the most frequent cause; you can create deadlock with two threads
+         and no locks by having each thread call <kbd class="calibre17">join()</kbd> on the <kbd class="calibre17">std::thread</kbd> object for the other. In this case, neither thread can make progress because it’s waiting for the other to finish, like the
+         children fighting over their toy. This simple cycle can occur anywhere that a thread can wait for another thread to perform
+         some action if the other thread can simultaneously be waiting for the first thread, and it isn’t limited to two threads: a
+         cycle of three or more threads will still cause deadlock. The guidelines for avoiding deadlock all boil down to one idea:
+         don’t wait for another thread if there’s a chance it’s waiting for you. The individual guidelines provide ways of identifying
+         and eliminating the possibility that the other thread is waiting for you.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03lev3sec6"><a id="ch03lev3sec6__title" class="calibre4"></a>Avoid nested locks
+      </h5>
+      
+      <p class="noind"><a id="iddle1265" class="calibre4"></a><a id="iddle1556" class="calibre4"></a><a id="iddle2169" class="calibre4"></a>The first idea is the simplest: don’t acquire a lock if you already hold one. If you stick to this guideline, it’s impossible
+         to get a deadlock from the lock usage alone because each thread only ever holds a single lock. You could still get deadlock
+         from other things (like the threads waiting for each other), but mutex locks are probably the most common cause of deadlock.
+         If you need to acquire multiple locks, do it as a single action with <kbd class="calibre17">std::lock</kbd> in order to acquire them without deadlock.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03lev3sec7"><a id="ch03lev3sec7__title" class="calibre4"></a>Avoid calling user-supplied code while holding a lock
+      </h5>
+      
+      <p class="noind">This is a simple follow-on from the previous guideline. Because the code is user-supplied, you have no idea what it could
+         do; it could do anything, including acquiring a lock. If you call user-supplied code while holding a lock, and that code acquires
+         a lock, you’ve violated the guideline on avoiding nested locks and could get deadlock. Sometimes this is unavoidable; if you’re
+         writing generic code, such as the stack in <a href="#ch03lev2sec5" class="calibre4">section 3.2.3</a>, every operation on the parameter type or types is user-supplied code. In this case, you need a new guideline.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03lev3sec8"><a id="ch03lev3sec8__title" class="calibre4"></a>Acquire locks in a fixed order
+      </h5>
+      
+      <p class="noind">If you absolutely must acquire two or more locks, and you can’t acquire them as a single operation with <kbd class="calibre17">std::lock</kbd>, the next best thing is to acquire them in the same order in every thread. I touched on this in <a href="#ch03lev2sec6" class="calibre4">section 3.2.4</a> as one way of avoiding deadlock when acquiring two mutexes: the key is to define the order in a way that’s consistent between
+         threads. In some cases, this is relatively easy. For example, look at the stack from <a href="#ch03lev2sec5" class="calibre4">section 3.2.3</a>—the mutex is internal to each stack instance, but the operations on the data items stored in a stack require calling user-supplied
+         code. You can, however, add the constraint that none of the operations on the data items stored in the stack should perform
+         any operation on the stack itself. This puts the burden on the user of the stack, but it’s rather uncommon for the data stored
+         in a container to access that container, and it’s quite apparent when this is happening, so it’s not a particularly difficult
+         burden to carry.
+      </p>
+      
+      <p class="noind">In other cases, this isn’t so straightforward, as you discovered with the swap operation in <a href="#ch03lev2sec6" class="calibre4">section 3.2.4</a>. At least in that case you could lock the mutexes simultaneously, but that’s not always possible. If you look back at the
+         linked list example from <a href="#ch03lev1sec1" class="calibre4">section 3.1</a>, you’ll see that one possibility for protecting the list is to have a mutex per node. Then, in order to access the list,
+         threads must acquire a lock on every node they’re interested in. For a thread to delete an item, it must then acquire the
+         lock on three nodes: the node being deleted and the nodes on either side, because they’re all being modified in some way.
+         Likewise, to traverse the list, a thread must keep hold of the lock on the current node while it acquires the lock on the
+         next one in the sequence, in order to ensure that the next pointer isn’t modified in the meantime. Once the lock on the next
+         node has been acquired, the lock on the first can be released because it’s no longer necessary.
+      </p>
+      
+      <p class="noind">This hand-over-hand locking style allows multiple threads to access the list, provided each is accessing a different node.
+         But in order to prevent deadlock, the <a id="iddle1268" class="calibre4"></a><a id="iddle1453" class="calibre4"></a><a id="iddle1560" class="calibre4"></a>nodes must always be locked in the same order: if two threads tried to traverse the list in opposite orders using hand-over-hand
+         locking, they could deadlock with each other in the middle of the list. If nodes A and B are adjacent in the list, the thread
+         going one way will try to hold the lock on node A and try to acquire the lock on node B. A thread going the other way would
+         be holding the lock on node B and trying to acquire the lock on node A—a classic scenario for deadlock, as shown in <a href="#ch03fig02" class="calibre4">figure 3.2</a>.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03fig02">Figure 3.2. <a id="ch03fig02__title" class="calibre4"></a>Deadlock with threads traversing a list in opposite orders
+      </h5>
+      
+      <p class="center1"><img alt="" src="03fig02_alt.jpg" class="calibre2"/></p>
+      
+      
+      <p class="noind">Likewise, when deleting node B that lies between nodes A and C, if that thread acquires the lock on B before the locks on
+         A and C, it has the potential to deadlock with a thread traversing the list. Such a thread would try to lock either A or C
+         first (depending on the direction of traversal) but would then find that it couldn’t obtain a lock on B because the thread
+         doing the deleting was holding the lock on B and trying to acquire the locks on A and C.
+      </p>
+      
+      <p class="noind">One way to prevent deadlock here is to define an order of traversal, so a thread must always lock A before B and B before
+         C. This would eliminate the possibility of deadlock at the expense of disallowing reverse traversal. Similar conventions can
+         often be established for other data structures.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03lev3sec9"><a id="ch03lev3sec9__title" class="calibre4"></a>Use a lock hierarchy
+      </h5>
+      
+      <p class="noind">Although this is a particular case of defining lock ordering, a lock hierarchy can provide a means of checking that the convention
+         is adhered to at runtime. The idea is that you divide your application into layers and identify all the mutexes that may be
+         locked in any given layer. When code tries to lock a mutex, it isn’t permitted to lock that mutex if it already holds a lock
+         from a lower layer. You can check this at runtime by assigning layer numbers to each mutex and keeping a record of which mutexes
+         are locked by each thread. This is a common pattern, but the C++ Standard Library does not provide direct support for it,
+         so you will need to write a custom <kbd class="calibre17">hierarchical_mutex</kbd> mutex type, the code for which is shown in <a href="#ch03ex08" class="calibre4">listing 3.8</a>.
+      </p>
+      
+      <p class="noind">The following listing shows an example of two threads using a hierarchical mutex.</p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03ex07">Listing 3.7. <a id="ch03ex07__title" class="calibre4"></a>Using a lock hierarchy to prevent deadlock
+      </h5>
+      <pre id="PLd0e5825" class="calibre5">hierarchical_mutex high_level_mutex(10000);                     <b class="calibre24"><i class="calibre6">1</i></b>
+hierarchical_mutex low_level_mutex(5000);                       <b class="calibre24"><i class="calibre6">2</i></b>
+hierarchical_mutex other_mutex(6000);                           <b class="calibre24"><i class="calibre6">3</i></b>
+int do_low_level_stuff();
+int low_level_func()
+{
+    std::lock_guard&lt;hierarchical_mutex&gt; lk(low_level_mutex);    <b class="calibre24"><i class="calibre6">4</i></b>
+    return do_low_level_stuff();
+}
+void high_level_stuff(int some_param);
+void high_level_func()
+{
+    std::lock_guard&lt;hierarchical_mutex&gt; lk(high_level_mutex);   <b class="calibre24"><i class="calibre6">6</i></b>
+    high_level_stuff(low_level_func());                         <b class="calibre24"><i class="calibre6">5</i></b>
+}
+void thread_a()                                                 <b class="calibre24"><i class="calibre6">7</i></b>
+{
+    high_level_func();
+}
+
+void do_other_stuff();
+void other_stuff()
+{
+    high_level_func();                                          <b class="calibre24"><i class="calibre6">10</i></b>
+    do_other_stuff();
+}
+void thread_b()                                                 <b class="calibre24"><i class="calibre6">8</i></b>
+{
+    std::lock_guard&lt;hierarchical_mutex&gt; lk(other_mutex);        <b class="calibre24"><i class="calibre6">9</i></b>
+    other_stuff();
+}</pre>
+      
+      <p class="noind"><a id="iddle2577" class="calibre4"></a>This code has three instances of <kbd class="calibre17">hierarchical_mutex</kbd>, (<b class="calibre24"><i class="calibre6">1</i></b>, <b class="calibre24"><i class="calibre6">2</i></b>, and <b class="calibre24"><i class="calibre6">3</i></b>), which are constructed with progressively lower hierarchy numbers. Because the mechanism is defined so that if you hold
+         a lock on a <kbd class="calibre17">hierarchical_mutex</kbd>, then you can only acquire a lock on another <kbd class="calibre17">hierarchical_mutex</kbd> with a lower hierarchy number, this imposes restrictions on what the code can do.
+      </p>
+      
+      <p class="noind">Assuming <kbd class="calibre17">do_low_level_stuff</kbd> doesn’t lock any mutexes, <kbd class="calibre17">low_level_func</kbd> is the bottom of your hierarchy, and locks the <kbd class="calibre17">low_level_mutex</kbd> <b class="calibre24"><i class="calibre6">4</i></b>. <kbd class="calibre17">high_level_func</kbd> calls <kbd class="calibre17">low_level_func</kbd> <b class="calibre24"><i class="calibre6">5</i></b>, while holding a lock on <kbd class="calibre17">high_level_mutex</kbd> <b class="calibre24"><i class="calibre6">6</i></b>, but that’s OK, because the hierarchy level of <kbd class="calibre17">high_level_mutex</kbd> (<b class="calibre24"><i class="calibre6">1</i></b>: 10000) is higher than that of <kbd class="calibre17">low_level_mutex</kbd> (<b class="calibre24"><i class="calibre6">2</i></b>: 5000).
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">thread_a()</kbd> <b class="calibre24"><i class="calibre6">7</i></b> abides by the rules, so it runs fine.
+      </p>
+      
+      <p class="noind">On the other hand, <kbd class="calibre17">thread_b()</kbd> <b class="calibre24"><i class="calibre6">8</i></b> disregards the rules and therefore will fail at runtime.
+      </p>
+      
+      <p class="noind">First off, it locks <kbd class="calibre17">other_mutex</kbd> <b class="calibre24"><i class="calibre6">9</i></b>, which has a hierarchy value of only 6000 <b class="calibre24"><i class="calibre6">3</i></b>. This means it should be somewhere midway in the hierarchy. When <kbd class="calibre17">other_stuff()</kbd> calls <kbd class="calibre17">high_level_func()</kbd> <b class="calibre24"><i class="calibre6">10</i></b>, it’s violating the hierarchy: <kbd class="calibre17">high_level_func()</kbd> tries to acquire the <kbd class="calibre17">high_level_mutex</kbd>, which has a value of 10000, considerably more than the current hierarchy value of 6000. The <kbd class="calibre17">hierarchical_mutex</kbd> will therefore report an error, possibly by throwing an exception or aborting the program. Deadlocks between hierarchical
+         mutexes are impossible, because the mutexes themselves enforce the lock ordering. This does mean that you can’t hold two locks
+         at the same time if they’re the same level in the hierarchy, so hand-over-hand locking schemes require that each mutex in
+         the chain has a lower hierarchy value than the prior one, which may be impractical in some cases.
+      </p>
+      
+      <p class="noind">This example also demonstrates another point: the use of the <kbd class="calibre17">std::lock_guard&lt;&gt;</kbd> template with a user-defined mutex type. <kbd class="calibre17">hierarchical_mutex</kbd> is not part of the standard but is easy to write; a simple implementation is shown in <a href="#ch03ex08" class="calibre4">listing 3.8</a>. Even though it’s a user-defined type, it can be used with <kbd class="calibre17">std::lock_guard&lt;&gt;</kbd> because it implements the three member functions required to satisfy the mutex concept: <kbd class="calibre17">lock()</kbd>, <kbd class="calibre17">unlock()</kbd>, and <kbd class="calibre17">try_lock()</kbd>. You haven’t yet seen <kbd class="calibre17">try_lock()</kbd> used directly, but it’s fairly simple: if the lock on the mutex is held by another thread, it returns <kbd class="calibre17">false</kbd> rather than waiting until the calling thread can acquire the lock on the mutex. It may also be used by <kbd class="calibre17">std::lock()</kbd> internally, as part of the deadlock-avoidance algorithm.
+      </p>
+      
+      <p class="noind">The implementation of <kbd class="calibre17">hierarchical_mutex</kbd> uses a thread-local variable to store the current hierarchy value. This value is accessible to all mutex instances, but has
+         a different value on each thread. This allows the code to check the behavior of each thread separately, and the code for each
+         mutex can check whether or not the current thread is allowed to lock that mutex.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03ex08">Listing 3.8. <a id="ch03ex08__title" class="calibre4"></a>A simple hierarchical mutex
+      </h5>
+      <pre id="PLd0e6046" class="calibre5">class hierarchical_mutex
+{
+    std::mutex internal_mutex;
+    unsigned long const hierarchy_value;
+    unsigned long previous_hierarchy_value;
+    static thread_local unsigned long this_thread_hierarchy_value;   <b class="calibre24"><i class="calibre6">1</i></b>
+    void check_for_hierarchy_violation()
+    {
+        if(this_thread_hierarchy_value &lt;= hierarchy_value)           <b class="calibre24"><i class="calibre6">2</i></b>
+        {
+            throw std::logic_error("mutex hierarchy violated");
+        }
+    }
+    void update_hierarchy_value()
+    {
+        previous_hierarchy_value=this_thread_hierarchy_value;        <b class="calibre24"><i class="calibre6">3</i></b>
+        this_thread_hierarchy_value=hierarchy_value;
+    }
+public:
+    explicit hierarchical_mutex(unsigned long value):
+        hierarchy_value(value),
+        previous_hierarchy_value(0)
+    {}
+    void lock()
+    {
+        check_for_hierarchy_violation();
+        internal_mutex.lock();                                       <b class="calibre24"><i class="calibre6">4</i></b>
+        update_hierarchy_value();                                    <b class="calibre24"><i class="calibre6">5</i></b>
+    }
+    void unlock()
+    {
+        if(this_thread_hierarchy_value!=hierarchy_value)
+            throw std::logic_error("mutex hierarchy violated");      <b class="calibre24"><i class="calibre6">9</i></b>
+        this_thread_hierarchy_value=previous_hierarchy_value;        <b class="calibre24"><i class="calibre6">6</i></b>
+        internal_mutex.unlock();
+    }
+    bool try_lock()
+    {
+        check_for_hierarchy_violation();
+        if(!internal_mutex.try_lock())                               <b class="calibre24"><i class="calibre6">7</i></b>
+            return false;
+        update_hierarchy_value();
+        return true;
+    }
+};
+thread_local unsigned long
+    hierarchical_mutex::this_thread_hierarchy_value(ULONG_MAX);      <b class="calibre24"><i class="calibre6">8</i></b></pre>
+      
+      <p class="noind"><a id="iddle1101" class="calibre4"></a><a id="iddle1454" class="calibre4"></a><a id="iddle2474" class="calibre4"></a>The key here is the use of the <kbd class="calibre17">thread_local</kbd> value representing the hierarchy value for the current thread: <kbd class="calibre17">this_thread_hierarchy_value</kbd> <b class="calibre24"><i class="calibre6">1</i></b>. It’s initialized to the maximum value <b class="calibre24"><i class="calibre6">8</i></b>, so initially any mutex can be locked. Because it’s declared <kbd class="calibre17">thread_local</kbd>, every thread has its own copy, so the state of the variable in one thread is entirely independent of the state of the variable
+         when read from another thread. See <a href="kindle_split_022.html#app01" class="calibre4">appendix A</a>, <a href="kindle_split_022.html#app01lev1sec8" class="calibre4">section A.8</a>, for more information about <kbd class="calibre17">thread_local</kbd>.
+      </p>
+      
+      <p class="noind">So, the first time a thread locks an instance of <kbd class="calibre17">hierarchical_mutex</kbd>, the value of <kbd class="calibre17">this_thread_hierarchy_value</kbd> is <kbd class="calibre17">ULONG_MAX</kbd>. By its nature, this is greater than any <a id="iddle1384" class="calibre4"></a><a id="iddle1554" class="calibre4"></a><a id="iddle1666" class="calibre4"></a><a id="iddle1909" class="calibre4"></a><a id="iddle1942" class="calibre4"></a><a id="iddle2117" class="calibre4"></a><a id="iddle2172" class="calibre4"></a><a id="iddle2388" class="calibre4"></a>other value, so the check in <kbd class="calibre17">check_for_hierarchy_violation()</kbd> <b class="calibre24"><i class="calibre6">2</i></b> passes. With that check out of the way, <kbd class="calibre17">lock()</kbd> delegates to the internal mutex for the locking <b class="calibre24"><i class="calibre6">4</i></b>. Once this lock has succeeded, you can update the hierarchy value <b class="calibre24"><i class="calibre6">5</i></b>.
+      </p>
+      
+      <p class="noind">If you now lock <i class="calibre6">another</i> <kbd class="calibre17">hierarchical_mutex</kbd> while holding the lock on this first one, the value of <kbd class="calibre17">this_thread_hierarchy_value</kbd> reflects the hierarchy value of the first mutex. The hierarchy value of this second mutex must now be less than that of the
+         mutex already held in order for the check <b class="calibre24"><i class="calibre6">2</i></b> to pass.
+      </p>
+      
+      <p class="noind">Now, it’s important to save the previous value of the hierarchy value for the current thread so you can restore it in <kbd class="calibre17">unlock()</kbd> <b class="calibre24"><i class="calibre6">6</i></b>; otherwise you’d never be able to lock a mutex with a higher hierarchy value again, even if the thread didn’t hold any locks.
+         Because you store this previous hierarchy value only when you hold the <kbd class="calibre17">internal_mutex</kbd> <b class="calibre24"><i class="calibre6">3</i></b>, and you restore it <i class="calibre6">before</i> you unlock the internal mutex <b class="calibre24"><i class="calibre6">6</i></b>, you can safely store it in the <kbd class="calibre17">hierarchical_mutex</kbd> itself, because it’s safely protected by the lock on the internal mutex. In order to avoid the hierarchy getting confused
+         due to out-of-order unlocking, you throw at <b class="calibre24"><i class="calibre6">9</i></b> if the mutex being unlocked is not the most recently locked one. Other mechanisms are possible, but this is the simplest.
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">try_lock()</kbd> works the same as <kbd class="calibre17">lock()</kbd>, except that if the call to <kbd class="calibre17">try_lock()</kbd> on the <kbd class="calibre17">internal_mutex</kbd> fails <b class="calibre24"><i class="calibre6">7</i></b>, then you don’t own the lock, so you don’t update the hierarchy value, and return <kbd class="calibre17">false</kbd> rather than <kbd class="calibre17">true</kbd>.
+      </p>
+      
+      <p class="noind">Although detection is a runtime check, it’s at least not timing-dependent—you don’t have to wait around for the rare conditions
+         that cause deadlock to show up. Also, the design process required to divide the application and mutexes in this way can help
+         eliminate many possible causes of deadlock before they even get written. It might be worth performing the design exercise
+         even if you don’t go as far as writing the runtime checks.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03lev3sec10"><a id="ch03lev3sec10__title" class="calibre4"></a>Extending these guidelines beyond locks
+      </h5>
+      
+      <p class="noind">As I mentioned back at the beginning of this section, deadlock doesn’t only occur with locks; it can occur with any synchronization
+         construct that can lead to a wait cycle. It’s therefore worth extending these guidelines to cover those cases too. For example,
+         just as you should avoid acquiring nested locks if possible, it’s a bad idea to wait for a thread while holding a lock, because
+         that thread might need to acquire the lock in order to proceed. Similarly, if you’re going to wait for a thread to finish,
+         it might be worth identifying a thread hierarchy, so that a thread waits only for threads lower down the hierarchy. One simple
+         way to do this is to ensure that your threads are joined in the same function that started them, as described in <a href="#ch03lev2sec2" class="calibre4">sections 3.1.2</a> and <a href="#ch03lev1sec3" class="calibre4">3.3</a>.
+      </p>
+      
+      <p class="noind">Once you’ve designed your code to avoid deadlock, <kbd class="calibre17">std::lock()</kbd> and <kbd class="calibre17">std:: lock_guard</kbd> cover most of the cases of simple locking, but sometimes more flexibility is required. For those cases, the Standard Library
+         provides the <kbd class="calibre17">std::unique_lock</kbd> template. Like <kbd class="calibre17">std::lock_guard</kbd>, this is a class template parameterized on the mutex type, and it also provides the same RAII-style lock management as <kbd class="calibre17">std::lock_guard</kbd>, but with a bit more flexibility.
+      </p>
+      
+      
+      
+      
+      
+      <h4 id="ch03lev2sec8" class="calibre23">3.2.6. <a id="ch03lev2sec8__title" class="calibre4"></a>Flexible locking with std::unique_lock
+      </h4>
+      
+      <p class="noind"><a id="iddle2271" class="calibre4"></a><kbd class="calibre17">std::unique_lock</kbd> provides a bit more flexibility than <kbd class="calibre17">std::lock_guard</kbd> by relaxing the invariants; an <kbd class="calibre17">std::unique_lock</kbd> instance doesn’t always own the mutex that it’s associated with. First off, as you can pass <kbd class="calibre17">std::adopt_lock</kbd> as a second argument to the constructor to have the lock object manage the lock on a mutex, you can also pass <kbd class="calibre17">std::defer_lock</kbd> as the second argument to indicate that the mutex should remain unlocked on construction. The lock can then be acquired later
+         by calling <kbd class="calibre17">lock()</kbd> on the <kbd class="calibre17">std::unique_lock</kbd> object (<i class="calibre6">not</i> the mutex) or by passing the <kbd class="calibre17">std:: unique_lock</kbd> object to <kbd class="calibre17">std::lock()</kbd>. <a href="#ch03ex06" class="calibre4">Listing 3.6</a> could easily have been written as shown in <a href="#ch03ex09" class="calibre4">listing 3.9</a>, using <kbd class="calibre17">std::unique_lock</kbd> and <kbd class="calibre17">std::defer_lock</kbd> <b class="calibre24"><i class="calibre6">1</i></b>, rather than <kbd class="calibre17">std::lock_guard</kbd> and <kbd class="calibre17">std::adopt_lock</kbd>. The code has the same line count and is equivalent, apart from one small thing: <kbd class="calibre17">std::unique_lock</kbd> takes more space and is slightly slower to use than <kbd class="calibre17">std::lock_guard</kbd>. The flexibility of allowing an <kbd class="calibre17">std::unique_lock</kbd> instance <i class="calibre6">not</i> to own the mutex comes at a price: this information has to be stored, and it has to be updated.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03ex09">Listing 3.9. <a id="ch03ex09__title" class="calibre4"></a>Using <kbd class="calibre17">std::lock()</kbd> and <kbd class="calibre17">std::unique_lock</kbd> in a swap operation
+      </h5>
+      <pre id="PLd0e6422" class="calibre5">class some_big_object;
+void swap(some_big_object&amp; lhs,some_big_object&amp; rhs);
+class X
+{
+private:
+    some_big_object some_detail;
+    std::mutex m;
+public:
+    X(some_big_object const&amp; sd):some_detail(sd){}
+    friend void swap(X&amp; lhs, X&amp; rhs)
+    {
+        if(&amp;lhs==&amp;rhs)
+            return;
+        <b class="calibre24">std::unique_lock&lt;std::mutex&gt; lock_a(lhs.m,std::defer_lock);</b>   <b class="calibre24"><i class="calibre6">1</i></b>
+        <b class="calibre24">std::unique_lock&lt;std::mutex&gt; lock_b(rhs.m,std::defer_lock);</b>   <b class="calibre24"><i class="calibre6">1</i></b>
+        <b class="calibre24">std::lock(lock_a,lock_b);</b>                                     <b class="calibre24"><i class="calibre6">2</i></b>
+        swap(lhs.some_detail,rhs.some_detail);
+    }
+};</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> std::defer_lock leaves mutexes unlocked.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Mutexes are locked here.</b></li>
+         
+      </ul>
+      
+      <p class="noind">In <a href="#ch03ex09" class="calibre4">listing 3.9</a>, the <kbd class="calibre17">std::unique_lock</kbd> objects could be passed to <kbd class="calibre17">std::lock()</kbd> <b class="calibre24"><i class="calibre6">2</i></b>, because <kbd class="calibre17">std::unique_lock</kbd> provides <kbd class="calibre17">lock()</kbd>, <kbd class="calibre17">try_lock()</kbd>, and <kbd class="calibre17">unlock()</kbd> member functions. These forward to the member functions of the same name on the underlying mutex to do the work and update
+         a flag inside the <kbd class="calibre17">std::unique_lock</kbd> instance to indicate whether the mutex is currently owned by that instance. This flag is necessary in order to ensure that
+         <kbd class="calibre17">unlock()</kbd> is called correctly in the destructor. If the instance <i class="calibre6">does</i> <a id="iddle1217" class="calibre4"></a><a id="iddle1433" class="calibre4"></a><a id="iddle1572" class="calibre4"></a><a id="iddle1629" class="calibre4"></a><a id="iddle1670" class="calibre4"></a><a id="iddle1736" class="calibre4"></a><a id="iddle1806" class="calibre4"></a><a id="iddle1879" class="calibre4"></a><a id="iddle1885" class="calibre4"></a><a id="iddle1912" class="calibre4"></a>own the mutex, the destructor <i class="calibre6">must</i> call <kbd class="calibre17">unlock()</kbd>, and if the instance <i class="calibre6">does not</i> own the mutex, it <i class="calibre6">must not</i> call <kbd class="calibre17">unlock()</kbd>. This flag can be queried by calling the <kbd class="calibre17">owns_lock()</kbd> member function. Unless you’re going to be transferring lock ownership around or doing something else that requires <kbd class="calibre17">std::unique_lock</kbd>, you’re still better off using the C++17 variadic <kbd class="calibre17">std::scoped_lock</kbd> if it’s available to you (see <a href="#ch03lev2sec6" class="calibre4">section 3.2.4</a>).
+      </p>
+      
+      <p class="noind">As you might expect, this flag has to be stored somewhere. Therefore, the size of a <kbd class="calibre17">std::unique_lock</kbd> object is typically larger than that of a <kbd class="calibre17">std::lock_guard</kbd> object, and there’s also a slight performance penalty when using <kbd class="calibre17">std::unique_lock</kbd> over <kbd class="calibre17">std:: lock_guard</kbd> because the flag has to be updated or checked, as appropriate. If <kbd class="calibre17">std::lock_guard</kbd> is sufficient for your needs, I’d therefore recommend using it in preference. That said, there are cases where <kbd class="calibre17">std::unique_lock</kbd> is a better fit for the task at hand because you need to make use of the additional flexibility. One example is deferred
+         locking, as you’ve already seen; another case is where the ownership of the lock needs to be transferred from one scope to
+         another.
+      </p>
+      
+      
+      
+      <h4 id="ch03lev2sec9" class="calibre23">3.2.7. <a id="ch03lev2sec9__title" class="calibre4"></a>Transferring mutex ownership between scopes
+      </h4>
+      
+      <p class="noind">Because <kbd class="calibre17">std::unique_lock</kbd> instances don’t have to own their associated mutexes, the ownership of a mutex can be transferred between instances by <i class="calibre6">moving</i> the instances around. In some cases this transfer is automatic, such as when returning an instance from a function, and in
+         other cases you have to do it explicitly by calling <kbd class="calibre17">std::move()</kbd>. Fundamentally this depends on whether the source is an <i class="calibre6">lvalue</i>—a real variable or reference to one—or an <i class="calibre6">rvalue</i>—a temporary of some kind. Ownership transfer is automatic if the source is an rvalue and must be done explicitly for an lvalue
+         in order to avoid accidentally transferring ownership away from a variable. <kbd class="calibre17">std::unique_lock</kbd> is an example of a type that’s <i class="calibre6">moveable</i> but not <i class="calibre6">copyable</i>. See <a href="kindle_split_022.html#app01" class="calibre4">appendix A</a>, <a href="kindle_split_022.html#app01lev2sec1" class="calibre4">section A.1.1</a>, for more about move semantics.
+      </p>
+      
+      <p class="noind">One possible use is to allow a function to lock a mutex and transfer ownership of that lock to the caller, so the caller can
+         then perform additional actions under the protection of the same lock. The following code snippet shows an example of this;
+         the <kbd class="calibre17">get_lock()</kbd> function locks the mutex and then prepares the data before returning the lock to the caller:
+      </p>
+      
+      <pre id="PLd0e6660" class="calibre5">std::unique_lock&lt;std::mutex&gt; get_lock()
+{
+    extern std::mutex some_mutex;
+    std::unique_lock&lt;std::mutex&gt; lk(some_mutex);
+    prepare_data();
+    return lk;                                      <b class="calibre24"><i class="calibre6">1</i></b>
+}
+void process_data()
+{
+    std::unique_lock&lt;std::mutex&gt; lk(get_lock());    <b class="calibre24"><i class="calibre6">2</i></b>
+    do_something();
+}</pre>
+      
+      <p class="noind"><a id="iddle1667" class="calibre4"></a><a id="iddle1910" class="calibre4"></a>Because <kbd class="calibre17">lk</kbd> is an automatic variable declared within the function, it can be returned directly <b class="calibre24"><i class="calibre6">1</i></b>, without a call to <kbd class="calibre17">std:move()</kbd>; the compiler takes care of calling the move constructor. The <kbd class="calibre17">process_data()</kbd> function can then transfer ownership directly into its own <kbd class="calibre17">std::unique_lock</kbd> instance <b class="calibre24"><i class="calibre6">2</i></b>, and the call to <kbd class="calibre17">do_something()</kbd> can rely on the data being correctly prepared without another thread altering the data in the meantime.
+      </p>
+      
+      <p class="noind">Typically this sort of pattern would be used where the mutex to be locked is dependent on the current state of the program
+         or on an argument passed in to the function that returns the <kbd class="calibre17">std::unique_lock</kbd> object. One such usage is where the lock isn’t returned directly but is a data member of a gateway class used to ensure correctly
+         locked access to some protected data. In this case, all access to the data is through this gateway class: when you want to
+         access the data, you obtain an instance of the gateway class (by calling a function such as <kbd class="calibre17">get_lock()</kbd> in the preceding example), which acquires the lock. You can then access the data through member functions of the gateway
+         object. When you’re finished, you destroy the gateway object, which releases the lock and allows other threads to access the
+         protected data. Such a gateway object may well be moveable (so that it can be returned from a function), in which case the
+         lock object data member also needs to be moveable.
+      </p>
+      
+      <p class="noind">The flexibility of <kbd class="calibre17">std::unique_lock</kbd> also allows instances to relinquish their locks before they’re destroyed. You can do this with the <kbd class="calibre17">unlock()</kbd> member function, like for a mutex. <kbd class="calibre17">std::unique_lock</kbd> supports the same basic set of member functions for locking and unlocking as a mutex does, so that it can be used with generic
+         functions such as <kbd class="calibre17">std::lock</kbd>. The ability to release a lock before the <kbd class="calibre17">std::unique_lock</kbd> instance is destroyed means that you can optionally release it in a specific code branch if it’s apparent that the lock is
+         no longer required. This can be important for the performance of the application; holding a lock for longer than required
+         can cause a drop in performance, because other threads waiting for the lock are prevented from proceeding for longer than
+         necessary.
+      </p>
+      
+      
+      
+      <h4 id="ch03lev2sec10" class="calibre23">3.2.8. <a id="ch03lev2sec10__title" class="calibre4"></a>Locking at an appropriate granularity
+      </h4>
+      
+      <p class="noind">The granularity of a lock is something I touched on earlier, in <a href="#ch03lev2sec5" class="calibre4">section 3.2.3</a>: the lock granularity is a hand-waving term to describe the amount of data protected by a single lock. A fine-grained lock
+         protects a small amount of data, and a coarse-grained lock protects a large amount of data. Not only is it important to choose
+         a sufficiently coarse lock granularity to ensure the required data is protected, but it’s also important to ensure that a
+         lock is held only for the operations that require it. We all know the frustration of waiting in the checkout line in a supermarket
+         with a cart full of groceries only for the person currently being served to suddenly realize that they forgot some cranberry
+         sauce and then leave everybody waiting while they go and find some, or for the cashier to be ready for payment and the customer
+         to only then start rummaging in their bag for their wallet. Everything proceeds much more easily if everybody gets to the
+         checkout with everything they want and with an appropriate method of payment ready.
+      </p>
+      
+      <p class="noind"><a id="iddle1492" class="calibre4"></a><a id="iddle1802" class="calibre4"></a>The same applies to threads: if multiple threads are waiting for the same resource (the cashier at the checkout), then if
+         any thread holds the lock for longer than necessary, it will increase the total time spent waiting (don’t wait until you’ve
+         reached the checkout to start looking for the cranberry sauce). Where possible, lock a mutex only while accessing the shared
+         data; try to do any processing of the data outside the lock. In particular, don’t do any time-consuming activities like file
+         I/O while holding a lock. File I/O is typically hundreds (if not thousands) of times slower than reading or writing the same
+         volume of data from memory. Unless the lock is intended to protect access to the file, performing I/O while holding the lock
+         will delay <i class="calibre6">other</i> threads unnecessarily (because they’ll block while waiting to acquire the lock), potentially eliminating any performance
+         gain from the use of multiple threads.
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">std::unique_lock</kbd> works well in this situation, because you can call <kbd class="calibre17">unlock()</kbd> when the code no longer needs access to the shared data and then call <kbd class="calibre17">lock()</kbd> again if access is required later in the code:
+      </p>
+      
+      <pre id="PLd0e6790" class="calibre5">void get_and_process_data()
+{
+    std::unique_lock&lt;std::mutex&gt; my_lock(the_mutex);
+    some_class data_to_process=get_next_data_chunk();
+    my_lock.unlock();                                   <b class="calibre24"><i class="calibre6">1</i></b>
+    result_type result=process(data_to_process);
+    my_lock.lock();                                     <b class="calibre24"><i class="calibre6">2</i></b>
+    write_result(data_to_process,result);
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> Don’t need mutex locked across call to process()</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Relock mutex to write result</b></li>
+         
+      </ul>
+      
+      <p class="noind">You don’t need the mutex locked across the call to <kbd class="calibre17">process()</kbd>, so you manually unlock it before the call <b class="calibre24"><i class="calibre6">1</i></b> and then lock it again afterward <b class="calibre24"><i class="calibre6">2</i></b>.
+      </p>
+      
+      <p class="noind">Hopefully it’s obvious that if you have one mutex protecting an entire data structure, not only is there likely to be more
+         contention for the lock, but also the potential for reducing the time that the lock is held is diminished. More of the operation
+         steps will require a lock on the same mutex, so the lock must be held longer. This double whammy of a cost is also a double
+         incentive to move toward finer-grained locking wherever possible.
+      </p>
+      
+      <p class="noind">As this example shows, locking at an appropriate granularity isn’t only about the amount of data locked; it’s also about how
+         long the lock is held and what operations are performed while the lock is held. <i class="calibre6">In general, a lock should be held for only the minimum possible time needed to perform the required operations.</i> This also means that time-consuming operations such as acquiring another lock (even if you know it won’t deadlock) or waiting
+         for I/O to complete shouldn’t be done while holding a lock unless absolutely necessary.
+      </p>
+      
+      <p class="noind">In <a href="#ch03ex06" class="calibre4">listings 3.6</a> and <a href="#ch03ex09" class="calibre4">3.9</a>, the operation that required locking the two mutexes was a swap operation, which obviously requires concurrent access to
+         both objects. Suppose <a id="iddle1357" class="calibre4"></a><a id="iddle1426" class="calibre4"></a><a id="iddle1510" class="calibre4"></a><a id="iddle1869" class="calibre4"></a><a id="iddle1903" class="calibre4"></a><a id="iddle2529" class="calibre4"></a>instead you were trying to compare a simple data member that was a plain <kbd class="calibre17">int</kbd>. Would this make a difference? <kbd class="calibre17">int</kbd>s are cheap to copy, so you could easily copy the data for each object being compared while only holding the lock for that
+         object and then compare the copied values. This would mean that you were holding the lock on each mutex for the minimum amount
+         of time and also that you weren’t holding one lock while locking another. The following listing shows a class <kbd class="calibre17">Y</kbd> for which this is the case and a sample implementation of the equality comparison operator.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03ex10">Listing 3.10. <a id="ch03ex10__title" class="calibre4"></a>Locking one mutex at a time in a comparison operator
+      </h5>
+      <pre id="PLd0e6909" class="calibre5">class Y
+{
+private:
+    int some_detail;
+    mutable std::mutex m;
+    int get_detail() const
+    {
+        std::lock_guard&lt;std::mutex&gt; lock_a(m);   <b class="calibre24"><i class="calibre6">1</i></b>
+        return some_detail;
+    }
+public:
+    Y(int sd):some_detail(sd){}
+    friend bool operator==(Y const&amp; lhs, Y const&amp; rhs)
+    {
+        if(&amp;lhs==&amp;rhs)
+            return true;
+        int const lhs_value=lhs.get_detail();    <b class="calibre24"><i class="calibre6">2</i></b>
+        int const rhs_value=rhs.get_detail();    <b class="calibre24"><i class="calibre6">3</i></b>
+        return lhs_value==rhs_value;             <b class="calibre24"><i class="calibre6">4</i></b>
+    }
+};</pre>
+      
+      <p class="noind">In this case, the comparison operator first retrieves the values to be compared by calling the <kbd class="calibre17">get_detail()</kbd> member function, <b class="calibre24"><i class="calibre6">2</i></b> and <b class="calibre24"><i class="calibre6">3</i></b>. This function retrieves the value while protecting it with a lock <b class="calibre24"><i class="calibre6">1</i></b>. The comparison operator then compares the retrieved values <b class="calibre24"><i class="calibre6">4</i></b>. Note, however, that as well as reducing the locking periods so that only one lock is held at a time (and eliminating the
+         possibility of deadlock), <i class="calibre6">this has subtly changed the semantics of the operation</i> compared to holding both locks together. In <a href="#ch03ex10" class="calibre4">listing 3.10</a>, if the operator returns <kbd class="calibre17">true</kbd>, it means that the value of <kbd class="calibre17">lhs.some_detail</kbd> at one point in time is equal to the value of <kbd class="calibre17">rhs.some_detail</kbd> at another point in time. The two values could have been changed in any way in between the two reads; the values could have
+         been swapped in between <b class="calibre24"><i class="calibre6">2</i></b> and <b class="calibre24"><i class="calibre6">3</i></b>, for example, rendering the comparison meaningless. The equality comparison might return <kbd class="calibre17">true</kbd> to indicate that the values were equal, even though there was never an instant in time when the values were equal. It’s therefore
+         important to be careful when making these changes that the semantics of the operation are not changed in a problematic fashion:
+         <i class="calibre6">if you don’t hold the required locks for the entire duration of an operation, you’re exposing yourself to race conditions</i>.
+      </p>
+      
+      <p class="noind"><a id="iddle1304" class="calibre4"></a><a id="iddle1467" class="calibre4"></a><a id="iddle1509" class="calibre4"></a><a id="iddle1906" class="calibre4"></a>Sometimes, there isn’t an appropriate level of granularity because not all accesses to the data structure require the same
+         level of protection. In this case, it might be appropriate to use an alternative mechanism, instead of a plain <kbd class="calibre17">std::mutex</kbd>.
+      </p>
+      
+      
+      
+      
+      <h3 id="ch03lev1sec3" class="chapter"><a id="ch03lev1sec3__title" class="calibre3"></a>3.3. Alternative facilities for protecting shared data
+      </h3>
+      
+      <p class="noind">Although they’re the most general mechanism, mutexes aren’t the only game in town when it comes to protecting shared data;
+         there are alternatives that provide more appropriate protection in specific scenarios.
+      </p>
+      
+      <p class="noind">One particularly extreme (but remarkably common) case is where the shared data needs protection only from concurrent access
+         while it’s being initialized, but after that no explicit synchronization is required. This might be because the data is read-only
+         once created, and so there are no possible synchronization issues, or it might be because the necessary protection is performed
+         implicitly as part of the operations on the data. In either case, locking a mutex after the data has been initialized, purely
+         in order to protect the initialization, is unnecessary and a needless hit to performance. It’s for this reason that the C++
+         Standard provides a mechanism purely for protecting shared data during initialization.
+      </p>
+      
+      
+      <h4 id="ch03lev2sec11" class="calibre23">3.3.1. <a id="ch03lev2sec11__title" class="calibre4"></a>Protecting shared data during initialization
+      </h4>
+      
+      <p class="noind">Suppose you have a shared resource that’s so expensive to construct that you want to do so only if it’s required; maybe it
+         opens a database connection or allocates a lot of memory. <i class="calibre6">Lazy initialization</i> such as this is common in single-threaded code—each operation that requires the resource first checks to see if it has been
+         initialized and then initializes it before use if not:
+      </p>
+      
+      <pre id="PLd0e7041" class="calibre5">std::shared_ptr&lt;some_resource&gt; resource_ptr;
+void foo()
+{
+    if(!resource_ptr)
+    {
+        resource_ptr.reset(new some_resource);     <b class="calibre24"><i class="calibre6">1</i></b>
+    }
+    resource_ptr-&gt;do_something();
+}</pre>
+      
+      <p class="noind">If the shared resource itself is safe for concurrent access, the only part that needs protecting when converting this to multithreaded
+         code is the initialization <b class="calibre24"><i class="calibre6">1</i></b>, but a naïve translation such as that in the following listing can cause unnecessary serialization of threads using the resource.
+         This is because each thread must wait on the mutex in order to check whether the resource has already been initialized.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03ex11">Listing 3.11. <a id="ch03ex11__title" class="calibre4"></a>Thread-safe lazy initialization using a mutex
+      </h5>
+      <pre id="PLd0e7063" class="calibre5">std::shared_ptr&lt;some_resource&gt; resource_ptr;
+std::mutex resource_mutex;
+void foo()
+{
+    std::unique_lock&lt;std::mutex&gt; lk(resource_mutex);   <b class="calibre24"><i class="calibre6">1</i></b>
+    if(!resource_ptr)
+    {
+        resource_ptr.reset(new some_resource);         <b class="calibre24"><i class="calibre6">2</i></b>
+    }
+    lk.unlock();
+    resource_ptr-&gt;do_something();
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><a id="iddle1249" class="calibre4"></a><a id="iddle2203" class="calibre4"></a><b class="calibre24"><i class="calibre6">1</i> All threads are serialized here</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Only the initialization needs protection</b></li>
+         
+      </ul>
+      
+      <p class="noind">This code is common enough, and the unnecessary serialization problematic enough, that many people have tried to come up with
+         a better way of doing this, including the infamous <i class="calibre6">double-checked locking</i> pattern: the pointer is first read without acquiring the lock (<b class="calibre24"><i class="calibre6">1</i></b> in the following code), and the lock is acquired only if the pointer is <kbd class="calibre17">NULL</kbd>. The pointer is then checked <i class="calibre6">again</i> once the lock has been acquired (<b class="calibre24"><i class="calibre6">2</i></b>, hence the <i class="calibre6">double-checked</i> part) in case another thread has done the initialization between the first check and this thread acquiring the lock:
+      </p>
+      
+      <pre id="PLd0e7132" class="calibre5">void undefined_behaviour_with_double_checked_locking()
+{
+    if(!resource_ptr)                                  <b class="calibre24"><i class="calibre6">1</i></b>
+    {
+        std::lock_guard&lt;std::mutex&gt; lk(resource_mutex);
+        if(!resource_ptr)                              <b class="calibre24"><i class="calibre6">2</i></b>
+        {
+            resource_ptr.reset(new some_resource);     <b class="calibre24"><i class="calibre6">3</i></b>
+        }
+    }
+    resource_ptr-&gt;do_something();                      <b class="calibre24"><i class="calibre6">4</i></b>
+}</pre>
+      
+      <p class="noind">Unfortunately, this pattern is infamous for a reason: it has the potential for nasty race conditions, because the read outside
+         the lock <b class="calibre24"><i class="calibre6">1</i></b>, isn’t synchronized with the write done by another thread inside the lock <b class="calibre24"><i class="calibre6">3</i></b>. This creates a race condition that covers not only the pointer itself but also the object pointed to; even if a thread sees
+         the pointer written by another thread, it might not see the newly created instance of <kbd class="calibre17">some_resource</kbd>, resulting in the call to <kbd class="calibre17">do_something()</kbd> <b class="calibre24"><i class="calibre6">4</i></b> operating on incorrect values. This is an example of the type of race condition defined as a <i class="calibre6">data race</i> by the C++ Standard and specified as <i class="calibre6">undefined behavior</i>. It’s therefore quite definitely something to avoid. See <a href="kindle_split_015.html#ch05" class="calibre4">chapter 5</a> for a detailed discussion of the memory model, including what constitutes a <i class="calibre6">data race</i>.
+      </p>
+      
+      <p class="noind">The C++ Standards Committee also saw that this was an important scenario, and so the C++ Standard Library provides <kbd class="calibre17">std::once_flag</kbd> and <kbd class="calibre17">std::call_once</kbd> to handle this situation. Rather than locking a mutex and explicitly checking the pointer, every thread can use <kbd class="calibre17">std::call_once</kbd>, safe in the knowledge that the pointer will <a id="iddle1846" class="calibre4"></a><a id="iddle1886" class="calibre4"></a>have been initialized by some thread (in a properly synchronized fashion) by the time <kbd class="calibre17">std::call_once</kbd> returns. The necessary synchronization data is stored in the <kbd class="calibre17">std::once_flag</kbd> instance; each instance of <kbd class="calibre17">std::once_flag</kbd> corresponds to a different initialization. Use of <kbd class="calibre17">std::call_once</kbd> will typically have a lower overhead than using a mutex explicitly, especially when the initialization has already been done,
+         so it should be used in preference where it matches the required functionality. The following example shows the same operation
+         as <a href="#ch03ex11" class="calibre4">listing 3.11</a>, rewritten to use <kbd class="calibre17">std::call_once</kbd>. In this case, the initialization is done by calling a function, but it could easily have been done with an instance of a
+         class with a function call operator. Like most of the functions in the standard library that take functions or predicates
+         as arguments, <kbd class="calibre17">std::call_once</kbd> works with any function or callable object:
+      </p>
+      
+      <pre id="PLd0e7233" class="calibre5">std::shared_ptr&lt;some_resource&gt; resource_ptr;
+std::once_flag resource_flag;                       <b class="calibre24"><i class="calibre6">1</i></b>
+void init_resource()
+{
+    resource_ptr.reset(new some_resource);
+}
+void foo()
+{
+    std::call_once(resource_flag,init_resource);    <b class="calibre24"><i class="calibre6">2</i></b>
+    resource_ptr-&gt;do_something();
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Initialization is called exactly once.</b></li>
+         
+      </ul>
+      
+      <p class="noind">In this example, both the <kbd class="calibre17">std::once_flag</kbd> <b class="calibre24"><i class="calibre6">1</i></b> and data being initialized are namespace-scope objects, but <kbd class="calibre17">std::call_once()</kbd> can easily be used for lazy initialization of class members, as in the following listing.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03ex12">Listing 3.12. <a id="ch03ex12__title" class="calibre4"></a>Thread-safe lazy initialization of a class member using <kbd class="calibre17">std::call_once</kbd></h5>
+      <pre id="PLd0e7277" class="calibre5">class X
+{
+private:
+    connection_info connection_details;
+    connection_handle connection;
+    std::once_flag connection_init_flag;
+    void open_connection()
+    {
+        connection=connection_manager.open(connection_details);
+    }
+public:
+    X(connection_info const&amp; connection_details_):
+        connection_details(connection_details_)
+    {}
+    void send_data(data_packet const&amp; data)                             <b class="calibre24"><i class="calibre6">1</i></b>
+    {
+        std::call_once(connection_init_flag,&amp;X::open_connection,this);  <b class="calibre24"><i class="calibre6">2</i></b>
+        connection.send_data(data);
+    }
+    data_packet receive_data()                                          <b class="calibre24"><i class="calibre6">3</i></b>
+    {
+        std::call_once(connection_init_flag,&amp;X::open_connection,this);  <b class="calibre24"><i class="calibre6">2</i></b>
+        return connection.receive_data();
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1256" class="calibre4"></a><a id="iddle1434" class="calibre4"></a><a id="iddle1844" class="calibre4"></a><a id="iddle1904" class="calibre4"></a><a id="iddle2310" class="calibre4"></a><a id="iddle2324" class="calibre4"></a>In that example, the initialization is done either by the first call to <kbd class="calibre17">send_data()</kbd> <b class="calibre24"><i class="calibre6">1</i></b>, or by the first call to <kbd class="calibre17">receive_data()</kbd> <b class="calibre24"><i class="calibre6">3</i></b>. The use of the <kbd class="calibre17">open_connection()</kbd> member function to initialize the data also requires that the <kbd class="calibre17">this</kbd> pointer be passed in. Just as for other functions in the Standard Library that accept callable objects, such as the constructors
+         for <kbd class="calibre17">std::thread</kbd> and <kbd class="calibre17">std::bind()</kbd>, this is done by passing an additional argument to <kbd class="calibre17">std::call_once()</kbd> <b class="calibre24"><i class="calibre6">2</i></b>.
+      </p>
+      
+      <p class="noind">It’s worth noting that like <kbd class="calibre17">std::mutex</kbd>, <kbd class="calibre17">std::once_flag</kbd> instances can’t be copied or moved, so if you use them as a class member like this, you’ll have to explicitly define these
+         special member functions should you require them.
+      </p>
+      
+      <p class="noind">One scenario where there’s a potential race condition over initialization is that of a local variable declared with <kbd class="calibre17">static</kbd>. The initialization of such a variable is defined to occur the first time control passes through its declaration; for multiple
+         threads calling the function, this means there’s the potential for a race condition to define first. On many pre-C++11 compilers
+         this race condition is problematic in practice, because multiple threads may believe they’re first and try to initialize the
+         variable, or threads may try to use it after initialization has started on another thread but before it’s finished. In C++11
+         this problem is solved: the initialization is defined to happen on exactly one thread, and no other threads will proceed until
+         that initialization is complete, so the race condition is over which thread gets to do the initialization rather than anything
+         more problematic. This can be used as an alternative to <kbd class="calibre17">std::call_once</kbd> for those cases where a single global instance is required:
+      </p>
+      
+      <pre id="PLd0e7400" class="calibre5">class my_class;
+my_class&amp; get_my_class_instance()
+{
+    static my_class instance;        <b class="calibre24"><i class="calibre6">1</i></b>
+    return instance;
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> Initialization guaranteed to be thread-safe</b></li>
+         
+      </ul>
+      
+      <p class="noind">Multiple threads can then call <kbd class="calibre17">get_my_class_instance()</kbd> safely <b class="calibre24"><i class="calibre6">1</i></b>, without having to worry about race conditions on the initialization.
+      </p>
+      
+      <p class="noind">Protecting data only for initialization is a special case of a more general scenario: that of a rarely updated data structure.
+         For most of the time, this data structure is read-only and can therefore be read by multiple threads concurrently, but on
+         occasion the data structure may need updating. What’s needed here is a protection mechanism that acknowledges this fact.
+      </p>
+      
+      
+      
+      
+      <h4 id="ch03lev2sec12" class="calibre23">3.3.2. <a id="ch03lev2sec12__title" class="calibre4"></a>Protecting rarely updated data structures
+      </h4>
+      
+      <p class="noind"><a id="iddle1902" class="calibre4"></a>Consider a table used to store a cache of DNS entries for resolving domain names to their corresponding IP addresses. Typically,
+         a given DNS entry will remain unchanged for a long period of time—in many cases, DNS entries remain unchanged for years. Although
+         new entries may be added to the table from time to time as users access different websites, this data will therefore remain
+         largely unchanged throughout its life. It’s important that the validity of the cached entries is checked periodically, but
+         this still requires an update only if the details have changed.
+      </p>
+      
+      <p class="noind">Although updates are rare, they can still happen, and if this cache is to be accessed from multiple threads, it will need
+         to be appropriately protected during updates to ensure that none of the threads reading the cache see a broken data structure.
+      </p>
+      
+      <p class="noind">In the absence of a special-purpose data structure that exactly fits the desired usage and that’s specially designed for concurrent
+         updates and reads (such as those in <a href="kindle_split_016.html#ch06" class="calibre4">chapters 6</a> and <a href="kindle_split_017.html#ch07" class="calibre4">7</a>), this update requires that the thread doing the update has exclusive access to the data structure until it has completed
+         the operation. Once the change is complete, the data structure is again safe for multiple threads to access concurrently.
+         Using <kbd class="calibre17">std::mutex</kbd> to protect the data structure is therefore overly pessimistic, because it will eliminate the possible concurrency in reading
+         the data structure when it isn’t undergoing modification; what’s needed is a different kind of mutex. This new kind of mutex
+         is typically called a <i class="calibre6">reader-writer</i> mutex, because it allows for two different kinds of usage: exclusive access by a single “writer” thread or shared, and concurrent
+         access by multiple “reader” threads.
+      </p>
+      
+      <p class="noind">The C++17 Standard Library provides two such mutexes out of the box, <kbd class="calibre17">std:: shared_mutex</kbd> and <kbd class="calibre17">std::shared_timed_mutex</kbd>. C++14 only features <kbd class="calibre17">std::shared_timed_mutex</kbd>, and C++11 didn’t provide either. If you’re struck with a pre-C++14 compiler, then you could use the implementation provided
+         by the Boost library, which is based on the original proposal. The difference between <kbd class="calibre17">std::shared_mutex</kbd> and <kbd class="calibre17">std::shared_timed_mutex</kbd> is that <kbd class="calibre17">std::shared_timed_mutex</kbd> supports additional operations (as described in <a href="kindle_split_014.html#ch04lev1sec3" class="calibre4">section 4.3</a>), so <kbd class="calibre17">std::shared_mutex</kbd> might offer a performance benefit on some platforms, if you don’t need the additional operations.
+      </p>
+      
+      <p class="noind">As you’ll see in <a href="kindle_split_018.html#ch08" class="calibre4">chapter 8</a>, the use of such a mutex isn’t a panacea, and the performance is dependent on the number of processors involved and the relative
+         workloads of the reader and updater threads. It’s therefore important to profile the performance of the code on the target
+         system to ensure that there’s a benefit to the additional complexity.
+      </p>
+      
+      <p class="noind">Rather than using an instance of <kbd class="calibre17">std::mutex</kbd> for the synchronization, you use an instance of <kbd class="calibre17">std::shared_mutex</kbd>. For the update operations, <kbd class="calibre17">std::lock_guard &lt;std::shared_mutex&gt;</kbd> and <kbd class="calibre17">std::unique_lock&lt;std::shared_mutex&gt;</kbd> can be used for the locking, in place of the corresponding <kbd class="calibre17">std::mutex</kbd> specializations. These ensure exclusive access, as with <kbd class="calibre17">std::mutex</kbd>. Those threads that don’t need to update the data structure can instead use <kbd class="calibre17">std::shared_lock&lt;std::shared_mutex&gt;</kbd> to obtain <i class="calibre6">shared</i> access. This RAII class template was added in C++14, and is used the same as <a id="iddle1369" class="calibre4"></a><a id="iddle1519" class="calibre4"></a><a id="iddle1555" class="calibre4"></a><a id="iddle1851" class="calibre4"></a><a id="iddle1905" class="calibre4"></a><a id="iddle2597" class="calibre4"></a><a id="iddle2601" class="calibre4"></a><a id="iddle2606" class="calibre4"></a><kbd class="calibre17">std::unique_lock</kbd>, except that multiple threads may have a shared lock on the same <kbd class="calibre17">std::shared_mutex</kbd> at the same time. The only constraint is that if any thread has a shared lock, a thread that tries to acquire an exclusive
+         lock will block until all other threads have relinquished their locks, and likewise if any thread has an exclusive lock, no
+         other thread may acquire a shared or exclusive lock until the first thread has relinquished its lock.
+      </p>
+      
+      <p class="noind">The following listing shows a simple DNS cache like the one described, using <kbd class="calibre17">std::map</kbd> to hold the cached data, protected using <kbd class="calibre17">std::shared_mutex</kbd>.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch03ex13">Listing 3.13. <a id="ch03ex13__title" class="calibre4"></a>Protecting a data structure with <kbd class="calibre17">std::shared_mutex</kbd></h5>
+      <pre id="PLd0e7597" class="calibre5">#include &lt;map&gt;
+#include &lt;string&gt;
+#include &lt;mutex&gt;
+#include &lt;shared_mutex&gt;
+class dns_entry;
+class dns_cache
+{
+    std::map&lt;std::string,dns_entry&gt; entries;
+    mutable std::shared_mutex entry_mutex;
+public:
+    dns_entry find_entry(std::string const&amp; domain) const
+    {
+        std::shared_lock&lt;std::shared_mutex&gt; lk(entry_mutex);         <b class="calibre24"><i class="calibre6">1</i></b>
+        std::map&lt;std::string,dns_entry&gt;::const_iterator const it=
+            entries.find(domain);
+        return (it==entries.end())?dns_entry():it-&gt;second;
+    }
+    void update_or_add_entry(std::string const&amp; domain,
+                             dns_entry const&amp; dns_details)
+    {
+        std::lock_guard&lt;std::shared_mutex&gt; lk(entry_mutex);          <b class="calibre24"><i class="calibre6">2</i></b>
+        entries[domain]=dns_details;
+    }
+};</pre>
+      
+      <p class="noind">In <a href="#ch03ex13" class="calibre4">listing 3.13</a>, <kbd class="calibre17">find_entry()</kbd> uses an instance of std<kbd class="calibre17">::shared_lock&lt;&gt;</kbd> to protect it for shared, read-only access <b class="calibre24"><i class="calibre6">1</i></b>; multiple threads can therefore call <kbd class="calibre17">find_entry()</kbd> simultaneously without problems. On the other hand, <kbd class="calibre17">update_or_add_entry()</kbd> uses an instance of <kbd class="calibre17">std::lock_guard&lt;&gt;</kbd> to provide exclusive access while the table is updated <b class="calibre24"><i class="calibre6">2</i></b>; not only are other threads prevented from doing updates in a call to <kbd class="calibre17">update_or_add_entry()</kbd>, but threads that call <kbd class="calibre17">find_entry()</kbd> are blocked too.
+      </p>
+      
+      
+      
+      <h4 id="ch03lev2sec13" class="calibre23">3.3.3. <a id="ch03lev2sec13__title" class="calibre4"></a>Recursive locking
+      </h4>
+      
+      <p class="noind">With <kbd class="calibre17">std::mutex</kbd>, it’s an error for a thread to try to lock a mutex it already owns, and attempting to do so will result in <i class="calibre6">undefined behavior</i>. But in some circumstances it would be desirable for a thread to reacquire the same mutex several times without having first
+         released it. For this purpose, the C++ Standard Library provides <kbd class="calibre17">std::recursive_mutex</kbd>. It works like <kbd class="calibre17">std::mutex</kbd>, except that you can acquire multiple locks on a single instance from the same thread. You must release all your locks before
+         the mutex can be locked by another thread, so if you call <kbd class="calibre17">lock()</kbd> three times, you must also call <kbd class="calibre17">unlock()</kbd> three times. The correct use of <kbd class="calibre17">std::lock_guard &lt;std::recursive_mutex&gt;</kbd> and <kbd class="calibre17">std::unique_lock&lt;std::recursive_mutex&gt;</kbd> will handle this for you.
+      </p>
+      
+      <p class="noind">Most of the time, if you think you want a recursive mutex, you probably need to change your design instead. A common use of
+         recursive mutexes is where a class is designed to be accessible from multiple threads concurrently, so it has a mutex protecting
+         the member data. Each public member function locks the mutex, does the work, and then unlocks the mutex. But sometimes it’s
+         desirable for one public member function to call another as part of its operation. In this case, the second member function
+         will also try to lock the mutex, leading to undefined behavior. The quick-and-dirty solution is to change the mutex to a recursive
+         mutex. This will allow the mutex lock in the second member function to succeed and the function to proceed.
+      </p>
+      
+      <p class="noind">But such usage is not recommended because it can lead to sloppy thinking and bad design. In particular, the class invariants
+         are typically broken while the lock is held, which means that the second member function needs to work even when called with
+         the invariants broken. It’s usually better to extract a new private member function that’s called from both member functions,
+         which does not lock the mutex (it expects it to already be locked). You can then think carefully about the circumstances under
+         which that new function can be called and the state of the data under those circumstances.
+      </p>
+      
+      
+      
+      
+      <h3 id="ch03lev1sec4" class="chapter"><a id="ch03lev1sec4__title" class="calibre3"></a>Summary
+      </h3>
+      
+      <p class="noind">In this chapter I discussed how problematic race conditions can be disastrous when sharing data between threads and how to
+         use <kbd class="calibre17">std::mutex</kbd> and careful interface design to avoid them. You saw that mutexes aren’t a panacea and do have their own problems in the form
+         of deadlock, though the C++ Standard Library provides a tool to help avoid that in the form of <kbd class="calibre17">std::lock()</kbd>. You then looked at some further techniques for avoiding deadlock, followed by a brief look at transferring lock ownership
+         and issues surrounding choosing the appropriate granularity for locking. Finally, I covered the alternative data-protection
+         facilities provided for specific scenarios, such as <kbd class="calibre17">std:: call_once()</kbd> and std<kbd class="calibre17">::shared_mutex</kbd>.
+      </p>
+      
+      <p class="noind">One thing that I haven’t covered yet, however, is waiting for input from other threads. Your thread-safe stack throws an exception
+         if the stack is empty, so if one thread wanted to wait for another thread to push a value on the stack (which is, after all,
+         one of the primary uses for a thread-safe stack), it would have to repeatedly try to pop a value, retrying if an exception
+         gets thrown. This consumes valuable processing time in performing the check, without making any progress; indeed, the constant
+         checking might hamper progress by preventing the other threads in the system from running. What’s needed is some way for a
+         thread to wait for another thread to complete a task without consuming CPU time in the process. <a href="kindle_split_014.html#ch04" class="calibre4">Chapter 4</a> builds on the facilities I’ve discussed for protecting shared data and introduces the various mechanisms for synchronizing
+         operations between threads in C++; <a href="kindle_split_016.html#ch06" class="calibre4">chapter 6</a> shows how these can be used to build larger reusable data structures.
+      </p>
+      
+      
+      
+      
+      <div class="calibre13" id="calibre_pb_18"></div>
+</body></html>

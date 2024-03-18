@@ -1,0 +1,2032 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:mbp="Kindle">
+  <head>
+    <title>C++ Concurrency in Action, Second Edition</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+  <link href="stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+<h2 class="part" id="ch07">Chapter 7. <a id="ch07__title" class="calibre3"></a>Designing lock-free concurrent data structures
+      </h2>
+      
+      <p class="noind"><a id="iddle1532" class="calibre4"></a><i class="calibre6">This chapter covers</i></p>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22">Implementations of data structures designed for concurrency without using locks</li>
+         
+         <li class="calibre22">Techniques for managing memory in lock-free data structures</li>
+         
+         <li class="calibre22">Simple guidelines to aid in the writing of lock-free data structures</li>
+         
+      </ul>
+      
+      <p class="noind">In the last chapter we looked at general aspects of designing data structures for concurrency, with guidelines for thinking
+         about the design to ensure they’re safe. We then examined several common data structures and looked at example implementations
+         that used mutexes and locks to protect the shared data. The first couple of examples used one mutex to protect the entire
+         data structure, but later ones used more than one to protect various smaller parts of the data structure and allow greater
+         levels of concurrency in accesses to the data structure.
+      </p>
+      
+      <p class="noind">Mutexes are powerful mechanisms for ensuring that multiple threads can safely access a data structure without encountering
+         race conditions or broken invariants. It’s also relatively straightforward to reason about the behavior of code that uses
+         them: either the code has the lock on the mutex protecting the data or it doesn’t. But it’s not all a bed of roses; you saw
+         in <a href="kindle_split_013.html#ch03" class="calibre4">chapter 3</a> how the incorrect use of locks <a id="iddle1534" class="calibre4"></a><a id="iddle1535" class="calibre4"></a><a id="iddle1688" class="calibre4"></a><a id="iddle1990" class="calibre4"></a>can lead to deadlock, and you’ve seen with the lock-based queue and lookup table examples how the granularity of locking can
+         affect the potential for true concurrency. If you can write data structures that are safe for concurrent access without locks,
+         there’s the potential to avoid these problems. This data structure is called a <i class="calibre6">lock-free</i> data structure.
+      </p>
+      
+      <p class="noind">In this chapter we’ll look at how the memory-ordering properties of the atomic operations introduced in <a href="kindle_split_015.html#ch05" class="calibre4">chapter 5</a> can be used to build lock-free data structures. It is vital for the understanding of this chapter that you have read and
+         understood all of <a href="kindle_split_015.html#ch05" class="calibre4">chapter 5</a>. You need to take extreme care when designing these data structures, because they’re hard to get right, and the conditions
+         that cause the design to fail may occur very rarely. We’ll start by looking at what it means for data structures to be lock-free;
+         then we’ll move on to the reasons for using them before working through some examples and drawing out some general guidelines.
+      </p>
+      
+      
+      <h3 id="ch07lev1sec1" class="chapter"><a id="ch07lev1sec1__title" class="calibre3"></a>7.1. Definitions and consequences
+      </h3>
+      
+      <p class="noind">Algorithms and data structures that use mutexes, condition variables, and futures to synchronize the data are called <i class="calibre6">blocking</i> data structures and algorithms. The application calls library functions that will suspend the execution of a thread until
+         another thread performs an action. These library calls are termed <i class="calibre6">blocking</i> calls because the thread can’t progress past this point until the block is removed. Typically, the OS will suspend a blocked
+         thread completely (and allocate its time slices to another thread) until it’s <i class="calibre6">unblocked</i> by the appropriate action of another thread, whether that’s unlocking a mutex, notifying a condition variable, or making
+         a future ready.
+      </p>
+      
+      <p class="noind">Data structures and algorithms that don’t use blocking library functions are said to be <i class="calibre6">nonblocking</i>. Not all these data structures are lock-free, though, so let’s look at the various types of nonblocking data structures.
+      </p>
+      
+      
+      <h4 id="ch07lev2sec1" class="calibre23">7.1.1. <a id="ch07lev2sec1__title" class="calibre4"></a>Types of nonblocking data structures
+      </h4>
+      
+      <p class="noind">Back in <a href="kindle_split_015.html#ch05" class="calibre4">chapter 5</a>, we implemented a basic mutex using <kbd class="calibre17">std::atomic_flag</kbd> as a spin lock. The code is reproduced in the following listing.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex01">Listing 7.1. <a id="ch07ex01__title" class="calibre4"></a>Implementation of a spin-lock mutex using <kbd class="calibre17">std::atomic_flag</kbd></h5>
+      <pre id="PLd0e24747" class="calibre5">class spinlock_mutex
+{
+    std::atomic_flag flag;
+public:
+    spinlock_mutex():
+        flag(ATOMIC_FLAG_INIT)
+    {}
+    void lock()
+    {
+        while(flag.test_and_set(std::memory_order_acquire));
+    }
+    void unlock()
+    {
+        flag.clear(std::memory_order_release);
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1707" class="calibre4"></a><a id="iddle2464" class="calibre4"></a><a id="iddle2634" class="calibre4"></a>This code doesn’t call any blocking functions; <kbd class="calibre17">lock()</kbd> keeps looping until the call to <kbd class="calibre17">test_and_set()</kbd> returns <kbd class="calibre17">false</kbd>. This is why it gets the name <i class="calibre6">spin lock</i>—the code “spins” around the loop. There are no blocking calls, so any code that uses this mutex to protect shared data is
+         consequently <i class="calibre6">nonblocking</i>. It’s not lock-free, though. It’s still a mutex and can still be locked by only one thread at a time. For that reason, knowing
+         something is nonblocking is not enough in most circumstances. Instead, you need to know which (if any) of the more specific
+         terms defined here apply. These are
+      </p>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><i class="calibre6">Obstruction-Free</i>—If all other threads are paused, then any given thread will complete its operation in a bounded number of steps.
+         </li>
+         
+         <li class="calibre22"><i class="calibre6">Lock-Free</i>—If multiple threads are operating on a data structure, then after a bounded number of steps one of them will complete its
+            operation.
+         </li>
+         
+         <li class="calibre22"><i class="calibre6">Wait-Free</i>—Every thread operating on a data structure will complete its operation in a bounded number of steps, even if other threads
+            are also operating on the data structure.
+         </li>
+         
+      </ul>
+      
+      <p class="noind">For the most part, obstruction-free algorithms aren’t particularly useful—it’s not often that all other threads are paused,
+         so this is more useful as a characterization of a failed lock-free implementation. Let’s look more at what’s involved in these
+         characterizations, starting with lock-free so you can see what kinds of data structures are covered.
+      </p>
+      
+      
+      
+      <h4 id="ch07lev2sec2" class="calibre23">7.1.2. <a id="ch07lev2sec2__title" class="calibre4"></a>Lock-free data structures
+      </h4>
+      
+      <p class="noind">For a data structure to qualify as lock-free, more than one thread must be able to access the data structure concurrently.
+         They don’t have to be able to do the same operations; a lock-free queue might allow one thread to push and one to pop but
+         break if two threads try to push new items at the same time. Not only that, but if one of the threads accessing the data structure
+         is suspended by the scheduler midway through its operation, the other threads must still be able to complete their operations
+         without waiting for the suspended thread.
+      </p>
+      
+      <p class="noind">Algorithms that use compare/exchange operations on the data structure often have loops in them. The reason for using a compare/exchange
+         operation is that another thread might have modified the data in the meantime, in which case the code will need to redo part
+         of its operation before trying the compare/exchange again. This code can still be lock-free if the compare/exchange would
+         eventually succeed if the other threads were suspended. If it didn’t, you’d have a spin lock, which is nonblocking but not
+         lock-free.
+      </p>
+      
+      <p class="noind">Lock-free algorithms with these loops can result in one thread being subject to <i class="calibre6">starvation</i>. If another thread performs operations with the “wrong” timing, the other thread might make progress but the first thread
+         continually has to retry its operation. Data structures that avoid this problem are wait-free as well as lock-free.
+      </p>
+      
+      
+      
+      
+      <h4 id="ch07lev2sec3" class="calibre23">7.1.3. <a id="ch07lev2sec3__title" class="calibre4"></a>Wait-free data structures
+      </h4>
+      
+      <p class="noind"><a id="iddle1130" class="calibre4"></a><a id="iddle1134" class="calibre4"></a><a id="iddle1533" class="calibre4"></a><a id="iddle1536" class="calibre4"></a><a id="iddle2636" class="calibre4"></a>A wait-free data structure is a lock-free data structure with the additional property that every thread accessing the data
+         structure can complete its operation within a bounded number of steps, regardless of the behavior of other threads. Algorithms
+         that can involve an unbounded number of retries because of clashes with other threads are not wait-free. Most of the examples
+         in this chapter have that property—they have a <kbd class="calibre17">while</kbd> loop on a <kbd class="calibre17">compare_exchange_weak</kbd> or <kbd class="calibre17">compare_exchange_strong</kbd> operation, with no upper bound on the number of times the loop can run. The scheduling of threads by the OS may mean that
+         a given thread can loop an exceedingly large number of times, but other threads loop very few times. These operations are
+         thus not wait-free.
+      </p>
+      
+      <p class="noind">Writing wait-free data structures correctly is extremely hard. In order to ensure that every thread can complete its operations
+         within a bounded number of steps, you have to ensure that each operation can be performed in a single pass and that the steps
+         performed by one thread don’t cause an operation on another thread to fail. This can make the overall algorithms for the various
+         operations considerably more complex.
+      </p>
+      
+      <p class="noind">Given how hard it is to get a lock-free or wait-free data structure right, you need some pretty good reasons to write one;
+         you need to be sure that the benefit outweighs the cost. Let’s therefore examine the points that affect the balance.
+      </p>
+      
+      
+      
+      <h4 id="ch07lev2sec4" class="calibre23">7.1.4. <a id="ch07lev2sec4__title" class="calibre4"></a>The pros and cons of lock-free data structures
+      </h4>
+      
+      <p class="noind">When it comes down to it, the primary reason for using lock-free data structures is to enable maximum concurrency. With lock-based
+         containers, there’s always the potential for one thread to have to block and wait for another to complete its operation before
+         the first thread can proceed; preventing concurrency through mutual exclusion is the entire purpose of a mutex lock. With
+         a lock-free data structure, some thread makes progress with every step. With a wait-free data structure, every thread can
+         make forward progress, regardless of what the other threads are doing; there’s no need for waiting. This is a desirable property
+         to have but hard to achieve. It’s all too easy to end up writing what’s essentially a spin lock.
+      </p>
+      
+      <p class="noind">A second reason to use lock-free data structures is robustness. If a thread dies while holding a lock, that data structure
+         is broken forever. But if a thread dies partway through an operation on a lock-free data structure, nothing is lost except
+         that thread’s data; other threads can proceed normally.
+      </p>
+      
+      <p class="noind">The flip side here is that if you can’t exclude threads from accessing the data structure, then you must be careful to ensure
+         that the invariants are upheld or choose alternative invariants that can be upheld. Also, you must pay attention to the ordering
+         constraints you impose on the operations. To avoid the undefined behavior associated with a data race, you must use atomic
+         operations for the modifications. But that alone isn’t enough; you must ensure that changes become visible to other threads
+         in the correct order. All this means that writing thread-safe data structures without using locks is considerably harder than
+         writing them with locks.
+      </p>
+      
+      <p class="noind"><a id="iddle1515" class="calibre4"></a><a id="iddle1537" class="calibre4"></a>Because there aren’t any locks, deadlocks are impossible with lock-free data structures, although there is the possibility
+         of live locks instead. A <i class="calibre6">live lock</i> occurs when two threads each try to change the data structure, but for each thread, the changes made by the other require
+         the operation to be restarted, so both threads loop and try again. Imagine two people trying to go through a narrow gap. If
+         they both go at once, they get stuck, so they have to come out and try again. Unless someone gets there first (either by agreement,
+         by being faster, or by sheer luck), the cycle will repeat. As in this simple example, live locks are typically short-lived
+         because they depend on the exact scheduling of threads. They therefore sap performance rather than cause long-term problems,
+         but they’re still something to watch out for. By definition, wait-free code can’t suffer from live lock because there’s always
+         an upper limit on the number of steps needed to perform an operation. The flip side here is that the algorithm is likely more
+         complex than the alternative and may require more steps even when no other thread is accessing the data structure.
+      </p>
+      
+      <p class="noind">This brings us to another downside of lock-free and wait-free code: although it can increase the potential for concurrency
+         of operations on a data structure and reduce the time an individual thread spends waiting, it may well <i class="calibre6">decrease</i> overall performance. First, the atomic operations used for lock-free code can be much slower than non-atomic operations,
+         and there’ll likely be more of them in a lock-free data structure than in the mutex locking code for a lock-based data structure.
+         Not only that, but the hardware must synchronize data between threads that access the same atomic variables. As you’ll see
+         in <a href="kindle_split_018.html#ch08" class="calibre4">chapter 8</a>, the cache ping-pong associated with multiple threads accessing the same atomic variables can be a significant performance
+         drain. As with everything, it’s important to check the relevant performance aspects (whether that’s worst-case wait time,
+         average wait time, overall execution time, or something else) both with a lock-based data structure and a lock-free one before
+         committing either way.
+      </p>
+      
+      <p class="noind">Now let’s look at some examples.</p>
+      
+      
+      
+      
+      <h3 id="ch07lev1sec2" class="chapter"><a id="ch07lev1sec2__title" class="calibre3"></a>7.2. Examples of lock-free data structures
+      </h3>
+      
+      <p class="noind">In order to demonstrate some of the techniques used in designing lock-free data structures, we’ll look at the lock-free implementation
+         of a series of simple data structures. Not only will each example describe the implementation of a useful data structure,
+         but I’ll use the examples to highlight particular aspects of lock-free data structure design.
+      </p>
+      
+      <p class="noind">As already mentioned, lock-free data structures rely on the use of atomic operations and the associated memory-ordering guarantees
+         in order to ensure that data becomes visible to other threads in the correct order. Initially, we’ll use the default <kbd class="calibre17">memory_order_seq_cst</kbd> memory ordering for all atomic operations, because that’s the easiest to reason about (remember that all <kbd class="calibre17">memory_order_seq_cst</kbd> operations form a total order). But for later examples we’ll look at reducing some of the ordering constraints to <kbd class="calibre17">memory_order_acquire</kbd>, <kbd class="calibre17">memory_order_release</kbd>, or even <kbd class="calibre17">memory_order_relaxed</kbd>. Although none of these examples use mutex locks directly, it’s worth bearing <a id="iddle1449" class="calibre4"></a><a id="iddle1506" class="calibre4"></a><a id="iddle1513" class="calibre4"></a><a id="iddle1543" class="calibre4"></a><a id="iddle1569" class="calibre4"></a><a id="iddle1821" class="calibre4"></a><a id="iddle2555" class="calibre4"></a>in mind that only <kbd class="calibre17">std::atomic_flag</kbd> is guaranteed not to use locks in the implementation. On some platforms, what appears to be lock-free code might be using
+         locks internal to the C++ Standard Library implementation (see <a href="kindle_split_015.html#ch05" class="calibre4">chapter 5</a> for more details). On these platforms, a simple lock-based data structure might be more appropriate, but there’s more to
+         it than that; before choosing an implementation, you must identify your requirements and profile the various options that
+         meet those requirements.
+      </p>
+      
+      <p class="noind">So, back to the beginning with the simplest of data structures: a stack.</p>
+      
+      
+      <h4 id="ch07lev2sec5" class="calibre23">7.2.1. <a id="ch07lev2sec5__title" class="calibre4"></a>Writing a thread-safe stack without locks
+      </h4>
+      
+      <p class="noind">The basic premise of a stack is relatively simple: nodes are retrieved in the reverse order to which they were added—last
+         in, first out (LIFO). It’s therefore important to ensure that once a value is added to the stack, it can safely be retrieved
+         immediately by another thread, and it’s also important to ensure that only one thread returns a given value. The simplest
+         stack is a linked list; the <kbd class="calibre17">head</kbd> pointer identifies the first node (which will be the next to retrieve), and each node then points to the next node in turn.
+      </p>
+      
+      <p class="noind">Under this scheme, adding a node is relatively simple:</p>
+      
+      <p class="calibre19"></p>
+      <ol class="calibre27">
+         
+         <li class="calibre22">Create a new node.</li>
+         
+         <li class="calibre22">Set its <kbd class="calibre17">next</kbd> pointer to the current <kbd class="calibre17">head</kbd> node.
+         </li>
+         
+         <li class="calibre22">Set the <kbd class="calibre17">head</kbd> node to point to it.
+         </li>
+         
+      </ol>
+      
+      <p class="noind">This works fine in a single-threaded context, but if other threads are also modifying the stack, it’s not enough. Crucially,
+         if two threads are adding nodes, there’s a race condition between steps 2 and 3: a second thread could modify the value of
+         <kbd class="calibre17">head</kbd> between when your thread reads it in step 2 and you update it in step 3. This would then result in the changes made by that
+         other thread being discarded or something even worse. Before we look at addressing this race condition, it’s also important
+         to note that once <kbd class="calibre17">head</kbd> has been updated to point to your new node, another thread could read that node. It’s therefore vital that your new node
+         is thoroughly prepared <i class="calibre6">before</i> <kbd class="calibre17">head</kbd> is set to point to it; you can’t modify the node afterward.
+      </p>
+      
+      <p class="noind">OK, so what can you do about this nasty race condition? The answer is to use an atomic compare/exchange operation at step
+         3 to ensure that <kbd class="calibre17">head</kbd> hasn’t been modified since you read it in step 2. If it has, you can loop and try again. The following listing shows how
+         you can implement a thread-safe <kbd class="calibre17">push()</kbd> without locks.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex02">Listing 7.2. <a id="ch07ex02__title" class="calibre4"></a>Implementing <kbd class="calibre17">push()</kbd> without locks
+      </h5>
+      <pre id="PLd0e25095" class="calibre5">template&lt;typename T&gt;
+class lock_free_stack
+{
+private:
+    struct node
+    {
+        T data;
+        node* next;
+        node(T const&amp; data_):                                          <b class="calibre24"><i class="calibre6">1</i></b>
+            data(data_)
+        {}
+    };
+    std::atomic&lt;node*&gt; head;
+public:
+    void push(T const&amp; data)
+    {
+        node* const new_node=new node(data);                           <b class="calibre24"><i class="calibre6">2</i></b>
+        new_node-&gt;next=head.load();                                    <b class="calibre24"><i class="calibre6">3</i></b>
+        while(!head.compare_exchange_weak(new_node-&gt;next,new_node));   <b class="calibre24"><i class="calibre6">4</i></b>
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1135" class="calibre4"></a>This code neatly matches the preceding three-point plan: create a new node <b class="calibre24"><i class="calibre6">2</i></b>, set the node’s <kbd class="calibre17">next</kbd> pointer to the current <kbd class="calibre17">head</kbd> <b class="calibre24"><i class="calibre6">3</i></b>, and set the <kbd class="calibre17">head</kbd> pointer to the new node <b class="calibre24"><i class="calibre6">4</i></b>. By populating the data in the <kbd class="calibre17">node</kbd> structure itself from the <kbd class="calibre17">node</kbd> constructor <b class="calibre24"><i class="calibre6">1</i></b>, you’ve ensured that the node is ready to roll as soon as it’s constructed, so that’s the easy problem solved. Then you use
+         <kbd class="calibre17">compare_exchange_weak()</kbd> to ensure that the <kbd class="calibre17">head</kbd> pointer still has the same value as you stored in <kbd class="calibre17">new_node-&gt;next</kbd> <b class="calibre24"><i class="calibre6">3</i></b>, and you set it to <kbd class="calibre17">new_node</kbd> if so. This bit of code also uses a nifty part of the compare/exchange functionality: if it returns <kbd class="calibre17">false</kbd> to indicate that the comparison failed (for example, because <kbd class="calibre17">head</kbd> was modified by another thread), the value supplied as the first parameter (<kbd class="calibre17">new_node-&gt;next</kbd>) is updated to the current value of <kbd class="calibre17">head</kbd>. You therefore don’t have to reload <kbd class="calibre17">head</kbd> each time through the loop, because the compiler does that for you. Also, because you’re looping directly on failure, you
+         can use <kbd class="calibre17">compare_exchange_weak</kbd>, which can result in more optimal code than <kbd class="calibre17">compare_exchange_strong</kbd> on some architectures (see <a href="kindle_split_015.html#ch05" class="calibre4">chapter 5</a>).
+      </p>
+      
+      <p class="noind">So, you might not have a <kbd class="calibre17">pop()</kbd> operation yet, but you can quickly check <kbd class="calibre17">push()</kbd> for compliance with the guidelines. The only place that can throw an exception is the construction of the new <kbd class="calibre17">node</kbd> <b class="calibre24"><i class="calibre6">1</i></b>, but this will clean up after itself, and the list hasn’t been modified yet, so that’s perfectly safe. Because you build
+         the data to be stored as part of the <kbd class="calibre17">node</kbd>, and you use <kbd class="calibre17">compare_exchange_weak()</kbd> to update the <kbd class="calibre17">head</kbd> pointer, there are no problematic race conditions here. Once the compare/exchange succeeds, the node is on the list and ready
+         for the taking. There are no locks, so there’s no possibility of deadlock, and your <kbd class="calibre17">push()</kbd> function passes with flying colors.
+      </p>
+      
+      <p class="noind">Now that you have a means of adding data to the stack, you need a way to remove it. On the face of it, this is quite simple:</p>
+      
+      <p class="calibre19"></p>
+      <ol class="calibre27">
+         
+         <li class="calibre22">Read the current value of <kbd class="calibre17">head</kbd>.
+         </li>
+         
+         <li class="calibre22">Read <kbd class="calibre17">head-&gt;next</kbd>.
+         </li>
+         
+         <li class="calibre22">Set <kbd class="calibre17">head</kbd> to <kbd class="calibre17">head-&gt;next</kbd>.
+         </li>
+         
+         <li class="calibre22">Return the <kbd class="calibre17">data</kbd> from the retrieved <kbd class="calibre17">node</kbd>.
+         </li>
+         
+         <li class="calibre22">Delete the retrieved node.</li>
+         
+      </ol>
+      
+      <p class="noind"><a id="iddle1702" class="calibre4"></a><a id="iddle2665" class="calibre4"></a>But in the presence of multiple threads, this isn’t so simple. If there are two threads removing items from the stack, they
+         both might read the same value of <kbd class="calibre17">head</kbd> at step 1. If one thread then proceeds all the way through to step 5 before the other gets to step 2, the second thread will
+         be dereferencing a dangling pointer. This is one of the biggest issues in writing lock-free code, so for now you’ll leave
+         out step 5 and leak the nodes.
+      </p>
+      
+      <p class="noind">This doesn’t resolve all the problems, though. There’s another problem: if two threads read the same value of <kbd class="calibre17">head</kbd>, they’ll return the same node. This violates the intent of the stack data structure, so you need to avoid this. You can resolve
+         this the same way you resolved the race in <kbd class="calibre17">push()</kbd>: use compare/exchange to update <kbd class="calibre17">head</kbd>. If the compare/exchange fails, either a new node has been pushed on or another thread popped the node you were trying to
+         pop. Either way, you need to return to step 1 (although the compare/exchange call rereads <kbd class="calibre17">head</kbd> for you).
+      </p>
+      
+      <p class="noind">Once the compare/exchange call succeeds, you know you’re the only thread that’s popping the given node off the stack, so you
+         can safely execute step 4. Here’s a first try at <kbd class="calibre17">pop()</kbd>:
+      </p>
+      
+      <pre id="PLd0e25308" class="calibre5">template&lt;typename T&gt;
+class lock_free_stack
+{
+public:
+    void pop(T&amp; result)
+    {
+        node* old_head=head.load();
+        while(!head.compare_exchange_weak(old_head,old_head-&gt;next));
+        result=old_head-&gt;data;
+    }
+};</pre>
+      
+      <p class="noind">Although this is nice and succinct, there are still a couple of problems aside from the leaking node. First, it doesn’t work
+         on an empty list: if <kbd class="calibre17">head</kbd> is a null pointer, it will cause undefined behavior as it tries to read the <kbd class="calibre17">next</kbd> pointer. This is easily fixed by checking for <kbd class="calibre17">nullptr</kbd> in the <kbd class="calibre17">while</kbd> loop and either throwing an exception on an empty stack or returning a <kbd class="calibre17">bool</kbd> to indicate success or failure.
+      </p>
+      
+      <p class="noind">The second problem is an exception-safety issue. When we first introduced the thread-safe stack back in <a href="kindle_split_013.html#ch03" class="calibre4">chapter 3</a>, you saw how returning the object by value left you with an exception safety issue: if an exception is thrown when copying
+         the return value, the value is lost. In that case, passing in a reference to the result was an acceptable solution because
+         you could ensure that the stack was left unchanged if an exception was thrown. Unfortunately, here you don’t have that luxury;
+         you can only safely copy the data once you know you’re the only thread returning the node, which means the node has already
+         been removed from the queue. Consequently, passing in the target for the return value by reference is no longer an advantage:
+         you might as well return by value. If you want to return the value safely, you have to use the other option from <a href="kindle_split_013.html#ch03" class="calibre4">chapter 3</a>: return a (smart) pointer to the data value.
+      </p>
+      
+      <p class="noind"><a id="iddle2635" class="calibre4"></a>If you return a smart pointer, you can return <kbd class="calibre17">nullptr</kbd> to indicate that there’s no value to return, but this requires that the data be allocated on the heap. If you do the heap
+         allocation as part of <kbd class="calibre17">pop()</kbd>, you’re <i class="calibre6">still</i> no better off, because the heap allocation might throw an exception. Instead, you can allocate the memory when you <kbd class="calibre17">push()</kbd> the data onto the stack—you have to allocate memory for the <kbd class="calibre17">node</kbd> anyway. Returning <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> won’t throw an exception, so <kbd class="calibre17">pop()</kbd> is now safe. Putting all this together gives the following listing.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex03">Listing 7.3. <a id="ch07ex03__title" class="calibre4"></a>A lock-free stack that leaks nodes
+      </h5>
+      <pre id="PLd0e25374" class="calibre5">template&lt;typename T&gt;
+class lock_free_stack
+{
+private:
+    struct node
+    {
+        std::shared_ptr&lt;T&gt; data;                                      <b class="calibre24"><i class="calibre6">1</i></b>
+        node* next;
+        node(T const&amp; data_):
+            data(std::make_shared&lt;T&gt;(data_))                          <b class="calibre24"><i class="calibre6">2</i></b>
+        {}
+    };
+    std::atomic&lt;node*&gt; head;
+public:
+    void push(T const&amp; data)
+    {
+        node* const new_node=new node(data);
+        new_node-&gt;next=head.load();
+        while(!head.compare_exchange_weak(new_node-&gt;next,new_node));
+    }
+    std::shared_ptr&lt;T&gt; pop()
+    {
+        node* old_head=head.load();
+        while(old_head &amp;&amp;                                             <b class="calibre24"><i class="calibre6">3</i></b>
+            !head.compare_exchange_weak(old_head,old_head-&gt;next));
+        return old_head ? old_head-&gt;data : std::shared_ptr&lt;T&gt;();      <b class="calibre24"><i class="calibre6">4</i></b>
+    }
+};</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> Data is now held by pointer</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Create std::shared_ptr for newly allocated T</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">3</i> Check old_head is not a null pointer before you dereference it</b></li>
+         
+      </ul>
+      
+      <p class="noind">The data is held by the pointer now <b class="calibre24"><i class="calibre6">1</i></b>, so you have to allocate the data on the heap in the node constructor <b class="calibre24"><i class="calibre6">2</i></b>. You also have to check for a null pointer before you dereference <kbd class="calibre17">old_head</kbd> in the <kbd class="calibre17">compare_exchange_weak()</kbd> loop <b class="calibre24"><i class="calibre6">3</i></b>. Finally, you either return the data associated with your node, if there is one, or a null pointer if not <b class="calibre24"><i class="calibre6">4</i></b>. Note that although this is lock-free, it’s not wait-free, because the <kbd class="calibre17">while</kbd> loops in both <kbd class="calibre17">push()</kbd> and <kbd class="calibre17">pop()</kbd> could in theory loop forever if the <kbd class="calibre17">compare_exchange_weak()</kbd> keeps failing.
+      </p>
+      
+      <p class="noind"><a id="iddle1541" class="calibre4"></a><a id="iddle1550" class="calibre4"></a><a id="iddle1584" class="calibre4"></a><a id="iddle1783" class="calibre4"></a><a id="iddle1822" class="calibre4"></a>If you have a garbage collector picking up after you (like in managed languages such as C# or Java), you’re finished; the
+         old node will be collected and recycled once it’s no longer being accessed by any threads. But not many C++ compilers ship
+         with a garbage collector, so you generally have to tidy up after yourself.
+      </p>
+      
+      
+      
+      <h4 id="ch07lev2sec6" class="calibre23">7.2.2. <a id="ch07lev2sec6__title" class="calibre4"></a>Stopping those pesky leaks: managing memory in lock-free data structures
+      </h4>
+      
+      <p class="noind">When you first looked at <kbd class="calibre17">pop()</kbd>, you opted to leak nodes in order to avoid the race condition where one thread deletes a node while another thread still
+         holds a pointer to it that it’s about to dereference. But leaking memory isn’t acceptable in any sensible C++ program, so
+         you have to do something about that. Now it’s time to look at the problem and work out a solution.
+      </p>
+      
+      <p class="noind">The basic problem is that you want to free a node, but you can’t do so until you’re sure there are no other threads that still
+         hold pointers to it. If only one thread ever calls <kbd class="calibre17">pop()</kbd> on a particular stack instance, you’re home free. Nodes are created in calls to <kbd class="calibre17">push()</kbd>, and <kbd class="calibre17">push()</kbd> doesn’t access the contents of existing nodes, so the only threads that can access a given node are the thread that added
+         that node to the stack, and any threads that call <kbd class="calibre17">pop()</kbd>. <kbd class="calibre17">push()</kbd> doesn’t touch the node once it’s been added to the stack, so that leaves the threads that call <kbd class="calibre17">pop()</kbd>—if there’s only one of them, then the thread that called <kbd class="calibre17">pop()</kbd> must be the only thread that can touch the node, and it can safely delete it.
+      </p>
+      
+      <p class="noind">On the other hand, if you need to handle multiple threads calling <kbd class="calibre17">pop()</kbd> on the same stack instance, you need some way to track when it’s safe to delete a node. This means you need to write a special-purpose
+         garbage collector for <kbd class="calibre17">node</kbd>s. Now, this might sound scary, and although it’s certainly tricky, it’s not <i class="calibre6">that</i> bad: you’re only checking for <kbd class="calibre17">node</kbd>s, and you’re only checking for nodes accessed from <kbd class="calibre17">pop()</kbd>. You’re not worried about nodes in <kbd class="calibre17">push()</kbd>, because they’re only accessible from one thread until they’re on the stack, whereas multiple threads might be accessing
+         the same node in <kbd class="calibre17">pop()</kbd>.
+      </p>
+      
+      <p class="noind">If there are no threads calling <kbd class="calibre17">pop()</kbd>, it’s perfectly safe to delete all the nodes currently awaiting deletion. Therefore, if you add the nodes to a “to be deleted”
+         list when you’ve extracted the data, then you can delete them all when there are no threads calling <kbd class="calibre17">pop()</kbd>. How do you know there aren’t any threads calling <kbd class="calibre17">pop()</kbd>? Simple—count them. If you increment a counter on entry and decrement that counter on exit, it’s safe to delete the nodes
+         from the “to be deleted” list when the counter is zero. It will have to be an atomic counter so it can safely be accessed
+         from multiple threads. The following listing shows the amended <kbd class="calibre17">pop()</kbd> function, and <a href="#ch07ex05" class="calibre4">listing 7.5</a> shows the supporting functions for this implementation.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex04">Listing 7.4. <a id="ch07ex04__title" class="calibre4"></a>Reclaiming nodes when no threads are in <kbd class="calibre17">pop()</kbd></h5>
+      <pre id="PLd0e25585" class="calibre5">template&lt;typename T&gt;
+class lock_free_stack
+{
+private:
+    std::atomic&lt;unsigned&gt; threads_in_pop;       <b class="calibre24"><i class="calibre6">1</i></b>
+    void try_reclaim(node* old_head);
+public:
+    std::shared_ptr&lt;T&gt; pop()
+    {
+        ++threads_in_pop;                       <b class="calibre24"><i class="calibre6">2</i></b>
+        node* old_head=head.load();
+        while(old_head &amp;&amp;
+              !head.compare_exchange_weak(old_head,old_head-&gt;next));
+        std::shared_ptr&lt;T&gt; res;
+        if(old_head)
+        {
+            res.swap(old_head-&gt;data);           <b class="calibre24"><i class="calibre6">3</i></b>
+        }
+        try_reclaim(old_head);                  <b class="calibre24"><i class="calibre6">4</i></b>
+        return res;
+    }
+};</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><a id="iddle2422" class="calibre4"></a><a id="iddle2556" class="calibre4"></a><a id="iddle2585" class="calibre4"></a><b class="calibre24"><i class="calibre6">1</i> Atomic variable</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Increase counter before doing anything else</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">3</i> Reclaim deleted nodes if you can</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">4</i> Extract data from node rather than copying pointer</b></li>
+         
+      </ul>
+      
+      <p class="noind">The atomic variable <kbd class="calibre17">threads_in_pop</kbd> <b class="calibre24"><i class="calibre6">1</i></b> is used to count the threads currently trying to pop an item off the stack. It’s incremented at the start of <kbd class="calibre17">pop()</kbd> <b class="calibre24"><i class="calibre6">2</i></b>, and decremented inside <kbd class="calibre17">try_reclaim()</kbd>, which is called once the node has been removed <b class="calibre24"><i class="calibre6">4</i></b>. Because you’re going to potentially delay the deletion of the node itself, you can use <kbd class="calibre17">swap()</kbd> to remove the data from the node <b class="calibre24"><i class="calibre6">3</i></b> rather than copying the pointer, so that the data will be deleted automatically when you no longer need it rather than it
+         being kept alive because there’s still a reference in a not-yet-deleted node. The next listing shows what goes into <kbd class="calibre17">try_reclaim()</kbd>.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex05">Listing 7.5. <a id="ch07ex05__title" class="calibre4"></a>The reference-counted reclamation machinery
+      </h5>
+      <pre id="PLd0e25694" class="calibre5">template&lt;typename T&gt;
+class lock_free_stack
+{
+private:
+    std::atomic&lt;node*&gt; to_be_deleted;
+    static void delete_nodes(node* nodes)
+    {
+        while(nodes)
+        {
+            node* next=nodes-&gt;next;
+            delete nodes;
+            nodes=next;
+         }
+    }
+    void try_reclaim(node* old_head)
+    {
+        if(threads_in_pop==1)                                       <b class="calibre24"><i class="calibre6">1</i></b>
+        {
+            node* nodes_to_delete=to_be_deleted.exchange(nullptr);  <b class="calibre24"><i class="calibre6">2</i></b>
+            if(!--threads_in_pop)                                   <b class="calibre24"><i class="calibre6">3</i></b>
+            {
+                delete_nodes(nodes_to_delete);                      <b class="calibre24"><i class="calibre6">4</i></b>
+            }
+            else if(nodes_to_delete)                                <b class="calibre24"><i class="calibre6">5</i></b>
+            {
+                chain_pending_nodes(nodes_to_delete);               <b class="calibre24"><i class="calibre6">6</i></b>
+            }
+            delete old_head;                                        <b class="calibre24"><i class="calibre6">7</i></b>
+        }
+        else
+        {
+            chain_pending_node(old_head);                           <b class="calibre24"><i class="calibre6">8</i></b>
+            --threads_in_pop;
+        }
+    }
+    void chain_pending_nodes(node* nodes)
+    {
+        node* last=nodes;
+        while(node* const next=last-&gt;next)                          <b class="calibre24"><i class="calibre6">9</i></b>
+        {
+            last=next;
+        }
+        chain_pending_nodes(nodes,last);
+    }
+    void chain_pending_nodes(node* first,node* last)
+    {
+        last-&gt;next=to_be_deleted;                                   <b class="calibre24"><i class="calibre6">10</i></b>
+        while(!to_be_deleted.compare_exchange_weak(                 <b class="calibre24"><i class="calibre6">11</i></b>
+                  last-&gt;next,first));
+    }
+    void chain_pending_node(node* n)
+    {
+        chain_pending_nodes(n,n);                                   <b class="calibre24"><i class="calibre6">12</i></b>
+    }
+};</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Claim list of to-be-deleted nodes</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">3</i> Are you the only thread in pop()?</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">9</i> Follow the next pointer chain to the end.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">11</i> Loop to guarantee that last-&gt;next is correct.</b></li>
+         
+      </ul>
+      
+      <p class="noind">If the count of <kbd class="calibre17">threads_in_pop</kbd> is 1 when you’re trying to reclaim the node <b class="calibre24"><i class="calibre6">1</i></b>, you’re the only thread currently in <kbd class="calibre17">pop()</kbd>, which means it’s safe to delete the node you just removed <b class="calibre24"><i class="calibre6">7</i></b>, and it <i class="calibre6">may</i> also be safe to delete the pending nodes. If the count is not 1, it’s not safe to delete any nodes, so you have to add the
+         node to the pending list <b class="calibre24"><i class="calibre6">8</i></b>.
+      </p>
+      
+      <p class="noind">Assume for a moment that <kbd class="calibre17">threads_in_pop</kbd> is 1. You now need to try to reclaim the pending nodes; if you don’t, they’ll stay pending until you destroy the stack. To
+         do <a id="iddle2586" class="calibre4"></a>this, you first claim the list for yourself with an atomic <kbd class="calibre17">exchange</kbd> operation <b class="calibre24"><i class="calibre6">2</i></b>, and then decrement the count of <kbd class="calibre17">threads_in_pop</kbd> <b class="calibre24"><i class="calibre6">3</i></b>. If the count is zero after the decrement, you know that no other thread can be accessing this list of pending nodes. There
+         may be new pending nodes, but you’re not bothered about them for now, as long as it’s safe to reclaim your list. You can then
+         call <kbd class="calibre17">delete_nodes</kbd> to iterate down the list and delete them <b class="calibre24"><i class="calibre6">4</i></b>.
+      </p>
+      
+      <p class="noind">If the count is not zero after the decrement, it’s not safe to reclaim the nodes, so if there are any <b class="calibre24"><i class="calibre6">5</i></b>, you must chain them back onto the list of nodes pending deletion <b class="calibre24"><i class="calibre6">6</i></b>. This can happen if there are multiple threads accessing the data structure concurrently. Other threads might have called
+         <kbd class="calibre17">pop()</kbd> in between the first test of <kbd class="calibre17">threads_in_pop</kbd> <b class="calibre24"><i class="calibre6">1</i></b> and the “claiming” of the list <b class="calibre24"><i class="calibre6">2</i></b>, potentially adding new nodes to the list that are still being accessed by one or more of those other threads. In <a href="#ch07fig01" class="calibre4">figure 7.1</a>, thread C adds node Y to the <kbd class="calibre17">to_be_deleted</kbd> list, even though thread B is still referencing it as <kbd class="calibre17">old_head</kbd>, and will try and read its <kbd class="calibre17">next</kbd> pointer. Thread A can’t therefore delete the nodes without potentially causing undefined behavior for thread B.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07fig01">Figure 7.1. <a id="ch07fig01__title" class="calibre4"></a>Three threads call <kbd class="calibre17">pop()</kbd> concurrently, showing why you must check <kbd class="calibre17">threads_in_pop</kbd> after claiming the nodes to be deleted in <kbd class="calibre17">try_reclaim()</kbd>.
+      </h5>
+      
+      <p class="center1"><img alt="" src="07fig01_alt.jpg" class="calibre2"/></p>
+      
+      
+      <p class="noind">To chain the nodes that are pending deletion onto the pending list, you reuse the <kbd class="calibre17">next</kbd> pointer from the nodes to link them together. In the case of relinking an existing chain back onto the list, you traverse
+         the chain to find the end <b class="calibre24"><i class="calibre6">9</i></b>, replace the <kbd class="calibre17">next</kbd> pointer from the last node with the current <kbd class="calibre17">to_be_deleted</kbd> pointer <b class="calibre24"><i class="calibre6">10</i></b>, and store the first node in the chain as the new <kbd class="calibre17">to_be_deleted</kbd> pointer <b class="calibre24"><i class="calibre6">11</i></b>. You have to use <kbd class="calibre17">compare_exchange_weak</kbd> in a loop here in order to ensure that you don’t leak any nodes that have been added by another thread. This has the benefit
+         of updating the <kbd class="calibre17">next</kbd> pointer from the end of the chain if it has been changed. Adding a single node onto the list is a special case where the
+         first node in the chain to be added is the same as the last one <b class="calibre24"><i class="calibre6">12</i></b>.
+      </p>
+      
+      <p class="noind">This works reasonably well in low-load situations, where there are suitable quiescent points at which no threads are in <kbd class="calibre17">pop()</kbd>. But this is potentially a transient situation, which is why you need to test that the <kbd class="calibre17">threads_in_pop</kbd> count decrements to zero <b class="calibre24"><i class="calibre6">3</i></b> before doing the reclaim and why this test occurs before you delete the just-removed node <b class="calibre24"><i class="calibre6">7</i></b>. Deleting a node is potentially a time-consuming operation, and you want the window in which other threads can modify the
+         list to be as small as possible. The longer the time between when the thread first finds <kbd class="calibre17">threads_in_pop</kbd> to be equal to 1 and the attempt to delete the nodes, the more chance there is that another thread has called <kbd class="calibre17">pop()</kbd>, and that <kbd class="calibre17">threads_in_pop</kbd> is no longer equal to 1, preventing the nodes from being deleted.
+      </p>
+      
+      <p class="noind">In high-load situations, there may never be this quiescent state, because other threads have entered <kbd class="calibre17">pop()</kbd> before all the threads initially in <kbd class="calibre17">pop()</kbd> have left. Under this scenario, the <kbd class="calibre17">to_be_deleted</kbd> list would grow without bounds, and you’d be leaking memory again. If there aren’t going to be any quiescent periods, you
+         need to find an alternative mechanism for reclaiming the nodes. The key is to identify when no more threads are accessing
+         a particular node so that it can be reclaimed. By far the easiest such mechanism to reason about is the use of hazard pointers.<a id="iddle1445" class="calibre4"></a><a id="iddle1540" class="calibre4"></a><a id="iddle1685" class="calibre4"></a><a id="iddle1773" class="calibre4"></a><a id="iddle1774" class="calibre4"></a><a id="iddle2557" class="calibre4"></a><a id="iddle2569" class="calibre4"></a></p>
+      
+      
+      
+      
+      <h4 id="ch07lev2sec7" class="calibre23">7.2.3. <a id="ch07lev2sec7__title" class="calibre4"></a>Detecting nodes that can’t be reclaimed using hazard pointers
+      </h4>
+      
+      <p class="noind"><a id="iddle1430" class="calibre4"></a>The term <i class="calibre6">hazard pointers</i> is a reference to a technique discovered by Maged Michael.<sup class="calibre18">[<a href="#ch07fn01" class="calibre4">1</a>]</sup> They are so called because deleting a node that might still be referenced by other threads is hazardous. If other threads
+         do indeed hold references to that node and proceed to access the node through that reference, you have undefined behavior.
+         The basic idea is that if a thread is going to access an object that another thread might want to delete, it first sets a
+         hazard pointer to reference the object, informing the other thread that deleting the object would indeed be hazardous. Once
+         the object is no longer needed, the hazard pointer is cleared. If you’ve ever watched the Oxford/Cambridge boat race, you’ve
+         seen a similar mechanism used when starting the race: the cox of either boat can raise their hand to indicate that they aren’t
+         ready. While either cox has their hand raised, the umpire may not start the race. If both coxes have their hands down, the
+         race may start, but a cox may raise their hand again if the race hasn’t started and they feel the situation has changed.
+      </p>
+      <blockquote class="smaller">
+         <p class="calibre19"><sup class="calibre20"><a id="ch07fn01" class="calibre4">1</a></sup> 
+            </p><div class="calibre15">“Safe Memory Reclamation for Dynamic Lock-Free Objects Using Atomic Reads and Writes,” Maged M. Michael, in PODC ’02: Proceedings
+               of the Twenty-first Annual Symposium on Principles of Distributed Computing (2002), ISBN 1-58113-485-1.
+            </div>
+         <p class="calibre19"></p>
+      </blockquote>
+      
+      <p class="noind">When a thread wants to delete an object, it must first check the hazard pointers belonging to the other threads in the system.
+         If none of the hazard pointers reference the object, it can safely be deleted. Otherwise, it must be left until later. Periodically,
+         the list of objects that have been left until later is checked to see if any of them can now be deleted.
+      </p>
+      
+      <p class="noind">Described at such a high level, it sounds relatively straightforward, so how do you do this in C++?</p>
+      
+      <p class="noind">Well, first off you need a location in which to store the pointer to the object you’re accessing, the hazard pointer itself.
+         This location must be visible to all threads, and you need one of these for each thread that might access the data structure.
+         Allocating them correctly and efficiently can be a challenge, so you’ll leave that for later and assume you have a function
+         <kbd class="calibre17">get_hazard_pointer_for_current_thread()</kbd> that returns a reference to your hazard pointer. You then need to set it when you read a pointer that you intend to dereference—in
+         this case the <kbd class="calibre17">head</kbd> value from the list:
+      </p>
+      
+      <pre id="PLd0e26065" class="calibre5">std::shared_ptr&lt;T&gt; pop()
+{
+    std::atomic&lt;void*&gt;&amp; hp=get_hazard_pointer_for_current_thread();
+    node* old_head=head.load();           <b class="calibre24"><i class="calibre6">1</i></b>
+    node* temp;
+    do
+    {
+        temp=old_head;
+        hp.store(old_head);               <b class="calibre24"><i class="calibre6">2</i></b>
+        old_head=head.load();
+    } while(old_head!=temp);              <b class="calibre24"><i class="calibre6">3</i></b>
+    // ...
+}</pre>
+      
+      <p class="noind"><a id="iddle1131" class="calibre4"></a>You have to do this in a <kbd class="calibre17">while</kbd> loop to ensure that the <kbd class="calibre17">node</kbd> hasn’t been deleted between the reading of the old <kbd class="calibre17">head</kbd> pointer <b class="calibre24"><i class="calibre6">1</i></b> and the setting of the hazard pointer <b class="calibre24"><i class="calibre6">2</i></b>. During this window no other thread knows you’re accessing this particular node. Fortunately, if the old <kbd class="calibre17">head</kbd> node is going to be deleted, <kbd class="calibre17">head</kbd> itself must have changed, so you can check this and keep looping until you know that the <kbd class="calibre17">head</kbd> pointer still has the same value you set your hazard pointer to <b class="calibre24"><i class="calibre6">3</i></b>. Using hazard pointers like this relies on the fact that it’s safe to use the value of a pointer after the object it references
+         has been deleted. This is technically undefined behavior if you are using the default implementation of <kbd class="calibre17">new</kbd> and <kbd class="calibre17">delete</kbd>, so either you need to ensure that your implementation permits it, or you need to use a custom allocator that permits this
+         usage.
+      </p>
+      
+      <p class="noind">Now that you’ve set your hazard pointer, you can proceed with the rest of <kbd class="calibre17">pop()</kbd>, safe in the knowledge that no other thread will delete the nodes from under you. Well, almost: every time you reload <kbd class="calibre17">old_head</kbd>, you need to update the hazard pointer before you dereference the freshly read pointer value. Once you’ve extracted a node
+         from the list, you can clear your hazard pointer. If there are no other hazard pointers referencing your node, you can safely
+         delete it; otherwise, you have to add it to a list of nodes to be deleted later. The following listing shows a full implementation
+         of <kbd class="calibre17">pop()</kbd> using this scheme.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex06">Listing 7.6. <a id="ch07ex06__title" class="calibre4"></a>An implementation of <kbd class="calibre17">pop()</kbd> using hazard pointers
+      </h5>
+      <pre id="PLd0e26150" class="calibre5">std::shared_ptr&lt;T&gt; pop()
+{
+    std::atomic&lt;void*&gt;&amp; hp=get_hazard_pointer_for_current_thread();
+    node* old_head=head.load();
+    do
+    {
+        node* temp;
+        do                                                 <b class="calibre24"><i class="calibre6">1</i></b>
+        {
+            temp=old_head;
+            hp.store(old_head);
+            old_head=head.load();
+        } while(old_head!=temp);
+    }
+    while(old_head &amp;&amp;
+          !head.compare_exchange_strong(old_head,old_head-&gt;next));
+    hp.store(nullptr);                                     <b class="calibre24"><i class="calibre6">2</i></b>
+    std::shared_ptr&lt;T&gt; res;
+    if(old_head)
+    {
+        res.swap(old_head-&gt;data);
+        if(outstanding_hazard_pointers_for(old_head))      <b class="calibre24"><i class="calibre6">3</i></b>
+        {
+            reclaim_later(old_head);                       <b class="calibre24"><i class="calibre6">4</i></b>
+        }
+        else
+        {
+            delete old_head;                               <b class="calibre24"><i class="calibre6">5</i></b>
+        }
+        delete_nodes_with_no_hazards();                    <b class="calibre24"><i class="calibre6">6</i></b>
+    }
+    return res;
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><a id="iddle1283" class="calibre4"></a><a id="iddle1447" class="calibre4"></a><a id="iddle1732" class="calibre4"></a><a id="iddle1848" class="calibre4"></a><b class="calibre24"><i class="calibre6">1</i> Loop until you’ve set the hazard pointer to head.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Clear hazard pointer once you’re finished</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">3</i> Check for hazard pointers referencing a node before you delete it.</b></li>
+         
+      </ul>
+      
+      <p class="noind">First off, you’ve moved the loop that sets the hazard pointer <i class="calibre6">inside</i> the outer loop for reloading <kbd class="calibre17">old_head</kbd> if the compare/exchange fails <b class="calibre24"><i class="calibre6">1</i></b>. You’re using <kbd class="calibre17">compare_exchange_strong()</kbd> here because you’re doing work inside the <kbd class="calibre17">while</kbd> loop: a spurious failure on <kbd class="calibre17">compare_exchange_weak()</kbd> would result in resetting the hazard pointer unnecessarily. This ensures that the hazard pointer is correctly set before
+         you dereference <kbd class="calibre17">old_head</kbd>. Once you’ve claimed the node as yours, you can clear your hazard pointer <b class="calibre24"><i class="calibre6">2</i></b>. If you did get a node, you need to check the hazard pointers belonging to other threads to see if they reference it <b class="calibre24"><i class="calibre6">3</i></b>. If so, you can’t delete it yet, so you must put it on a list to be reclaimed later <b class="calibre24"><i class="calibre6">4</i></b>; otherwise, you can delete it right away <b class="calibre24"><i class="calibre6">5</i></b>. Finally, you put in a call to check for any nodes for which you had to call <kbd class="calibre17">reclaim_later()</kbd>. If there are no longer any hazard pointers referencing those nodes, you can safely delete them <b class="calibre24"><i class="calibre6">6</i></b>. Any nodes for which there are still outstanding hazard pointers will be left for the next thread that calls <kbd class="calibre17">pop()</kbd>.
+      </p>
+      
+      <p class="noind">There’s still a lot of detail hidden in these new functions—<kbd class="calibre17">get_hazard_pointer_for_current_thread()</kbd>, <kbd class="calibre17">reclaim_later()</kbd>, <kbd class="calibre17">outstanding_hazard_pointers_for()</kbd>, and <kbd class="calibre17">delete_nodes_with_no_hazards()</kbd>—so let’s draw back the curtain and look at how they work.
+      </p>
+      
+      <p class="noind">The exact scheme for allocating hazard pointer instances to threads used by <kbd class="calibre17">get_hazard_pointer_for_current_thread()</kbd> doesn’t matter for the program logic (although it can affect the efficiency, as you’ll see later). For now you’ll go with
+         a simple structure: a fixed-size array of pairs of thread IDs and pointers. <kbd class="calibre17">get_hazard_pointer_for_current_thread()</kbd> then searches through the array to find the first free slot and sets the ID entry of that slot to the ID of the current thread.
+         When the thread exits, the slot is freed by resetting the ID entry to a default-constructed <kbd class="calibre17">std::thread::id()</kbd>. This is shown in the following listing.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex07">Listing 7.7. <a id="ch07ex07__title" class="calibre4"></a>A simple implementation of <kbd class="calibre17">get_hazard_pointer_for_current_thread()</kbd></h5>
+      <pre id="PLd0e26311" class="calibre5">unsigned const max_hazard_pointers=100;
+struct hazard_pointer
+{
+    std::atomic&lt;std::thread::id&gt; id;
+    std::atomic&lt;void*&gt; pointer;
+};
+hazard_pointer hazard_pointers[max_hazard_pointers];
+class hp_owner
+{
+    hazard_pointer* hp;
+
+public:
+    hp_owner(hp_owner const&amp;)=delete;
+    hp_owner operator=(hp_owner const&amp;)=delete;
+    hp_owner():
+        hp(nullptr)
+    {
+        for(unsigned i=0;i&lt;max_hazard_pointers;++i)
+        {
+            std::thread::id old_id;
+            if(hazard_pointers[i].id.compare_exchange_strong(  <b class="calibre24"><i class="calibre6">1</i></b>
+                old_id,std::this_thread::get_id()))
+            {
+                hp=&amp;hazard_pointers[i];
+                break;
+            }
+        }
+        if(!hp)                                                <b class="calibre24"><i class="calibre6">2</i></b>
+        {
+            throw std::runtime_error("No hazard pointers available");
+        }
+    }
+    std::atomic&lt;void*&gt;&amp; get_pointer()
+    {
+        return hp-&gt;pointer;
+    }
+    ~hp_owner()                                                <b class="calibre24"><i class="calibre6">3</i></b>
+    {
+        hp-&gt;pointer.store(nullptr);
+        hp-&gt;id.store(std::thread::id());
+    }
+};
+std::atomic&lt;void*&gt;&amp; get_hazard_pointer_for_current_thread()    <b class="calibre24"><i class="calibre6">4</i></b>
+{
+    thread_local static hp_owner hazard;                       <b class="calibre24"><i class="calibre6">5</i></b>
+    return hazard.get_pointer();                               <b class="calibre24"><i class="calibre6">6</i></b>
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><a id="iddle1431" class="calibre4"></a><a id="iddle2493" class="calibre4"></a><b class="calibre24"><i class="calibre6">1</i> Try to claim ownership of a hazard pointer.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">5</i> Each thread has its own hazard pointer.</b></li>
+         
+      </ul>
+      
+      <p class="noind">The implementation of <kbd class="calibre17">get_hazard_pointer_for_current_thread()</kbd> itself is deceptively simple <b class="calibre24"><i class="calibre6">4</i></b>: it has a <kbd class="calibre17">thread_local</kbd> variable of type <kbd class="calibre17">hp_owner</kbd> <b class="calibre24"><i class="calibre6">5</i></b>, which stores the hazard pointer for the current thread. It then returns the pointer from that object <b class="calibre24"><i class="calibre6">6</i></b>. This works as follows: the first time <i class="calibre6">each thread</i> calls this function, a new instance of <kbd class="calibre17">hp_owner</kbd> is created. The constructor for this new instance <b class="calibre24"><i class="calibre6">2</i></b> then searches through the table of owner/pointer pairs looking for an entry without an owner. It uses <kbd class="calibre17">compare_exchange_strong()</kbd> to check for an entry without an owner and claim it in one go <b class="calibre24"><i class="calibre6">3</i></b>. If the <kbd class="calibre17">compare_exchange_strong()</kbd> fails, another thread owns that entry, so you move on to the next. If the exchange succeeds, you’ve successfully claimed
+         the entry for the current thread, so you store it and stop the search <b class="calibre24"><i class="calibre6">4</i></b>. If you get to the end of the list without finding a free entry <b class="calibre24"><i class="calibre6">5</i></b>, there are too many threads using hazard pointers, so you throw an exception.
+      </p>
+      
+      <p class="noind">Once the <kbd class="calibre17">hp_owner</kbd> instance has been created for a given thread, further accesses are much faster because the pointer is cached, so the table
+         doesn’t have to be scanned again.
+      </p>
+      
+      <p class="noind">When each thread exits, if an instance of <kbd class="calibre17">hp_owner</kbd> was created for that thread, then it’s destroyed. The destructor then resets the pointer to <kbd class="calibre17">nullptr</kbd> before setting the owner ID to <kbd class="calibre17">std::thread::id()</kbd>, allowing another thread to reuse the entry later <b class="calibre24"><i class="calibre6">6</i></b>.
+      </p>
+      
+      <p class="noind">With this implementation of <kbd class="calibre17">get_hazard_pointer_for_current_thread()</kbd>, the implementation of <kbd class="calibre17">outstanding_hazard_pointers_for()</kbd> is simple—scan through the hazard pointer table looking for entries:
+      </p>
+      
+      <pre id="PLd0e26456" class="calibre5">bool outstanding_hazard_pointers_for(void* p)
+{
+    for(unsigned i=0;i&lt;max_hazard_pointers;++i)
+    {
+        if(hazard_pointers[i].pointer.load()==p)
+        {
+            return true;
+        }
+    }
+    return false;
+}</pre>
+      
+      <p class="noind">It’s not even worth checking whether each entry has an owner: unowned entries will have a null pointer, so the comparison
+         will return <kbd class="calibre17">false</kbd> anyway, and it simplifies the code.
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">reclaim_later()</kbd> and <kbd class="calibre17">delete_nodes_with_no_hazards()</kbd> can then work on a simple linked list; <kbd class="calibre17">reclaim_later()</kbd> adds nodes to the list, and <kbd class="calibre17">delete_nodes_with_no_hazards()</kbd> scans through the list, deleting entries with no outstanding hazards. The next listing shows this implementation.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex08">Listing 7.8. <a id="ch07ex08__title" class="calibre4"></a>A simple implementation of the reclaim functions
+      </h5>
+      <pre id="PLd0e26487" class="calibre5">template&lt;typename T&gt;
+void do_delete(void* p)
+{
+    delete static_cast&lt;T*&gt;(p);
+}
+struct data_to_reclaim
+{
+    void* data;
+    std::function&lt;void(void*)&gt; deleter;
+    data_to_reclaim* next;
+    template&lt;typename T&gt;
+    data_to_reclaim(T* p):                                        <b class="calibre24"><i class="calibre6">1</i></b>
+        data(p),
+        deleter(&amp;do_delete&lt;T&gt;),
+        next(0)
+    {}
+    ~data_to_reclaim()
+    {
+        deleter(data);                                            <b class="calibre24"><i class="calibre6">2</i></b>
+    }
+};
+std::atomic&lt;data_to_reclaim*&gt; nodes_to_reclaim;
+void add_to_reclaim_list(data_to_reclaim* node)                   <b class="calibre24"><i class="calibre6">3</i></b>
+{
+    node-&gt;next=nodes_to_reclaim.load();
+    while(!nodes_to_reclaim.compare_exchange_weak(node-&gt;next,node));
+}
+template&lt;typename T&gt;
+void reclaim_later(T* data)                                       <b class="calibre24"><i class="calibre6">4</i></b>
+{
+    add_to_reclaim_list(new data_to_reclaim(data));               <b class="calibre24"><i class="calibre6">5</i></b>
+}
+void delete_nodes_with_no_hazards()
+{
+    data_to_reclaim* current=nodes_to_reclaim.exchange(nullptr);  <b class="calibre24"><i class="calibre6">6</i></b>
+    while(current)
+    {
+        data_to_reclaim* const next=current-&gt;next;
+        if(!outstanding_hazard_pointers_for(current-&gt;data))       <b class="calibre24"><i class="calibre6">7</i></b>
+        {
+            delete current;                                       <b class="calibre24"><i class="calibre6">8</i></b>
+        }
+        else
+        {
+            add_to_reclaim_list(current);                         <b class="calibre24"><i class="calibre6">9</i></b>
+        }
+        current=next;
+    }
+}</pre>
+      
+      <p class="noind"><a id="iddle1284" class="calibre4"></a><a id="iddle1296" class="calibre4"></a><a id="iddle1581" class="calibre4"></a><a id="iddle1849" class="calibre4"></a>First off, I expect you’ve spotted that <kbd class="calibre17">reclaim_later()</kbd> is a function template rather than a plain function, <b class="calibre24"><i class="calibre6">4</i></b>. This is because hazard pointers are a general-purpose utility, so you don’t want to tie yourselves to stack nodes. You’ve
+         been using <kbd class="calibre17">std:: atomic&lt;void*&gt;</kbd> to store the pointers already. You therefore need to handle any pointer type, but you can’t use <kbd class="calibre17">void*</kbd> because you want to delete the data items when you can, and <kbd class="calibre17">delete</kbd> requires the real type of the pointer. The constructor of <kbd class="calibre17">data_to_reclaim</kbd> handles that nicely, as you’ll see in a minute; <kbd class="calibre17">reclaim_later()</kbd> creates a new instance of <kbd class="calibre17">data_to_reclaim</kbd> for your pointer and adds it to the reclaim list <b class="calibre24"><i class="calibre6">5</i></b>. <kbd class="calibre17">add_to_reclaim_list()</kbd> itself <b class="calibre24"><i class="calibre6">3</i></b> is a simple <kbd class="calibre17">compare_exchange_weak()</kbd> loop on the list head like you’ve seen before.
+      </p>
+      
+      <p class="noind">Back to the constructor of <kbd class="calibre17">data_to_reclaim</kbd> <b class="calibre24"><i class="calibre6">1</i></b>: the constructor is also a template. It stores the data to be deleted as a <kbd class="calibre17">void*</kbd> in the <kbd class="calibre17">data</kbd> member and then stores a pointer to the appropriate instantiation of <kbd class="calibre17">do_delete()</kbd>—a simple function that casts the supplied <kbd class="calibre17">void*</kbd> to the chosen pointer type and then deletes the pointed-to <a id="iddle1446" class="calibre4"></a><a id="iddle1582" class="calibre4"></a><a id="iddle1775" class="calibre4"></a><a id="iddle1850" class="calibre4"></a>object. <kbd class="calibre17">std::function&lt;&gt;</kbd> wraps this function pointer safely, so that the destructor of <kbd class="calibre17">data_to_reclaim</kbd> can then delete the data by invoking the stored function <b class="calibre24"><i class="calibre6">2</i></b>.
+      </p>
+      
+      <p class="noind">The destructor of <kbd class="calibre17">data_to_reclaim</kbd> isn’t called when you’re adding nodes to the list; it’s called when there are no more hazard pointers to that node. This
+         is the responsibility of <kbd class="calibre17">delete_nodes_with_no_hazards()</kbd>.
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">delete_nodes_with_no_hazards()</kbd> first claims the entire list of nodes to be reclaimed for itself with a simple <kbd class="calibre17">exchange()</kbd> <b class="calibre24"><i class="calibre6">6</i></b>. This simple but crucial step ensures that this is the only thread trying to reclaim this particular set of nodes. Other
+         threads are now free to add further nodes to the list or even try to reclaim them without impacting the operation of this
+         thread.
+      </p>
+      
+      <p class="noind">Then, as long as there are still nodes left in the list, you check each node in turn to see if there are any outstanding hazard
+         pointers <b class="calibre24"><i class="calibre6">7</i></b>. If there aren’t, you can safely delete the entry (and clean up the stored data) <b class="calibre24"><i class="calibre6">8</i></b>. Otherwise, you add the item back on the list for reclaiming later <b class="calibre24"><i class="calibre6">9</i></b>.
+      </p>
+      
+      <p class="noind">Although this simple implementation does indeed safely reclaim the deleted nodes, it adds quite a bit of overhead to the process.
+         Scanning the hazard pointer array requires checking <kbd class="calibre17">max_hazard_pointers</kbd> atomic variables, and this is done for every <kbd class="calibre17">pop()</kbd> call. Atomic operations are inherently slow—often 100 times slower than an equivalent non-atomic operation on desktop CPUs—so
+         this makes <kbd class="calibre17">pop()</kbd> an expensive operation. Not only do you scan the hazard pointer list for the node you’re about to remove, but you also scan
+         it for each node in the waiting list. Clearly this is a bad idea. There may well be <kbd class="calibre17">max_hazard_pointers</kbd> nodes in the list, and you’re checking all of them against <kbd class="calibre17">max_hazard_pointers</kbd> stored hazard pointers. Ouch! There has to be a better way.
+      </p>
+      
+      
+      <h5 class="notetitle" id="ch07lev3sec1"><a id="ch07lev3sec1__title" class="calibre4"></a>Better reclamation strategies using hazard pointers
+      </h5>
+      
+      <p class="noind">There <i class="calibre6">is</i> a better way. What I’ve shown here is a simple and naïve implementation of hazard pointers to help explain the technique.
+         The first thing you can do is trade memory for performance. Rather than checking every node on the reclamation list every
+         time you call <kbd class="calibre17">pop()</kbd>, you don’t try to reclaim any nodes at all unless there are more than <kbd class="calibre17">max_hazard_pointers</kbd> nodes on the list. That way you’re guaranteed to be able to reclaim at least one node. If you wait until there are <kbd class="calibre17">max_hazard_pointers+1</kbd> nodes on the list, you’re not much better off. Once you get to <kbd class="calibre17">max_hazard_pointers</kbd> nodes, you’ll be trying to reclaim nodes for most calls to <kbd class="calibre17">pop()</kbd>, so you’re not doing much better. But if you wait until there are <kbd class="calibre17">2*max_hazard_pointers</kbd> nodes on the list, then at most <kbd class="calibre17">max_hazard_pointers</kbd> of those will still be active, so you’re guaranteed to be able to reclaim at least <kbd class="calibre17">max_hazard_pointers</kbd> nodes, and it will then be at least <kbd class="calibre17">max_hazard_pointers</kbd> calls to <kbd class="calibre17">pop()</kbd> before you try to reclaim any nodes again. This is much better. Rather than checking around <kbd class="calibre17">max_hazard_pointers</kbd> nodes every call to <kbd class="calibre17">push()</kbd> (and not necessarily reclaiming any), you’re checking <kbd class="calibre17">2*max_hazard_pointers</kbd> nodes every <kbd class="calibre17">max_hazard_pointers</kbd> calls to <kbd class="calibre17">pop()</kbd> and reclaiming at least <kbd class="calibre17">max_hazard_pointers</kbd> nodes. That’s effectively two nodes checked for every <kbd class="calibre17">pop()</kbd>, one of which is reclaimed.
+      </p>
+      
+      <p class="noind"><a id="iddle1227" class="calibre4"></a><a id="iddle1539" class="calibre4"></a><a id="iddle1686" class="calibre4"></a><a id="iddle1852" class="calibre4"></a>Even this has a downside (beyond the increased memory usage from the larger reclamation list, and the larger number of potentially
+         reclaimable nodes): you now have to count the nodes on the reclamation list, which means using an atomic count, and you still
+         have multiple threads competing to access the reclamation list itself. If you have memory to spare, you can trade increased
+         memory usage for an even better reclamation scheme: each thread keeps its own reclamation list in a thread-local variable.
+         There’s no need for atomic variables for the count or the list access. Instead, you have <kbd class="calibre17">max_hazard_pointers*max_hazard_pointers</kbd> nodes allocated. If a thread exits before all its nodes have been reclaimed, they can be stored in the global list as before
+         and added to the local list of the next thread doing a reclamation process.
+      </p>
+      
+      <p class="noind">Another downside of hazard pointers is that they’re covered by a patent application submitted by IBM.<sup class="calibre18">[<a href="#ch07fn02" class="calibre4">2</a>]</sup> Though I believe this patent has now expired, if you write software for use in a country where the patents are valid, it
+         is a good idea to get a patent lawyer to verify that for you, or you need to make sure you have a suitable licensing arrangement
+         in place. This is something common to many of the lock-free memory reclamation techniques; this is an active research area,
+         so large companies are taking out patents where they can. You may be asking why I’ve devoted so many pages to a technique
+         that people may be unable to use, and that’s a fair question. First, it may be possible to use the technique without paying
+         for a license. For example, if you’re developing free software licensed under the GPL,<sup class="calibre18">[<a href="#ch07fn03" class="calibre4">3</a>]</sup> your software may be covered by IBM’s statement of non-assertion.<sup class="calibre18">[<a href="#ch07fn04" class="calibre4">4</a>]</sup> Second, and most important, the explanation of the techniques shows some of the things that are important to think about
+         when writing lock-free code, such as the costs of atomic operations. Finally, there is a proposal to incorporate hazard pointers
+         into a future revision of the C++ Standard,<sup class="calibre18">[<a href="#ch07fn05" class="calibre4">5</a>]</sup> so it is good to know how they work, even if you will hopefully be able to use your compiler vendor’s implementation in the
+         future.
+      </p>
+      <blockquote class="smaller">
+         <p class="calibre19"><sup class="calibre20"><a id="ch07fn02" class="calibre4">2</a></sup> 
+            </p><div class="calibre15">Maged M. Michael, U.S. Patent and Trademark Office application number 20040107227, “Method for efficient implementation of
+               dynamic lock-free data structures with safe memory reclamation.”
+            </div>
+         <p class="calibre19"></p>
+      </blockquote>
+      <blockquote class="smaller">
+         <p class="calibre19"><sup class="calibre20"><a id="ch07fn03" class="calibre4">3</a></sup> 
+            </p><div class="calibre15">GNU General Public License <a href="http://www.gnu.org/licenses/gpl.html" class="calibre4">http://www.gnu.org/licenses/gpl.html</a>.
+            </div>
+         <p class="calibre19"></p>
+      </blockquote>
+      <blockquote class="smaller">
+         <p class="calibre19"><sup class="calibre20"><a id="ch07fn04" class="calibre4">4</a></sup> 
+            </p><div class="calibre15">IBM Statement of Non-Assertion of Named Patents Against OSS, <a href="http://www.ibm.com/ibm/licensing/patents/pledgedpatents.pdf" class="calibre4">http://www.ibm.com/ibm/licensing/patents/pledgedpatents.pdf</a>.
+            </div>
+         <p class="calibre19"></p>
+      </blockquote>
+      <blockquote class="smaller">
+         <p class="calibre19"><sup class="calibre20"><a id="ch07fn05" class="calibre4">5</a></sup> 
+            </p><div class="calibre15">P0566: Proposed Wording for Concurrent Data Structures: Hazard Pointer and ReadCopyUpdate (RCU), Michael Wong, Maged M. Michael,
+               Paul McKenney, Geoffrey Romer, Andrew Hunter, Arthur O’Dwyer, David S. Hollman, JF Bastien, Hans Boehm, David Goldblatt, Frank
+               Birbacher <a href="http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p0566r5.pdf" class="calibre4">http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p0566r5.pdf</a></div>
+         <p class="calibre19"></p>
+      </blockquote>
+      
+      <p class="noind">So, are there any unpatented memory reclamation techniques that can be used with lock-free code? Luckily, there are. One such
+         mechanism is reference counting.
+      </p>
+      
+      
+      
+      
+      <h4 id="ch07lev2sec8" class="calibre23">7.2.4. <a id="ch07lev2sec8__title" class="calibre4"></a>Detecting nodes in use with reference counting
+      </h4>
+      
+      <p class="noind">Back in <a href="#ch07lev2sec6" class="calibre4">section 7.2.2</a>, you saw that the problem with deleting nodes is detecting which nodes are still being accessed by reader threads. If you
+         could safely identify precisely which nodes were being referenced and when no threads were accessing these nodes, you could
+         delete them. Hazard pointers tackle the problem by storing a list of the <a id="iddle1056" class="calibre4"></a><a id="iddle1058" class="calibre4"></a><a id="iddle2129" class="calibre4"></a>nodes in use. Reference counting tackles the problem by storing a count of the number of threads accessing each node.
+      </p>
+      
+      <p class="noind">This may seem nice and straightforward, but it’s quite hard to manage in practice. At first, you might think that something
+         like <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> would be up to the task; after all, it’s a reference-counted pointer. Unfortunately, although some operations on <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> are atomic, they aren’t guaranteed to be lock-free. Although by itself this is no different than any of the operations on
+         the atomic types, <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> is intended for use in many contexts, and making the atomic operations lock-free would likely impose an overhead on all uses
+         of the class. If your platform supplies an implementation for which <kbd class="calibre17">std::atomic_is_lock_free(&amp;some_shared_ptr)</kbd> returns <kbd class="calibre17">true</kbd>, the whole memory reclamation issue goes away. Use <kbd class="calibre17">std::shared_ptr&lt;node&gt;</kbd> for the list, as in <a href="#ch07ex09" class="calibre4">listing 7.9</a>. Note the need to clear the <kbd class="calibre17">next</kbd> pointer from the popped node in order to avoid the potential for deeply nested destruction of <kbd class="calibre17">node</kbd>s when the last <kbd class="calibre17">std::shared_ptr</kbd> referencing a given <kbd class="calibre17">node</kbd> is destroyed.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex09">Listing 7.9. <a id="ch07ex09__title" class="calibre4"></a>A lock-free stack using a <kbd class="calibre17">lock-free std::shared_ptr&lt;&gt;</kbd> implementation
+      </h5>
+      <pre id="PLd0e26919" class="calibre5">template&lt;typename T&gt;
+class lock_free_stack
+{
+private:
+    struct node
+    {
+        std::shared_ptr&lt;T&gt; data;
+        std::shared_ptr&lt;node&gt; next;
+        node(T const&amp; data_):
+            data(std::make_shared&lt;T&gt;(data_))
+        {}
+    };
+    std::shared_ptr&lt;node&gt; head;
+public:
+    void push(T const&amp; data)
+    {
+        std::shared_ptr&lt;node&gt; const new_node=std::make_shared&lt;node&gt;(data);
+        new_node-&gt;next=std::atomic_load(&amp;head);
+        while(!std::atomic_compare_exchange_weak(&amp;head,
+                  &amp;new_node-&gt;next,new_node));
+    }
+    std::shared_ptr&lt;T&gt; pop()
+    {
+        std::shared_ptr&lt;node&gt; old_head=std::atomic_load(&amp;head);
+        while(old_head &amp;&amp; !std::atomic_compare_exchange_weak(&amp;head,
+                  &amp;old_head,std::atomic_load(&amp;old_head-&gt;next)));
+        if(old_head) {
+            std::atomic_store(&amp;old_head-&gt;next,std::shared_ptr&lt;node&gt;());
+            return old_head-&gt;data;
+        }
+        return std::shared_ptr&lt;T&gt;();
+    }
+    ~lock_free_stack(){
+        while(pop());
+    }
+};</pre>
+      
+      <p class="noind">Not only is it rare for an implementation to provide lock-free atomic operations on <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd>, but remembering to use the atomic operations consistently is hard. The Concurrency TS helps you out, if you have an implementation
+         available, because it provides <kbd class="calibre17">std::experimental::atomic_shared_ptr&lt;T&gt;</kbd> in the <kbd class="calibre17">&lt;experimental/atomic&gt;</kbd> header. This is in many ways equivalent to a theoretical <kbd class="calibre17">std::atomic&lt;std::shared_ptr&lt;T&gt;&gt;</kbd>, except that <kbd class="calibre17">std::shared_ptr&lt;T&gt;</kbd> can’t be used with <kbd class="calibre17">std::atomic&lt;&gt;</kbd>, because it has nontrivial copy semantics to ensure that the reference count is handled correctly. <kbd class="calibre17">std::experimental::atomic_shared_ptr&lt;T&gt;</kbd> handles the reference counting correctly, while still ensuring atomic operations. Like the other atomic types described in
+         <a href="kindle_split_015.html#ch05" class="calibre4">chapter 5</a>, it may or may not be lock-free on any given implementation. <a href="#ch07ex09" class="calibre4">Listing 7.9</a> can thus be rewritten as in <a href="#ch07ex10" class="calibre4">listing 7.10</a>. See how much simpler it is without having to remember to include the <kbd class="calibre17">atomic_load</kbd> and <kbd class="calibre17">atomic_store</kbd> calls.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex10">Listing 7.10. <a id="ch07ex10__title" class="calibre4"></a>Stack implementation using <kbd class="calibre17">std::experimental::atomic_shared_ptr&lt;&gt;</kbd></h5>
+      <pre id="PLd0e26973" class="calibre5">template&lt;typename T&gt;
+class lock_free_stack
+{
+private:
+    struct node
+    {
+        std::shared_ptr&lt;T&gt; data;
+        std::experimental::atomic_shared_ptr&lt;node&gt; next;
+        node(T const&amp; data_):
+            data(std::make_shared&lt;T&gt;(data_))
+        {}
+    };
+    std::experimental::atomic_shared_ptr&lt;node&gt; head;
+public:
+    void push(T const&amp; data)
+    {
+        std::shared_ptr&lt;node&gt; const new_node=std::make_shared&lt;node&gt;(data);
+        new_node-&gt;next=head.load();
+        while(!head.compare_exchange_weak(new_node-&gt;next,new_node));
+    }
+    std::shared_ptr&lt;T&gt; pop()
+    {
+        std::shared_ptr&lt;node&gt; old_head=head.load();
+        while(old_head &amp;&amp; !head.compare_exchange_weak(
+                  old_head,old_head-&gt;next.load()));
+        if(old_head) {
+            old_head-&gt;next=std::shared_ptr&lt;node&gt;();
+            return old_head-&gt;data;
+        }
+        return std::shared_ptr&lt;T&gt;();
+    }
+    ~lock_free_stack(){
+        while(pop());
+    }
+};</pre>
+      
+      <p class="noind">In the probable case that your <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> implementation isn’t lock-free, and your implementation doesn’t provide a lock-free <kbd class="calibre17">std::experimental::atomic_shared_ptr&lt;&gt;</kbd> either, you need to manage the reference counting manually.
+      </p>
+      
+      <p class="noind">One possible technique involves the use of not one but two reference counts for each node: an internal count and an external
+         count. The sum of these values is the total number of references to the node. The external count is kept alongside the pointer
+         to the node and is increased every time the pointer is read. When the reader is finished with the node, it decreases the internal
+         count. A simple operation that reads the pointer will leave the external count increased by one and the internal count decreased
+         by one when it’s finished.
+      </p>
+      
+      <p class="noind">When the external count/pointer pairing is no longer required (the node is no longer accessible from a location accessible
+         to multiple threads), the internal count is increased by the value of the external count minus one and the external counter
+         is discarded. Once the internal count is equal to zero, there are no outstanding references to the node and it can be safely
+         deleted. It’s still important to use atomic operations for updates of shared data. Let’s now look at an implementation of
+         a lock-free stack that uses this technique to ensure that the nodes are reclaimed only when it’s safe to do so.
+      </p>
+      
+      <p class="noind">The following listing shows the internal data structure and the implementation of <kbd class="calibre17">push()</kbd>, which is nice and straightforward.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex11">Listing 7.11. <a id="ch07ex11__title" class="calibre4"></a>Pushing a node on a lock-free stack using split reference counts
+      </h5>
+      <pre id="PLd0e27007" class="calibre5">template&lt;typename T&gt;
+class lock_free_stack
+{
+private:
+    struct node;
+    struct counted_node_ptr                  <b class="calibre24"><i class="calibre6">1</i></b>
+    {
+        int external_count;
+        node* ptr;
+    };
+    struct node
+    {
+        std::shared_ptr&lt;T&gt; data;
+        std::atomic&lt;int&gt; internal_count;     <b class="calibre24"><i class="calibre6">2</i></b>
+        counted_node_ptr next;               <b class="calibre24"><i class="calibre6">3</i></b>
+        node(T const&amp; data_):
+            data(std::make_shared&lt;T&gt;(data_)),
+            internal_count(0)
+        {}
+    };
+    std::atomic&lt;counted_node_ptr&gt; head;      <b class="calibre24"><i class="calibre6">4</i></b>
+public:
+    ~lock_free_stack()
+    {
+        while(pop());
+    }
+    void push(T const&amp; data)                 <b class="calibre24"><i class="calibre6">5</i></b>
+    {
+        counted_node_ptr new_node;
+        new_node.ptr=new node(data);
+        new_node.external_count=1;
+        new_node.ptr-&gt;next=head.load();
+        while(!head.compare_exchange_weak(new_node.ptr-&gt;next,new_node));
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1355" class="calibre4"></a><a id="iddle1474" class="calibre4"></a>First, the external count is wrapped together with the node pointer in the <kbd class="calibre17">counted_node_ptr</kbd> structure <b class="calibre24"><i class="calibre6">1</i></b>. This can then be used for the <kbd class="calibre17">next</kbd> pointer in the <kbd class="calibre17">node</kbd> structure, <b class="calibre24"><i class="calibre6">3</i></b> alongside the internal count <b class="calibre24"><i class="calibre6">2</i></b>. Because <kbd class="calibre17">counted_node_ptr</kbd> is a simple <kbd class="calibre17">struct</kbd>, you can use it with the <kbd class="calibre17">std::atomic&lt;&gt;</kbd> template for the <kbd class="calibre17">head</kbd> of the list <b class="calibre24"><i class="calibre6">4</i></b>.
+      </p>
+      
+      <p class="noind">On those platforms that support a double-word-compare-and-swap operation, this structure will be small enough for <kbd class="calibre17">std::atomic&lt;counted_node_ptr&gt;</kbd> to be lock-free. If it isn’t on your platform, you might be better off using the <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> version from <a href="#ch07ex09" class="calibre4">listing 7.9</a>, because <kbd class="calibre17">std::atomic&lt;&gt;</kbd> will use a mutex to guarantee atomicity when the type is too large for the platform’s atomic instructions (rendering your
+         “lock-free” algorithm lock-based after all). Alternatively, if you’re willing to limit the size of the counter, and you know
+         that your platform has spare bits in a pointer (for example, because the address space is only 48 bits but a pointer is 64
+         bits), you can store the count inside the spare bits of the pointer to fit it all back in a single machine word. These tricks
+         require platform-specific knowledge and are thus outside the scope of this book.
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">push()</kbd> is relatively simple <b class="calibre24"><i class="calibre6">5</i></b>. You construct a <kbd class="calibre17">counted_node_ptr</kbd> that refers to a freshly allocated <kbd class="calibre17">node</kbd> with associated data and set the <kbd class="calibre17">next</kbd> value of the <kbd class="calibre17">node</kbd> to the current value of <kbd class="calibre17">head</kbd>. You can then use <kbd class="calibre17">compare_exchange_weak()</kbd> to set the value of <kbd class="calibre17">head</kbd>, as in the previous listings. The counts are set up so the <kbd class="calibre17">internal_count</kbd> is zero, and the <kbd class="calibre17">external_count</kbd> is one. Because this is a new node, there’s currently only one external reference to the node (the <kbd class="calibre17">head</kbd> pointer itself).
+      </p>
+      
+      <p class="noind">As usual, the complexities come to light in the implementation of <kbd class="calibre17">pop()</kbd>, which is shown in the following listing.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex12">Listing 7.12. <a id="ch07ex12__title" class="calibre4"></a>Popping a node from a lock-free stack using split reference counts
+      </h5>
+      <pre id="PLd0e27150" class="calibre5">template&lt;typename T&gt;
+class lock_free_stack
+{
+private:
+    // other parts as in listing 7.11
+    void increase_head_count(counted_node_ptr&amp; old_counter)
+    {
+        counted_node_ptr new_counter;
+        do
+        {
+            new_counter=old_counter;
+            ++new_counter.external_count;
+        }
+        while(!head.compare_exchange_strong(old_counter,new_counter));  <b class="calibre24"><i class="calibre6">1</i></b>
+        old_counter.external_count=new_counter.external_count;
+    }
+public:
+    std::shared_ptr&lt;T&gt; pop()#
+    {
+        counted_node_ptr old_head=head.load();
+        for(;;)
+        {
+            increase_head_count(old_head);
+            node* const ptr=old_head.ptr;                               <b class="calibre24"><i class="calibre6">2</i></b>
+            if(!ptr)
+            {
+                return std::shared_ptr&lt;T&gt;();
+            }
+            if(head.compare_exchange_strong(old_head,ptr-&gt;next))        <b class="calibre24"><i class="calibre6">3</i></b>
+            {
+                std::shared_ptr&lt;T&gt; res;
+                res.swap(ptr-&gt;data);                                    <b class="calibre24"><i class="calibre6">4</i></b>
+                int const count_increase=old_head.external_count-2;     <b class="calibre24"><i class="calibre6">5</i></b>
+                if(ptr-&gt;internal_count.fetch_add(count_increase)==      <b class="calibre24"><i class="calibre6">6</i></b>
+                   -count_increase)
+                {
+                    delete ptr;
+                }
+                return res;                                             <b class="calibre24"><i class="calibre6">7</i></b>
+            }
+            else if(ptr-&gt;internal_count.fetch_sub(1)==1)
+            {
+                delete ptr;                                             <b class="calibre24"><i class="calibre6">8</i></b>
+            }
+        }
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1933" class="calibre4"></a>This time, once you’ve loaded the value of <kbd class="calibre17">head</kbd>, you must first increase the count of external references to the <kbd class="calibre17">head</kbd> node to indicate that you’re referencing it and to ensure that it’s safe to dereference it. If you dereference the pointer
+         <i class="calibre6">before</i> increasing the reference count, another thread could free the node before you access it, leaving you with a dangling pointer.
+         This is the primary reason for using the split reference count: by incrementing the external reference count, you ensure that
+         the pointer remains valid for the duration of your access. The increment is done with a <kbd class="calibre17">compare_exchange_strong()</kbd> loop <b class="calibre24"><i class="calibre6">1</i></b>, which compares and sets the whole structure to ensure that the pointer hasn’t been changed by another thread in the meantime.
+      </p>
+      
+      <p class="noind"><a id="iddle1225" class="calibre4"></a><a id="iddle1538" class="calibre4"></a><a id="iddle1553" class="calibre4"></a><a id="iddle1589" class="calibre4"></a><a id="iddle1859" class="calibre4"></a><a id="iddle2188" class="calibre4"></a>Once the count has been increased, you can safely dereference the <kbd class="calibre17">ptr</kbd> field of the value loaded from <kbd class="calibre17">head</kbd> in order to access the pointed-to node <b class="calibre24"><i class="calibre6">2</i></b>. If the pointer is a null pointer, you’re at the end of the list: no more entries. If the pointer isn’t a null pointer, you
+         can try to remove the node by a <kbd class="calibre17">compare_exchange_strong()</kbd> call on <kbd class="calibre17">head</kbd> <b class="calibre24"><i class="calibre6">3</i></b>.
+      </p>
+      
+      <p class="noind">If the <kbd class="calibre17">compare_exchange_strong()</kbd> succeeds, you’ve taken ownership of the node and can swap out the <kbd class="calibre17">data</kbd> in preparation for returning it <b class="calibre24"><i class="calibre6">4</i></b>. This ensures that the data isn’t kept alive just because other threads accessing the stack happen to still have pointers
+         to its node. Then you can add the external count to the internal count on the node with an atomic <kbd class="calibre17">fetch_add</kbd> <b class="calibre24"><i class="calibre6">6</i></b>. If the reference count is now zero, the <i class="calibre6">previous</i> value (which is what <kbd class="calibre17">fetch_add</kbd> returns) was the negative of what you added, in which case you can delete the node. It’s important to note that the value
+         you add is two less than the external count <b class="calibre24"><i class="calibre6">5</i></b>; you’ve removed the node from the list, so you drop one off the count for that, and you’re no longer accessing the node from
+         this thread, so you drop another off the count for that. Whether or not you deleted the node, you’ve finished, so you can
+         return the data <b class="calibre24"><i class="calibre6">7</i></b>.
+      </p>
+      
+      <p class="noind">If the compare/exchange <b class="calibre24"><i class="calibre6">3</i></b> fails, another thread removed your node before you did, or another thread added a new node to the stack. Either way, you
+         need to start again with the fresh value of <kbd class="calibre17">head</kbd> returned by the compare/exchange call. But first you must decrease the reference count on the node you were trying to remove.
+         This thread won’t access it anymore. If you’re the last thread to hold a reference (because another thread removed it from
+         the stack), the internal reference count will be 1, so subtracting 1 will set the count to zero. In this case, you can delete
+         the node here before you loop <b class="calibre24"><i class="calibre6">8</i></b>.
+      </p>
+      
+      <p class="noind">So far, you’ve been using the default <kbd class="calibre17">std::memory_order_seq_cst</kbd> memory ordering for all your atomic operations. On most systems these are more expensive in terms of execution time and synchronization
+         overhead than the other memory orderings, and on some systems considerably so. Now that you have the logic of your data structure
+         right, you can think about relaxing some of these memory-ordering requirements; you don’t want to impose any unnecessary overhead
+         on the users of the stack. Before leaving your stack behind and moving on to the design of a lock-free queue, let’s examine
+         the stack operations and ask ourselves, can we use more relaxed memory orderings for some operations and still get the same
+         level of safety?
+      </p>
+      
+      
+      
+      <h4 id="ch07lev2sec9" class="calibre23">7.2.5. <a id="ch07lev2sec9__title" class="calibre4"></a>Applying the memory model to the lock-free stack
+      </h4>
+      
+      <p class="noind">Before you go about changing the memory orderings, you need to examine the operations and identify the required relationships
+         between them. You can then go back and find the minimum memory orderings that provide these required relationships. In order
+         to do this, you’ll have to look at the situation from the point of view of threads in several different scenarios. The simplest
+         possible scenario has to be where one thread pushes a data item onto the stack and another thread then pops that data item
+         off the stack some time later, so we’ll start from there.
+      </p>
+      
+      <p class="noind"><a id="iddle1450" class="calibre4"></a><a id="iddle2182" class="calibre4"></a>In this simple case, three important pieces of data are involved. First is the <kbd class="calibre17">counted_node_ptr</kbd> used for transferring the data: <kbd class="calibre17">head</kbd>. Second is the <kbd class="calibre17">node</kbd> structure that <kbd class="calibre17">head</kbd> refers to, and third is the data item pointed to by that node.
+      </p>
+      
+      <p class="noind">The thread doing the <kbd class="calibre17">push()</kbd> first constructs the data item and the <kbd class="calibre17">node</kbd> and then sets <kbd class="calibre17">head</kbd>. The thread doing the <kbd class="calibre17">pop()</kbd> first loads the value of <kbd class="calibre17">head</kbd>, then does a compare/exchange loop on <kbd class="calibre17">head</kbd> to increase the reference count, and then reads the <kbd class="calibre17">node</kbd> structure to obtain the <kbd class="calibre17">next</kbd> value. Right here you can see a required relationship; the <kbd class="calibre17">next</kbd> value is a plain non-atomic object, so in order to read this safely, there must be a happens-before relationship between
+         the store (by the pushing thread) and the load (by the popping thread). Because the only atomic operation in the <kbd class="calibre17">push()</kbd> is the <kbd class="calibre17">compare_exchange_weak()</kbd>, and you need a release operation to get a happens-before relationship between threads, the <kbd class="calibre17">compare_exchange_weak()</kbd> must be <kbd class="calibre17">std:: memory_order_release</kbd> or stronger. If the <kbd class="calibre17">compare_exchange_weak()</kbd> call fails, nothing has changed and you keep looping, so you need only <kbd class="calibre17">std::memory_order_relaxed</kbd> in that case:
+      </p>
+      
+      <pre id="PLd0e27414" class="calibre5">void push(T const&amp; data)
+{
+    counted_node_ptr new_node;
+    new_node.ptr=new node(data);
+    new_node.external_count=1;
+    new_node.ptr-&gt;next=head.load(std::memory_order_relaxed)
+    while(!head.compare_exchange_weak(new_node.ptr-&gt;next,new_node,
+        std::memory_order_release,std::memory_order_relaxed));
+}</pre>
+      
+      <p class="noind">What about the <kbd class="calibre17">pop()</kbd> code? In order to get the happens-before relationship you need, you must have an operation that’s <kbd class="calibre17">std::memory_order_acquire</kbd> or stronger before the access to <kbd class="calibre17">next</kbd>. The pointer you dereference to access the <kbd class="calibre17">next</kbd> field is the old value read by the <kbd class="calibre17">compare_exchange_strong()</kbd> in <kbd class="calibre17">increase_head_count()</kbd>, so you need the ordering on that if it succeeds. As with the call in <kbd class="calibre17">push()</kbd>, if the exchange fails, you just loop again, so you can use relaxed ordering on failure:
+      </p>
+      
+      <pre id="PLd0e27444" class="calibre5">void increase_head_count(counted_node_ptr&amp; old_counter)
+{
+    counted_node_ptr new_counter;
+    do
+    {
+        new_counter=old_counter;
+        ++new_counter.external_count;
+    }
+    while(!head.compare_exchange_strong(old_counter,new_counter,
+        std::memory_order_acquire,std::memory_order_relaxed));
+    old_counter.external_count=new_counter.external_count;
+}</pre>
+      
+      <p class="noind">If the <kbd class="calibre17">compare_exchange_strong()</kbd> call succeeds, you know that the value read had the <kbd class="calibre17">ptr</kbd> field set to what’s now stored in <kbd class="calibre17">old_counter</kbd>. Because the store in <kbd class="calibre17">push()</kbd> was <a id="iddle1363" class="calibre4"></a><a id="iddle2423" class="calibre4"></a>a release operation, and this <kbd class="calibre17">compare_exchange_strong()</kbd> is an acquire operation, the store synchronizes with the load and you have a happens-before relationship. Consequently, the
+         store to the <kbd class="calibre17">ptr</kbd> field in the <kbd class="calibre17">push()</kbd> happens before the <kbd class="calibre17">ptr-&gt;next</kbd> access in <kbd class="calibre17">pop()</kbd>, and you’re safe.
+      </p>
+      
+      <p class="noind">Note that the memory ordering on the initial <kbd class="calibre17">head.load()</kbd> didn’t matter to this analysis, so you can safely use <kbd class="calibre17">std::memory_order_relaxed</kbd> for that.
+      </p>
+      
+      <p class="noind">Next up, let’s consider the <kbd class="calibre17">compare_exchange_strong()</kbd> to set <kbd class="calibre17">head</kbd> to <kbd class="calibre17">old_head.ptr-&gt;next</kbd>. Do you need anything from this operation to guarantee the data integrity of this thread? If the exchange succeeds, you access
+         <kbd class="calibre17">ptr-&gt;data</kbd>, so you need to ensure that the store to <kbd class="calibre17">ptr-&gt;data</kbd> in the <kbd class="calibre17">push()</kbd> thread happens before the load. But you already have that guarantee: the acquire operation in <kbd class="calibre17">increase_head_count()</kbd> ensures that there’s a synchronizes-with relationship between the store in the <kbd class="calibre17">push()</kbd> thread and that compare/exchange. Because the store to <kbd class="calibre17">data</kbd> in the <kbd class="calibre17">push()</kbd> thread is sequenced before the store to <kbd class="calibre17">head</kbd> and the call to <kbd class="calibre17">increase_head_count()</kbd> is sequenced before the load of <kbd class="calibre17">ptr-&gt;data</kbd>, there’s a happens-before relationship, and all is well even if this compare/exchange in <kbd class="calibre17">pop()</kbd> uses <kbd class="calibre17">std::memory_order_relaxed</kbd>. The only other place where <kbd class="calibre17">ptr-&gt;data</kbd> is changed is the call to <kbd class="calibre17">swap()</kbd> that you’re looking at, and no other thread can be operating on the same node; that’s the whole point of the compare/exchange.
+      </p>
+      
+      <p class="noind">If the <kbd class="calibre17">compare_exchange_strong()</kbd> fails, the new value of <kbd class="calibre17">old_head</kbd> isn’t touched until next time around the loop, and you already decided that the <kbd class="calibre17">std::memory_order_acquire</kbd> in <kbd class="calibre17">increase_head_count()</kbd> was enough, so <kbd class="calibre17">std::memory_order_relaxed</kbd> is enough there also.
+      </p>
+      
+      <p class="noind">What about other threads? Do you need anything stronger here to ensure other threads are still safe? The answer is no, because
+         <kbd class="calibre17">head</kbd> is only ever modified by compare/exchange operations. Because these are read-modify-write operations, they form part of the
+         release sequence headed by the compare/exchange in <kbd class="calibre17">push()</kbd>. Therefore, the <kbd class="calibre17">compare_exchange_weak()</kbd> in <kbd class="calibre17">push()</kbd> synchronizes with a call to <kbd class="calibre17">compare_exchange_strong()</kbd> in <kbd class="calibre17">increase_head_count()</kbd>, which reads the value stored, even if many other threads modify <kbd class="calibre17">head</kbd> in the meantime.
+      </p>
+      
+      <p class="noind">You’ve nearly finished: the only remaining operations to deal with are the <kbd class="calibre17">fetch_add()</kbd> operations for modifying the reference count. The thread that got to return the data from this node can proceed, safe in
+         the knowledge that no other thread can have modified the node data. But any thread that did <i class="calibre6">not</i> successfully retrieve the data knows that another thread <i class="calibre6">did</i> modify the node data; the successful thread used <kbd class="calibre17">swap()</kbd> to extract the referenced data item. Therefore you need to ensure that <kbd class="calibre17">swap()</kbd> happens before the <kbd class="calibre17">delete</kbd> in order to avoid a data race. The easy way to do this is to make the <kbd class="calibre17">fetch_add()</kbd> in the successful-return branch use <kbd class="calibre17">std::memory_order_release</kbd> and the <kbd class="calibre17">fetch_add()</kbd> in the loop-again branch use <kbd class="calibre17">std::memory_order_acquire</kbd>. But this is still overkill: only one thread does the <kbd class="calibre17">delete</kbd> (the one that sets the count to zero), so only that thread needs to do an acquire operation. Thankfully, because <kbd class="calibre17">fetch_add()</kbd> is a read-modify-write operation, it forms part of the release sequence, so you can do that with an additional <kbd class="calibre17">load()</kbd>. If the loop-again branch decreases the reference count to zero, it can reload the reference count with <kbd class="calibre17">std::memory_order_acquire</kbd> in order to ensure the required synchronizes-with relationship, and the <kbd class="calibre17">fetch_add()</kbd> itself can use <kbd class="calibre17">std::memory_order_relaxed</kbd>. The final stack implementation with the new version of <kbd class="calibre17">pop()</kbd> is shown here.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex13">Listing 7.13. <a id="ch07ex13__title" class="calibre4"></a>A lock-free stack with reference counting and relaxed atomic operations
+      </h5>
+      <pre id="PLd0e27659" class="calibre5">template&lt;typename T&gt;
+class lock_free_stack
+{
+private:
+    struct node;
+    struct counted_node_ptr
+    {
+        int external_count;
+        node* ptr;
+    };
+    struct node
+    {
+        std::shared_ptr&lt;T&gt; data;
+        std::atomic&lt;int&gt; internal_count;
+        counted_node_ptr next;
+        node(T const&amp; data_):
+            data(std::make_shared&lt;T&gt;(data_)),
+            internal_count(0)
+        {}
+    };
+    std::atomic&lt;counted_node_ptr&gt; head;
+    void increase_head_count(counted_node_ptr&amp; old_counter)
+    {
+        counted_node_ptr new_counter;
+        do
+        {
+            new_counter=old_counter;
+            ++new_counter.external_count;
+        }
+        while(!head.compare_exchange_strong(old_counter,new_counter,
+                                            std::memory_order_acquire,
+                                            std::memory_order_relaxed));
+        old_counter.external_count=new_counter.external_count;
+    }
+public:
+    ~lock_free_stack()
+    {
+        while(pop());
+    }
+    void push(T const&amp; data)
+    {
+        counted_node_ptr new_node;
+        new_node.ptr=new node(data);
+        new_node.external_count=1;
+        new_node.ptr-&gt;next=head.load(std::memory_order_relaxed)
+        while(!head.compare_exchange_weak(new_node.ptr-&gt;next,new_node,
+                                          std::memory_order_release,
+                                          std::memory_order_relaxed));
+    }
+    std::shared_ptr&lt;T&gt; pop()
+    {
+        counted_node_ptr old_head=
+            head.load(std::memory_order_relaxed);
+        for(;;)
+        {
+            increase_head_count(old_head);
+            node* const ptr=old_head.ptr;
+            if(!ptr)
+            {
+                return std::shared_ptr&lt;T&gt;();
+            }
+            if(head.compare_exchange_strong(old_head,ptr-&gt;next,
+                                            std::memory_order_relaxed))
+            {
+                std::shared_ptr&lt;T&gt; res;
+                res.swap(ptr-&gt;data);
+                int const count_increase=old_head.external_count-2;
+                if(ptr-&gt;internal_count.fetch_add(count_increase,
+                       std::memory_order_release)==-count_increase)
+                {
+                    delete ptr;
+                }
+                return res;
+            }
+            else if(ptr-&gt;internal_count.fetch_add(-1,
+                        std::memory_order_relaxed)==1)
+            {
+                ptr-&gt;internal_count.load(std::memory_order_acquire);
+                delete ptr;
+            }
+        }
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1542" class="calibre4"></a><a id="iddle1566" class="calibre4"></a><a id="iddle1784" class="calibre4"></a><a id="iddle1823" class="calibre4"></a><a id="iddle2550" class="calibre4"></a><a id="iddle2583" class="calibre4"></a>That was quite a workout, but you got there in the end, and the stack is better for it. By using more relaxed operations in
+         a carefully thought-out manner, the performance is improved without impacting the correctness. As you can see, the implementation
+         of <kbd class="calibre17">pop()</kbd> is now 37 lines rather than the 8 lines of the equivalent <kbd class="calibre17">pop()</kbd> in the lock-based stack of <a href="kindle_split_016.html#ch06ex01" class="calibre4">listing 6.1</a> and the 7 lines of the basic lock-free stack without memory management in <a href="#ch07ex02" class="calibre4">listing 7.2</a>. As we move on to look at writing a lock-free queue, you’ll see a similar pattern: lots of the complexity in lock-free code
+         comes from managing memory.
+      </p>
+      
+      
+      
+      <h4 id="ch07lev2sec10" class="calibre23">7.2.6. <a id="ch07lev2sec10__title" class="calibre4"></a>Writing a thread-safe queue without locks
+      </h4>
+      
+      <p class="noind">A queue offers a slightly different challenge to a stack, because the <kbd class="calibre17">push()</kbd> and <kbd class="calibre17">pop()</kbd> operations access different parts of the data structure in a queue, whereas they both access the same head node for a stack.
+         Consequently, the synchronization needs are different. You need to ensure that changes made to one end are correctly visible
+         to accesses at the other. But the structure of <kbd class="calibre17">try_pop()</kbd> for the queue in <a href="kindle_split_016.html#ch06ex06" class="calibre4">listing 6.6</a> isn’t that far off that of <kbd class="calibre17">pop()</kbd> for the simple lock-free stack in <a href="#ch07ex02" class="calibre4">listing 7.2</a>, so you can reasonably assume that the lock-free code won’t be that dissimilar. Let’s see how.
+      </p>
+      
+      <p class="noind">If you take <a href="kindle_split_016.html#ch06ex06" class="calibre4">listing 6.6</a> as a basis, you need two <kbd class="calibre17">node</kbd> pointers: one for the <kbd class="calibre17">head</kbd> of the list and one for the <kbd class="calibre17">tail</kbd>. You’re going to be accessing these from multiple threads, so they’d better be atomic in order to allow you to do away with
+         the corresponding mutexes. Let’s start by making that small change and see where it gets you. The following listing shows
+         the result.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex14">Listing 7.14. <a id="ch07ex14__title" class="calibre4"></a>A single-producer, single-consumer lock-free queue
+      </h5>
+      <pre id="PLd0e27774" class="calibre5">template&lt;typename T&gt;
+class lock_free_queue
+{
+private:
+    struct node
+    {
+        std::shared_ptr&lt;T&gt; data;
+        node* next;
+        node():
+            next(nullptr)
+        {}
+    };
+    std::atomic&lt;node*&gt; head;
+    std::atomic&lt;node*&gt; tail;
+    node* pop_head()
+    {
+        node* const old_head=head.load();
+        if(old_head==tail.load())                      <b class="calibre24"><i class="calibre6">1</i></b>
+        {
+            return nullptr;
+        }
+        head.store(old_head-&gt;next);
+        return old_head;
+    }
+public:
+    lock_free_queue():
+        head(new node),tail(head.load())
+    {}
+    lock_free_queue(const lock_free_queue&amp; other)=delete;
+    lock_free_queue&amp; operator=(const lock_free_queue&amp; other)=delete;
+    ~lock_free_queue()
+    {
+        while(node* const old_head=head.load())
+        {
+            head.store(old_head-&gt;next);
+            delete old_head;
+        }
+    }
+    std::shared_ptr&lt;T&gt; pop()
+    {
+        node* old_head=pop_head();
+        if(!old_head)
+        {
+            return std::shared_ptr&lt;T&gt;();
+        }
+        std::shared_ptr&lt;T&gt; const res(old_head-&gt;data);   <b class="calibre24"><i class="calibre6">2</i></b>
+        delete old_head;
+        return res;
+    }
+    void push(T new_value)
+    {
+        std::shared_ptr&lt;T&gt; new_data(std::make_shared&lt;T&gt;(new_value));
+        node* p=new node;                               <b class="calibre24"><i class="calibre6">3</i></b>
+        node* const old_tail=tail.load();               <b class="calibre24"><i class="calibre6">4</i></b>
+        old_tail-&gt;data.swap(new_data);                  <b class="calibre24"><i class="calibre6">5</i></b>
+        old_tail-&gt;next=p;                               <b class="calibre24"><i class="calibre6">6</i></b>
+        tail.store(p);                                  <b class="calibre24"><i class="calibre6">7</i></b>
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1567" class="calibre4"></a><a id="iddle1703" class="calibre4"></a><a id="iddle1824" class="calibre4"></a><a id="iddle1922" class="calibre4"></a><a id="iddle1934" class="calibre4"></a><a id="iddle2505" class="calibre4"></a><a id="iddle2551" class="calibre4"></a>At first glance, this doesn’t seem too bad, and if there’s only one thread calling <kbd class="calibre17">push()</kbd> at a time, and only one thread calling <kbd class="calibre17">pop()</kbd>, then this is perfectly fine. The important thing in that case is the happens-before relationship between the <kbd class="calibre17">push()</kbd> and the <kbd class="calibre17">pop()</kbd> to ensure that it’s safe to retrieve the <kbd class="calibre17">data</kbd>. The store to <kbd class="calibre17">tail</kbd> <b class="calibre24"><i class="calibre6">7</i></b> synchronizes with the load from <kbd class="calibre17">tail</kbd> <b class="calibre24"><i class="calibre6">1</i></b>; the store to the preceding node’s <kbd class="calibre17">data</kbd> pointer <b class="calibre24"><i class="calibre6">5</i></b> is sequenced before the store to <kbd class="calibre17">tail;</kbd> and the load from <kbd class="calibre17">tail</kbd> is sequenced before the load from the <kbd class="calibre17">data</kbd> pointer <b class="calibre24"><i class="calibre6">2</i></b>, so the store to <kbd class="calibre17">data</kbd> happens before the load, and everything is OK. This is therefore a perfectly serviceable <i class="calibre6">single-producer, single-consumer (SPSC)</i> queue.
+      </p>
+      
+      <p class="noind">The problems come when multiple threads call <kbd class="calibre17">push()</kbd> concurrently or multiple threads call <kbd class="calibre17">pop()</kbd> concurrently. Let’s look at <kbd class="calibre17">push()</kbd> first. If you have two threads calling <kbd class="calibre17">push()</kbd> concurrently, they both allocate new nodes to be the new dummy node <b class="calibre24"><i class="calibre6">3</i></b>, both read the <i class="calibre6">same</i> value for <kbd class="calibre17">tail</kbd> <b class="calibre24"><i class="calibre6">4</i></b>, and consequently both update the data members of the same node when setting the <kbd class="calibre17">data</kbd> and <kbd class="calibre17">next</kbd> pointers, <b class="calibre24"><i class="calibre6">5</i></b> and <b class="calibre24"><i class="calibre6">6</i></b>. This is a data race!
+      </p>
+      
+      <p class="noind">There are similar problems in <kbd class="calibre17">pop_head()</kbd>. If two threads call concurrently, they will both read the same value of <kbd class="calibre17">head</kbd>, and both then overwrite the old value with the same <kbd class="calibre17">next</kbd> pointer. Both threads will now think they’ve retrieved the same node—a recipe for disaster. Not only do you have to ensure
+         that only one thread uses <kbd class="calibre17">pop()</kbd> on a given item, but you also need to ensure that other threads can safely access the <kbd class="calibre17">next</kbd> member of the node they read from <kbd class="calibre17">head</kbd>. This is exactly the problem you saw with <kbd class="calibre17">pop()</kbd> for your lock-free stack, so any of the solutions for that could be used here.
+      </p>
+      
+      <p class="noind">So if <kbd class="calibre17">pop()</kbd> is a “solved problem,” what about <kbd class="calibre17">push()</kbd>? The problem here is that in order to get the required happens-before relationship between <kbd class="calibre17">push()</kbd> and <kbd class="calibre17">pop()</kbd>, you need to set the data items on the dummy node before you update <kbd class="calibre17">tail</kbd>. But this means that concurrent calls to <kbd class="calibre17">push()</kbd> are racing over those same data items, because they’ve read the same <kbd class="calibre17">tail</kbd> pointer.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07lev3sec2"><a id="ch07lev3sec2__title" class="calibre4"></a>Handling multiple threads in push()
+      </h5>
+      
+      <p class="noind"><a id="iddle1040" class="calibre4"></a>One option is to add a dummy node between the real nodes. This way, the only part of the current <kbd class="calibre17">tail</kbd> node that needs updating is the <kbd class="calibre17">next</kbd> pointer, which could therefore be made atomic. If a thread manages to successfully change the <kbd class="calibre17">next</kbd> pointer from <kbd class="calibre17">nullptr</kbd> to its new node, then it has successfully added the pointer; otherwise, it would have to start again and reread the <kbd class="calibre17">tail</kbd>. This would then require a minor change to <kbd class="calibre17">pop()</kbd> in order to discard nodes with a null data pointer and loop again. The downside here is that every <kbd class="calibre17">pop()</kbd> call will typically have to remove two nodes, and there are twice as many memory allocations.
+      </p>
+      
+      <p class="noind">A second option is to make the <kbd class="calibre17">data</kbd> pointer atomic and set that with a call to compare/exchange. If the call succeeds, this is your tail node, and you can safely
+         set the <kbd class="calibre17">next</kbd> pointer to your new node and then update <kbd class="calibre17">tail</kbd>. If the compare/exchange fails because another thread has stored the data, you loop around, reread <kbd class="calibre17">tail</kbd>, and start again. If the atomic operations on <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> are lock-free, you’re home free. If not, you need an alternative. One possibility is to have <kbd class="calibre17">pop()</kbd> return <kbd class="calibre17">std::unique_ptr&lt;&gt;</kbd> (after all, it’s the only reference to the object) and store the data as a plain pointer in the queue. This would allow you
+         to store it as <kbd class="calibre17">std::atomic&lt;T*&gt;</kbd>, which would then support the necessary <kbd class="calibre17">compare_exchange_strong()</kbd> call. If you’re using the reference-counting scheme from <a href="#ch07ex12" class="calibre4">listing 7.12</a> to handle multiple threads in <kbd class="calibre17">pop()</kbd>, <kbd class="calibre17">push()</kbd> now looks like this.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex15">Listing 7.15. <a id="ch07ex15__title" class="calibre4"></a>A (broken) first attempt at revising <kbd class="calibre17">push()</kbd></h5>
+      <pre id="PLd0e28089" class="calibre5">void push(T new_value)
+{
+    std::unique_ptr&lt;T&gt; new_data(new T(new_value));
+    counted_node_ptr new_next;
+    new_next.ptr=new node;
+    new_next.external_count=1;
+    for(;;)
+    {
+        node* const old_tail=tail.load();           <b class="calibre24"><i class="calibre6">1</i></b>
+        T* old_data=nullptr;
+        if(old_tail-&gt;data.compare_exchange_strong(
+            old_data,new_data.get()))               <b class="calibre24"><i class="calibre6">2</i></b>
+        {
+            old_tail-&gt;next=new_next;
+            tail.store(new_next.ptr);               <b class="calibre24"><i class="calibre6">3</i></b>
+            new_data.release();
+            break;
+        }
+    }
+}</pre>
+      
+      <p class="noind">Using the reference-counting scheme avoids this particular race, but it’s not the only race in <kbd class="calibre17">push()</kbd>. If you look at the revised version of <kbd class="calibre17">push()</kbd> in <a href="#ch07ex15" class="calibre4">listing 7.15</a>, you’ll see a pattern you saw in the stack: load an atomic pointer <b class="calibre24"><i class="calibre6">1</i></b> and dereference that pointer <b class="calibre24"><i class="calibre6">2</i></b>. In the meantime, another thread could update the pointer <b class="calibre24"><i class="calibre6">3</i></b>, eventually leading to the node being deallocated (in <kbd class="calibre17">pop()</kbd>). If the node is deallocated before you dereference the pointer, you have undefined behavior. Ouch! It’s tempting to add
+         an external count in <kbd class="calibre17">tail</kbd> the same as you did for <kbd class="calibre17">head</kbd>, but each node already has an external count in the <kbd class="calibre17">next</kbd> pointer of the previous node in the queue. Having two external counts for the same node requires a modification to the reference-counting
+         scheme to avoid deleting the node too early. You can address this by also counting the number of external counters inside
+         the <kbd class="calibre17">node</kbd> structure and decreasing this number when each external counter is destroyed (as well as adding the corresponding external
+         count to the internal count). If the internal count is zero and there are no external counters, you know the node can safely
+         be deleted. This is a technique I first encountered through Joe Seigh’s Atomic Ptr Plus Project (<a href="http://atomic-ptr-plus.sourceforge.net/" class="calibre4">http://atomic-ptr-plus.sourceforge.net/</a>). The following listing shows how <kbd class="calibre17">push()</kbd> looks under this scheme.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex16">Listing 7.16. <a id="ch07ex16__title" class="calibre4"></a>Implementing <kbd class="calibre17">push()</kbd> for a lock-free queue with a reference-counted tail
+      </h5>
+      <pre id="PLd0e28164" class="calibre5">template&lt;typename T&gt;
+class lock_free_queue
+{
+private:
+    struct node;
+    struct counted_node_ptr
+    {
+        int external_count;
+        node* ptr;
+    };
+    std::atomic&lt;counted_node_ptr&gt; head;
+    std::atomic&lt;counted_node_ptr&gt; tail;                      <b class="calibre24"><i class="calibre6">1</i></b>
+    struct node_counter
+    {
+        unsigned internal_count:30;
+        unsigned external_counters:2;                        <b class="calibre24"><i class="calibre6">2</i></b>
+    };
+    struct node
+    {
+        std::atomic&lt;T*&gt; data;
+        std::atomic&lt;node_counter&gt; count;                     <b class="calibre24"><i class="calibre6">3</i></b>
+        counted_node_ptr next;
+        node()
+        {
+            node_counter new_count;
+            new_count.internal_count=0;
+            new_count.external_counters=2;                   <b class="calibre24"><i class="calibre6">4</i></b>
+            count.store(new_count);
+
+            next.ptr=nullptr;
+            next.external_count=0;
+        }
+    };
+public:
+    void push(T new_value)
+    {
+        std::unique_ptr&lt;T&gt; new_data(new T(new_value));
+        counted_node_ptr new_next;
+        new_next.ptr=new node;
+        new_next.external_count=1;
+        counted_node_ptr old_tail=tail.load();
+        for(;;)
+        {
+            increase_external_count(tail,old_tail);          <b class="calibre24"><i class="calibre6">5</i></b>
+            T* old_data=nullptr;
+            if(old_tail.ptr-&gt;data.compare_exchange_strong(   <b class="calibre24"><i class="calibre6">6</i></b>
+               old_data,new_data.get()))
+            {
+                old_tail.ptr-&gt;next=new_next;
+                old_tail=tail.exchange(new_next);
+                free_external_counter(old_tail);             <b class="calibre24"><i class="calibre6">7</i></b>
+                new_data.release();
+                break;
+            }
+            old_tail.ptr-&gt;release_ref();
+        }
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1394" class="calibre4"></a><a id="iddle1458" class="calibre4"></a>In <a href="#ch07ex16" class="calibre4">listing 7.16</a>, <kbd class="calibre17">tail</kbd> is now <kbd class="calibre17">atomic&lt;counted_node_ptr&gt;</kbd>, the same as <kbd class="calibre17">head</kbd> <b class="calibre24"><i class="calibre6">1</i></b>, and the <kbd class="calibre17">node</kbd> structure has a <kbd class="calibre17">count</kbd> member to replace the <kbd class="calibre17">internal_count</kbd> from before <b class="calibre24"><i class="calibre6">3</i></b>. This <kbd class="calibre17">count</kbd> is a structure containing the <kbd class="calibre17">internal_count</kbd> and an additional <kbd class="calibre17">external_counters</kbd> member <b class="calibre24"><i class="calibre6">2</i></b>. Note that you need only 2 bits for the <kbd class="calibre17">external_counters</kbd> because there are at most two such counters. By using a bit field for this and specifying <kbd class="calibre17">internal_count</kbd> as a 30-bit value, you keep the total counter size to 32 bits. This gives you plenty of scope for large internal count values
+         while ensuring that the whole structure fits inside a machine word on 32-bit and 64-bit machines. It’s important to update
+         these counts together as a single entity in order to avoid race conditions, as you’ll see shortly. Keeping the structure within
+         a machine word makes it more likely that the atomic operations can be lock-free on many platforms.
+      </p>
+      
+      <p class="noind">The <kbd class="calibre17">node</kbd> is initialized with the <kbd class="calibre17">internal_count</kbd> set to zero and the <kbd class="calibre17">external_counters</kbd> set to <kbd class="calibre17">2</kbd> <b class="calibre24"><i class="calibre6">4</i></b>, because every new node starts out referenced from <kbd class="calibre17">tail</kbd> and from the <kbd class="calibre17">next</kbd> pointer of the previous node once you’ve added it to the queue. <kbd class="calibre17">push()</kbd> itself is similar to <a href="#ch07ex15" class="calibre4">listing 7.15</a>, except that before you dereference the value loaded from <kbd class="calibre17">tail</kbd> in order to call to <kbd class="calibre17">compare_exchange_strong()</kbd> on the <kbd class="calibre17">data</kbd> member of the node <b class="calibre24"><i class="calibre6">6</i></b>, you call a new function <kbd class="calibre17">increase_external_count()</kbd> to increase the count <b class="calibre24"><i class="calibre6">5</i></b>, and then afterward you call <kbd class="calibre17">free_external_counter()</kbd> on the old tail value <b class="calibre24"><i class="calibre6">7</i></b>.
+      </p>
+      
+      <p class="noind">With the <kbd class="calibre17">push()</kbd> side dealt with, let’s take a look at <kbd class="calibre17">pop()</kbd>. This is shown in the following listing and blends the reference-counting logic from the <kbd class="calibre17">pop()</kbd> implementation in <a href="#ch07ex12" class="calibre4">listing 7.12</a> with the queue-pop logic from <a href="#ch07ex14" class="calibre4">listing 7.14</a>.
+      </p>
+      
+      
+      <p class="noind"></p>
+      
+      
+      <h5 class="notetitle" id="ch07ex17">Listing 7.17. <a id="ch07ex17__title" class="calibre4"></a>Popping a node from a lock-free queue with a reference-counted tail
+      </h5>
+      <pre id="PLd0e28344" class="calibre5">template&lt;typename T&gt;
+class lock_free_queue
+{
+private:
+    struct node
+    {
+        void release_ref();
+    };
+public:
+    std::unique_ptr&lt;T&gt; pop()
+    {
+        counted_node_ptr old_head=head.load(std::memory_order_relaxed); <b class="calibre24"><i class="calibre6">1</i></b>
+        for(;;)
+        {
+            increase_external_count(head,old_head);                     <b class="calibre24"><i class="calibre6">2</i></b>
+            node* const ptr=old_head.ptr;
+            if(ptr==tail.load().ptr)
+            {
+                ptr-&gt;release_ref();                                     <b class="calibre24"><i class="calibre6">3</i></b>
+                return std::unique_ptr&lt;T&gt;();
+            }
+            if(head.compare_exchange_strong(old_head,ptr-&gt;next))        <b class="calibre24"><i class="calibre6">4</i></b>
+            {
+                T* const res=ptr-&gt;data.exchange(nullptr);
+                free_external_counter(old_head);                        <b class="calibre24"><i class="calibre6">5</i></b>
+                return std::unique_ptr&lt;T&gt;(res);
+            }
+            ptr-&gt;release_ref();                                         <b class="calibre24"><i class="calibre6">6</i></b>
+        }
+    }
+};</pre>
+      
+      <p class="noind">You prime the pump by loading the <kbd class="calibre17">old_head</kbd> value before you enter the loop <b class="calibre24"><i class="calibre6">1</i></b>, and before you increase the external count on the loaded value,<b class="calibre24"><i class="calibre6">2</i></b>. If the <kbd class="calibre17">head</kbd> node is the same as the <kbd class="calibre17">tail</kbd> node, you can release the reference <b class="calibre24"><i class="calibre6">3</i></b> and return a null pointer because there’s no data in the queue. If there is data, you want to try to claim it for yourself,
+         and you do this with the call to <kbd class="calibre17">compare_exchange_strong()</kbd> <b class="calibre24"><i class="calibre6">4</i></b>. As with the stack in <a href="#ch07ex12" class="calibre4">listing 7.12</a>, this compares the external count and pointer as a single entity; if either changes, you need to loop again, after releasing
+         the reference <b class="calibre24"><i class="calibre6">6</i></b>. If the exchange succeeded, you’ve claimed the data in the node as yours, so you can return that to the caller after you’ve
+         released the external counter to the popped node <b class="calibre24"><i class="calibre6">5</i></b>. Once both the external reference counts have been freed and the internal count has dropped to zero, the node itself can
+         be deleted. The reference-counting functions that take care of all this are shown in <a href="#ch07ex18" class="calibre4">listings 7.18</a>, <a href="#ch07ex19" class="calibre4">7.19</a>, and <a href="#ch07ex20" class="calibre4">7.20</a>.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex18">Listing 7.18. <a id="ch07ex18__title" class="calibre4"></a>Releasing a node reference in a lock-free queue
+      </h5>
+      <pre id="PLd0e28431" class="calibre5">template&lt;typename T&gt;
+class lock_free_queue
+{
+private:
+    struct node
+    {
+        void release_ref()
+        {
+            node_counter old_counter=
+                count.load(std::memory_order_relaxed);
+            node_counter new_counter;
+            do
+            {
+                new_counter=old_counter;
+                --new_counter.internal_count;         <b class="calibre24"><i class="calibre6">1</i></b>
+            }
+            while(!count.compare_exchange_strong(     <b class="calibre24"><i class="calibre6">2</i></b>
+                  old_counter,new_counter,
+                  std::memory_order_acquire,std::memory_order_relaxed));
+            if(!new_counter.internal_count &amp;&amp;
+               !new_counter.external_counters)
+            {
+                delete this;                          <b class="calibre24"><i class="calibre6">3</i></b>
+            }
+        }
+    };
+};</pre>
+      
+      <p class="noind"><a id="iddle1459" class="calibre4"></a><a id="iddle1460" class="calibre4"></a>The implementation of <kbd class="calibre17">node::release_ref()</kbd> is only slightly changed from the equivalent code in the implementation of <kbd class="calibre17">lock_free_stack::pop()</kbd> from <a href="#ch07ex12" class="calibre4">listing 7.12</a>. Whereas the code in <a href="#ch07ex12" class="calibre4">listing 7.12</a> only has to handle a single external count so you could use a simple <kbd class="calibre17">fetch_sub</kbd>, the whole <kbd class="calibre17">count</kbd> structure now has to be updated atomically, even though you only want to modify the <kbd class="calibre17">internal_count</kbd> field <b class="calibre24"><i class="calibre6">1</i></b>. This therefore requires a compare/exchange loop <b class="calibre24"><i class="calibre6">2</i></b>. Once you’ve decremented <kbd class="calibre17">internal_count</kbd>, if both the internal and external counts are now zero, this is the last reference, so you can delete the node <b class="calibre24"><i class="calibre6">3</i></b>.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex19">Listing 7.19. <a id="ch07ex19__title" class="calibre4"></a>Obtaining a new reference to a node in a lock-free queue
+      </h5>
+      <pre id="PLd0e28506" class="calibre5">template&lt;typename T&gt;
+class lock_free_queue
+{
+private:
+    static void increase_external_count(
+        std::atomic&lt;counted_node_ptr&gt;&amp; counter,
+        counted_node_ptr&amp; old_counter)
+    {
+        counted_node_ptr new_counter;
+        do
+        {
+            new_counter=old_counter;
+            ++new_counter.external_count;
+        }
+        while(!counter.compare_exchange_strong(
+              old_counter,new_counter,
+              std::memory_order_acquire,std::memory_order_relaxed));
+        old_counter.external_count=new_counter.external_count;
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1230" class="calibre4"></a><a id="iddle1552" class="calibre4"></a><a id="iddle1568" class="calibre4"></a><a id="iddle1828" class="calibre4"></a><a id="iddle2518" class="calibre4"></a><a id="iddle2552" class="calibre4"></a><a href="#ch07ex19" class="calibre4">Listing 7.19</a> is the other side. This time, rather than releasing a reference, you’re obtaining a fresh one and increasing the external
+         count. <kbd class="calibre17">increase_external_count()</kbd> is similar to the <kbd class="calibre17">increase_head_count()</kbd> function from <a href="#ch07ex13" class="calibre4">listing 7.13</a>, except that it has been made into a <kbd class="calibre17">static</kbd> member function that takes the external counter to update as the first parameter rather than operating on a fixed counter.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex20">Listing 7.20. <a id="ch07ex20__title" class="calibre4"></a>Freeing an external counter to a node in a lock-free queue
+      </h5>
+      <pre id="PLd0e28584" class="calibre5">template&lt;typename T&gt;
+class lock_free_queue
+{
+private:
+    static void free_external_counter(counted_node_ptr &amp;old_node_ptr)
+    {
+        node* const ptr=old_node_ptr.ptr;
+        int const count_increase=old_node_ptr.external_count-2;
+        node_counter old_counter=
+            ptr-&gt;count.load(std::memory_order_relaxed);
+        node_counter new_counter;
+        do
+        {
+            new_counter=old_counter;
+            --new_counter.external_counters;              <b class="calibre24"><i class="calibre6">1</i></b>
+            new_counter.internal_count+=count_increase;   <b class="calibre24"><i class="calibre6">2</i></b>
+        }
+        while(!ptr-&gt;count.compare_exchange_strong(        <b class="calibre24"><i class="calibre6">3</i></b>
+              old_counter,new_counter,
+              std::memory_order_acquire,std::memory_order_relaxed));
+        if(!new_counter.internal_count &amp;&amp;
+           !new_counter.external_counters)
+        {
+            delete ptr;                                   <b class="calibre24"><i class="calibre6">4</i></b>
+        }
+    }
+};</pre>
+      
+      <p class="noind">The counterpart to <kbd class="calibre17">increase_external_count()</kbd> is <kbd class="calibre17">free_external_counter()</kbd>. This is similar to the equivalent code from <kbd class="calibre17">lock_free_stack::pop()</kbd> in <a href="#ch07ex12" class="calibre4">listing 7.12</a>, but modified to handle the <kbd class="calibre17">external_counters</kbd> count. It updates the two counts using a single <kbd class="calibre17">compare_exchange_strong()</kbd> on the whole <kbd class="calibre17">count</kbd> structure <b class="calibre24"><i class="calibre6">3</i></b>, as you did when decreasing the <kbd class="calibre17">internal_count</kbd> in <kbd class="calibre17">release_ref()</kbd>. The <kbd class="calibre17">internal_count</kbd> value is updated as in <a href="#ch07ex12" class="calibre4">listing 7.12</a> <b class="calibre24"><i class="calibre6">2</i></b>, and the <kbd class="calibre17">external_counters</kbd> value is decreased by one <b class="calibre24"><i class="calibre6">1</i></b>. If <i class="calibre6">both</i> the values are now zero, there are no more references to the node, so it can be safely deleted <b class="calibre24"><i class="calibre6">4</i></b>. This has to be done as a single action (which therefore requires the compare/exchange loop) to avoid a race condition. If
+         they’re updated <a id="iddle1226" class="calibre4"></a><a id="iddle1618" class="calibre4"></a>separately, two threads may both think they are the last one and both delete the node, resulting in undefined behavior.
+      </p>
+      
+      <p class="noind">Although this now works and is race-free, there’s still a performance issue. Once one thread has started a <kbd class="calibre17">push()</kbd> operation by successfully completing the <kbd class="calibre17">compare_exchange_strong()</kbd> on <kbd class="calibre17">old_tail.ptr-&gt;data</kbd> (<b class="calibre24"><i class="calibre6">5</i></b> from <a href="#ch07ex16" class="calibre4">listing 7.16</a>), no other thread can perform a <kbd class="calibre17">push()</kbd> operation. Any thread that tries will see the new value rather than <kbd class="calibre17">nullptr</kbd>, which will cause the <kbd class="calibre17">compare_exchange_strong()</kbd> call to fail and make that thread loop again. This is a busy wait, which consumes CPU cycles without achieving anything.
+         Consequently, this is effectively a lock. The first <kbd class="calibre17">push()</kbd> call blocks other threads until it has completed, so this code is no longer lock-free. Not only that, but whereas the operating
+         system can give priority to the thread that holds the lock on a mutex if there are blocked threads, it can’t do so in this
+         case, so the blocked threads will waste CPU cycles until the first thread is done. This calls for the next trick from the
+         lock-free bag of tricks: the waiting thread can help the thread that’s doing the <kbd class="calibre17">push()</kbd>.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07lev3sec3"><a id="ch07lev3sec3__title" class="calibre4"></a>Making the queue lock-free by helping out another thread
+      </h5>
+      
+      <p class="noind">In order to restore the lock-free property of the code, you need to find a way for a waiting thread to make progress even
+         if the thread doing the <kbd class="calibre17">push()</kbd> is stalled. One way to do this is to help the stalled thread by doing its work for it.
+      </p>
+      
+      <p class="noind">In this case, you know exactly what needs to be done: the <kbd class="calibre17">next</kbd> pointer on the tail node needs to be set to a new dummy node, and then the <kbd class="calibre17">tail</kbd> pointer itself must be updated. The thing about dummy nodes is that they’re all equivalent, so it doesn’t matter if you use
+         the dummy node created by the thread that successfully pushed the data or the dummy node from one of the threads that’s waiting
+         to push. If you make the <kbd class="calibre17">next</kbd> pointer in a node atomic, you can then use <kbd class="calibre17">compare_exchange_strong()</kbd> to set the pointer. Once the <kbd class="calibre17">next</kbd> pointer is set, you can then use a <kbd class="calibre17">compare_exchange_weak()</kbd> loop to set the <kbd class="calibre17">tail</kbd> while ensuring that it’s still referencing the same original node. If it isn’t, someone else has updated it, and you can
+         stop trying and loop again. This requires a minor change to <kbd class="calibre17">pop()</kbd> as well in order to load the <kbd class="calibre17">next</kbd> pointer; this is shown in the following listing.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex21">Listing 7.21. <a id="ch07ex21__title" class="calibre4"></a><kbd class="calibre17">pop()</kbd> modified to allow helping on the <kbd class="calibre17">push()</kbd> side
+      </h5>
+      <pre id="PLd0e28765" class="calibre5">template&lt;typename T&gt;
+class lock_free_queue
+{
+private:
+    struct node
+    {
+        std::atomic&lt;T*&gt; data;
+        std::atomic&lt;node_counter&gt; count;
+        std::atomic&lt;counted_node_ptr&gt; next;                   <b class="calibre24"><i class="calibre6">1</i></b>
+    };
+public:
+    std::unique_ptr&lt;T&gt; pop()
+    {
+        counted_node_ptr old_head=head.load(std::memory_order_relaxed);
+        for(;;)
+        {
+            increase_external_count(head,old_head);
+            node* const ptr=old_head.ptr;
+            if(ptr==tail.load().ptr)
+            {
+                return std::unique_ptr&lt;T&gt;();
+            }
+            counted_node_ptr next=ptr-&gt;next.load();           <b class="calibre24"><i class="calibre6">2</i></b>
+            if(head.compare_exchange_strong(old_head,next))
+            {
+                T* const res=ptr-&gt;data.exchange(nullptr);
+                free_external_counter(old_head);
+                return std::unique_ptr&lt;T&gt;(res);
+            }
+            ptr-&gt;release_ref();
+        }
+    }
+};</pre>
+      
+      <p class="noind">As I mentioned, the changes here are simple: the <kbd class="calibre17">next</kbd> pointer is now atomic <b class="calibre24"><i class="calibre6">1</i></b>, so the <kbd class="calibre17">load</kbd> at <b class="calibre24"><i class="calibre6">2</i></b> is atomic. In this example, you’re using the default <kbd class="calibre17">memory_order_seq_cst</kbd> ordering, so you could omit the explicit call to <kbd class="calibre17">load()</kbd> and rely on the load in the implicit conversion to <kbd class="calibre17">counted_node_ptr</kbd>, but putting in the explicit call reminds you where to add the explicit memory ordering later.
+      </p>
+      
+      <p class="noind">The code for <kbd class="calibre17">push()</kbd> is more involved and is shown here.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch07ex22">Listing 7.22. <a id="ch07ex22__title" class="calibre4"></a>A sample <kbd class="calibre17">push()</kbd> with helping for a lock-free queue
+      </h5>
+      <pre id="PLd0e28822" class="calibre5">template&lt;typename T&gt;
+class lock_free_queue
+{
+private:
+    void set_new_tail(counted_node_ptr &amp;old_tail,                   <b class="calibre24"><i class="calibre6">1</i></b>
+                      counted_node_ptr const &amp;new_tail)
+    {
+        node* const current_tail_ptr=old_tail.ptr;
+        while(!tail.compare_exchange_weak(old_tail,new_tail) &amp;&amp;     <b class="calibre24"><i class="calibre6">2</i></b>
+              old_tail.ptr==current_tail_ptr);
+        if(old_tail.ptr==current_tail_ptr)                          <b class="calibre24"><i class="calibre6">3</i></b>
+            free_external_counter(old_tail);                        <b class="calibre24"><i class="calibre6">4</i></b>
+        else
+            current_tail_ptr-&gt;release_ref();                        <b class="calibre24"><i class="calibre6">5</i></b>
+    }
+public:
+    void push(T new_value)
+    {
+        std::unique_ptr&lt;T&gt; new_data(new T(new_value));
+        counted_node_ptr new_next;
+        new_next.ptr=new node;
+        new_next.external_count=1;
+        counted_node_ptr old_tail=tail.load();
+        for(;;)
+        {
+            increase_external_count(tail,old_tail);
+            T* old_data=nullptr;
+            if(old_tail.ptr-&gt;data.compare_exchange_strong(          <b class="calibre24"><i class="calibre6">6</i></b>
+                   old_data,new_data.get()))
+            {
+                counted_node_ptr old_next={0};
+                if(!old_tail.ptr-&gt;next.compare_exchange_strong(     <b class="calibre24"><i class="calibre6">7</i></b>
+                       old_next,new_next))
+                {
+                    delete new_next.ptr;                            <b class="calibre24"><i class="calibre6">8</i></b>
+                    new_next=old_next;                              <b class="calibre24"><i class="calibre6">9</i></b>
+                }
+                set_new_tail(old_tail, new_next);
+                new_data.release();
+                break;
+            }
+            else                                                    <b class="calibre24"><i class="calibre6">10</i></b>
+            {
+                counted_node_ptr old_next={0};
+                if(old_tail.ptr-&gt;next.compare_exchange_strong(      <b class="calibre24"><i class="calibre6">11</i></b>
+                       old_next,new_next))
+                {
+                    old_next=new_next;                              <b class="calibre24"><i class="calibre6">12</i></b>
+                    new_next.ptr=new node;                          <b class="calibre24"><i class="calibre6">13</i></b>
+                }
+                set_new_tail(old_tail, old_next);                   <b class="calibre24"><i class="calibre6">14</i></b>
+            }
+        }
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1813" class="calibre4"></a><a id="iddle1899" class="calibre4"></a>This is similar to the original <kbd class="calibre17">push()</kbd> from <a href="#ch07ex16" class="calibre4">listing 7.16</a>, but there are a few crucial differences. If you <i class="calibre6">do</i> set the <kbd class="calibre17">data</kbd> pointer <b class="calibre24"><i class="calibre6">6</i></b>, you need to handle the case where another thread has helped you, and there’s now an <kbd class="calibre17">else</kbd> clause to do the helping <b class="calibre24"><i class="calibre6">10</i></b>.
+      </p>
+      
+      <p class="noind">Having set the <kbd class="calibre17">data</kbd> pointer in the node <b class="calibre24"><i class="calibre6">6</i></b>, this new version of <kbd class="calibre17">push()</kbd> updates the <kbd class="calibre17">next</kbd> pointer using <kbd class="calibre17">compare_exchange_strong()</kbd> <b class="calibre24"><i class="calibre6">7</i></b>. You use <kbd class="calibre17">compare_exchange_strong()</kbd> to avoid looping. If the exchange fails, you know that another thread has already set the <kbd class="calibre17">next</kbd> pointer, so you don’t need the new node you allocated at the beginning, and you can delete it <b class="calibre24"><i class="calibre6">8</i></b>. You also want to use the <kbd class="calibre17">next</kbd> value that the other thread set for updating <kbd class="calibre17">tail</kbd> <b class="calibre24"><i class="calibre6">9</i></b>.
+      </p>
+      
+      <p class="noind">The update of the <kbd class="calibre17">tail</kbd> pointer has been extracted into <kbd class="calibre17">set_new_tail()</kbd> <b class="calibre24"><i class="calibre6">1</i></b>. This uses a <kbd class="calibre17">compare_exchange_weak()</kbd> loop <b class="calibre24"><i class="calibre6">2</i></b> to update the <kbd class="calibre17">tail</kbd>, because if other threads are trying to <kbd class="calibre17">push()</kbd> a new node, the <kbd class="calibre17">external_count</kbd> part may have changed, and you don’t want to lose it. But you also need to take care that you don’t replace the value if
+         another thread has successfully changed it already; otherwise, you may end up with loops in the queue, which would be a rather
+         bad idea. Consequently, you need to <a id="iddle1544" class="calibre4"></a><a id="iddle1548" class="calibre4"></a><a id="iddle1549" class="calibre4"></a><a id="iddle1551" class="calibre4"></a><a id="iddle1811" class="calibre4"></a><a id="iddle2189" class="calibre4"></a>ensure that the <kbd class="calibre17">ptr</kbd> part of the loaded value is the same if the compare/exchange fails. If the <kbd class="calibre17">ptr</kbd> is the same once the loop has exited <b class="calibre24"><i class="calibre6">3</i></b>, then you must have successfully set the <kbd class="calibre17">tail</kbd>, so you need to free the old external counter <b class="calibre24"><i class="calibre6">4</i></b>. If the <kbd class="calibre17">ptr</kbd> value is different, then another thread will have freed the counter, so you need to release the single reference held by
+         this thread <b class="calibre24"><i class="calibre6">5</i></b>.
+      </p>
+      
+      <p class="noind">If the thread calling <kbd class="calibre17">push()</kbd> failed to set the <kbd class="calibre17">data</kbd> pointer this time through the loop, it can help the successful thread to complete the update. First off, you try to update
+         the <kbd class="calibre17">next</kbd> pointer to the new node allocated on this thread <b class="calibre24"><i class="calibre6">11</i></b>. If this succeeds, you want to use the node you allocated as the new <kbd class="calibre17">tail</kbd> node <b class="calibre24"><i class="calibre6">12</i></b>, and you need to allocate another new node in anticipation of managing to push an item on the queue <b class="calibre24"><i class="calibre6">13</i></b>. You can then try to set the <kbd class="calibre17">tail</kbd> node by calling <kbd class="calibre17">set_new_tail</kbd> before looping around again <b class="calibre24"><i class="calibre6">14</i></b>.
+      </p>
+      
+      <p class="noind">You may have noticed that there are a lot of <kbd class="calibre17">new</kbd> and <kbd class="calibre17">delete</kbd> calls for such a small piece of code, because new nodes are allocated on <kbd class="calibre17">push()</kbd> and destroyed in <kbd class="calibre17">pop()</kbd>. The efficiency of the memory allocator therefore has a considerable impact on the performance of this code; a poor allocator
+         can completely destroy the scalability properties of a lock-free container like this. The selection and implementation of
+         these allocators are beyond the scope of this book, but it’s important to bear in mind that the only way to know that an allocator
+         is better is to try it and measure the performance of the code before and after. Common techniques for optimizing memory allocation
+         include having a separate memory allocator on each thread and using free lists to recycle nodes rather than returning them
+         to the allocator.
+      </p>
+      
+      <p class="noind">That’s enough examples for now; instead, let’s look at extracting some guidelines for writing lock-free data structures from
+         the examples.
+      </p>
+      
+      
+      
+      
+      
+      <h3 id="ch07lev1sec3" class="chapter"><a id="ch07lev1sec3__title" class="calibre3"></a>7.3. Guidelines for writing lock-free data structures
+      </h3>
+      
+      <p class="noind">If you’ve followed through all the examples in this chapter, you’ll appreciate the complexities involved in getting lock-free
+         code right. If you’re going to design your own data structures, it helps to have some guidelines to focus on. The general
+         guidelines regarding concurrent data structures from the beginning of <a href="kindle_split_016.html#ch06" class="calibre4">chapter 6</a> still apply, but you need more than that. I’ve pulled a few useful guidelines out from the examples, which you can then refer
+         to when designing your own lock-free data structures.
+      </p>
+      
+      
+      <h4 id="ch07lev2sec11" class="calibre23">7.3.1. <a id="ch07lev2sec11__title" class="calibre4"></a>Guideline: use std::memory_order_seq_cst for prototyping
+      </h4>
+      
+      <p class="noind"><kbd class="calibre17">std::memory_order_seq_cst</kbd> is much easier to reason about than any other memory ordering because all these operations form a total order. In all the
+         examples in this chapter, you’ve started with <kbd class="calibre17">std::memory_order_seq_cst</kbd> and only relaxed the memory-ordering constraints once the basic operations were working. In this sense, using other memory
+         orderings is an <i class="calibre6">optimization</i>, and as such you need to avoid doing it prematurely. In general, you can only determine which operations can be relaxed when
+         you can see the full set of code that can operate on the guts of the data structure. Attempting to do otherwise makes your
+         life harder. This is complicated by the <a id="iddle1001" class="calibre4"></a><a id="iddle1075" class="calibre4"></a><a id="iddle1545" class="calibre4"></a><a id="iddle1546" class="calibre4"></a><a id="iddle1547" class="calibre4"></a><a id="iddle2506" class="calibre4"></a>fact that the code may work when tested but isn’t guaranteed. Unless you have an algorithm checker that can systematically
+         test all possible combinations of thread visibilities that are consistent with the specified ordering guarantees (and these
+         things do exist), running the code isn’t enough.
+      </p>
+      
+      
+      
+      <h4 id="ch07lev2sec12" class="calibre23">7.3.2. <a id="ch07lev2sec12__title" class="calibre4"></a>Guideline: use a lock-free memory reclamation scheme
+      </h4>
+      
+      <p class="noind">One of the biggest difficulties with lock-free code is managing memory. It’s essential to avoid deleting objects when other
+         threads might still have references to them, but you still want to delete the object as soon as possible in order to avoid
+         excessive memory consumption. In this chapter you’ve seen three techniques for ensuring that memory can safely be reclaimed:
+      </p>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22">Waiting until no threads are accessing the data structure and deleting all objects that are pending deletion</li>
+         
+         <li class="calibre22">Using hazard pointers to identify that a thread is accessing a particular object</li>
+         
+         <li class="calibre22">Reference counting the objects so that they aren’t deleted until there are no outstanding references</li>
+         
+      </ul>
+      
+      <p class="noind">In all cases, the key idea is to use some method to keep track of how many threads are accessing a particular object and only
+         delete each object when it’s no longer referenced from anywhere. There are many other ways of reclaiming memory in lock-free
+         data structures. For example, this is the ideal scenario for using a garbage collector. It’s much easier to write the algorithms
+         if you know that the garbage collector will free the nodes when they’re no longer used, but not before.
+      </p>
+      
+      <p class="noind">Another alternative is to recycle nodes and only free them completely when the data structure is destroyed. Because the nodes
+         are reused, the memory never becomes invalid, so some of the difficulties in avoiding undefined behavior go away. The downside
+         here is that another problem becomes more prevalent. This is the so-called <i class="calibre6">ABA problem</i>.
+      </p>
+      
+      
+      
+      <h4 id="ch07lev2sec13" class="calibre23">7.3.3. <a id="ch07lev2sec13__title" class="calibre4"></a>Guideline: watch out for the ABA problem
+      </h4>
+      
+      <p class="noind">The ABA problem is something to be wary of in any compare/exchange–based algorithm. It goes like this:</p>
+      
+      <p class="calibre19"></p>
+      <ol class="calibre27">
+         
+         <li class="calibre22">Thread 1 reads an atomic variable, <kbd class="calibre17">x</kbd>, and finds it has value <kbd class="calibre17">A</kbd>.
+         </li>
+         
+         <li class="calibre22">Thread 1 performs some operation based on this value, such as dereferencing it (if it’s a pointer) or doing a lookup, or something.</li>
+         
+         <li class="calibre22">Thread 1 is stalled by the operating system.</li>
+         
+         <li class="calibre22">Another thread performs some operations on <kbd class="calibre17">x</kbd> that change its value to <kbd class="calibre17">B</kbd>.
+         </li>
+         
+         <li class="calibre22">A thread then changes the data associated with the value <kbd class="calibre17">A</kbd> such that the value held by thread 1 is no longer valid. This may be as drastic as freeing the pointed-to memory or changing
+            an associated value.
+         </li>
+         
+         <li class="calibre22">A thread then changes <kbd class="calibre17">x</kbd> back to <kbd class="calibre17">A</kbd> based on this new data. If this is a pointer, it may be a new object that happens to share the same address as the old one.
+         </li>
+         
+         <li class="calibre22">Thread 1 resumes and performs a compare/exchange on <kbd class="calibre17">x</kbd>, comparing against <kbd class="calibre17">A</kbd>. The compare/exchange succeeds (because the value is indeed <kbd class="calibre17">A</kbd>), but this is the wrong <kbd class="calibre17">A</kbd> value. The data originally read at step 2 is no longer valid, but thread 1 has no way of telling and will corrupt the data
+            structure.
+         </li>
+         
+      </ol>
+      
+      <p class="noind">None of the algorithms presented here suffer from this problem, but it’s easy to write lock-free algorithms that do. The most
+         common way to avoid this problem is to include an ABA counter alongside the variable <kbd class="calibre17">x</kbd>. The compare/exchange operation is then done on the combined structure of <kbd class="calibre17">x</kbd> plus the counter as a single unit. Every time the value is replaced, the counter is incremented, so even if <kbd class="calibre17">x</kbd> has the same value, the compare/exchange will fail if another thread has modified <kbd class="calibre17">x</kbd>.
+      </p>
+      
+      <p class="noind">The ABA problem is particularly prevalent in algorithms that use free lists or otherwise recycle nodes rather than returning
+         them to the allocator.
+      </p>
+      
+      
+      
+      <h4 id="ch07lev2sec14" class="calibre23">7.3.4. <a id="ch07lev2sec14__title" class="calibre4"></a>Guideline: identify busy-wait loops and help the other thread
+      </h4>
+      
+      <p class="noind">In the final queue example, you saw how a thread performing a push operation had to wait for another thread also performing
+         a push to complete its operation before it could proceed. Left alone, this would have been a busy-wait loop, with the waiting
+         thread wasting CPU time while failing to proceed. If you end up with a busy-wait loop, you effectively have a blocking operation
+         and might as well use mutexes and locks. By modifying the algorithm so that the waiting thread performs the incomplete steps
+         if it’s scheduled to run before the original thread completes the operation, you can remove the busy-wait and the operation
+         is no longer blocking. In the queue example this required changing a data member to be an atomic variable rather than a non-atomic
+         variable and using compare/exchange operations to set it, but in more complex data structures it might require more extensive
+         changes.
+      </p>
+      
+      
+      
+      
+      <h3 id="ch07lev1sec4" class="chapter"><a id="ch07lev1sec4__title" class="calibre3"></a>Summary
+      </h3>
+      
+      <p class="noind">Following from the lock-based data structures of <a href="kindle_split_016.html#ch06" class="calibre4">chapter 6</a>, this chapter has described simple implementations of various lock-free data structures, starting with a stack and a queue,
+         as before. You saw how you must take care with the memory ordering on your atomic operations to ensure that there are no data
+         races and that each thread sees a coherent view of the data structure. You also saw how memory management becomes much harder
+         for lock-free data structures than lock-based ones and examined a couple of mechanisms for handling it. You also saw how to
+         avoid creating wait loops by helping the thread you’re waiting for to complete its operation.
+      </p>
+      
+      <p class="noind">Designing lock-free data structures is a difficult task, and it’s easy to make mistakes, but these data structures have scalability
+         properties that are important in some situations. Hopefully, by following through the examples in this chapter and reading
+         the guidelines, you’ll be better equipped to design your own lock-free data structure, implement one from a research paper,
+         or find the bug in the one your former colleague wrote before they left the company.
+      </p>
+      
+      <p class="noind">Wherever data is shared between threads, you need to think about the data structures used and how the data is synchronized
+         between threads. By designing data structures for concurrency, you can encapsulate that responsibility in the data structure
+         itself, so the rest of the code can focus on the task it’s trying to perform with the data rather than the data synchronization.
+         You’ll see this in action in <a href="kindle_split_018.html#ch08" class="calibre4">chapter 8</a> as we move on from concurrent data structures to concurrent code in general. Parallel algorithms use multiple threads to
+         improve their performance, and the choice of concurrent data structure is crucial where the algorithms need their worker threads
+         to share data.
+      </p>
+      
+      
+      
+      
+      <div class="calibre13" id="calibre_pb_26"></div>
+</body></html>

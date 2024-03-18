@@ -1,0 +1,1239 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:mbp="Kindle">
+  <head>
+    <title>C++ Concurrency in Action, Second Edition</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+  <link href="stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+<h2 class="part" id="ch09">Chapter 9. <a id="ch09__title" class="calibre3"></a>Advanced thread management
+      </h2>
+      
+      <p class="noind"><a id="iddle2520" class="calibre4"></a><i class="calibre6">This chapter covers</i></p>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22">Thread pools</li>
+         
+         <li class="calibre22">Handling dependencies between pool tasks</li>
+         
+         <li class="calibre22">Work stealing for pool threads</li>
+         
+         <li class="calibre22">Interrupting threads</li>
+         
+      </ul>
+      
+      <p class="noind">In earlier chapters, you’ve been explicitly managing threads by creating <kbd class="calibre17">std::thread</kbd> objects for every thread. In a couple of places you’ve seen how this can be undesirable, because you then have to manage
+         the lifetime of the thread objects, determine the number of threads appropriate to the problem and to the current hardware,
+         and so forth. The ideal scenario would be that you could divide the code into the smallest pieces that could be executed concurrently,
+         pass them over to the compiler and library, and say, “Parallelize this for optimal performance.” As we’ll see in <a href="kindle_split_020.html#ch10" class="calibre4">chapter 10</a>, there are cases where you can do this: if your code that requires parallelization can be expressed as a call to a standard
+         library algorithm, then you can ask the library to do the parallelization for you in most cases.
+      </p>
+      
+      <p class="noind">Another recurring theme in several of the examples is that you might use several threads to solve a problem but require that
+         they finish early if some condition is met. This might be because the result has already been determined, or because <a id="iddle2359" class="calibre4"></a><a id="iddle2476" class="calibre4"></a><a id="iddle2478" class="calibre4"></a><a id="iddle2667" class="calibre4"></a>an error has occurred, or even because the user has explicitly requested that the operation be aborted. Whatever the reason,
+         the threads need to be sent a “Please stop” request so that they can give up on the task they were given, tidy up, and finish
+         as soon as possible.
+      </p>
+      
+      <p class="noind">In this chapter, we’ll look at mechanisms for managing threads and tasks, starting with the automatic management of the number
+         of threads and the division of tasks between them.
+      </p>
+      
+      
+      <h3 id="ch09lev1sec1" class="chapter"><a id="ch09lev1sec1__title" class="calibre3"></a>9.1. Thread pools
+      </h3>
+      
+      <p class="noind">In many companies, employees who would normally spend their time in the office are occasionally required to visit clients
+         or suppliers or to attend a trade show or conference. Although these trips might be necessary, and on any given day there
+         might be several people making this trip, it may well be months or even years between these trips for any particular employee.
+         Because it would therefore be rather expensive and impractical for each employee to have a company car, companies often offer
+         a <i class="calibre6">car pool</i> instead; they have a limited number of cars that are available to all employees. When an employee needs to make an off-site
+         trip, they book one of the pool cars for the appropriate time and return it for others to use when they return to the office.
+         If there are no pool cars free on a given day, the employee will have to reschedule their trip for a subsequent date.
+      </p>
+      
+      <p class="noind">A <i class="calibre6">thread pool</i> is a similar idea, except that <i class="calibre6">threads</i> are being shared rather than cars. On most systems, it’s impractical to have a separate thread for every task that can potentially
+         be done in parallel with other tasks, but you’d still like to take advantage of the available concurrency where possible.
+         A thread pool allows you to accomplish this; tasks that can be executed concurrently are submitted to the pool, which puts
+         them on a queue of pending work. Each task is then taken from the queue by one of the <i class="calibre6">worker threads</i>, which executes the task before looping back to take another from the queue.
+      </p>
+      
+      <p class="noind">There are several key design issues when building a thread pool, such as how many threads to use, the most efficient way to
+         allocate tasks to threads, and whether or not you can wait for a task to complete. In this section we’ll look at some thread
+         pool implementations that address these design issues, starting with the simplest possible thread pool.
+      </p>
+      
+      
+      <h4 id="ch09lev2sec1" class="calibre23">9.1.1. <a id="ch09lev2sec1__title" class="calibre4"></a>The simplest possible thread pool
+      </h4>
+      
+      <p class="noind">At its simplest, a thread pool is a fixed number of <i class="calibre6">worker threads</i> (typically the same number as the value returned by <kbd class="calibre17">std::thread::hardware_concurrency()</kbd>) that process work. When you have work to do, you call a function to put it on the queue of pending work. Each worker thread
+         takes work off the queue, runs the specified task, and then goes back to the queue for more work. In the simplest case there’s
+         no way to wait for the task to complete. If you need to do this, you have to manage the synchronization yourself.
+      </p>
+      
+      <p class="noind">The following listing shows a sample implementation of this thread pool.</p>
+      
+      
+      
+      <h5 class="notetitle" id="ch09ex01">Listing 9.1. <a id="ch09ex01__title" class="calibre4"></a>Simple thread pool
+      </h5>
+      <pre id="PLd0e33724" class="calibre5">class thread_pool
+{
+    std::atomic_bool done;
+    threadsafe_queue&lt;std::function&lt;void()&gt; &gt; work_queue;                   <b class="calibre24"><i class="calibre6">1</i></b>
+    std::vector&lt;std::thread&gt; threads;                                      <b class="calibre24"><i class="calibre6">2</i></b>
+    join_threads joiner;                                                   <b class="calibre24"><i class="calibre6">3</i></b>
+    void worker_thread()
+    {
+        while(!done)                                                       <b class="calibre24"><i class="calibre6">4</i></b>
+        {
+            std::function&lt;void()&gt; task;
+            if(work_queue.try_pop(task))                                   <b class="calibre24"><i class="calibre6">5</i></b>
+            {
+                task();                                                    <b class="calibre24"><i class="calibre6">6</i></b>
+            }
+            else
+            {
+                std::this_thread::yield();                                 <b class="calibre24"><i class="calibre6">7</i></b>
+            }
+        }
+    }
+public:
+    thread_pool():
+        done(false),joiner(threads)
+    {
+        unsigned const thread_count=std::thread::hardware_concurrency();   <b class="calibre24"><i class="calibre6">8</i></b>
+        try
+        {
+            for(unsigned i=0;i&lt;thread_count;++i)
+            {
+                threads.push_back(
+                    std::thread(&amp;thread_pool::worker_thread,this));        <b class="calibre24"><i class="calibre6">9</i></b>
+            }
+        }
+        catch(...)
+        {
+            done=true;                                                     <b class="calibre24"><i class="calibre6">10</i></b>
+            throw;
+        }
+    }
+    ~thread_pool()
+    {
+        done=true;                                                         <b class="calibre24"><i class="calibre6">11</i></b>
+    }
+    template&lt;typename FunctionType&gt;
+    void submit(FunctionType f)
+    {
+        work_queue.push(std::function&lt;void()&gt;(f));                         <b class="calibre24"><i class="calibre6">12</i></b>
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1297" class="calibre4"></a><a id="iddle1503" class="calibre4"></a><a id="iddle2415" class="calibre4"></a><a id="iddle2456" class="calibre4"></a><a id="iddle2480" class="calibre4"></a><a id="iddle2651" class="calibre4"></a><a id="iddle2668" class="calibre4"></a>This implementation has a vector of worker threads <b class="calibre24"><i class="calibre6">2</i></b> and uses one of the thread-safe queues from <a href="kindle_split_016.html#ch06" class="calibre4">chapter 6</a> <b class="calibre24"><i class="calibre6">1</i></b> to manage the queue of work. In this case, users can’t wait for the tasks, and they can’t return any values, so you can use
+         <kbd class="calibre17">std::function&lt;void()&gt;</kbd> to encapsulate your tasks. The <kbd class="calibre17">submit()</kbd> function then wraps whatever function or callable object is supplied inside an <kbd class="calibre17">std::function&lt;void()&gt;</kbd> instance and pushes it on the queue <b class="calibre24"><i class="calibre6">12</i></b>.
+      </p>
+      
+      <p class="noind">The threads are started in the constructor: you use <kbd class="calibre17">std::thread::hardware_concurrency()</kbd> to tell you how many concurrent threads the hardware can support <b class="calibre24"><i class="calibre6">8</i></b>, and you create that many threads running your <kbd class="calibre17">worker_thread()</kbd> member function <b class="calibre24"><i class="calibre6">9</i></b>.
+      </p>
+      
+      <p class="noind">Starting a thread can fail by throwing an exception, so you need to ensure that any threads you’ve already started are stopped
+         and cleaned up nicely in this case. This is achieved with a <kbd class="calibre17">try</kbd>-<kbd class="calibre17">catch</kbd> block that sets the <kbd class="calibre17">done</kbd> flag when an exception is thrown <b class="calibre24"><i class="calibre6">10</i></b>, alongside an instance of the <kbd class="calibre17">join_threads</kbd> class from <a href="kindle_split_018.html#ch08" class="calibre4">chapter 8</a> <b class="calibre24"><i class="calibre6">3</i></b> to join all the threads. This also works with the destructor: you can set the <kbd class="calibre17">done</kbd> flag <b class="calibre24"><i class="calibre6">11</i></b>, and the <kbd class="calibre17">join_threads</kbd> instance will ensure that all the threads have completed before the pool is destroyed. Note that the order of declaration
+         of the members is important: both the <kbd class="calibre17">done</kbd> flag and the <kbd class="calibre17">worker_queue</kbd> must be declared before the <kbd class="calibre17">threads</kbd> vector, which must in turn be declared before the <kbd class="calibre17">joiner</kbd>. This ensures that the members are destroyed in the right order; you can’t destroy the queue safely until all the threads
+         have stopped, for example.
+      </p>
+      
+      <p class="noind">The <kbd class="calibre17">worker_thread</kbd> function itself is quite simple: it sits in a loop waiting until the <kbd class="calibre17">done</kbd> flag is set <b class="calibre24"><i class="calibre6">4</i></b>, pulling tasks off the queue <b class="calibre24"><i class="calibre6">5</i></b> and executing them <b class="calibre24"><i class="calibre6">6</i></b> in the meantime. If there are no tasks on the queue, the function calls <kbd class="calibre17">std::this_thread:: yield()</kbd> to take a small break <b class="calibre24"><i class="calibre6">7</i></b> and give another thread a chance to put some work on the queue before it tries to take some off again the next time around.
+      </p>
+      
+      <p class="noind">For many purposes this simple thread pool will suffice, especially if the tasks are entirely independent and don’t return
+         any values or perform any blocking operations. But there are also many circumstances where this simple thread pool may not
+         adequately address your needs, and yet others where it can cause problems such as deadlock. Also, in simple cases you may
+         be better served using <kbd class="calibre17">std::async</kbd> as in many of the examples in <a href="kindle_split_018.html#ch08" class="calibre4">chapter 8</a>. Throughout this chapter, we’ll look at more complex thread pool implementations that have additional features either to
+         address user needs or reduce the potential for problems. First up: waiting for the tasks we’ve submitted.
+      </p>
+      
+      
+      
+      <h4 id="ch09lev2sec2" class="calibre23">9.1.2. <a id="ch09lev2sec2__title" class="calibre4"></a>Waiting for tasks submitted to a thread pool
+      </h4>
+      
+      <p class="noind">In the examples in <a href="kindle_split_018.html#ch08" class="calibre4">chapter 8</a> that explicitly spawned threads, after dividing the work between threads, the master thread always waited for the newly spawned
+         threads to finish, to ensure that the overall task was complete before returning to the caller. With thread pools, you’d need
+         to wait for the tasks submitted to the thread pool to complete, rather than the worker threads themselves. This is similar
+         to the way that the <a id="iddle1760" class="calibre4"></a><kbd class="calibre17">std::async</kbd>-based examples in <a href="kindle_split_018.html#ch08" class="calibre4">chapter 8</a> waited for the futures. With the simple thread pool from <a href="#ch09ex01" class="calibre4">listing 9.1</a>, you’d have to do this manually using the techniques from <a href="kindle_split_014.html#ch04" class="calibre4">chapter 4</a>: condition variables and futures. This adds complexity to the code; it would be better if you could wait for the tasks directly.
+      </p>
+      
+      <p class="noind">By moving that complexity into the thread pool itself, you can wait for the tasks directly. You can have the <kbd class="calibre17">submit()</kbd> function return a task handle of some description that you can then use to wait for the task to complete. This task handle
+         would wrap the use of condition variables or futures, simplifying the code that uses the thread pool.
+      </p>
+      
+      <p class="noind">A special case of having to wait for the spawned task to finish occurs when the main thread needs a result computed by the
+         task. You’ve seen this in examples throughout the book, such as the <kbd class="calibre17">parallel_accumulate()</kbd> function from <a href="kindle_split_012.html#ch02" class="calibre4">chapter 2</a>. In this case, you can combine the waiting with the result transfer through the use of futures. <a href="#ch09ex02" class="calibre4">Listing 9.2</a> shows the changes required to the simple thread pool that allow you to wait for tasks to complete and then pass return values
+         from the task to the waiting thread. Because <kbd class="calibre17">std::packaged_task&lt;&gt;</kbd> instances are not <i class="calibre6">copyable</i>, just <i class="calibre6">movable</i>, you can no longer use <kbd class="calibre17">std::function&lt;&gt;</kbd> for the queue entries, because <kbd class="calibre17">std::function&lt;&gt;</kbd> requires that the stored function objects are copy-constructible. Instead, you must use a custom function wrapper that can
+         handle move-only types. This is a simple type-erasure class with a function call operator. You only need to handle functions
+         that take no parameters and return <kbd class="calibre17">void</kbd>, so this is a straightforward virtual call in the implementation.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch09ex02">Listing 9.2. <a id="ch09ex02__title" class="calibre4"></a>A thread pool with waitable tasks
+      </h5>
+      <pre id="PLd0e34024" class="calibre5">class function_wrapper
+{
+    struct impl_base {
+        virtual void call()=0;
+        virtual ~impl_base() {}
+    };
+    std::unique_ptr&lt;impl_base&gt; impl;
+    template&lt;typename F&gt;
+    struct impl_type: impl_base
+    {
+        F f;
+        impl_type(F&amp;&amp; f_): f(std::move(f_)) {}
+        void call() { f(); }
+    };
+public:
+    template&lt;typename F&gt;
+    function_wrapper(F&amp;&amp; f):
+        impl(new impl_type&lt;F&gt;(std::move(f)))
+    {}
+    void operator()() { impl-&gt;call(); }
+    function_wrapper() = default;
+    function_wrapper(function_wrapper&amp;&amp; other):
+        impl(std::move(other.impl))
+    {}
+    function_wrapper&amp; operator=(function_wrapper&amp;&amp; other)
+    {
+        impl=std::move(other.impl);
+        return *this;
+    }
+    function_wrapper(const function_wrapper&amp;)=delete;
+    function_wrapper(function_wrapper&amp;)=delete;
+    function_wrapper&amp; operator=(const function_wrapper&amp;)=delete;
+};
+class thread_pool
+{
+    thread_safe_queue&lt;function_wrapper&gt; work_queue;               <b class="calibre24"><i class="calibre6">1</i></b>
+    void worker_thread()
+    {
+        while(!done)
+        {
+            function_wrapper task;                                <b class="calibre24"><i class="calibre6">1</i></b>
+            if(work_queue.try_pop(task))
+            {
+                task();
+            }
+            else
+            {
+                std::this_thread::yield();
+            }
+        }
+    }
+public:
+    template&lt;typename FunctionType&gt;
+    std::future&lt;typename std::result_of&lt;FunctionType()&gt;::type&gt;    <b class="calibre24"><i class="calibre6">2</i></b>
+        submit(FunctionType f)
+    {
+        typedef typename std::result_of&lt;FunctionType()&gt;::type
+            result_type;                                          <b class="calibre24"><i class="calibre6">3</i></b>
+        std::packaged_task&lt;result_type()&gt; task(std::move(f));     <b class="calibre24"><i class="calibre6">4</i></b>
+        std::future&lt;result_type&gt; res(task.get_future());          <b class="calibre24"><i class="calibre6">5</i></b>
+        work_queue.push(std::move(task));                         <b class="calibre24"><i class="calibre6">6</i></b>
+        return res;                                               <b class="calibre24"><i class="calibre6">7</i></b>
+    }
+    // rest as before
+};</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> Use function_wrapper rather than std::function</b></li>
+         
+      </ul>
+      
+      <p class="noind">First, the modified <kbd class="calibre17">submit()</kbd> function <b class="calibre24"><i class="calibre6">2</i></b> returns a <kbd class="calibre17">std::future&lt;&gt;</kbd> to hold the return value of the task and allow the caller to wait for the task to complete. This requires that you know the
+         return type of the supplied function <kbd class="calibre17">f</kbd>, which is where <kbd class="calibre17">std:: result_of&lt;&gt;</kbd> comes in: <kbd class="calibre17">std::result_of&lt;FunctionType()&gt;::type</kbd> is the type of the result of invoking an instance of type <kbd class="calibre17">FunctionType</kbd> (such as <kbd class="calibre17">f</kbd>) with no arguments. You use the same <kbd class="calibre17">std::result_of&lt;&gt;</kbd> expression for the <kbd class="calibre17">result_type typedef</kbd> <b class="calibre24"><i class="calibre6">3</i></b> inside the function.
+      </p>
+      
+      <p class="noind">You then wrap the function <kbd class="calibre17">f</kbd> in a <kbd class="calibre17">std::packaged_task&lt;result_type()&gt;</kbd> <b class="calibre24"><i class="calibre6">4</i></b>, because <kbd class="calibre17">f</kbd> is a function or callable object that takes no parameters and returns an <a id="iddle1761" class="calibre4"></a>instance of type <kbd class="calibre17">result_type</kbd>, as we deduced. You can now get your future from the <kbd class="calibre17">std::packaged_task&lt;&gt;</kbd> <b class="calibre24"><i class="calibre6">5</i></b> before pushing the task onto the queue <b class="calibre24"><i class="calibre6">6</i></b> and returning the future <b class="calibre24"><i class="calibre6">7</i></b>. Note that you have to use <kbd class="calibre17">std::move()</kbd> when pushing the task onto the queue, because <kbd class="calibre17">std::packaged_task&lt;&gt;</kbd> isn’t copyable. The queue now stores <kbd class="calibre17">function_wrapper</kbd> objects rather than <kbd class="calibre17">std::function&lt;void()&gt;</kbd> objects in order to handle this.
+      </p>
+      
+      <p class="noind">This pool allows you to wait for your tasks and have them return results. The next listing shows what the <kbd class="calibre17">parallel_accumulate</kbd> function looks like with this thread pool.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch09ex03">Listing 9.3. <a id="ch09ex03__title" class="calibre4"></a><kbd class="calibre17">parallel_accumulate</kbd> using a thread pool with waitable tasks
+      </h5>
+      <pre id="PLd0e34176" class="calibre5">template&lt;typename Iterator,typename T&gt;
+T parallel_accumulate(Iterator first,Iterator last,T init)
+{
+    unsigned long const length=std::distance(first,last);
+    if(!length)
+        return init;
+    unsigned long const block_size=25;
+    unsigned long const num_blocks=(length+block_size-1)/block_size;   <b class="calibre24"><i class="calibre6">1</i></b>
+    std::vector&lt;std::future&lt;T&gt; &gt; futures(num_blocks-1);
+    thread_pool pool;
+    Iterator block_start=first;
+    for(unsigned long i=0;i&lt;(num_blocks-1);++i)
+    {
+        Iterator block_end=block_start;
+        std::advance(block_end,block_size);
+        futures[i]=pool.submit([=]{
+            accumulate_block&lt;Iterator,T&gt;()(block_start,block_end);
+        });                                                            <b class="calibre24"><i class="calibre6">2</i></b>
+        block_start=block_end;
+    }
+    T last_result=accumulate_block&lt;Iterator,T&gt;()(block_start,last);
+    T result=init;
+    for(unsigned long i=0;i&lt;(num_blocks-1);++i)
+    {
+        result+=futures[i].get();
+    }
+    result += last_result;
+    return result;
+}</pre>
+      
+      <p class="noind">When you compare this against <a href="kindle_split_018.html#ch08ex04" class="calibre4">listing 8.4</a>, there are a couple of things to notice. First, you’re working in terms of the number of blocks to use (<kbd class="calibre17">num_blocks</kbd>) <b class="calibre24"><i class="calibre6">1</i></b> rather than the number of threads. In order to make the most use of the scalability of your thread pool, you need to divide
+         the work into the smallest blocks that it’s worth working with concurrently. When there are only a few threads in the pool,
+         each thread will process many blocks, but as the number of threads grows with the hardware, the number of blocks processed
+         in parallel will also grow.
+      </p>
+      
+      <p class="noind">You need to be careful when choosing the “smallest blocks worth working with concurrently.” There’s an inherent overhead to
+         submitting a task to a thread pool, having <a id="iddle1424" class="calibre4"></a><a id="iddle2416" class="calibre4"></a><a id="iddle2457" class="calibre4"></a><a id="iddle2479" class="calibre4"></a><a id="iddle2650" class="calibre4"></a>the worker thread run it, and passing the return value through a <kbd class="calibre17">std::future&lt;&gt;</kbd>, and for small tasks it’s not worth the payoff. If you choose too small a task size, the code may run more slowly with a
+         thread pool than with one thread.
+      </p>
+      
+      <p class="noind">Assuming the block size is sensible, you don’t have to worry about packaging the tasks, obtaining the futures, or storing
+         the <kbd class="calibre17">std::thread</kbd> objects so you can join with the threads later; the thread pool takes care of that. All you need to do is call <kbd class="calibre17">submit()</kbd> with your task <b class="calibre24"><i class="calibre6">2</i></b>.
+      </p>
+      
+      <p class="noind">The thread pool takes care of the exception safety too. Any exception thrown by the task gets propagated through the future
+         returned from <kbd class="calibre17">submit()</kbd>, and if the function exits with an exception, the thread pool destructor abandons any not-yet-completed tasks and waits for
+         the pool threads to finish.
+      </p>
+      
+      <p class="noind">This works well for simple cases like this, where the tasks are independent. But it’s not so good for situations where the
+         tasks depend on other tasks also submitted to the thread pool.
+      </p>
+      
+      
+      
+      <h4 id="ch09lev2sec3" class="calibre23">9.1.3. <a id="ch09lev2sec3__title" class="calibre4"></a>Tasks that wait for other tasks
+      </h4>
+      
+      <p class="noind">The Quicksort algorithm is an example that I’ve used throughout this book. It’s simple in concept: the data to be sorted is
+         partitioned into those items that go before a pivot item and those that go after it in the sorted sequence. These two sets
+         of items are recursively sorted and then stitched back together to form a fully sorted set. When parallelizing this algorithm,
+         you need to ensure that these recursive calls make use of the available concurrency.
+      </p>
+      
+      <p class="noind">Back in <a href="kindle_split_014.html#ch04" class="calibre4">chapter 4</a>, when I first introduced this example, you used <kbd class="calibre17">std::async</kbd> to run one of the recursive calls at each stage, letting the library choose between running it on a new thread and running
+         it synchronously when the relevant <kbd class="calibre17">get()</kbd> was called. This works well, because each task is either running on its own thread or will be invoked when required.
+      </p>
+      
+      <p class="noind">When we revisited the implementation in <a href="kindle_split_018.html#ch08" class="calibre4">chapter 8</a>, you saw an alternative structure that used a fixed number of threads related to the available hardware concurrency. In this
+         case, you used a stack of pending chunks that needed sorting. As each thread partitioned the data it was sorting, it added
+         a new chunk to the stack for one of the sets of data and then sorted the other one directly. At this point, a straightforward
+         wait for the sorting of the other chunk to complete would potentially deadlock, because you’d be consuming one of your limited
+         number of threads waiting. It would be easy to end up in a situation where all of the threads were waiting for chunks to be
+         sorted and no threads were doing any sorting. We addressed this issue by having the threads pull chunks off the stack and
+         sort them while the particular chunk they were waiting for was unsorted.
+      </p>
+      
+      <p class="noind">You’d get the same problem if you substituted a simple thread pool like the ones you’ve seen so far in this chapter, instead
+         of <kbd class="calibre17">std::async</kbd> in the example from <a href="kindle_split_014.html#ch04" class="calibre4">chapter 4</a>. There are now only a limited number of threads, and they might end up all waiting for tasks that haven’t been scheduled
+         because there are no free threads. You therefore <a id="iddle1871" class="calibre4"></a><a id="iddle2669" class="calibre4"></a>need to use a solution similar to the one you used in <a href="kindle_split_018.html#ch08" class="calibre4">chapter 8</a>: process outstanding chunks while you’re waiting for your chunk to complete. If you’re using the thread pool to manage the
+         list of tasks and their association with threads—which is, after all, the whole point of using a thread pool—you don’t have
+         access to the task list to do this. What you need to do is modify the thread pool to do this automatically.
+      </p>
+      
+      <p class="noind">The simplest way to do this is to add a new function on <kbd class="calibre17">thread_pool</kbd> to run a task from the queue and manage the loop yourself, so we’ll go with that. Advanced thread pool implementations might
+         add logic into the wait function or additional wait functions to handle this case, possibly prioritizing the task being waited
+         for. The following listing shows the new <kbd class="calibre17">run_pending_task()</kbd> function, and a modified Quicksort to make use of it is shown in <a href="#ch09ex05" class="calibre4">listing 9.5</a>.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch09ex04">Listing 9.4. <a id="ch09ex04__title" class="calibre4"></a>An implementation of <kbd class="calibre17">run_pending_task()</kbd></h5>
+      <pre id="PLd0e34336" class="calibre5">void thread_pool::run_pending_task()
+{
+    function_wrapper task;
+    if(work_queue.try_pop(task))
+    {
+        task();
+    }
+    else
+    {
+        std::this_thread::yield();
+    }
+}</pre>
+      
+      <p class="noind">This implementation of <kbd class="calibre17">run_pending_task()</kbd> is lifted straight out of the main loop of the <kbd class="calibre17">worker_thread()</kbd> function, which can now be modified to call the extracted <kbd class="calibre17">run_pending_task()</kbd>. This tries to take a task off the queue and run it if there is one; otherwise, it yields to allow the OS to reschedule the
+         thread. The Quicksort implementation in <a href="#ch09ex05" class="calibre4">listing 9.5</a> is a lot simpler than the corresponding version from <a href="kindle_split_018.html#ch08ex01" class="calibre4">listing 8.1</a>, because all the thread-management logic has been moved to the thread pool.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch09ex05">Listing 9.5. <a id="ch09ex05__title" class="calibre4"></a>A thread-pool–based implementation of Quicksort
+      </h5>
+      <pre id="PLd0e34365" class="calibre5">template&lt;typename T&gt;
+struct sorter                                          <b class="calibre24"><i class="calibre6">1</i></b>
+{
+    thread_pool pool;                                  <b class="calibre24"><i class="calibre6">2</i></b>
+
+    std::list&lt;T&gt; do_sort(std::list&lt;T&gt;&amp; chunk_data)
+    {
+        if(chunk_data.empty())
+        {
+            return chunk_data;
+        }
+        std::list&lt;T&gt; result;
+        result.splice(result.begin(),chunk_data,chunk_data.begin());
+        T const&amp; partition_val=*result.begin();
+        typename std::list&lt;T&gt;::iterator divide_point=
+            std::partition(chunk_data.begin(),chunk_data.end(),
+                           [&amp;](T const&amp; val){return val&lt;partition_val;});
+        std::list&lt;T&gt; new_lower_chunk;
+        new_lower_chunk.splice(new_lower_chunk.end(),
+                               chunk_data,chunk_data.begin(),
+                               divide_point);
+        std::future&lt;std::list&lt;T&gt; &gt; new_lower=           <b class="calibre24"><i class="calibre6">3</i></b>
+            pool.submit(std::bind(&amp;sorter::do_sort,this,
+                                  std::move(new_lower_chunk)));
+        std::list&lt;T&gt; new_higher(do_sort(chunk_data));
+        result.splice(result.end(),new_higher);
+        while(new_lower.wait_for(std::chrono::seconds(0)) ==
+            std::future_status::timeout)
+        {
+            pool.run_pending_task();                    <b class="calibre24"><i class="calibre6">4</i></b>
+        }
+        result.splice(result.begin(),new_lower.get());
+        return result;
+    }
+};
+template&lt;typename T&gt;
+std::list&lt;T&gt; parallel_quick_sort(std::list&lt;T&gt; input)
+{
+    if(input.empty())
+    {
+        return input;
+    }
+    sorter&lt;T&gt; s;
+    return s.do_sort(input);
+}</pre>
+      
+      <p class="noind"><a id="iddle1303" class="calibre4"></a><a id="iddle2034" class="calibre4"></a><a id="iddle2191" class="calibre4"></a>As in <a href="kindle_split_018.html#ch08ex01" class="calibre4">listing 8.1</a>, you’ve delegated the real work to the <kbd class="calibre17">do_sort()</kbd> member function of the <kbd class="calibre17">sorter</kbd> class template <b class="calibre24"><i class="calibre6">1</i></b>, although in this case the class is only there to wrap the <kbd class="calibre17">thread_pool</kbd> instance <b class="calibre24"><i class="calibre6">2</i></b>.
+      </p>
+      
+      <p class="noind">Your thread and task management are now reduced to submitting a task to the pool <b class="calibre24"><i class="calibre6">3</i></b> and running pending tasks while waiting <b class="calibre24"><i class="calibre6">4</i></b>. This is much simpler than in <a href="kindle_split_018.html#ch08ex01" class="calibre4">listing 8.1</a>, where you had to explicitly manage the threads and the stack of chunks to sort. When submitting the task to the pool, you
+         use <kbd class="calibre17">std::bind()</kbd> to bind the <kbd class="calibre17">this</kbd> pointer to <kbd class="calibre17">do_sort()</kbd> and to supply the chunk to sort. In this case, you call <kbd class="calibre17">std::move()</kbd> on <kbd class="calibre17">new_lower_chunk</kbd> as you pass it in, to ensure that the data is moved rather than copied.
+      </p>
+      
+      <p class="noind">Although this has now addressed the crucial deadlock-causing problem with tasks that wait for other tasks, this thread pool
+         is still far from ideal. For starters, every call to <kbd class="calibre17">submit()</kbd> and every call to <kbd class="calibre17">run_pending_task()</kbd> accesses the same queue. You saw in <a href="kindle_split_018.html#ch08" class="calibre4">chapter 8</a> how having a single set of data modified by multiple threads can have a detrimental effect on performance, so you need to
+         address this problem.
+      </p>
+      
+      
+      
+      
+      <h4 id="ch09lev2sec4" class="calibre23">9.1.4. <a id="ch09lev2sec4__title" class="calibre4"></a>Avoiding contention on the work queue
+      </h4>
+      
+      <p class="noind"><a id="iddle1209" class="calibre4"></a><a id="iddle1827" class="calibre4"></a><a id="iddle2417" class="calibre4"></a><a id="iddle2477" class="calibre4"></a><a id="iddle2494" class="calibre4"></a>Every time a thread calls <kbd class="calibre17">submit()</kbd> on a particular instance of the thread pool, it has to push a new item onto the single shared work queue. Likewise, the worker
+         threads are continually popping items off the queue in order to run the tasks. This means that as the number of processors
+         increases, there’s increasing contention on the queue. This can be a real performance drain; even if you use a lock-free queue
+         so there’s no explicit waiting, cache ping-pong can be a substantial time sink.
+      </p>
+      
+      <p class="noind">One way to avoid cache ping-pong is to use a separate work queue per thread. Each thread then posts new items to its own queue
+         and takes work from the global work queue only if there’s no work on its own individual queue. The following listing shows
+         an implementation that makes use of a <kbd class="calibre17">thread_local</kbd> variable to ensure that each thread has its own work queue, as well as the global one.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch09ex06">Listing 9.6. <a id="ch09ex06__title" class="calibre4"></a>A thread pool with thread-local work queues
+      </h5>
+      <pre id="PLd0e34525" class="calibre5">class thread_pool
+{
+    threadsafe_queue&lt;function_wrapper&gt; pool_work_queue;
+    typedef std::queue&lt;function_wrapper&gt; local_queue_type;   <b class="calibre24"><i class="calibre6">1</i></b>
+    static thread_local std::unique_ptr&lt;local_queue_type&gt;
+        local_work_queue;                                    <b class="calibre24"><i class="calibre6">2</i></b>
+    void worker_thread()
+    {
+        local_work_queue.reset(new local_queue_type);        <b class="calibre24"><i class="calibre6">3</i></b>
+
+        while(!done)
+        {
+            run_pending_task();
+        }
+    }
+public:
+    template&lt;typename FunctionType&gt;
+    std::future&lt;typename std::result_of&lt;FunctionType()&gt;::type&gt;
+        submit(FunctionType f)
+    {
+        typedef typename std::result_of&lt;FunctionType()&gt;::type result_type;
+        std::packaged_task&lt;result_type()&gt; task(f);
+        std::future&lt;result_type&gt; res(task.get_future());
+        if(local_work_queue)                                 <b class="calibre24"><i class="calibre6">4</i></b>
+        {
+            local_work_queue-&gt;push(std::move(task));
+        }
+        else
+        {
+            pool_work_queue.push(std::move(task));           <b class="calibre24"><i class="calibre6">5</i></b>
+        }
+        return res;
+    }
+    void run_pending_task()
+    {
+        function_wrapper task;
+        if(local_work_queue &amp;&amp; !local_work_queue-&gt;empty())  <b class="calibre24"><i class="calibre6">6</i></b>
+        {
+            task=std::move(local_work_queue-&gt;front());
+            local_work_queue-&gt;pop();
+            task();
+        }
+        else if(pool_work_queue.try_pop(task))              <b class="calibre24"><i class="calibre6">7</i></b>
+        {
+            task();
+        }
+        else
+        {
+            std::this_thread::yield();
+        }
+    }
+    // rest as before
+};</pre>
+      
+      <p class="noind"><a id="iddle1872" class="calibre4"></a><a id="iddle2481" class="calibre4"></a><a id="iddle2666" class="calibre4"></a><a id="iddle2670" class="calibre4"></a>You’ve used a <kbd class="calibre17">std::unique_ptr&lt;&gt;</kbd> to hold the thread-local work queue <b class="calibre24"><i class="calibre6">2</i></b> because you don’t want other threads that aren’t part of your thread pool to have one; this is initialized in the <kbd class="calibre17">worker_thread()</kbd> function before the processing loop <b class="calibre24"><i class="calibre6">3</i></b>. The destructor of <kbd class="calibre17">std::unique_ptr&lt;&gt;</kbd> will ensure that the work queue is destroyed when the thread exits.
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">submit()</kbd> then checks to see if the current thread has a work queue <b class="calibre24"><i class="calibre6">4</i></b>. If it does, it’s a pool thread, and you can put the task on the local queue; otherwise, you need to put the task on the
+         pool queue as before <b class="calibre24"><i class="calibre6">5</i></b>.
+      </p>
+      
+      <p class="noind">There’s a similar check in <kbd class="calibre17">run_pending_task()</kbd> <b class="calibre24"><i class="calibre6">6</i></b>, except this time you also need to check to see if there are any items on the local queue. If there are, you can take the
+         front one and process it; notice that the local queue can be a plain <kbd class="calibre17">std::queue&lt;</kbd> <b class="calibre24"><i class="calibre6">1</i></b> because it’s only ever accessed by the one thread. If there are no tasks on the local queue, you try the pool queue as before
+         <b class="calibre24"><i class="calibre6">7</i></b>.
+      </p>
+      
+      <p class="noind">This works fine for reducing contention, but when the distribution of work is uneven, it can easily result in one thread having
+         a lot of work in its queue while the others have no work do to. For example, with the Quicksort example, only the topmost
+         chunk would make it to the pool queue, because the remaining chunks would end up on the local queue of the worker thread that
+         processed that one. This defeats the purpose of using a thread pool.
+      </p>
+      
+      <p class="noind">Thankfully, there is a solution to this: allow the threads to <i class="calibre6">steal</i> work from each other’s queues if there’s no work in their queue and no work in the global queue.
+      </p>
+      
+      
+      
+      <h4 id="ch09lev2sec5" class="calibre23">9.1.5. <a id="ch09lev2sec5__title" class="calibre4"></a>Work stealing
+      </h4>
+      
+      <p class="noind">In order to allow a thread with no work to do to take work from another thread with a full queue, the queue must be accessible
+         to the thread doing the stealing from <kbd class="calibre17">run_pending_tasks()</kbd>. This requires that each thread register its queue with the thread pool or be given one by the thread pool. Also, you must
+         ensure that the data in the work queue is suitably synchronized and protected so that your invariants are protected.
+      </p>
+      
+      <p class="noind">It’s possible to write a lock-free queue that allows the owner thread to push and pop at one end while other threads can steal
+         entries from the other, but the implementation of this queue is beyond the scope of this book. In order to demonstrate the
+         idea, we’ll stick to using a mutex to protect the queue’s data. We hope work stealing is a rare event, so there should be
+         little contention on the mutex, and this simple queue should therefore have minimal overhead. A simple lock-based implementation
+         is shown here.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch09ex07">Listing 9.7. <a id="ch09ex07__title" class="calibre4"></a>Lock-based queue for work stealing
+      </h5>
+      <pre id="PLd0e34668" class="calibre5">class work_stealing_queue
+{
+private:
+    typedef function_wrapper data_type;
+    std::deque&lt;data_type&gt; the_queue;                   <b class="calibre24"><i class="calibre6">1</i></b>
+    mutable std::mutex the_mutex;
+public:
+    work_stealing_queue()
+    {}
+    work_stealing_queue(const work_stealing_queue&amp; other)=delete;
+    work_stealing_queue&amp; operator=(
+        const work_stealing_queue&amp; other)=delete;
+    void push(data_type data)                          <b class="calibre24"><i class="calibre6">2</i></b>
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(the_mutex);
+        the_queue.push_front(std::move(data));
+    }
+    bool empty() const
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(the_mutex);
+        return the_queue.empty();
+    }
+    bool try_pop(data_type&amp; res)                       <b class="calibre24"><i class="calibre6">3</i></b>
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(the_mutex);
+        if(the_queue.empty())
+        {
+            return false;
+        }
+        res=std::move(the_queue.front());
+        the_queue.pop_front();
+        return true;
+    }
+    bool try_steal(data_type&amp; res)                     <b class="calibre24"><i class="calibre6">4</i></b>
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(the_mutex);
+        if(the_queue.empty())
+        {
+            return false;
+        }
+        res=std::move(the_queue.back());
+        the_queue.pop_back();
+        return true;
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle2584" class="calibre4"></a><a id="iddle2587" class="calibre4"></a>This queue is a simple wrapper around a <kbd class="calibre17">std::deque&lt;function_wrapper&gt;</kbd> <b class="calibre24"><i class="calibre6">1</i></b> that protects all accesses with a mutex lock. Both <kbd class="calibre17">push()</kbd> <b class="calibre24"><i class="calibre6">2</i></b> and <kbd class="calibre17">try_pop()</kbd> <b class="calibre24"><i class="calibre6">3</i></b> work on the front of the queue, while <kbd class="calibre17">try_steal()</kbd> <b class="calibre24"><i class="calibre6">4</i></b> works on the back.
+      </p>
+      
+      <p class="noind">This means that this “queue” is a last-in-first-out stack for its own thread; the task most recently pushed on is the first
+         one off again. This can help improve performance from a cache perspective, because the data related to that task is more likely
+         to still be in the cache than the data related to a task pushed on the queue previously. Also, it maps nicely to algorithms
+         such as Quicksort. In the previous implementation, each call to <kbd class="calibre17">do_sort()</kbd> pushes one item on the stack and then waits for it. By processing the most recent item first, you ensure that the chunk needed
+         for the current call to complete is processed before the chunks needed for the other branches, reducing the number of active
+         tasks and the total stack usage. <kbd class="calibre17">try_steal()</kbd> takes items from the opposite end of the queue to <kbd class="calibre17">try_pop()</kbd> in order to minimize contention; you could potentially use the techniques discussed in <a href="kindle_split_016.html#ch06" class="calibre4">chapters 6</a> and <a href="kindle_split_017.html#ch07" class="calibre4">7</a> to enable concurrent calls to <kbd class="calibre17">try_pop()</kbd> and <kbd class="calibre17">try_steal()</kbd>.
+      </p>
+      
+      <p class="noind">OK, so you have your nice sparkly work queue that permits stealing; how do you use it in your thread pool? Here’s one potential
+         implementation.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch09ex08">Listing 9.8. <a id="ch09ex08__title" class="calibre4"></a>A thread pool that uses work stealing
+      </h5>
+      <pre id="PLd0e34765" class="calibre5">class thread_pool
+{
+    typedef function_wrapper task_type;
+    std::atomic_bool done;
+    threadsafe_queue&lt;task_type&gt; pool_work_queue;
+    std::vector&lt;std::unique_ptr&lt;work_stealing_queue&gt; &gt; queues;          <b class="calibre24"><i class="calibre6">1</i></b>
+    std::vector&lt;std::thread&gt; threads;
+    join_threads joiner;
+    static thread_local work_stealing_queue* local_work_queue;          <b class="calibre24"><i class="calibre6">2</i></b>
+    static thread_local unsigned my_index;
+    void worker_thread(unsigned my_index_)
+    {
+        my_index=my_index_;
+        local_work_queue=queues[my_index].get();                        <b class="calibre24"><i class="calibre6">3</i></b>
+        while(!done)
+        {
+            run_pending_task();
+        }
+    }
+    bool pop_task_from_local_queue(task_type&amp; task)
+    {
+        return local_work_queue &amp;&amp; local_work_queue-&gt;try_pop(task);
+    }
+    bool pop_task_from_pool_queue(task_type&amp; task)
+    {
+        return pool_work_queue.try_pop(task);
+    }
+    bool pop_task_from_other_thread_queue(task_type&amp; task)              <b class="calibre24"><i class="calibre6">4</i></b>
+    {
+        for(unsigned i=0;i&lt;queues.size();++i)
+        {
+            unsigned const index=(my_index+i+1)%queues.size();          <b class="calibre24"><i class="calibre6">5</i></b>
+            if(queues[index]-&gt;try_steal(task))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+public:
+    thread_pool():
+        done(false),joiner(threads)
+    {
+        unsigned const thread_count=std::thread::hardware_concurrency();
+        try
+        {
+            for(unsigned i=0;i&lt;thread_count;++i)
+            {
+                queues.push_back(std::unique_ptr&lt;work_stealing_queue&gt;(  <b class="calibre24"><i class="calibre6">6</i></b>
+                                     new work_stealing_queue));
+            }
+            for(unsigned i=0;i&lt;thread_count;++i)
+            {
+                threads.push_back(
+                    std::thread(&amp;thread_pool::worker_thread,this,i));
+            }
+        }
+        catch(...)
+        {
+            done=true;
+            throw;
+        }
+    }
+    ~thread_pool()
+    {
+        done=true;
+    }
+    template&lt;typename FunctionType&gt;
+    std::future&lt;typename std::result_of&lt;FunctionType()&gt;::type&gt; submit(
+        FunctionType f)
+    {
+        typedef typename std::result_of&lt;FunctionType()&gt;::type result_type;
+        std::packaged_task&lt;result_type()&gt; task(f);
+        std::future&lt;result_type&gt; res(task.get_future());
+        if(local_work_queue)
+        {
+            local_work_queue-&gt;push(std::move(task));
+        }
+        else
+        {
+            pool_work_queue.push(std::move(task));
+        }
+        return res;
+    }
+    void run_pending_task()
+    {
+        task_type task;
+        if(pop_task_from_local_queue(task) ||                           <b class="calibre24"><i class="calibre6">7</i></b>
+           pop_task_from_pool_queue(task) ||                            <b class="calibre24"><i class="calibre6">8</i></b>
+           pop_task_from_other_thread_queue(task))                      <b class="calibre24"><i class="calibre6">9</i></b>
+        {
+            task();
+        }
+        else
+        {
+            std::this_thread::yield();
+        }
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1482" class="calibre4"></a><a id="iddle1789" class="calibre4"></a><a id="iddle2508" class="calibre4"></a>This code is similar to <a href="#ch09ex06" class="calibre4">listing 9.6</a>. The first difference is that each thread has a <kbd class="calibre17">work_stealing_queue</kbd> rather than a plain <kbd class="calibre17">std::queue&lt;&gt;</kbd> <b class="calibre24"><i class="calibre6">2</i></b>. When each thread is created, rather than allocating its own work queue, the pool constructor allocates one <b class="calibre24"><i class="calibre6">6</i></b>, which is then stored in the list of work queues for this pool <b class="calibre24"><i class="calibre6">1</i></b>. The index of the queue in the list is then passed in to the thread function and used to retrieve the pointer to the queue
+         <b class="calibre24"><i class="calibre6">3</i></b>. This means that the thread pool can access the queue when trying to steal a task for a thread that has no work to do. <kbd class="calibre17">run_pending_task()</kbd> will now try to take a task from its thread’s own queue <b class="calibre24"><i class="calibre6">7</i></b>, take a task from the pool queue <b class="calibre24"><i class="calibre6">8</i></b>, or take a task from the queue of another thread <b class="calibre24"><i class="calibre6">9</i></b>.
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">pop_task_from_other_thread_queue()</kbd> <b class="calibre24"><i class="calibre6">4</i></b> iterates through the queues belonging to all the threads in the pool, trying to steal a task from each in turn. In order
+         to avoid every thread trying to steal from the first thread in the list, each thread starts at the next thread in the list
+         by offsetting the index of the queue to check by its own index <b class="calibre24"><i class="calibre6">5</i></b>.
+      </p>
+      
+      <p class="noind">Now you have a working thread pool that’s good for many potential uses. There are still a myriad of ways to improve it for
+         any particular usage, but that’s left as an exercise for the reader. One aspect that hasn’t been explored is the idea of dynamically
+         resizing the thread pool to ensure that there’s optimal CPU usage even when threads are blocked waiting for something such
+         as I/O or a mutex lock.
+      </p>
+      
+      <p class="noind">Next on the list of “advanced” thread-management techniques is interrupting threads.</p>
+      
+      
+      
+      
+      <h3 id="ch09lev1sec2" class="chapter"><a id="ch09lev1sec2__title" class="calibre3"></a>9.2. Interrupting threads
+      </h3>
+      
+      <p class="noind">In many situations it’s desirable to signal to a long-running thread that it’s time to stop. This might be because it’s a
+         worker thread for a thread pool and the pool is now being destroyed, or because the work being done by the thread has been
+         explicitly canceled by the user, or a myriad of other reasons. Whatever the reason, the idea is the same: you need to signal
+         from one thread that another should stop before it <a id="iddle1475" class="calibre4"></a><a id="iddle1486" class="calibre4"></a><a id="iddle1488" class="calibre4"></a><a id="iddle2491" class="calibre4"></a><a id="iddle2495" class="calibre4"></a><a id="iddle2517" class="calibre4"></a>reaches the natural end of its processing, and you need to do this in a way that allows that thread to terminate nicely rather
+         than abruptly pulling the rug out from under it.
+      </p>
+      
+      <p class="noind">You could potentially design a separate mechanism for every case where you need to do this, but that would be overkill. Not
+         only does a common mechanism make it easier to write the code on subsequent occasions, but it can allow you to write code
+         that can be interrupted, without having to worry about where that code is being used. The C++11 Standard doesn’t provide this
+         mechanism (though there is an active proposal for adding interrupt support to a future C++ standard<sup class="calibre18">[<a href="#ch09fn01" class="calibre4">1</a>]</sup>), but it’s relatively straightforward to build one. Let’s look at how you can do that, starting from the point of view of
+         the interface for launching and interrupting a thread rather than that of the thread being interrupted.
+      </p>
+      <blockquote class="smaller">
+         <p class="calibre19"><sup class="calibre20"><a id="ch09fn01" class="calibre4">1</a></sup> 
+            </p><div class="calibre15">P0660: A Cooperatively Interruptible Joining Thread, Rev 3, Nicolai Josuttis, Herb Sutter, Anthony Williams <a href="http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p0660r3.pdf" class="calibre4">http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p0660r3.pdf</a>.
+            </div>
+         <p class="calibre19"></p>
+      </blockquote>
+      
+      
+      <h4 id="ch09lev2sec6" class="calibre23">9.2.1. <a id="ch09lev2sec6__title" class="calibre4"></a>Launching and interrupting another thread
+      </h4>
+      
+      <p class="noind">To start with, let’s look at the external interface. What do you need from an interruptible thread? At the basic level, all
+         you need is the same interface as you have for <kbd class="calibre17">std::thread</kbd>, with an additional <kbd class="calibre17">interrupt()</kbd> function:
+      </p>
+      
+      <pre id="PLd0e34973" class="calibre5">class interruptible_thread
+{
+public:
+    template&lt;typename FunctionType&gt;
+    interruptible_thread(FunctionType f);
+    void join();
+    void detach();
+    bool joinable() const;
+    void interrupt();
+};</pre>
+      
+      <p class="noind">Internally, you can use <kbd class="calibre17">std::thread</kbd> to manage the thread itself and use some custom data structure to handle the interruption. Now, what about from the point
+         of view of the thread itself? At the most basic level you want to be able to say “I can be interrupted here”—you want an <i class="calibre6">interruption point</i>. For this to be usable without having to pass down additional data, it needs to be a simple function that can be called without
+         any parameters: <kbd class="calibre17">interruption_point()</kbd>. This implies that the interruption-specific data structure needs to be accessible through a <kbd class="calibre17">thread_local</kbd> variable that’s set when the thread is started, so that when a thread calls your <kbd class="calibre17">interruption_point()</kbd> function, it checks the data structure for the currently-executing thread. We’ll look at the implementation of <kbd class="calibre17">interruption_point()</kbd> later.
+      </p>
+      
+      <p class="noind">This <kbd class="calibre17">thread_local</kbd> flag is the primary reason you can’t use plain <kbd class="calibre17">std::thread</kbd> to manage the thread; it needs to be allocated in a way that the <kbd class="calibre17">interruptible_thread</kbd> instance can access, as well as the newly started thread. You can do this by wrapping <a id="iddle2475" class="calibre4"></a>the supplied function before you pass it to <kbd class="calibre17">std::thread</kbd> to launch the thread in the constructor, as shown in the next listing.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch09ex09">Listing 9.9. <a id="ch09ex09__title" class="calibre4"></a>Basic implementation of <kbd class="calibre17">interruptible_thread</kbd></h5>
+      <pre id="PLd0e35027" class="calibre5">class interrupt_flag
+{
+public:
+    void set();
+    bool is_set() const;
+};
+thread_local interrupt_flag this_thread_interrupt_flag;    <b class="calibre24"><i class="calibre6">1</i></b>
+class interruptible_thread
+{
+    std::thread internal_thread;
+    interrupt_flag* flag;
+public:
+    template&lt;typename FunctionType&gt;
+    interruptible_thread(FunctionType f)
+    {
+        std::promise&lt;interrupt_flag*&gt; p;                   <b class="calibre24"><i class="calibre6">2</i></b>
+        internal_thread=std::thread([f,&amp;p]{                <b class="calibre24"><i class="calibre6">3</i></b>
+                p.set_value(&amp;this_thread_interrupt_flag);
+                f();                                       <b class="calibre24"><i class="calibre6">4</i></b>
+            });
+        flag=p.get_future().get();                         <b class="calibre24"><i class="calibre6">5</i></b>
+    }
+    void interrupt()
+    {
+        if(flag)
+        {
+            flag-&gt;set();                                   <b class="calibre24"><i class="calibre6">6</i></b>
+        }
+    }
+};</pre>
+      
+      <p class="noind">The supplied function <kbd class="calibre17">f</kbd> is wrapped in a lambda function <b class="calibre24"><i class="calibre6">3</i></b>, which holds a copy of <kbd class="calibre17">f</kbd> and a reference to the local promise, <kbd class="calibre17">p</kbd> <b class="calibre24"><i class="calibre6">2</i></b>. The lambda sets the value of the promise to the address of the <kbd class="calibre17">this_thread_interrupt_flag</kbd> (which is declared <kbd class="calibre17">thread_local</kbd> <b class="calibre24"><i class="calibre6">1</i></b>) for the new thread before invoking the copy of the supplied function <b class="calibre24"><i class="calibre6">4</i></b>. The calling thread then waits for the future associated with the promise to become ready and stores the result in the <kbd class="calibre17">flag</kbd> member variable <b class="calibre24"><i class="calibre6">5</i></b>. Note that even though the lambda is running on the new thread and has a dangling reference to the local variable, <kbd class="calibre17">p</kbd>, this is OK because the <kbd class="calibre17">interruptible_thread</kbd> constructor waits until <kbd class="calibre17">p</kbd> is no longer referenced by the new thread before returning. Note that this implementation doesn’t take account of handling
+         joining with the thread, or detaching it. You need to ensure that the <kbd class="calibre17">flag</kbd> variable is cleared when the thread exits, or is detached, to avoid a dangling pointer.
+      </p>
+      
+      <p class="noind">The <kbd class="calibre17">interrupt()</kbd> function is then relatively straightforward: if you have a valid pointer to an interrupt flag, you have a thread to interrupt,
+         so you can set the flag <b class="calibre24"><i class="calibre6">6</i></b>. <a id="iddle1189" class="calibre4"></a><a id="iddle1477" class="calibre4"></a><a id="iddle1481" class="calibre4"></a><a id="iddle1483" class="calibre4"></a><a id="iddle1484" class="calibre4"></a><a id="iddle1489" class="calibre4"></a><a id="iddle2509" class="calibre4"></a><a id="iddle2512" class="calibre4"></a><a id="iddle2513" class="calibre4"></a><a id="iddle2652" class="calibre4"></a>It’s then up to the interrupted thread what it does with the interruption. Let’s explore that next.
+      </p>
+      
+      
+      
+      <h4 id="ch09lev2sec7" class="calibre23">9.2.2. <a id="ch09lev2sec7__title" class="calibre4"></a>Detecting that a thread has been interrupted
+      </h4>
+      
+      <p class="noind">You can now set the interruption flag, but that doesn’t do you any good if the thread doesn’t check whether it’s being interrupted.
+         In the simplest case you can do this with an <kbd class="calibre17">interruption_point()</kbd> function; you can call this function at a point where it’s safe to be interrupted, and it throws a <kbd class="calibre17">thread_interrupted</kbd> exception if the flag is set:
+      </p>
+      
+      <pre id="PLd0e35220" class="calibre5">void interruption_point()
+{
+    if(this_thread_interrupt_flag.is_set())
+    {
+        throw thread_interrupted();
+    }
+}</pre>
+      
+      <p class="noind">You can use this function by calling it at convenient points within your code:</p>
+      
+      <pre id="PLd0e35229" class="calibre5">void foo()
+{
+    while(!done)
+    {
+        interruption_point();
+        process_next_item();
+    }
+}</pre>
+      
+      <p class="noind">Although this works, it’s not ideal. Some of the best places for interrupting a thread are where it’s blocked waiting for
+         something, which means that the thread isn’t running in order to call <kbd class="calibre17">interruption_point()</kbd>! What you need here is a means for waiting for something in an interruptible fashion.
+      </p>
+      
+      
+      
+      <h4 id="ch09lev2sec8" class="calibre23">9.2.3. <a id="ch09lev2sec8__title" class="calibre4"></a>Interrupting a condition variable wait
+      </h4>
+      
+      <p class="noind">OK, so you can detect interruptions at carefully chosen places in your code, with explicit calls to <kbd class="calibre17">interruption_point()</kbd>, but that doesn’t help when you want to do a blocking wait, such as waiting for a condition variable to be notified. You
+         need a new function—<kbd class="calibre17">interruptible_wait()</kbd>—which you can then overload for the various things you might want to wait for, and you can work out how to interrupt the
+         waiting. I’ve already mentioned that one thing you might be waiting for is a condition variable, so let’s start there: what
+         do you need to do in order to be able to interrupt a wait on a condition variable? The simplest thing that would work is to
+         notify the condition variable once you’ve set the interrupt flag, and put an interruption point immediately after the wait.
+         But for this to work, you’d have to notify all threads waiting on the condition variable in order to ensure that your thread
+         of interest wakes up. Waiters have to handle spurious wake-ups anyway, so other threads would handle this the same as a spurious
+         wake-up—they wouldn’t be able to tell the difference. The <kbd class="calibre17">interrupt_flag</kbd> <a id="iddle1476" class="calibre4"></a><a id="iddle1895" class="calibre4"></a>structure would need to be able to store a pointer to a condition variable so that it can be notified in a call to <kbd class="calibre17">set()</kbd>. One possible implementation of <kbd class="calibre17">interruptible_wait()</kbd> for condition variables might look like the following listing.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch09ex10">Listing 9.10. <a id="ch09ex10__title" class="calibre4"></a>A broken version of <kbd class="calibre17">interruptible_wait</kbd> for <kbd class="calibre17">std::condition_variable</kbd></h5>
+      <pre id="PLd0e35285" class="calibre5">void interruptible_wait(std::condition_variable&amp; cv,
+                        std::unique_lock&lt;std::mutex&gt;&amp; lk)
+{
+    interruption_point();
+    this_thread_interrupt_flag.set_condition_variable(cv);   <b class="calibre24"><i class="calibre6">1</i></b>
+    cv.wait(lk);                                             <b class="calibre24"><i class="calibre6">2</i></b>
+    this_thread_interrupt_flag.clear_condition_variable();   <b class="calibre24"><i class="calibre6">3</i></b>
+    interruption_point();
+}</pre>
+      
+      <p class="noind">Assuming the presence of some functions for setting and clearing an association of a condition variable with an interrupt
+         flag, this code is nice and simple. It checks for interruption, associates the condition variable with <kbd class="calibre17">interrupt_flag</kbd> for the current thread <b class="calibre24"><i class="calibre6">1</i></b>, waits on the condition variable <b class="calibre24"><i class="calibre6">2</i></b>, clears the association with the condition variable <b class="calibre24"><i class="calibre6">3</i></b>, and checks for interruption again. If the thread is interrupted during the wait on the condition variable, the interrupting
+         thread will broadcast the condition variable and wake you from the wait, so you can check for interruption. Unfortunately,
+         this code is <i class="calibre6">broken</i>: there are two problems with it. The first problem is relatively obvious if you have your exception safety hat on: <kbd class="calibre17">std::condition_variable::wait()</kbd> can throw an exception, so you might exit the function without removing the association of the interrupt flag with the condition
+         variable. This is easily fixed with a structure that removes the association in its destructor.
+      </p>
+      
+      <p class="noind">The second, less obvious problem is that there’s a race condition. If the thread is interrupted after the initial call to
+         <kbd class="calibre17">interruption_point()</kbd>, but before the call to <kbd class="calibre17">wait()</kbd>, then it doesn’t matter whether the condition variable has been associated with the interrupt flag, because <i class="calibre6">the thread isn’t waiting and so can’t be woken by a notify on the condition variable</i>. You need to ensure that the thread can’t be notified between the last check for interruption and the call to <kbd class="calibre17">wait()</kbd>. Without delving into the internals of <kbd class="calibre17">std::condition_variable</kbd>, you have only one way of doing that: use the mutex held by <kbd class="calibre17">lk</kbd> to protect this too, which requires passing it in on the call to <kbd class="calibre17">set_condition_variable()</kbd>. Unfortunately, this creates its own problems: you’d be passing a reference to a mutex whose lifetime you don’t know to another
+         thread (the thread doing the interrupting) for that thread to lock (in the call to <kbd class="calibre17">interrupt()</kbd>), without knowing whether that thread has locked the mutex already when it makes the call. This has the potential for deadlock
+         and the potential to access a mutex after it has already been destroyed, so it’s a nonstarter. It would be rather too restrictive
+         if you couldn’t reliably interrupt a condition variable wait—you can do almost as well without a special <kbd class="calibre17">interruptible_wait()</kbd>—so what other options do you have? One option is to put a timeout on the wait; use <kbd class="calibre17">wait_for()</kbd> rather than <kbd class="calibre17">wait()</kbd> with a small timeout value (such as 1 ms). This puts an upper limit on how long the thread will have to wait before it sees
+         the interruption (subject to the tick granularity of the clock). If you do this, the waiting thread will see more “spurious”
+         wakes resulting from the timeout, but it can’t easily be helped. This implementation is shown in the next listing, along with
+         the corresponding implementation of <kbd class="calibre17">interrupt_flag</kbd>.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch09ex11">Listing 9.11. <a id="ch09ex11__title" class="calibre4"></a>Using a timeout in <kbd class="calibre17">interruptible_wait</kbd> for <kbd class="calibre17">std::condition_variable</kbd></h5>
+      <pre id="PLd0e35381" class="calibre5">class interrupt_flag
+{
+    std::atomic&lt;bool&gt; flag;
+    std::condition_variable* thread_cond;
+    std::mutex set_clear_mutex;
+public:
+    interrupt_flag():
+        thread_cond(0)
+    {}
+    void set()
+    {
+        flag.store(true,std::memory_order_relaxed);
+        std::lock_guard&lt;std::mutex&gt; lk(set_clear_mutex);
+        if(thread_cond)
+        {
+            thread_cond-&gt;notify_all();
+        }
+    }
+    bool is_set() const
+    {
+        return flag.load(std::memory_order_relaxed);
+    }
+    void set_condition_variable(std::condition_variable&amp; cv)
+    {
+        std::lock_guard&lt;std::mutex&gt; lk(set_clear_mutex);
+        thread_cond=&amp;cv;
+    }
+    void clear_condition_variable()
+    {
+        std::lock_guard&lt;std::mutex&gt; lk(set_clear_mutex);
+        thread_cond=0;
+    }
+    struct clear_cv_on_destruct
+    {
+        ~clear_cv_on_destruct()
+        {
+            this_thread_interrupt_flag.clear_condition_variable();
+        }
+    };
+};
+void interruptible_wait(std::condition_variable&amp; cv,
+                        std::unique_lock&lt;std::mutex&gt;&amp; lk)
+{
+    interruption_point();
+    this_thread_interrupt_flag.set_condition_variable(cv);
+    interrupt_flag::clear_cv_on_destruct guard;
+    interruption_point();
+    cv.wait_for(lk,std::chrono::milliseconds(1));
+    interruption_point();
+}</pre>
+      
+      <p class="noind"><a id="iddle1487" class="calibre4"></a><a id="iddle2109" class="calibre4"></a><a id="iddle2515" class="calibre4"></a><a id="iddle2653" class="calibre4"></a>If you have the predicate that’s being waited for, then the 1 ms timeout can be completely hidden inside the predicate loop:
+      </p>
+      
+      <pre id="PLd0e35427" class="calibre5">template&lt;typename Predicate&gt;
+void interruptible_wait(std::condition_variable&amp; cv,
+                        std::unique_lock&lt;std::mutex&gt;&amp; lk,
+                        Predicate pred)
+{
+    interruption_point();
+    this_thread_interrupt_flag.set_condition_variable(cv);
+    interrupt_flag::clear_cv_on_destruct guard;
+    while(!this_thread_interrupt_flag.is_set() &amp;&amp; !pred())
+    {
+        cv.wait_for(lk,std::chrono::milliseconds(1));
+    }
+    interruption_point();
+}</pre>
+      
+      <p class="noind">This will result in the predicate being checked more often than it might otherwise be, but it’s easily used in place of a
+         plain call to <kbd class="calibre17">wait()</kbd>. The variants with timeouts are easily implemented: wait either for the time specified, or 1 ms, whichever is shortest. OK,
+         so <kbd class="calibre17">std::condition_variable</kbd> waits are now taken care of; what about <kbd class="calibre17">std::condition_variable_any</kbd>? Is this the same, or can you do better?
+      </p>
+      
+      
+      
+      <h4 id="ch09lev2sec9" class="calibre23">9.2.4. <a id="ch09lev2sec9__title" class="calibre4"></a>Interrupting a wait on std::condition_variable_any
+      </h4>
+      
+      <p class="noind"><kbd class="calibre17">std::condition_variable_any</kbd> differs from <kbd class="calibre17">std::condition_variable</kbd> in that it works with any lock type rather than just <kbd class="calibre17">std::unique_lock&lt;std::mutex&gt;</kbd>. It turns out that this makes things much easier, and you can do better with <kbd class="calibre17">std::condition_variable_any</kbd> than you could with <kbd class="calibre17">std::condition_variable</kbd>. Because it works with any lock type, you can build your own lock type that locks/unlocks both the internal <kbd class="calibre17">set_clear_mutex</kbd> in your <kbd class="calibre17">interrupt_flag</kbd> and the lock supplied to the wait call, as shown here.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch09ex12">Listing 9.12. <a id="ch09ex12__title" class="calibre4"></a><kbd class="calibre17">interruptible_wait</kbd> for <kbd class="calibre17">std::condition_variable_any</kbd></h5>
+      <pre id="PLd0e35483" class="calibre5">class interrupt_flag
+{
+    std::atomic&lt;bool&gt; flag;
+    std::condition_variable* thread_cond;
+    std::condition_variable_any* thread_cond_any;
+    std::mutex set_clear_mutex;
+public:
+    interrupt_flag():
+        thread_cond(0),thread_cond_any(0)
+    {}
+    void set()
+    {
+        flag.store(true,std::memory_order_relaxed);
+        std::lock_guard&lt;std::mutex&gt; lk(set_clear_mutex);
+        if(thread_cond)
+        {
+            thread_cond-&gt;notify_all();
+        }
+        else if(thread_cond_any)
+        {
+            thread_cond_any-&gt;notify_all();
+        }
+    }
+    template&lt;typename Lockable&gt;
+    void wait(std::condition_variable_any&amp; cv,Lockable&amp; lk)
+    {
+        struct custom_lock
+        {
+            interrupt_flag* self;
+            Lockable&amp; lk;
+            custom_lock(interrupt_flag* self_,
+                        std::condition_variable_any&amp; cond,
+                        Lockable&amp; lk_):
+                self(self_),lk(lk_)
+            {
+                self-&gt;set_clear_mutex.lock();           <b class="calibre24"><i class="calibre6">1</i></b>
+                self-&gt;thread_cond_any=&amp;cond;            <b class="calibre24"><i class="calibre6">2</i></b>
+            }
+            void unlock()                               <b class="calibre24"><i class="calibre6">3</i></b>
+            {
+                lk.unlock();
+                self-&gt;set_clear_mutex.unlock();
+            }
+            void lock()
+            {
+                std::lock(self-&gt;set_clear_mutex,lk);    <b class="calibre24"><i class="calibre6">4</i></b>
+            }
+            ~custom_lock()
+            {
+                self-&gt;thread_cond_any=0;                <b class="calibre24"><i class="calibre6">5</i></b>
+                self-&gt;set_clear_mutex.unlock();
+            }
+        };
+        custom_lock cl(this,cv,lk);
+        interruption_point();
+        cv.wait(cl);
+        interruption_point();
+    }
+    // rest as before
+};
+template&lt;typename Lockable&gt;
+void interruptible_wait(std::condition_variable_any&amp; cv,
+                        Lockable&amp; lk)
+{
+    this_thread_interrupt_flag.wait(cv,lk);
+}</pre>
+      
+      <p class="noind"><a id="iddle1067" class="calibre4"></a><a id="iddle1232" class="calibre4"></a><a id="iddle1478" class="calibre4"></a><a id="iddle1480" class="calibre4"></a><a id="iddle1896" class="calibre4"></a><a id="iddle2486" class="calibre4"></a><a id="iddle2511" class="calibre4"></a>Your custom lock type acquires the lock on the internal <kbd class="calibre17">set_clear_mutex</kbd> when it’s constructed <b class="calibre24"><i class="calibre6">1</i></b>, and then sets the <kbd class="calibre17">thread_cond_any</kbd> pointer to refer to the <kbd class="calibre17">std:: condition_variable_any</kbd> passed in to the constructor <b class="calibre24"><i class="calibre6">2</i></b>. The <kbd class="calibre17">Lockable</kbd> reference is stored for later; this must already be locked. You can now check for an interruption without worrying about
+         races. If the interrupt flag is set at this point, it was set before you acquired the lock on <kbd class="calibre17">set_clear_mutex</kbd>. When the condition variable calls your <kbd class="calibre17">unlock()</kbd> function inside <kbd class="calibre17">wait()</kbd>, you unlock the <kbd class="calibre17">Lockable</kbd> object and the internal <kbd class="calibre17">set_clear_mutex</kbd> <b class="calibre24"><i class="calibre6">3</i></b>. This allows threads that are trying to interrupt you to acquire the lock on <kbd class="calibre17">set_clear_mutex</kbd> and check the <kbd class="calibre17">thread_cond_any</kbd> pointer once you’re inside the <kbd class="calibre17">wait()</kbd> call but not before. This is exactly what you were after (but couldn’t manage) with <kbd class="calibre17">std::condition_variable</kbd>. Once <kbd class="calibre17">wait()</kbd> has finished waiting (either because it was notified or because of a spurious wake), it will call your <kbd class="calibre17">lock()</kbd> function, which again acquires the lock on the internal <kbd class="calibre17">set_clear_mutex</kbd> and the lock on the <kbd class="calibre17">Lockable</kbd> object <b class="calibre24"><i class="calibre6">4</i></b>. You can now check again for interruptions that happened during the <kbd class="calibre17">wait()</kbd> call before clearing the <kbd class="calibre17">thread_cond_any</kbd> pointer in your <kbd class="calibre17">custom_lock</kbd> destructor <b class="calibre24"><i class="calibre6">5</i></b>, where you also unlock the <kbd class="calibre17">set_clear_mutex</kbd>.
+      </p>
+      
+      
+      
+      <h4 id="ch09lev2sec10" class="calibre23">9.2.5. <a id="ch09lev2sec10__title" class="calibre4"></a>Interrupting other blocking calls
+      </h4>
+      
+      <p class="noind">That rounds up interrupting condition variable waits, but what about other blocking waits: mutex locks, waiting for futures,
+         and the like? In general you have to go for the timeout option you used for <kbd class="calibre17">std::condition_variable</kbd> because there’s no way to interrupt the wait short of fulfilling the condition being waited for, without access to the internals
+         of the mutex or future. But with those other things, you do know what you’re waiting for, so you can loop within the <kbd class="calibre17">interruptible_wait()</kbd> function. As an example, here’s an overload of <kbd class="calibre17">interruptible_wait()</kbd> for <kbd class="calibre17">std::future&lt;&gt;</kbd>:
+      </p>
+      
+      <pre id="PLd0e35664" class="calibre5">template&lt;typename T&gt;
+void interruptible_wait(std::future&lt;T&gt;&amp; uf)
+{
+   while(!this_thread_interrupt_flag.is_set())
+   {
+       if(uf.wait_for(lk,std::chrono::milliseconds(1))==
+           std::future_status::ready)
+           break;
+   }
+   interruption_point();
+}</pre>
+      
+      <p class="noind">This waits until either the interrupt flag is set or the future is ready but does a blocking wait on the future for 1 ms at
+         a time. This means that on average it will be around 0.5 ms before an interrupt request is acknowledged, assuming a high-resolution
+         clock. The <kbd class="calibre17">wait_for</kbd> will typically wait at least a whole clock tick, so if your clock ticks every <a id="iddle1485" class="calibre4"></a><a id="iddle1490" class="calibre4"></a><a id="iddle2514" class="calibre4"></a>15 ms, you’ll end up waiting around 15 ms rather than 1 ms. This may or may not be acceptable, depending on the circumstances.
+         You can always reduce the timeout if necessary (and if the clock supports it). The downside of reducing the timeout is that
+         the thread will wake more often to check the flag, and this will increase the task-switching overhead.
+      </p>
+      
+      <p class="noind">OK, we’ve looked at how you might detect interruption with the <kbd class="calibre17">interruption_point()</kbd> and <kbd class="calibre17">interruptible_wait()</kbd> functions, but how do you handle that?
+      </p>
+      
+      
+      
+      <h4 id="ch09lev2sec11" class="calibre23">9.2.6. <a id="ch09lev2sec11__title" class="calibre4"></a>Handling interruptions
+      </h4>
+      
+      <p class="noind">From the point of view of the thread being interrupted, an interruption is a <kbd class="calibre17">thread_interrupted</kbd> exception, which can therefore be handled like any other exception. In particular, you can catch it in a standard <kbd class="calibre17">catch</kbd> block:
+      </p>
+      
+      <pre id="PLd0e35729" class="calibre5">try
+{
+    do_something();
+}
+catch(thread_interrupted&amp;)
+{
+    handle_interruption();
+}</pre>
+      
+      <p class="noind">This means that you could catch the interruption, handle it in some way, and then carry on regardless. If you do this, and
+         another thread calls <kbd class="calibre17">interrupt()</kbd> again, your thread will be interrupted again the next time it calls an interruption point. You might want to do this if your
+         thread is performing a series of independent tasks; interrupting one task will cause that task to be abandoned, and the thread
+         can then move on to performing the next task in the list.
+      </p>
+      
+      <p class="noind">Because <kbd class="calibre17">thread_interrupted</kbd> is an exception, all the usual exception-safety precautions must also be taken when calling code that can be interrupted,
+         in order to ensure that resources aren’t leaked, and your data structures are left in a coherent state. Often, it will be
+         desirable to let the interruption terminate the thread, so you can let the exception propagate up. But if you let exceptions
+         propagate out of the thread function passed to the <kbd class="calibre17">std::thread</kbd> constructor, <kbd class="calibre17">std::terminate()</kbd> will be called, and the whole program will be terminated. In order to avoid having to remember to put a <kbd class="calibre17">catch (thread_interrupted)</kbd> handler in every function you pass to <kbd class="calibre17">interruptible_thread</kbd>, you can instead put that <kbd class="calibre17">catch</kbd> block inside the wrapper you use for initializing the <kbd class="calibre17">interrupt_flag</kbd>. This makes it safe to allow the interruption exception to propagate unhandled, because it will then terminate that individual
+         thread. The initialization of the thread in the <kbd class="calibre17">interruptible_thread</kbd> constructor now looks like this:
+      </p>
+      
+      <pre id="PLd0e35768" class="calibre5">internal_thread=std::thread([f,&amp;p]{
+        p.set_value(&amp;this_thread_interrupt_flag);
+        <b class="calibre24">try</b>
+        <b class="calibre24">{</b>
+            f();
+        <b class="calibre24">}</b>
+        <b class="calibre24">catch(thread_interrupted const&amp;)</b>
+        <b class="calibre24">{}</b>
+    });</pre>
+      
+      <p class="noind"><a id="iddle1061" class="calibre4"></a><a id="iddle1353" class="calibre4"></a><a id="iddle1479" class="calibre4"></a><a id="iddle2447" class="calibre4"></a><a id="iddle2510" class="calibre4"></a>Let’s now look at a concrete example where interruption is useful.
+      </p>
+      
+      
+      
+      <h4 id="ch09lev2sec12" class="calibre23">9.2.7. <a id="ch09lev2sec12__title" class="calibre4"></a>Interrupting background tasks on application exit
+      </h4>
+      
+      <p class="noind">Consider for a moment a desktop search application. As well as interacting with the user, the application needs to monitor
+         the state of the filesystem, identifying any changes and updating its index. This processing is typically left to a background
+         thread in order to avoid affecting the responsiveness of the GUI. This background thread needs to run for the entire lifetime
+         of the application; it will be started as part of the application initialization and left to run until the application is
+         shut down. For such an application this is typically only when the machine itself is being shut down, because the application
+         needs to run the whole time in order to maintain an up-to-date index. In any case, when the application is being shut down,
+         you need to close down the background threads in an orderly manner; one way to do this is by interrupting them.
+      </p>
+      
+      <p class="noind">The following listing shows a sample implementation of the thread-management parts of this system.</p>
+      
+      
+      
+      <h5 class="notetitle" id="ch09ex13">Listing 9.13. <a id="ch09ex13__title" class="calibre4"></a>Monitoring the filesystem in the background
+      </h5>
+      <pre id="PLd0e35854" class="calibre5">std::mutex config_mutex;
+std::vector&lt;interruptible_thread&gt; background_threads;
+void background_thread(int disk_id)
+{
+    while(true)
+    {
+        interruption_point();                        <b class="calibre24"><i class="calibre6">1</i></b>
+        fs_change fsc=get_fs_changes(disk_id);       <b class="calibre24"><i class="calibre6">2</i></b>
+        if(fsc.has_changes())
+        {
+            update_index(fsc);                       <b class="calibre24"><i class="calibre6">3</i></b>
+        }
+    }
+}
+void start_background_processing()
+{
+    background_threads.push_back(
+        interruptible_thread(background_thread,disk_1));
+    background_threads.push_back(
+        interruptible_thread(background_thread,disk_2));
+}
+int main()
+{
+    start_background_processing();                   <b class="calibre24"><i class="calibre6">4</i></b>
+    process_gui_until_exit();                        <b class="calibre24"><i class="calibre6">5</i></b>
+    std::unique_lock&lt;std::mutex&gt; lk(config_mutex);
+    for(unsigned i=0;i&lt;background_threads.size();++i)
+    {
+        background_threads[i].interrupt();          <b class="calibre24"><i class="calibre6">6</i></b>
+    }
+    for(unsigned i=0;i&lt;background_threads.size();++i)
+    {
+        background_threads[i].join();               <b class="calibre24"><i class="calibre6">7</i></b>
+    }
+}</pre>
+      
+      <p class="noind">At startup, the background threads are launched <b class="calibre24"><i class="calibre6">3</i></b>. The main thread then proceeds with handling the GUI <b class="calibre24"><i class="calibre6">4</i></b>. When the user has requested that the application exit, the background threads are interrupted <b class="calibre24"><i class="calibre6">5</i></b>, and then the main thread waits for each background thread to complete before exiting <b class="calibre24"><i class="calibre6">6</i></b>. The background threads sit in a loop, checking for disk changes <b class="calibre24"><i class="calibre6">7</i></b> and updating the index <b class="calibre24"><i class="calibre6">2</i></b>. Every time around the loop they check for interruption by calling <kbd class="calibre17">interruption_point()</kbd> <b class="calibre24"><i class="calibre6">1</i></b>.
+      </p>
+      
+      <p class="noind">Why do you interrupt all the threads before waiting for any? Why not interrupt each and then wait for it before moving on
+         to the next? The answer is <i class="calibre6">concurrency</i>. Threads will likely not finish immediately when they’re interrupted, because they have to proceed to the next interruption
+         point and then run any destructor calls and exception-handling code necessary before they exit. By joining with each thread
+         immediately, you therefore cause the interrupting thread to wait, even though it still has useful work it could do—interrupt
+         the other threads. Only when you have no more work to do (all the threads have been interrupted) do you wait. This also allows
+         all the threads being interrupted to process their interruptions in parallel and potentially finish sooner.
+      </p>
+      
+      <p class="noind">This interruption mechanism could easily be extended to add further interruptible calls or to disable interruptions across
+         a specific block of code, but this is left as an exercise for the reader.
+      </p>
+      
+      
+      
+      
+      <h3 id="ch09lev1sec3" class="chapter"><a id="ch09lev1sec3__title" class="calibre3"></a>Summary
+      </h3>
+      
+      <p class="noind">In this chapter, we’ve looked at various advanced thread-management techniques: thread pools and interrupting threads. You’ve
+         seen how the use of local work queues and work stealing can reduce the synchronization overhead and potentially improve the
+         throughput of the thread pool and how running other tasks from the queue while waiting for a subtask to complete can eliminate
+         the potential for deadlock.
+      </p>
+      
+      <p class="noind">We’ve also looked at various ways of allowing one thread to interrupt the processing of another, such as the use of specific
+         interruption points and functions that perform what would otherwise be a blocking wait in a way that can be interrupted.
+      </p>
+      
+      
+      
+      
+      <div class="calibre13" id="calibre_pb_30"></div>
+</body></html>

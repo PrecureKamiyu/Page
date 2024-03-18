@@ -1,0 +1,1415 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:mbp="Kindle">
+  <head>
+    <title>C++ Concurrency in Action, Second Edition</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+  <link href="stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+<h2 class="part" id="ch06">Chapter 6. <a id="ch06__title" class="calibre3"></a>Designing lock-based concurrent data structures
+      </h2>
+      
+      <p class="noind"><a id="iddle1522" class="calibre4"></a><i class="calibre6">This chapter covers</i></p>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22">What it means to design data structures for concurrency</li>
+         
+         <li class="calibre22">Guidelines for doing so</li>
+         
+         <li class="calibre22">Example implementations of data structures designed for concurrency</li>
+         
+      </ul>
+      
+      <p class="noind">In the last chapter we looked at the low-level details of atomic operations and the memory model. In this chapter we’ll take
+         a break from the low-level details (although we’ll need them for <a href="kindle_split_017.html#ch07" class="calibre4">chapter 7</a>) and think about data structures.
+      </p>
+      
+      <p class="noind">The choice of data structure to use for a programming problem can be a key part of the overall solution, and parallel programming
+         problems are no exception. If a data structure is to be accessed from multiple threads, either it must be completely immutable
+         so the data never changes and no synchronization is necessary, or the program must be designed to ensure that changes are
+         correctly synchronized between threads. One option is to use a separate mutex and external locking to protect the data, using
+         the techniques we looked at in <a href="kindle_split_013.html#ch03" class="calibre4">chapters 3</a> and <a href="kindle_split_014.html#ch04" class="calibre4">4</a>, and another is to design the data structure itself for concurrent access.
+      </p>
+      
+      <p class="noind"><a id="iddle1160" class="calibre4"></a><a id="iddle1257" class="calibre4"></a><a id="iddle1524" class="calibre4"></a><a id="iddle1672" class="calibre4"></a><a id="iddle1893" class="calibre4"></a><a id="iddle2538" class="calibre4"></a>When designing a data structure for concurrency, you can use the basic building blocks of multithreaded applications from
+         earlier chapters, such as mutexes and condition variables. Indeed, you’ve already seen a couple of examples showing how to
+         combine these building blocks to write data structures that are safe for concurrent access from multiple threads.
+      </p>
+      
+      <p class="noind">In this chapter we’ll start by looking at some general guidelines for designing data structures for concurrency. We’ll then
+         take the basic building blocks of locks and condition variables and revisit the design of those basic data structures before
+         moving on to more complex data structures. In <a href="kindle_split_017.html#ch07" class="calibre4">chapter 7</a> we’ll look at how to go right back to basics and use the atomic operations described in <a href="kindle_split_015.html#ch05" class="calibre4">chapter 5</a> to build data structures without locks.
+      </p>
+      
+      <p class="noind">So, without further ado, let’s look at what’s involved in designing a data structure for concurrency.</p>
+      
+      
+      <h3 id="ch06lev1sec1" class="chapter"><a id="ch06lev1sec1__title" class="calibre3"></a>6.1. What does it mean to design for concurrency?
+      </h3>
+      
+      <p class="noind">At the basic level, designing a data structure for concurrency means that multiple threads can access the data structure concurrently,
+         either performing the same or distinct operations, and each thread will see a self-consistent view of the data structure.
+         No data will be lost or corrupted, all invariants will be upheld, and there’ll be no problematic race conditions. This data
+         structure is said to be <i class="calibre6">thread-safe</i>. In general, a data structure will be safe only for particular types of concurrent access. It may be possible to have multiple
+         threads performing one type of operation on the data structure concurrently, whereas another operation requires exclusive
+         access by a single thread. Alternatively, it may be safe for multiple threads to access a data structure concurrently if they’re
+         performing <i class="calibre6">different</i> actions, whereas multiple threads performing the <i class="calibre6">same</i> action would be problematic.
+      </p>
+      
+      <p class="noind">Truly designing for concurrency means more than that, though: it means providing the <i class="calibre6">opportunity for concurrency</i> to threads accessing the data structure. By its nature, a mutex provides <i class="calibre6">mutual exclusion</i>: only one thread can acquire a lock on the mutex at a time. A mutex protects a data structure by explicitly <i class="calibre6">preventing</i> true concurrent access to the data it protects.
+      </p>
+      
+      <p class="noind">This is called <i class="calibre6">serialization</i>: threads take turns accessing the data protected by the mutex; they must access it serially rather than concurrently. Consequently,
+         you must put careful thought into the design of the data structure to enable true concurrent access. Some data structures
+         have more scope for true concurrency than others, but in all cases the idea is the same: the smaller the protected region,
+         the fewer operations are serialized, and the greater the potential for concurrency.
+      </p>
+      
+      <p class="noind">Before we look at some data structure designs, let’s have a quick look at some simple guidelines for what to consider when
+         designing for concurrency.
+      </p>
+      
+      
+      
+      <h4 id="ch06lev2sec1" class="calibre23">6.1.1. <a id="ch06lev2sec1__title" class="calibre4"></a>Guidelines for designing data structures for concurrency
+      </h4>
+      
+      <p class="noind"><a id="iddle1159" class="calibre4"></a><a id="iddle1253" class="calibre4"></a><a id="iddle2421" class="calibre4"></a>As I mentioned, you have two aspects to consider when designing data structures for concurrent access: ensuring that the accesses
+         are <i class="calibre6">safe</i> and <i class="calibre6">enabling</i> genuine concurrent access. I covered the basics of how to make the data structure thread-safe back in <a href="kindle_split_013.html#ch03" class="calibre4">chapter 3</a>:
+      </p>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22">Ensure that no thread can see a state where the invariants of the data structure have been broken by the actions of another
+            thread.
+         </li>
+         
+         <li class="calibre22">Take care to avoid race conditions inherent in the interface to the data structure by providing functions for complete operations
+            rather than for operation steps.
+         </li>
+         
+         <li class="calibre22">Pay attention to how the data structure behaves in the presence of exceptions to ensure that the invariants are not broken.</li>
+         
+         <li class="calibre22">Minimize the opportunities for deadlock when using the data structure by restricting the scope of locks and avoiding nested
+            locks where possible.
+         </li>
+         
+      </ul>
+      
+      <p class="noind">Before you think about any of these details, it’s also important to think about what constraints you want to put on the users
+         of the data structure; if one thread is accessing the data structure through a particular function, which functions are safe
+         to call from other threads?
+      </p>
+      
+      <p class="noind">This is a crucial question to consider. Generally, constructors and destructors require exclusive access to the data structure,
+         but it’s up to the user to ensure that they’re not accessed before construction is complete or after destruction has started.
+         If the data structure supports assignment, <kbd class="calibre17">swap()</kbd>, or copy construction, then as the designer of the data structure, you need to decide whether these operations are safe to
+         call concurrently with other operations or whether they require the user to ensure exclusive access even though the majority
+         of functions for manipulating the data structure may be called from multiple threads concurrently without any problems.
+      </p>
+      
+      <p class="noind">The second aspect to consider is that of enabling genuine concurrent access. I can’t offer much in the way of guidelines for
+         this; instead, here’s a list of questions to ask yourself as the data structure designer:
+      </p>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22">Can the scope of locks be restricted to allow some parts of an operation to be performed outside the lock?</li>
+         
+         <li class="calibre22">Can different parts of the data structure be protected with different mutexes?</li>
+         
+         <li class="calibre22">Do all operations require the same level of protection?</li>
+         
+         <li class="calibre22">Can a simple change to the data structure improve the opportunities for concurrency without affecting the operational semantics?</li>
+         
+      </ul>
+      
+      <p class="noind">All these questions are guided by a single idea: how can you minimize the amount of serialization that must occur and enable
+         the greatest amount of true concurrency? It’s not uncommon for data structures to allow concurrent access from multiple threads
+         that merely read the data structure, whereas a thread that can modify the data structure must have exclusive access. This
+         is supported by using constructs like <a id="iddle1521" class="calibre4"></a><a id="iddle1531" class="calibre4"></a><a id="iddle1563" class="calibre4"></a><a id="iddle2312" class="calibre4"></a><a id="iddle2554" class="calibre4"></a><kbd class="calibre17">std::shared_mutex</kbd>. Likewise, as you’ll see shortly, it’s quite common for a data structure to support concurrent access from threads performing
+         different operations while serializing threads that try to perform the same operation.
+      </p>
+      
+      <p class="noind">The simplest thread-safe data structures typically use mutexes and locks to protect the data. Although there are issues with
+         this, as you saw in <a href="kindle_split_013.html#ch03" class="calibre4">chapter 3</a>, it’s relatively easy to ensure that only one thread is accessing the data structure at a time. To ease you into the design
+         of thread-safe data structures, we’ll stick to looking at such lock-based data structures in this chapter and leave the design
+         of concurrent data structures without locks for <a href="kindle_split_017.html#ch07" class="calibre4">chapter 7</a>.
+      </p>
+      
+      
+      
+      
+      <h3 id="ch06lev1sec2" class="chapter"><a id="ch06lev1sec2__title" class="calibre3"></a>6.2. Lock-based concurrent data structures
+      </h3>
+      
+      <p class="noind">The design of lock-based concurrent data structures is all about ensuring that the right mutex is locked when accessing the
+         data and that the lock is held for the minimum amount of time. This is hard enough when there’s just one mutex protecting
+         a data structure. You need to ensure that data can’t be accessed outside the protection of the mutex lock and that there are
+         no race conditions inherent in the interface, as you saw in <a href="kindle_split_013.html#ch03" class="calibre4">chapter 3</a>. If you use separate mutexes to protect separate parts of the data structure, these issues are compounded, and there’s now
+         also the possibility of deadlock if the operations on the data structure require more than one mutex to be locked. You therefore
+         need to consider the design of a data structure with multiple mutexes even more carefully than the design of a data structure
+         with a single mutex.
+      </p>
+      
+      <p class="noind">In this section you’ll apply the guidelines from <a href="#ch06lev2sec1" class="calibre4">section 6.1.1</a> to the design of several simple data structures, using mutexes and locks to protect the data. In each case you’ll seek out
+         opportunities for enabling greater concurrency while ensuring that the data structure remains thread-safe.
+      </p>
+      
+      <p class="noind">Let’s start by looking at the stack implementation from <a href="kindle_split_013.html#ch03" class="calibre4">chapter 3</a>; it’s one of the simplest data structures around, and it uses only a single mutex. Is it thread-safe? How does it fare from
+         the point of view of achieving true concurrency?
+      </p>
+      
+      
+      <h4 id="ch06lev2sec2" class="calibre23">6.2.1. <a id="ch06lev2sec2__title" class="calibre4"></a>A thread-safe stack using locks
+      </h4>
+      
+      <p class="noind">The thread-safe stack from <a href="kindle_split_013.html#ch03" class="calibre4">chapter 3</a> is reproduced in the following listing. The intent is to write a thread-safe data structure akin to <kbd class="calibre17">std::stack&lt;&gt;</kbd>, which supports pushing data items onto the stack and popping them off again.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06ex01">Listing 6.1. <a id="ch06ex01__title" class="calibre4"></a>A class definition for a thread-safe stack
+      </h5>
+      <pre id="PLd0e21639" class="calibre5">#include &lt;exception&gt;
+struct empty_stack: std::exception
+{
+    const char* what() const throw();
+};
+template&lt;typename T&gt;
+class threadsafe_stack
+{
+private:
+    std::stack&lt;T&gt; data;
+    mutable std::mutex m;
+public:
+    threadsafe_stack(){}
+    threadsafe_stack(const threadsafe_stack&amp; other)
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(other.m);
+        data=other.data;
+    }
+    threadsafe_stack&amp; operator=(const threadsafe_stack&amp;) = delete;
+    void push(T new_value)
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(m);
+        data.push(std::move(new_value));                  <b class="calibre24"><i class="calibre6">1</i></b>
+    }
+    std::shared_ptr&lt;T&gt; pop()
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(m);
+        if(data.empty()) throw empty_stack();             <b class="calibre24"><i class="calibre6">2</i></b>
+        std::shared_ptr&lt;T&gt; const res(
+           std::make_shared&lt;T&gt;(std::move(data.top())));   <b class="calibre24"><i class="calibre6">3</i></b>
+        data.pop();                                       <b class="calibre24"><i class="calibre6">4</i></b>
+        return res;
+    }
+    void pop(T&amp; value)
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(m);
+        if(data.empty()) throw empty_stack();
+        value=std::move(data.top());                      <b class="calibre24"><i class="calibre6">5</i></b>
+        data.pop();                                       <b class="calibre24"><i class="calibre6">6</i></b>
+    }
+    bool empty() const
+    {
+        std::lock_guard&lt;std::mutex&gt; lock(m);
+        return data.empty();
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1317" class="calibre4"></a><a id="iddle1781" class="calibre4"></a>Let’s look at each of the guidelines in turn and see how they apply here.
+      </p>
+      
+      <p class="noind">First, as you can see, the basic thread safety is provided by protecting each member function with a lock on the mutex, <kbd class="calibre17">m</kbd>. This ensures that only one thread is accessing the data at any one time, so provided each member function maintains the
+         invariants, no thread can see a broken invariant.
+      </p>
+      
+      <p class="noind">Second, there’s a potential for a race condition between <kbd class="calibre17">empty()</kbd> and either of the <kbd class="calibre17">pop()</kbd> functions, but because the code explicitly checks for the contained stack being empty while holding the lock in <kbd class="calibre17">pop()</kbd>, this race condition isn’t problematic. By returning the popped data item directly as part of the call to <kbd class="calibre17">pop()</kbd>, you avoid a potential race condition that would be present with separate <kbd class="calibre17">top()</kbd> and <kbd class="calibre17">pop()</kbd> member functions such as those in <kbd class="calibre17">std::stack&lt;&gt;</kbd>.
+      </p>
+      
+      <p class="noind"><a id="iddle1261" class="calibre4"></a><a id="iddle1318" class="calibre4"></a>Next, there are a few potential sources of exceptions. Locking a mutex may throw an exception, but not only is this likely
+         to be exceedingly rare (because it indicates a problem with the mutex or a lack of system resources), it’s also the first
+         operation in each member function. Because no data has been modified, this is safe. Unlocking a mutex can’t fail, so that’s
+         always safe, and the use of <kbd class="calibre17">std::lock_guard&lt;&gt;</kbd> ensures that the mutex is never left locked.
+      </p>
+      
+      <p class="noind">The call to <kbd class="calibre17">data.push()</kbd> <b class="calibre24"><i class="calibre6">1</i></b> may throw an exception if either copying/moving the data value throws an exception or not enough memory can be allocated
+         to extend the underlying data structure. Either way, <kbd class="calibre17">std::stack&lt;&gt;</kbd> guarantees it will be safe, so that’s not a problem either.
+      </p>
+      
+      <p class="noind">In the first overload of <kbd class="calibre17">pop()</kbd>, the code itself might throw an <kbd class="calibre17">empty_stack</kbd> exception <b class="calibre24"><i class="calibre6">2</i></b>, but nothing has been modified, so that’s safe. The creation of <kbd class="calibre17">res</kbd> <b class="calibre24"><i class="calibre6">3</i></b> might throw an exception, though, for a couple of reasons: the call to <kbd class="calibre17">std::make_shared</kbd> might throw because it can’t allocate memory for the new object and the internal data required for reference counting, or
+         the copy constructor or move constructor of the data item to be returned might throw when copying/moving into the freshly-allocated
+         memory. In both cases, the C++ runtime and Standard Library ensure that there are no memory leaks and the new object (if any)
+         is correctly destroyed. Because you <i class="calibre6">still</i> haven’t modified the underlying stack, you’re OK. The call to <kbd class="calibre17">data.pop()</kbd> <b class="calibre24"><i class="calibre6">4</i></b> is guaranteed not to throw, as is the return of the result, so this overload of <kbd class="calibre17">pop()</kbd> is exception-safe.
+      </p>
+      
+      <p class="noind">The second overload of <kbd class="calibre17">pop()</kbd> is similar, except this time it’s the copy assignment or move assignment operator that can throw <b class="calibre24"><i class="calibre6">5</i></b>, rather than the construction of a new object and an <kbd class="calibre17">std::shared_ptr</kbd> instance. Again, you don’t modify the data structure until the call to <kbd class="calibre17">data.pop()</kbd> <b class="calibre24"><i class="calibre6">6</i></b>, which is still guaranteed not to throw, so this overload is exception-safe too.
+      </p>
+      
+      <p class="noind">Finally, <kbd class="calibre17">empty()</kbd> doesn’t modify any data, so that’s exception-safe.
+      </p>
+      
+      <p class="noind">There are a couple of opportunities for deadlock here, because you call user code while holding a lock: the copy constructor
+         or move constructor (<b class="calibre24"><i class="calibre6">1</i></b>, <b class="calibre24"><i class="calibre6">3</i></b>) and copy assignment or move assignment operator <b class="calibre24"><i class="calibre6">5</i></b> on the contained data items, as well as potentially a user-defined <kbd class="calibre17">operator new</kbd>. If these functions either call member functions on the stack that the item is being inserted into or removed from or require
+         a lock of any kind and another lock was held when the stack member function was invoked, there’s the possibility of deadlock.
+         But it’s sensible to require that users of the stack be responsible for ensuring this; you can’t reasonably expect to add
+         an item onto a stack or remove it from a stack without copying it or allocating memory for it.
+      </p>
+      
+      <p class="noind">Because all the member functions use <kbd class="calibre17">std::lock_guard&lt;&gt;</kbd> to protect the data, it’s safe for any number of threads to call the <kbd class="calibre17">stack</kbd> member functions. The only member functions that aren’t safe are the constructors and destructors, but this isn’t a problem;
+         the object can be constructed only once and destroyed only once. Calling member functions on an incompletely constructed object
+         or a partially destructed object is never a good idea, whether done concurrently or not. As a consequence, the user must <a id="iddle1192" class="calibre4"></a><a id="iddle1530" class="calibre4"></a><a id="iddle1562" class="calibre4"></a><a id="iddle1894" class="calibre4"></a><a id="iddle2527" class="calibre4"></a><a id="iddle2542" class="calibre4"></a><a id="iddle2549" class="calibre4"></a>ensure that other threads aren’t able to access the stack until it’s fully constructed and must ensure that all threads have
+         ceased accessing the stack before it’s destroyed.
+      </p>
+      
+      <p class="noind">Although it’s safe for multiple threads to call the member functions concurrently, because of the use of locks, only one thread
+         is ever doing any work in the stack data structure at a time. This <i class="calibre6">serialization</i> of threads can potentially limit the performance of an application where there’s significant contention on the stack: while
+         a thread is waiting for the lock, it isn’t doing any useful work. Also, the stack doesn’t provide any means of waiting for
+         an item to be added, so if a thread needs to wait, it must periodically call <kbd class="calibre17">empty()</kbd>, or call <kbd class="calibre17">pop()</kbd> and catch the <kbd class="calibre17">empty_stack</kbd> exceptions. This makes this stack implementation a poor choice if such a scenario is required, because a waiting thread must
+         either consume precious resources checking for data or the user must write external wait and notification code (for example,
+         using condition variables), which might render the internal locking unnecessary and therefore wasteful. The queue from <a href="kindle_split_014.html#ch04" class="calibre4">chapter 4</a> shows a way of incorporating this waiting into the data structure itself using a condition variable inside the data structure,
+         so let’s look at that next.
+      </p>
+      
+      
+      
+      <h4 id="ch06lev2sec3" class="calibre23">6.2.2. <a id="ch06lev2sec3__title" class="calibre4"></a>A thread-safe queue using locks and condition variables
+      </h4>
+      
+      <p class="noind">The thread-safe queue from <a href="kindle_split_014.html#ch04" class="calibre4">chapter 4</a> is reproduced in <a href="#ch06ex02" class="calibre4">listing 6.2</a>. Much like the stack was modeled after <kbd class="calibre17">std::stack&lt;&gt;</kbd>, this queue is modeled after <kbd class="calibre17">std::queue&lt;&gt;</kbd>. Again, the interface differs from that of the standard container adaptor because of the constraints of writing a data structure
+         that’s safe for concurrent access from multiple threads.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06ex02">Listing 6.2. <a id="ch06ex02__title" class="calibre4"></a>The full class definition for a thread-safe queue using condition variables
+      </h5>
+      <pre id="PLd0e21933" class="calibre5">template&lt;typename T&gt;
+class threadsafe_queue
+{
+private:
+    mutable std::mutex mut;
+    std::queue&lt;T&gt; data_queue;
+    std::condition_variable data_cond;
+public:
+    threadsafe_queue()
+    {}
+    void push(T new_value)
+    {
+        std::lock_guard&lt;std::mutex&gt; lk(mut);
+        data_queue.push(std::move(new_value));
+        data_cond.notify_one();                                    <b class="calibre24"><i class="calibre6">1</i></b>
+    }
+    void wait_and_pop(T&amp; value)                                    <b class="calibre24"><i class="calibre6">2</i></b>
+    {
+        std::unique_lock&lt;std::mutex&gt; lk(mut);
+        data_cond.wait(lk,[this]{return !data_queue.empty();});
+        value=std::move(data_queue.front());
+        data_queue.pop();
+    }
+    std::shared_ptr&lt;T&gt; wait_and_pop()                              <b class="calibre24"><i class="calibre6">3</i></b>
+    {
+        std::unique_lock&lt;std::mutex&gt; lk(mut);
+        data_cond.wait(lk,[this]{return !data_queue.empty();});    <b class="calibre24"><i class="calibre6">4</i></b>
+        std::shared_ptr&lt;T&gt; res(
+            std::make_shared&lt;T&gt;(std::move(data_queue.front())));
+        data_queue.pop();
+        return res;
+    }
+    bool try_pop(T&amp; value)
+    {
+        std::lock_guard&lt;std::mutex&gt; lk(mut);
+        if(data_queue.empty())
+            return false;
+        value=std::move(data_queue.front());
+        data_queue.pop();
+        return true;
+    }
+    std::shared_ptr&lt;T&gt; try_pop()
+    {
+        std::lock_guard&lt;std::mutex&gt; lk(mut);
+        if(data_queue.empty())
+            return std::shared_ptr&lt;T&gt;();                           <b class="calibre24"><i class="calibre6">5</i></b>
+        std::shared_ptr&lt;T&gt; res(
+            std::make_shared&lt;T&gt;(std::move(data_queue.front())));
+        data_queue.pop();
+        return res;
+    }
+    bool empty() const
+    {
+        std::lock_guard&lt;std::mutex&gt; lk(mut);
+        return data_queue.empty();
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1259" class="calibre4"></a><a id="iddle2627" class="calibre4"></a>The structure of the queue implementation shown in <a href="#ch06ex02" class="calibre4">listing 6.2</a> is similar to the stack from <a href="#ch06ex01" class="calibre4">listing 6.1</a>, except for the call to <kbd class="calibre17">data_cond.notify_one()</kbd> in <kbd class="calibre17">push()</kbd> <b class="calibre24"><i class="calibre6">1</i></b> and the <kbd class="calibre17">wait_and_pop()</kbd> functions, <b class="calibre24"><i class="calibre6">2</i></b> and <b class="calibre24"><i class="calibre6">3</i></b>. The two overloads of <kbd class="calibre17">try_pop()</kbd> are almost identical to the <kbd class="calibre17">pop()</kbd> functions from <a href="#ch06ex01" class="calibre4">listing 6.1</a>, except that they don’t throw an exception if the queue is empty. Instead, they return either a <kbd class="calibre17">bool</kbd> value indicating whether a value was retrieved or a <kbd class="calibre17">NULL</kbd> pointer if no value could be retrieved by the pointer-returning overload <b class="calibre24"><i class="calibre6">5</i></b>. This would also have been a valid way of implementing the stack. If you exclude the <kbd class="calibre17">wait_and_pop()</kbd> functions, the analysis you did for the stack applies just as well here.
+      </p>
+      
+      <p class="noind">The new <kbd class="calibre17">wait_and_pop()</kbd> functions are a solution to the problem of waiting for a queue entry that you saw with the stack; rather than continuously
+         calling <kbd class="calibre17">empty()</kbd>, the waiting thread can call <kbd class="calibre17">wait_and_pop()</kbd> and the data structure will handle the waiting with a condition variable. The call to <kbd class="calibre17">data_cond.wait()</kbd> won’t return until the underlying queue has at least one element, so you don’t have to worry about the possibility of an
+         empty queue at this point in the code, and the data is still protected with the <a id="iddle1258" class="calibre4"></a>lock on the mutex. These functions don’t therefore add any new race conditions or possibilities for deadlock, and the invariants
+         will be upheld.
+      </p>
+      
+      <p class="noind">There’s a slight twist with regard to exception safety in that if more than one thread is waiting when an entry is pushed
+         onto the queue, only one thread will be woken by the call to <kbd class="calibre17">data_cond.notify_one()</kbd>. But if that thread then throws an exception in <kbd class="calibre17">wait_and_pop()</kbd>, such as when the new <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> is constructed <b class="calibre24"><i class="calibre6">4</i></b>, none of the other threads will be woken. If this isn’t acceptable, the call is readily replaced with <kbd class="calibre17">data_cond.notify_all()</kbd>, which will wake all the threads but at the cost of most of them then going back to sleep when they find that the queue is
+         empty after all. A second alternative is to have <kbd class="calibre17">wait_and_pop()</kbd> call <kbd class="calibre17">notify_one()</kbd> if an exception is thrown, so that another thread can attempt to retrieve the stored value. A third alternative is to move
+         the <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> initialization to the <kbd class="calibre17">push()</kbd> call and store <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> instances rather than direct data values. Copying the <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> out of the internal <kbd class="calibre17">std::queue&lt;&gt;</kbd> then can’t throw an exception, so <kbd class="calibre17">wait_and_pop()</kbd> is safe again. The following listing shows the queue implementation revised with this in mind.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06ex03">Listing 6.3. <a id="ch06ex03__title" class="calibre4"></a>A thread-safe queue holding <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> instances
+      </h5>
+      <pre id="PLd0e22097" class="calibre5">template&lt;typename T&gt;
+class threadsafe_queue
+{
+private:
+    mutable std::mutex mut;
+    std::queue&lt;std::shared_ptr&lt;T&gt; &gt; data_queue;
+    std::condition_variable data_cond;
+public:
+    threadsafe_queue()
+    {}
+    void wait_and_pop(T&amp; value)
+    {
+        std::unique_lock&lt;std::mutex&gt; lk(mut);
+        data_cond.wait(lk,[this]{return !data_queue.empty();});
+        value=std::move(*data_queue.front());                   <b class="calibre24"><i class="calibre6">1</i></b>
+        data_queue.pop();
+    }
+    bool try_pop(T&amp; value)
+    {
+        std::lock_guard&lt;std::mutex&gt; lk(mut);
+        if(data_queue.empty())
+            return false;
+        value=std::move(*data_queue.front());                   <b class="calibre24"><i class="calibre6">2</i></b>
+        data_queue.pop();
+        return true;
+    }
+    std::shared_ptr&lt;T&gt; wait_and_pop()
+    {
+        std::unique_lock&lt;std::mutex&gt; lk(mut);
+        data_cond.wait(lk,[this]{return !data_queue.empty();});
+        std::shared_ptr&lt;T&gt; res=data_queue.front();              <b class="calibre24"><i class="calibre6">3</i></b>
+        data_queue.pop();
+        return res;
+    }
+    std::shared_ptr&lt;T&gt; try_pop()
+    {
+        std::lock_guard&lt;std::mutex&gt; lk(mut);
+        if(data_queue.empty())
+            return std::shared_ptr&lt;T&gt;();
+        std::shared_ptr&lt;T&gt; res=data_queue.front();              <b class="calibre24"><i class="calibre6">4</i></b>
+        data_queue.pop();
+        return res;
+    }
+    void push(T new_value)
+    {
+        std::shared_ptr&lt;T&gt; data(
+            std::make_shared&lt;T&gt;(std::move(new_value)));         <b class="calibre24"><i class="calibre6">5</i></b>
+        std::lock_guard&lt;std::mutex&gt; lk(mut);
+        data_queue.push(data);
+        data_cond.notify_one();
+    }
+    bool empty() const
+    {
+        std::lock_guard&lt;std::mutex&gt; lk(mut);
+        return data_queue.empty();
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1782" class="calibre4"></a><a id="iddle1820" class="calibre4"></a>The basic consequences of holding the data by <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> are straightforward: the <kbd class="calibre17">pop</kbd> functions that take a reference to a variable to receive the new value now have to dereference the stored pointer, <b class="calibre24"><i class="calibre6">1</i></b> and <b class="calibre24"><i class="calibre6">2</i></b>, and the <kbd class="calibre17">pop</kbd> functions that return an <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> instance can retrieve it from the queue, <b class="calibre24"><i class="calibre6">3</i></b> and <b class="calibre24"><i class="calibre6">4</i></b>, before returning it to the caller.
+      </p>
+      
+      <p class="noind">If the data is held by <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd>, there’s an additional benefit: the allocation of the new instance can now be done outside the lock in <kbd class="calibre17">push()</kbd> <b class="calibre24"><i class="calibre6">5</i></b>, whereas in <a href="#ch06ex02" class="calibre4">listing 6.2</a> it had to be done while holding the lock in <kbd class="calibre17">pop()</kbd>. Because memory allocation is typically quite an expensive operation, this can be beneficial for the performance of the queue,
+         because it reduces the time the mutex is held, allowing other threads to perform operations on the queue in the meantime.
+      </p>
+      
+      <p class="noind">Just like in the stack example, the use of a mutex to protect the entire data structure limits the concurrency supported by
+         this queue; although multiple threads might be blocked on the queue in various member functions, only one thread can be doing
+         any work at a time. But part of this restriction comes from the use of <kbd class="calibre17">std::queue&lt;&gt;</kbd> in the implementation; by using the standard container you now have one data item that’s either protected or not. By taking
+         control of the detailed implementation of the data structure, you can provide more fine-grained locking and allow a higher
+         level of concurrency.
+      </p>
+      
+      
+      
+      
+      <h4 id="ch06lev2sec4" class="calibre23">6.2.3. <a id="ch06lev2sec4__title" class="calibre4"></a>A thread-safe queue using fine-grained locks and condition variables
+      </h4>
+      
+      <p class="noind"><a id="iddle1188" class="calibre4"></a><a id="iddle1374" class="calibre4"></a><a id="iddle1378" class="calibre4"></a><a id="iddle1448" class="calibre4"></a><a id="iddle1527" class="calibre4"></a><a id="iddle1559" class="calibre4"></a><a id="iddle1682" class="calibre4"></a><a id="iddle2442" class="calibre4"></a><a id="iddle2543" class="calibre4"></a><a id="iddle2546" class="calibre4"></a><a id="iddle2581" class="calibre4"></a><a id="iddle2628" class="calibre4"></a>In <a href="#ch06ex02" class="calibre4">listings 6.2</a> and <a href="#ch06ex03" class="calibre4">6.3</a> you have one protected data item (<kbd class="calibre17">data_queue</kbd>) and therefore one mutex. In order to use finer-grained locking, you need to look inside the queue at its constituent parts
+         and associate one mutex with each distinct data item.
+      </p>
+      
+      <p class="noind">The simplest data structure for a queue is a singly linked list, as shown in <a href="#ch06fig01" class="calibre4">figure 6.1</a>. The queue contains a <kbd class="calibre17">head</kbd> pointer, which points to the first item in the list, and each item then points to the next item. Data items are removed from
+         the queue by replacing the <kbd class="calibre17">head</kbd> pointer with the pointer to the next item and then returning the data from the old <kbd class="calibre17">head</kbd>.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06fig01">Figure 6.1. <a id="ch06fig01__title" class="calibre4"></a>A queue represented using a single-linked list
+      </h5>
+      
+      <p class="center1"><img alt="" src="06fig01_alt.jpg" class="calibre2"/></p>
+      
+      
+      <p class="noind">Items are added to the queue at the other end. In order to do this, the queue also contains a <kbd class="calibre17">tail</kbd> pointer, which refers to the last item in the list. New nodes are added by changing the <kbd class="calibre17">next</kbd> pointer of the last item to point to the new node and then updating the <kbd class="calibre17">tail</kbd> pointer to refer to the new item. When the list is empty, both the <kbd class="calibre17">head</kbd> and <kbd class="calibre17">tail</kbd> pointers are <kbd class="calibre17">NULL</kbd>.
+      </p>
+      
+      <p class="noind">The following listing shows a simple implementation of this queue based on a cut-down version of the interface to the queue
+         in <a href="#ch06ex02" class="calibre4">listing 6.2</a>; you have only one <kbd class="calibre17">try_pop()</kbd> function and no <kbd class="calibre17">wait_and_pop()</kbd> because this queue only supports single-threaded use.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06ex04">Listing 6.4. <a id="ch06ex04__title" class="calibre4"></a>A simple single-threaded queue implementation
+      </h5>
+      <pre id="PLd0e22357" class="calibre5">template&lt;typename T&gt;
+class queue
+{
+private:
+    struct node
+    {
+        T data;
+        std::unique_ptr&lt;node&gt; next;
+        node(T data_):
+            data(std::move(data_))
+        {}
+    };
+    std::unique_ptr&lt;node&gt; head;                     <b class="calibre24"><i class="calibre6">1</i></b>
+    node* tail;                                     <b class="calibre24"><i class="calibre6">2</i></b>
+public:
+    queue(): tail(nullptr)
+    {}
+    queue(const queue&amp; other)=delete;
+    queue&amp; operator=(const queue&amp; other)=delete;
+    std::shared_ptr&lt;T&gt; try_pop()
+    {
+        if(!head)
+        {
+            return std::shared_ptr&lt;T&gt;();
+        }
+        std::shared_ptr&lt;T&gt; const res(
+            std::make_shared&lt;T&gt;(std::move(head-&gt;data)));
+        std::unique_ptr&lt;node&gt; const old_head=std::move(head);
+        head=std::move(old_head-&gt;next);            <b class="calibre24"><i class="calibre6">3</i></b>
+        if(!head)
+            tail=nullptr;
+        return res;
+    }
+    void push(T new_value)
+    {
+        std::unique_ptr&lt;node&gt; p(new node(std::move(new_value)));
+        node* const new_tail=p.get();
+        if(tail)
+        {
+            tail-&gt;next=std::move(p);               <b class="calibre24"><i class="calibre6">4</i></b>
+        }
+        else
+        {
+            head=std::move(p);                     <b class="calibre24"><i class="calibre6">5</i></b>
+        }
+        tail=new_tail;                             <b class="calibre24"><i class="calibre6">6</i></b>
+    }
+};</pre>
+      
+      <p class="noind">First off, note that <a href="#ch06ex04" class="calibre4">listing 6.4</a> uses <kbd class="calibre17">std::unique_ptr&lt;node&gt;</kbd> to manage the nodes, because this ensures that they (and the data they refer to) get deleted when they’re no longer needed,
+         without having to write an explicit <kbd class="calibre17">delete</kbd>. This ownership chain is managed from <kbd class="calibre17">head</kbd>, with <kbd class="calibre17">tail</kbd> being a raw pointer to the last node, as it needs to refer to a node already owned by <kbd class="calibre17">std::unique_ptr&lt;node&gt;</kbd>.
+      </p>
+      
+      <p class="noind">Although this implementation works fine in a single-threaded context, a couple of things will cause you problems if you try
+         to use fine-grained locking in a multithreaded context. Given that you have two data items (<kbd class="calibre17">head</kbd> <b class="calibre24"><i class="calibre6">1</i></b> and <kbd class="calibre17">tail</kbd> <b class="calibre24"><i class="calibre6">2</i></b>), you could in principle use two mutexes, one to protect <kbd class="calibre17">head</kbd> and one to protect <kbd class="calibre17">tail,</kbd> but there are a couple of problems with that.
+      </p>
+      
+      <p class="noind">The most obvious problem is that <kbd class="calibre17">push()</kbd> can modify both <kbd class="calibre17">head</kbd> <b class="calibre24"><i class="calibre6">5</i></b> and <kbd class="calibre17">tail</kbd> <b class="calibre24"><i class="calibre6">6</i></b>, so it would have to lock both mutexes. This isn’t too much of a problem, although it’s unfortunate, because locking both
+         mutexes would be possible. The critical problem is that both <kbd class="calibre17">push()</kbd> and <kbd class="calibre17">pop()</kbd> access the <kbd class="calibre17">next</kbd> pointer of a node: <kbd class="calibre17">push()</kbd> updates <kbd class="calibre17">tail-&gt;next</kbd> <b class="calibre24"><i class="calibre6">4</i></b>, and <kbd class="calibre17">try_pop()</kbd> reads <kbd class="calibre17">head-&gt;next</kbd> <b class="calibre24"><i class="calibre6">3</i></b>. If there’s a single item in the <a id="iddle1162" class="calibre4"></a><a id="iddle1240" class="calibre4"></a><a id="iddle1375" class="calibre4"></a><a id="iddle1379" class="calibre4"></a><a id="iddle1528" class="calibre4"></a><a id="iddle1891" class="calibre4"></a><a id="iddle2544" class="calibre4"></a><a id="iddle2547" class="calibre4"></a>queue, then <kbd class="calibre17">head==tail</kbd>, so both <kbd class="calibre17">head-&gt;next</kbd> and <kbd class="calibre17">tail-&gt;next</kbd> are the same object, which therefore requires protection. Because you can’t tell if it’s the same object without reading
+         both <kbd class="calibre17">head</kbd> and <kbd class="calibre17">tail</kbd>, you now have to lock the same mutex in both <kbd class="calibre17">push()</kbd> and <kbd class="calibre17">try_pop()</kbd>, so you’re no better off than before. Is there a way out of this dilemma?
+      </p>
+      
+      
+      <h5 class="notetitle" id="ch06lev3sec1"><a id="ch06lev3sec1__title" class="calibre4"></a>Enabling concurrency by separating data
+      </h5>
+      
+      <p class="noind">You can solve this problem by preallocating a dummy node with no data to ensure that there’s always at least one node in the
+         queue to separate the node being accessed at the head from that being accessed at the tail. For an empty queue, <kbd class="calibre17">head</kbd> and <kbd class="calibre17">tail</kbd> now both point to the dummy node rather than being <kbd class="calibre17">NULL</kbd>. This is fine, because <kbd class="calibre17">try_pop()</kbd> doesn’t access <kbd class="calibre17">head-&gt;next</kbd> if the queue is empty. If you add a node to the queue (so there’s one real node), then <kbd class="calibre17">head</kbd> and <kbd class="calibre17">tail</kbd> now point to separate nodes, so there’s no race on <kbd class="calibre17">head-&gt;next</kbd> and <kbd class="calibre17">tail-&gt;next</kbd>. The downside is that you have to add an extra level of indirection to store the data by pointer in order to allow the dummy
+         nodes. The following listing shows how the implementation looks now.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06ex05">Listing 6.5. <a id="ch06ex05__title" class="calibre4"></a>A simple queue with a dummy node
+      </h5>
+      <pre id="PLd0e22623" class="calibre5">template&lt;typename T&gt;
+class queue
+{
+private:
+    struct node
+    {
+        std::shared_ptr&lt;T&gt; data;                        <b class="calibre24"><i class="calibre6">1</i></b>
+        std::unique_ptr&lt;node&gt; next;
+    };
+    std::unique_ptr&lt;node&gt; head;
+    node* tail;
+public:
+    queue():
+        <b class="calibre24">head(new node),tail(head.get())</b>                 <b class="calibre24"><i class="calibre6">2</i></b>
+    {}
+    queue(const queue&amp; other)=delete;
+    queue&amp; operator=(const queue&amp; other)=delete;
+    std::shared_ptr&lt;T&gt; try_pop()
+    {
+        <b class="calibre24">if(head.get()==tail)</b>                            <b class="calibre24"><i class="calibre6">3</i></b>
+        {
+            return std::shared_ptr&lt;T&gt;();
+        }
+        <b class="calibre24">std::shared_ptr&lt;T&gt; const res(head-&gt;data);</b>       <b class="calibre24"><i class="calibre6">4</i></b>
+        std::unique_ptr&lt;node&gt; old_head=std::move(head);
+        head=std::move(old_head-&gt;next);                 <b class="calibre24"><i class="calibre6">5</i></b>
+        return res;                                     <b class="calibre24"><i class="calibre6">6</i></b>
+    }
+    void push(T new_value)
+    {
+        <b class="calibre24">std::shared_ptr&lt;T&gt; new_data(</b>
+            <b class="calibre24">std::make_shared&lt;T&gt;(std::move(new_value)));</b> <b class="calibre24"><i class="calibre6">7</i></b>
+        <b class="calibre24">std::unique_ptr&lt;node&gt; p(new node);</b>              <b class="calibre24"><i class="calibre6">8</i></b>
+        <b class="calibre24">tail-&gt;data=new_data;</b>                            <b class="calibre24"><i class="calibre6">9</i></b>
+        node* const new_tail=p.get();
+        tail-&gt;next=std::move(p);
+        tail=new_tail;
+    }
+};</pre>
+      
+      <p class="noind">The changes to <kbd class="calibre17">try_pop()</kbd> are fairly minimal. First, you’re comparing <kbd class="calibre17">head</kbd> against <kbd class="calibre17">tail</kbd> <b class="calibre24"><i class="calibre6">3</i></b>, rather than checking for <kbd class="calibre17">NULL</kbd>, because the dummy node means that <kbd class="calibre17">head</kbd> is never <kbd class="calibre17">NULL</kbd>. Because <kbd class="calibre17">head</kbd> is a <kbd class="calibre17">std::unique_ptr&lt;node&gt;</kbd>, you need to call <kbd class="calibre17">head.get()</kbd> to do the comparison. Second, because the <kbd class="calibre17">node</kbd> now stores the data by pointer <b class="calibre24"><i class="calibre6">1</i></b>, you can retrieve the pointer directly <b class="calibre24"><i class="calibre6">4</i></b>, rather than having to construct a new instance of <kbd class="calibre17">T</kbd>. The big changes are in <kbd class="calibre17">push()</kbd>: you must first create a new instance of <kbd class="calibre17">T</kbd> on the heap and take ownership of it in a <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> <b class="calibre24"><i class="calibre6">7</i></b> (note the use of <kbd class="calibre17">std::make_shared</kbd> to avoid the overhead of a second memory allocation for the reference count). The new node you create is going to be the
+         new dummy node, so you don’t need to supply the <kbd class="calibre17">new_value</kbd> to the constructor <b class="calibre24"><i class="calibre6">8</i></b>. Instead, you set the data on the old dummy node to your newly allocated copy of the <kbd class="calibre17">new_value</kbd> <b class="calibre24"><i class="calibre6">9</i></b>. Finally, in order to have a dummy node, you have to create it in the constructor <b class="calibre24"><i class="calibre6">2</i></b>.
+      </p>
+      
+      <p class="noind">By now, I’m sure you’re wondering what these changes buy you and how they help with making the queue thread-safe. Well, <kbd class="calibre17">push()</kbd> now accesses only <kbd class="calibre17">tail</kbd>, not <kbd class="calibre17">head</kbd>, which is an improvement. <kbd class="calibre17">try_pop()</kbd> accesses both <kbd class="calibre17">head</kbd> and <kbd class="calibre17">tail</kbd>, but <kbd class="calibre17">tail</kbd> is needed only for the initial comparison, so the lock is short-lived. The big gain is that the dummy node means <kbd class="calibre17">try_pop()</kbd> and <kbd class="calibre17">push()</kbd> are never operating on the same node, so you no longer need an overarching mutex. You can have one mutex for <kbd class="calibre17">head</kbd> and one for <kbd class="calibre17">tail</kbd>. Where do you put the locks?
+      </p>
+      
+      <p class="noind">You’re aiming for the maximum number of opportunities for concurrency, so you want to hold the locks for the shortest possible
+         length of time. <kbd class="calibre17">push()</kbd> is easy: the mutex needs to be locked across all accesses to <kbd class="calibre17">tail</kbd>, which means you lock the mutex after the new node is allocated <b class="calibre24"><i class="calibre6">8</i></b>, and before you assign the data to the current tail node <b class="calibre24"><i class="calibre6">9</i></b>. The lock then needs to be held until the end of the function.
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">try_pop()</kbd> isn’t so easy. First off, you need to lock the mutex on <kbd class="calibre17">head</kbd> and hold it until you’re finished with <kbd class="calibre17">head</kbd>. This is the mutex to determine which thread does the popping, so you want to do that first. Once <kbd class="calibre17">head</kbd> is changed <b class="calibre24"><i class="calibre6">5</i></b>, you can unlock the mutex; it doesn’t need to be locked when you return the result <b class="calibre24"><i class="calibre6">6</i></b>. That leaves the access to <kbd class="calibre17">tail</kbd> needing a lock on the tail mutex. Because you need to access <kbd class="calibre17">tail</kbd> only once, you can just acquire the mutex for the time it takes to do the read. This is best done by wrapping it in a function.
+         In fact, because the code that needs the <kbd class="calibre17">head</kbd> mutex locked is only a subset of the member, it’s clearer to wrap that in a function too. The final code is shown here.
+      </p>
+      
+      
+      <p class="noind"></p>
+      
+      
+      <h5 class="notetitle" id="ch06ex06">Listing 6.6. <a id="ch06ex06__title" class="calibre4"></a>A thread-safe queue with fine-grained locking
+      </h5>
+      <pre id="PLd0e22859" class="calibre5">template&lt;typename T&gt;
+class threadsafe_queue
+{
+private:
+    struct node
+    {
+        std::shared_ptr&lt;T&gt; data;
+        std::unique_ptr&lt;node&gt; next;
+    };
+    std::mutex head_mutex;
+    std::unique_ptr&lt;node&gt; head;
+    std::mutex tail_mutex;
+    node* tail;
+    node* get_tail()
+    {
+        std::lock_guard&lt;std::mutex&gt; tail_lock(tail_mutex);
+        return tail;
+    }
+    std::unique_ptr&lt;node&gt; pop_head()
+    {
+        std::lock_guard&lt;std::mutex&gt; head_lock(head_mutex);
+
+        if(head.get()==get_tail())
+        {
+            return nullptr;
+        }
+        std::unique_ptr&lt;node&gt; old_head=std::move(head);
+        head=std::move(old_head-&gt;next);
+        return old_head;
+    }
+public:
+    threadsafe_queue():
+        head(new node),tail(head.get())
+    {}
+    threadsafe_queue(const threadsafe_queue&amp; other)=delete;
+    threadsafe_queue&amp; operator=(const threadsafe_queue&amp; other)=delete;
+    std::shared_ptr&lt;T&gt; try_pop()
+    {
+        std::unique_ptr&lt;node&gt; old_head=pop_head();
+        return old_head?old_head-&gt;data:std::shared_ptr&lt;T&gt;();
+    }
+    void push(T new_value)
+    {
+        std::shared_ptr&lt;T&gt; new_data(
+            std::make_shared&lt;T&gt;(std::move(new_value)));
+        std::unique_ptr&lt;node&gt; p(new node);
+        node* const new_tail=p.get();
+        std::lock_guard&lt;std::mutex&gt; tail_lock(tail_mutex);
+        tail-&gt;data=new_data;
+        tail-&gt;next=std::move(p);
+        tail=new_tail;
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1436" class="calibre4"></a><a id="iddle1786" class="calibre4"></a><a id="iddle2582" class="calibre4"></a>Let’s look at this code with a critical eye, thinking about the guidelines listed in <a href="#ch06lev2sec1" class="calibre4">section 6.1.1</a>. Before you look for broken invariants, you should be sure what they are:
+      </p>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><kbd class="calibre17">tail-&gt;next==nullptr</kbd>.
+         </li>
+         
+         <li class="calibre22"><kbd class="calibre17">tail-&gt;data==nullptr</kbd>.
+         </li>
+         
+         <li class="calibre22"><kbd class="calibre17">head==tail</kbd> implies an empty list.
+         </li>
+         
+         <li class="calibre22">A single element list has <kbd class="calibre17">head-&gt;next==tail</kbd>.
+         </li>
+         
+         <li class="calibre22">For each node <kbd class="calibre17">x</kbd> in the list, where <kbd class="calibre17">x!=tail</kbd>, <kbd class="calibre17">x-&gt;data</kbd> points to an instance of <kbd class="calibre17">T</kbd> and <kbd class="calibre17">x-&gt;next</kbd> points to the next node in the list. <kbd class="calibre17">x-&gt;next==tail</kbd> implies <kbd class="calibre17">x</kbd> is the last node in the list.
+         </li>
+         
+         <li class="calibre22">Following the <kbd class="calibre17">next</kbd> nodes from <kbd class="calibre17">head</kbd> will eventually yield <kbd class="calibre17">tail</kbd>.
+         </li>
+         
+      </ul>
+      
+      <p class="noind">On its own, <kbd class="calibre17">push()</kbd> is straightforward: the only modifications to the data structure are protected by <kbd class="calibre17">tail_mutex</kbd>, and they uphold the invariant because the new tail node is an empty node and <kbd class="calibre17">data</kbd> and <kbd class="calibre17">next</kbd> are correctly set for the old <kbd class="calibre17">tail</kbd> node, which is now the last real node in the list.
+      </p>
+      
+      <p class="noind">The interesting part is <kbd class="calibre17">try_pop()</kbd>. It turns out that not only is the lock on <kbd class="calibre17">tail_mutex</kbd> necessary to protect the read of <kbd class="calibre17">tail</kbd> itself, but it’s also necessary to ensure that you don’t get a data race reading the data from the <kbd class="calibre17">head</kbd>. If you didn’t have that mutex, it would be quite possible for a thread to call <kbd class="calibre17">try_pop()</kbd> and a thread to call <kbd class="calibre17">push()</kbd> concurrently, and there’d be no defined ordering on their operations. Even though each member function holds a lock on a
+         mutex, they hold locks on <i class="calibre6">different</i> mutexes, and they potentially access the same data; all data in the queue originates from a call to <kbd class="calibre17">push()</kbd>, after all. Because the threads would be potentially accessing the same data without a defined ordering, this would be a
+         data race, as you saw in <a href="kindle_split_015.html#ch05" class="calibre4">chapter 5</a>, and undefined behavior. Thankfully the lock on <kbd class="calibre17">tail_mutex</kbd> in <kbd class="calibre17">get_tail()</kbd> solves everything. Because the call to <kbd class="calibre17">get_tail()</kbd> locks the same mutex as the call to <kbd class="calibre17">push()</kbd>, there’s a defined order between the two calls. Either the call to <kbd class="calibre17">get_tail()</kbd> occurs before the call to <kbd class="calibre17">push()</kbd>, in which case it sees the old value of <kbd class="calibre17">tail</kbd>, or it occurs after the call to <kbd class="calibre17">push()</kbd>, in which case it sees the new value of <kbd class="calibre17">tail</kbd> and the new data attached to the previous value of <kbd class="calibre17">tail</kbd>.
+      </p>
+      
+      <p class="noind">It’s also important that the call to <kbd class="calibre17">get_tail()</kbd> occurs inside the lock on <kbd class="calibre17">head_mutex</kbd>. If it didn’t, the call to <kbd class="calibre17">pop_head()</kbd> could be stuck in between the call to <kbd class="calibre17">get_tail()</kbd> and the lock on the <kbd class="calibre17">head_mutex</kbd>, because other threads called <kbd class="calibre17">try_pop()</kbd> (and thus <kbd class="calibre17">pop_head()</kbd>) and acquired the lock first, preventing your initial thread from making progress:
+      </p>
+      
+      <pre id="PLd0e23055" class="calibre5">    std::unique_ptr&lt;node&gt; pop_head()                        <b class="calibre24"><i class="calibre6">1</i></b>
+    {
+        node* const old_tail=get_tail();                    <b class="calibre24"><i class="calibre6">2</i></b>
+        std::lock_guard&lt;std::mutex&gt; head_lock(head_mutex);
+
+        if(head.get()==old_tail)                            <b class="calibre24"><i class="calibre6">3</i></b>
+        {
+            return nullptr;
+        }
+        std::unique_ptr&lt;node&gt; old_head=std::move(head);
+        head=std::move(old_head-&gt;next);                    <b class="calibre24"><i class="calibre6">4</i></b>
+        return old_head;
+    }</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> This is a broken implementation.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Get old tail value outside lock on head_mutex</b></li>
+         
+      </ul>
+      
+      <p class="noind">In this broken scenario, where the call to <kbd class="calibre17">get_tail(0)</kbd> <b class="calibre24"><i class="calibre6">2</i></b> is made outside the scope of the lock, you might find that both <kbd class="calibre17">head</kbd> and <kbd class="calibre17">tail</kbd> have changed by the time your initial thread can acquire the lock on <kbd class="calibre17">head_mutex</kbd>, and not only is the returned <kbd class="calibre17">tail</kbd> node no longer the <kbd class="calibre17">tail</kbd>, but it’s no longer even part of the list. This could then mean that the comparison of <kbd class="calibre17">head</kbd> to <kbd class="calibre17">old_tail</kbd> <b class="calibre24"><i class="calibre6">3</i></b> fails, even if <kbd class="calibre17">head</kbd> is the last node. Consequently, when you update <kbd class="calibre17">head</kbd> <b class="calibre24"><i class="calibre6">4</i></b>, you may end up moving <kbd class="calibre17">head</kbd> beyond <kbd class="calibre17">tail</kbd> and off the end of the list, destroying the data structure. In the <kbd class="calibre17">correct</kbd> implementation from <a href="#ch06ex06" class="calibre4">listing 6.6</a>, you keep the call to <kbd class="calibre17">get_tail()</kbd> inside the lock on <kbd class="calibre17">head_mutex</kbd>. This ensures that no other threads can change <kbd class="calibre17">head</kbd>, and <kbd class="calibre17">tail</kbd> only ever moves further away (as new nodes are added in calls to <kbd class="calibre17">push()</kbd>), which is perfectly safe. <kbd class="calibre17">head</kbd> can never pass the value returned from <kbd class="calibre17">get_tail()</kbd>, so the invariants are upheld.
+      </p>
+      
+      <p class="noind">Once <kbd class="calibre17">pop_head()</kbd> has removed the node from the queue by updating <kbd class="calibre17">head</kbd>, the mutex is unlocked, and <kbd class="calibre17">try_pop()</kbd> can extract the data and delete the node if there was one (and return a <kbd class="calibre17">NULL</kbd> instance of <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> if not), safe in the knowledge that it’s the only thread that can access this node.
+      </p>
+      
+      <p class="noind">Next up, the external interface is a subset of that from <a href="#ch06ex02" class="calibre4">listing 6.2</a>, so the same analysis applies: there are no race conditions inherent in the interface.
+      </p>
+      
+      <p class="noind">Exceptions are more interesting. Because you’ve changed the data allocation patterns, the exceptions can now come from different
+         places. The only operations in <kbd class="calibre17">try_pop()</kbd> that can throw exceptions are the mutex locks, and the data isn’t modified until the locks are acquired. Therefore <kbd class="calibre17">try_pop()</kbd> is exception-safe. On the other hand, <kbd class="calibre17">push()</kbd> allocates a new instance of <kbd class="calibre17">T</kbd> on the heap and a new instance of <kbd class="calibre17">node</kbd>, either of which might throw an exception. But both of the newly allocated objects are assigned to smart pointers, so they’ll
+         be freed if an exception is thrown. Once the lock is acquired, none of the remaining operations in <kbd class="calibre17">push()</kbd> can throw an exception, so again you’re home and dry and <kbd class="calibre17">push()</kbd> is exception-safe too.
+      </p>
+      
+      <p class="noind">Because you haven’t changed the interface, there are no new external opportunities for deadlock. There are no internal opportunities,
+         either; the only place that two locks are acquired is in <kbd class="calibre17">pop_head()</kbd>, which always acquires the <kbd class="calibre17">head_mutex</kbd>, and then the <kbd class="calibre17">tail_mutex</kbd>, so this will never deadlock.
+      </p>
+      
+      <p class="noind">The remaining question concerns the possibilities for concurrency. This data structure has considerably more scope for concurrency
+         than that from <a href="#ch06ex02" class="calibre4">listing 6.2</a>, because the locks are more fine-grained and more is done outside the locks. For example, in <kbd class="calibre17">push()</kbd>, the new node and new data item are allocated with no locks held. This means that multiple threads can be allocating new
+         nodes and data items concurrently without a problem. Only one thread can add its new node to the list at a time, but the code
+         to <a id="iddle1260" class="calibre4"></a><a id="iddle1376" class="calibre4"></a><a id="iddle1380" class="calibre4"></a><a id="iddle1529" class="calibre4"></a><a id="iddle1684" class="calibre4"></a><a id="iddle1788" class="calibre4"></a><a id="iddle2545" class="calibre4"></a><a id="iddle2548" class="calibre4"></a><a id="iddle2642" class="calibre4"></a>do so is only a few simple pointer assignments, so the lock isn’t held for much time at all compared to the <kbd class="calibre17">std::queue&lt;&gt;</kbd>-based implementation where the lock is held around all the memory allocation operations internal to the <kbd class="calibre17">std::queue&lt;&gt;</kbd>.
+      </p>
+      
+      <p class="noind">Also, <kbd class="calibre17">try_pop()</kbd> holds the <kbd class="calibre17">tail_mutex</kbd> for only a short time, to protect a read from <kbd class="calibre17">tail</kbd>. Consequently, almost the entirety of a call to <kbd class="calibre17">try_pop()</kbd> can occur concurrently with a call to <kbd class="calibre17">push()</kbd>. Also, the operations performed while holding the <kbd class="calibre17">head_mutex</kbd> are quite minimal; the expensive <kbd class="calibre17">delete</kbd> (in the destructor of the <kbd class="calibre17">node</kbd> pointer) is outside the lock. This will increase the number of calls to <kbd class="calibre17">try_pop()</kbd> that can happen concurrently; only one thread can call <kbd class="calibre17">pop_head()</kbd> at a time, but multiple threads can then delete their old nodes and return the data safely.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06lev3sec2"><a id="ch06lev3sec2__title" class="calibre4"></a>Waiting for an item to pop
+      </h5>
+      
+      <p class="noind">OK, so <a href="#ch06ex06" class="calibre4">listing 6.6</a> provides a thread-safe queue with fine-grained locking, but it supports only <kbd class="calibre17">try_pop()</kbd> (and only one overload at that). What about the handy <kbd class="calibre17">wait_and_pop()</kbd> functions back in <a href="#ch06ex02" class="calibre4">listing 6.2</a>? Can you implement an identical interface with your fine-grained locking?
+      </p>
+      
+      <p class="noind">The answer is yes, but the real question is how. Modifying <kbd class="calibre17">push()</kbd> is easy: add the <kbd class="calibre17">data_cond.notify_one()</kbd> call at the end of the function, like in <a href="#ch06ex02" class="calibre4">listing 6.2</a>. It’s not quite that simple; you’re using fine-grained locking because you want the maximum possible amount of concurrency.
+         If you leave the mutex locked across the call to <kbd class="calibre17">notify_one()</kbd> (as in <a href="#ch06ex02" class="calibre4">listing 6.2</a>), then if the notified thread wakes up before the mutex has been unlocked, it will have to wait for the mutex. On the other
+         hand, if you unlock the mutex <i class="calibre6">before</i> you call <kbd class="calibre17">notify_one()</kbd>, then the mutex is available for the waiting thread to acquire when it wakes up (assuming no other thread locks it first).
+         This is a minor improvement, but it might be important in some cases.
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">wait_and_pop()</kbd> is more complicated, because you have to decide where to wait, what the predicate is, and which mutex needs to be locked.
+         The condition you’re waiting for is “queue not empty,” which is represented by <kbd class="calibre17">head!=tail</kbd>. Written like that, it would require both <kbd class="calibre17">head_mutex</kbd> and <kbd class="calibre17">tail_mutex</kbd> to be locked, but you’ve already decided in <a href="#ch06ex06" class="calibre4">listing 6.6</a> that you only need to lock <kbd class="calibre17">tail_mutex</kbd> for the read of <kbd class="calibre17">tail</kbd> and not for the comparison itself, so you can apply the same logic here. If you make the predicate <kbd class="calibre17">head!=get_tail()</kbd>, you only need to hold <kbd class="calibre17">head_mutex</kbd>, so you can use your lock on that for the call to <kbd class="calibre17">data_cond.wait()</kbd>. Once you’ve added the wait logic, the implementation is the same as <kbd class="calibre17">try_pop()</kbd>.
+      </p>
+      
+      <p class="noind">The second overload of <kbd class="calibre17">try_pop()</kbd> and the corresponding <kbd class="calibre17">wait_and_pop()</kbd> overload require careful thought. If you replace the return of <kbd class="calibre17">std::shared_ptr&lt;&gt;</kbd> retrieved from <kbd class="calibre17">old_head</kbd> with a copy assignment to the <kbd class="calibre17">value</kbd> parameter, there’s a potential exception-safety issue. At this point, the data item has been removed from the queue and the
+         mutex unlocked; all that remains is to return the data to the caller. But if the copy assignment throws an exception (as it
+         might), the data item is lost because it can’t be returned to the queue in the same place.
+      </p>
+      
+      <p class="noind">If the actual type <kbd class="calibre17">T</kbd> used for the template argument has a no-throw move-assignment operator or a no-throw swap operation, you could use that,
+         but you’d prefer a general solution that could be used for any type <kbd class="calibre17">T</kbd>. In this case, you have to move the potential throwing operation inside the locked region before the node is removed from
+         the list. This means you need an extra overload of <kbd class="calibre17">pop_head()</kbd> that retrieves the stored value prior to modifying the list.
+      </p>
+      
+      <p class="noind">In comparison, <kbd class="calibre17">empty()</kbd> is trivial: lock <kbd class="calibre17">head_mutex</kbd> and check for <kbd class="calibre17">head== get_tail()</kbd> (see <a href="#ch06ex10" class="calibre4">listing 6.10</a>). The final code for the queue is shown in <a href="#ch06ex07" class="calibre4">listings 6.7</a>, <a href="#ch06ex08" class="calibre4">6.8</a>, <a href="#ch06ex09" class="calibre4">6.9</a>, and <a href="#ch06ex10" class="calibre4">6.10</a>.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06ex07">Listing 6.7. <a id="ch06ex07__title" class="calibre4"></a>A thread-safe queue with locking and waiting: internals and interface
+      </h5>
+      <pre id="PLd0e23505" class="calibre5">template&lt;typename T&gt;
+class threadsafe_queue
+{
+private:
+    struct node
+    {
+        std::shared_ptr&lt;T&gt; data;
+        std::unique_ptr&lt;node&gt; next;
+    };
+    std::mutex head_mutex;
+    std::unique_ptr&lt;node&gt; head;
+    std::mutex tail_mutex;
+    node* tail;
+    std::condition_variable data_cond;
+public:
+    threadsafe_queue():
+        head(new node),tail(head.get())
+    {}
+    threadsafe_queue(const threadsafe_queue&amp; other)=delete;
+    threadsafe_queue&amp; operator=(const threadsafe_queue&amp; other)=delete;
+    std::shared_ptr&lt;T&gt; try_pop();
+    bool try_pop(T&amp; value);
+    std::shared_ptr&lt;T&gt; wait_and_pop();
+    void wait_and_pop(T&amp; value);
+    void push(T new_value);
+    bool empty();
+};</pre>
+      
+      <p class="noind">Pushing new nodes onto the queue is fairly straightforward—the implementation (shown in the following listing) is close to
+         that shown previously.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06ex08">Listing 6.8. <a id="ch06ex08__title" class="calibre4"></a>A thread-safe queue with locking and waiting: pushing new values
+      </h5>
+      <pre id="PLd0e23520" class="calibre5">template&lt;typename T&gt;
+void threadsafe_queue&lt;T&gt;::push(T new_value)
+{
+    std::shared_ptr&lt;T&gt; new_data(
+        std::make_shared&lt;T&gt;(std::move(new_value)));
+    std::unique_ptr&lt;node&gt; p(new node);
+    {
+        std::lock_guard&lt;std::mutex&gt; tail_lock(tail_mutex);
+        tail-&gt;data=new_data;
+        node* const new_tail=p.get();
+        tail-&gt;next=std::move(p);
+        tail=new_tail;
+    }
+    data_cond.notify_one();
+}</pre>
+      
+      <p class="noind">As already mentioned, the complexity is all in the <kbd class="calibre17">pop</kbd> side, which makes use of a series of helper functions to simplify matters. The next listing shows the implementation of <kbd class="calibre17">wait_and_pop()</kbd> and the associated helper functions.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06ex09">Listing 6.9. <a id="ch06ex09__title" class="calibre4"></a>A thread-safe queue with locking and waiting: <kbd class="calibre17">wait_and_pop()</kbd></h5>
+      <pre id="PLd0e23544" class="calibre5">template&lt;typename T&gt;
+class threadsafe_queue
+{
+private:
+    node* get_tail()
+    {
+        std::lock_guard&lt;std::mutex&gt; tail_lock(tail_mutex);
+        return tail;
+    }
+    std::unique_ptr&lt;node&gt; pop_head()                             <b class="calibre24"><i class="calibre6">1</i></b>
+    {
+        std::unique_ptr&lt;node&gt; old_head=std::move(head);
+        head=std::move(old_head-&gt;next);
+        return old_head;
+    }
+    std::unique_lock&lt;std::mutex&gt; wait_for_data()                 <b class="calibre24"><i class="calibre6">2</i></b>
+    {
+        std::unique_lock&lt;std::mutex&gt; head_lock(head_mutex);
+        data_cond.wait(head_lock,[&amp;]{return head.get()!=get_tail();});
+        return std::move(head_lock);                             <b class="calibre24"><i class="calibre6">3</i></b>
+    }
+    std::unique_ptr&lt;node&gt; wait_pop_head()
+    {
+        std::unique_lock&lt;std::mutex&gt; head_lock(wait_for_data()); <b class="calibre24"><i class="calibre6">4</i></b>
+        return pop_head();
+    }
+    std::unique_ptr&lt;node&gt; wait_pop_head(T&amp; value)
+    {
+        std::unique_lock&lt;std::mutex&gt; head_lock(wait_for_data()); <b class="calibre24"><i class="calibre6">5</i></b>
+        value=std::move(*head-&gt;data);
+        return pop_head();
+    }
+public:
+    std::shared_ptr&lt;T&gt; wait_and_pop()
+    {
+        std::unique_ptr&lt;node&gt; const old_head=wait_pop_head();
+        return old_head-&gt;data;
+    }
+    void wait_and_pop(T&amp; value)
+    {
+        std::unique_ptr&lt;node&gt; const old_head=wait_pop_head(value);
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle2632" class="calibre4"></a>The implementation of the <kbd class="calibre17">pop</kbd> side shown in <a href="#ch06ex09" class="calibre4">listing 6.9</a> has several little helper functions to simplify the code and reduce duplication, such as <kbd class="calibre17">pop_head()</kbd> <b class="calibre24"><i class="calibre6">1</i></b>, which modifies the list to remove the head item, and <kbd class="calibre17">wait_for_data()</kbd> <b class="calibre24"><i class="calibre6">2</i></b>, which waits for the queue to have some data to pop. <kbd class="calibre17">wait_for_data()</kbd> is particularly noteworthy, because not only does it wait on the condition variable using a lambda function for the predicate,
+         but it also returns the lock instance to the caller <b class="calibre24"><i class="calibre6">3</i></b>. This is to ensure that the same lock is held while the data is modified by the relevant <kbd class="calibre17">wait_pop_head()</kbd> overload, <b class="calibre24"><i class="calibre6">4</i></b> and <b class="calibre24"><i class="calibre6">5</i></b>. <kbd class="calibre17">pop_head()</kbd> is also reused by the <kbd class="calibre17">try_pop()</kbd> code shown in the next listing.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06ex10">Listing 6.10. <a id="ch06ex10__title" class="calibre4"></a>A thread-safe queue with locking and waiting: <kbd class="calibre17">try_pop()</kbd> and <kbd class="calibre17">empty()</kbd></h5>
+      <pre id="PLd0e23631" class="calibre5">template&lt;typename T&gt;
+class threadsafe_queue
+{
+private:
+    std::unique_ptr&lt;node&gt; try_pop_head()
+    {
+        std::lock_guard&lt;std::mutex&gt; head_lock(head_mutex);
+        if(head.get()==get_tail())
+        {
+            return std::unique_ptr&lt;node&gt;();
+        }
+        return pop_head();
+    }
+    std::unique_ptr&lt;node&gt; try_pop_head(T&amp; value)
+    {
+        std::lock_guard&lt;std::mutex&gt; head_lock(head_mutex);
+        if(head.get()==get_tail())
+        {
+            return std::unique_ptr&lt;node&gt;();
+        }
+        value=std::move(*head-&gt;data);
+        return pop_head();
+    }
+public:
+    std::shared_ptr&lt;T&gt; try_pop()
+    {
+        std::unique_ptr&lt;node&gt; old_head=try_pop_head();
+        return old_head?old_head-&gt;data:std::shared_ptr&lt;T&gt;();
+    }
+    bool try_pop(T&amp; value)
+    {
+        std::unique_ptr&lt;node&gt; const old_head=try_pop_head(value);
+        return old_head;
+    }
+    bool empty()
+    {
+        std::lock_guard&lt;std::mutex&gt; head_lock(head_mutex);
+        return (head.get()==get_tail());
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1071" class="calibre4"></a><a id="iddle1526" class="calibre4"></a><a id="iddle1565" class="calibre4"></a><a id="iddle2540" class="calibre4"></a><a id="iddle2595" class="calibre4"></a>This queue implementation will serve as the basis for the lock-free queue covered in <a href="kindle_split_017.html#ch07" class="calibre4">chapter 7</a>. It’s an <i class="calibre6">unbounded</i> queue; threads can continue to push new values onto the queue as long as there’s available memory, even if no values are
+         removed. The alternative to an unbounded queue is a <i class="calibre6">bounded</i> queue, in which the maximum length of the queue is fixed when the queue is created. Once a bounded queue is full, attempts
+         to push further elements onto the queue will either fail or block until an element has been popped from the queue to make
+         room. Bounded queues can be useful for ensuring an even spread of work when dividing work between threads based on tasks to
+         be performed (see <a href="kindle_split_018.html#ch08" class="calibre4">chapter 8</a>). This prevents the thread(s) populating the queue from running too far ahead of the thread(s) reading items from the queue.
+      </p>
+      
+      <p class="noind">The unbounded queue implementation shown here can easily be extended to limit the length of the queue by waiting on the condition
+         variable in <kbd class="calibre17">push()</kbd>. Rather than waiting for the queue to have items (as is done in <kbd class="calibre17">pop()</kbd>), you need to wait for the queue to have fewer than the maximum number of items. Further discussion of bounded queues is
+         outside the scope of this book; for now, let’s move beyond queues and on to more complex data structures.
+      </p>
+      
+      
+      
+      
+      
+      <h3 id="ch06lev1sec3" class="chapter"><a id="ch06lev1sec3__title" class="calibre3"></a>6.3. Designing more complex lock-based data structures
+      </h3>
+      
+      <p class="noind">Stacks and queues are simple: the interface is exceedingly limited, and they’re tightly focused on a specific purpose. Not
+         all data structures are that simple; most data structures support a variety of operations. In principle, this can then lead
+         to greater opportunities for concurrency, but it also makes the task of protecting the data that much harder because the multiple
+         access patterns need to be taken into account. The precise nature of the various operations that can be performed is important
+         when designing these data structures for concurrent access.
+      </p>
+      
+      <p class="noind">To see some of the issues involved, let’s look at the design of a lookup table.</p>
+      
+      
+      <h4 id="ch06lev2sec5" class="calibre23">6.3.1. <a id="ch06lev2sec5__title" class="calibre4"></a>Writing a thread-safe lookup table using locks
+      </h4>
+      
+      <p class="noind">A lookup table or dictionary associates values of one type (the key type) with values of either the same or a different type
+         (the mapped type). In general, the intention behind such a structure is to allow code to query the data associated with a
+         given key. In the C++ Standard Library, this facility is provided by the associative containers: <kbd class="calibre17">std::map&lt;&gt;</kbd>, <kbd class="calibre17">std::multimap&lt;&gt;</kbd>, <kbd class="calibre17">std::unordered_map&lt;&gt;</kbd>, and <kbd class="calibre17">std::unordered_multimap&lt;&gt;</kbd>.
+      </p>
+      
+      <p class="noind">A lookup table has a different usage pattern than a stack or a queue. Whereas almost every operation on a stack or a queue
+         modifies it in some way, either to add an element or remove one, a lookup table might be modified rarely. The simple DNS cache
+         in <a href="kindle_split_013.html#ch03ex13" class="calibre4">listing 3.13</a> is one example of this scenario, which features a greatly reduced interface compared to <kbd class="calibre17">std::map&lt;&gt;</kbd>. As you saw with the stack and queue, the interfaces of the standard containers aren’t suitable when the data structure is
+         to be accessed from multiple threads concurrently, because there are inherent race conditions in the interface design, so
+         they need to be cut down and revised.
+      </p>
+      
+      <p class="noind"><a id="iddle2178" class="calibre4"></a>The biggest problem with the <kbd class="calibre17">std::map&lt;&gt;</kbd> interface from a concurrency perspective is the iterators. Although it’s possible to have an iterator that provides safe
+         access into a container even when other threads can access (and modify) the container, this is a tricky proposition. Correctly
+         handling iterators requires you to deal with issues such as another thread deleting the element that the iterator is referring
+         to, which can get rather involved. For the first cut at a thread-safe lookup table interface, you’ll skip the iterators. Given
+         that the interface to <kbd class="calibre17">std::map&lt;&gt;</kbd> (and the other associative containers in the standard library) is so heavily iterator-based, it’s probably worth setting
+         them aside and designing the interface from the ground up.
+      </p>
+      
+      <p class="noind">There are only a few basic operations on a lookup table:</p>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22">Add a new key/value pair.</li>
+         
+         <li class="calibre22">Change the value associated with a given key.</li>
+         
+         <li class="calibre22">Remove a key and its associated value.</li>
+         
+         <li class="calibre22">Obtain the value associated with a given key, if any.</li>
+         
+      </ul>
+      
+      <p class="noind">There are also a few container-wide operations that might be useful, such as a check on whether the container is empty, a
+         snapshot of the complete list of keys, or a snapshot of the complete set of key/value pairs.
+      </p>
+      
+      <p class="noind">If you stick to the simple thread-safety guidelines, such as not returning references, and put a simple mutex lock around
+         the entirety of each member function, all of these are safe; they either come before some modification from another thread
+         or after it. The biggest potential for a race condition is when a new key/value pair is being added; if two threads add a
+         new value, only one will be first, and the second will therefore fail. One possibility is to combine add and change into a
+         single member function, as you did for the DNS cache in <a href="kindle_split_013.html#ch03ex13" class="calibre4">listing 3.13</a>.
+      </p>
+      
+      <p class="noind">The only other interesting point from an interface perspective is the <i class="calibre6">if any</i> part of obtaining an associated value. One option is to allow the user to provide a “default” result that’s returned in the
+         case when the key isn’t present:
+      </p>
+      
+      <pre id="PLd0e23792" class="calibre5">mapped_type get_value(key_type const&amp; key, mapped_type default_value);</pre>
+      
+      <p class="noind">In this case, a default-constructed instance of <kbd class="calibre17">mapped_type</kbd> could be used if the <kbd class="calibre17">default_value</kbd> wasn’t explicitly provided. This could also be extended to return an <kbd class="calibre17">std::pair&lt;mapped_type,bool&gt;</kbd> instead of just an instance of <kbd class="calibre17">mapped_type</kbd>, where the <kbd class="calibre17">bool</kbd> indicates whether the value was present. Another option is to return a smart pointer referring to the value; if the pointer
+         value is <kbd class="calibre17">NULL</kbd>, there was no value to return.
+      </p>
+      
+      <p class="noind">As already mentioned, once the interface has been decided, then (assuming no interface race conditions) the thread safety
+         could be guaranteed by using a single mutex and a simple lock around every member function to protect the underlying data
+         structure. But this would squander the possibilities for concurrency provided by the separate functions for reading the data
+         structure and modifying it. One option is to use a mutex that supports multiple reader threads or a single writer thread,
+         such as <a id="iddle1255" class="calibre4"></a><a id="iddle1377" class="calibre4"></a><a id="iddle1558" class="calibre4"></a><a id="iddle1578" class="calibre4"></a><a id="iddle2160" class="calibre4"></a><a id="iddle2313" class="calibre4"></a><kbd class="calibre17">std::shared_mutex</kbd> used in <a href="kindle_split_013.html#ch03ex13" class="calibre4">listing 3.13</a>. Although this would indeed improve the possibilities for concurrent access, only one thread could modify the data structure
+         at a time. Ideally, you’d like to do better than that.
+      </p>
+      
+      
+      <h5 class="notetitle" id="ch06lev3sec3"><a id="ch06lev3sec3__title" class="calibre4"></a>Designing a map data structure for fine-grained locking
+      </h5>
+      
+      <p class="noind">As with the queue discussed in <a href="#ch06lev2sec4" class="calibre4">section 6.2.3</a>, in order to permit fine-grained locking you need to look carefully at the details of the data structure rather than wrapping
+         a pre-existing container such as <kbd class="calibre17">std::map&lt;&gt;</kbd>. There are three common ways of implementing an associative container like your lookup table:
+      </p>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22">A binary tree, such as a red-black tree</li>
+         
+         <li class="calibre22">A sorted array</li>
+         
+         <li class="calibre22">A hash table</li>
+         
+      </ul>
+      
+      <p class="noind">A binary tree doesn’t provide much scope for extending the opportunities for concurrency; every lookup or modification has
+         to start by accessing the root node, which therefore has to be locked. Although this lock can be released as the accessing
+         thread moves down the tree, this isn’t much better than a single lock across the whole data structure.
+      </p>
+      
+      <p class="noind">A sorted array is even worse, because you can’t tell in advance where in the array a given data value is going to be, so you
+         need a single lock for the whole array.
+      </p>
+      
+      <p class="noind">That leaves the hash table. Assuming a fixed number of buckets, which bucket a key belongs to is purely a property of the
+         key and its hash function. This means you can safely have a separate lock per bucket. If you again use a mutex that supports
+         multiple readers or a single writer, you increase the opportunities for concurrency <i class="calibre6">N</i>-fold, where <i class="calibre6">N</i> is the number of buckets. The downside is that you need a good hash function for the key. The C++ Standard Library provides
+         the <kbd class="calibre17">std::hash&lt;&gt;</kbd> template, which you can use for this purpose. It’s already specialized for fundamental types such as <kbd class="calibre17">int</kbd> and common library types such as <kbd class="calibre17">std::string</kbd>, and the user can easily specialize it for other key types. If you follow the lead of the standard unordered containers and
+         take the type of the function object to use for doing the hashing as a template parameter, the user can choose whether to
+         specialize <kbd class="calibre17">std::hash&lt;&gt;</kbd> for their key type or provide a separate hash function.
+      </p>
+      
+      <p class="noind">So, let’s look at some code. What might the implementation of a thread-safe lookup table look like? One possibility is shown
+         here.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06ex11">Listing 6.11. <a id="ch06ex11__title" class="calibre4"></a>A thread-safe lookup table
+      </h5>
+      <pre id="PLd0e23941" class="calibre5">template&lt;typename Key,typename Value,typename Hash=std::hash&lt;Key&gt; &gt;
+class threadsafe_lookup_table
+{
+private:
+    class bucket_type
+    {
+    private:
+        typedef std::pair&lt;Key,Value&gt; bucket_value;
+        typedef std::list&lt;bucket_value&gt; bucket_data;
+        typedef typename bucket_data::iterator bucket_iterator;
+        bucket_data data;
+        mutable std::shared_mutex mutex;                          <b class="calibre24"><i class="calibre6">1</i></b>
+
+        bucket_iterator find_entry_for(Key const&amp; key) const      <b class="calibre24"><i class="calibre6">2</i></b>
+        {
+            return std::find_if(data.begin(),data.end(),
+                                [&amp;](bucket_value const&amp; item)
+                                {return item.first==key;});
+        }
+    public:
+        Value value_for(Key const&amp; key,Value const&amp; default_value) const
+        {
+            std::shared_lock&lt;std::shared_mutex&gt; lock(mutex);      <b class="calibre24"><i class="calibre6">3</i></b>
+            bucket_iterator const found_entry=find_entry_for(key);
+            return (found_entry==data.end())?
+                default_value:found_entry-&gt;second;
+        }
+        void add_or_update_mapping(Key const&amp; key,Value const&amp; value)
+        {
+            std::unique_lock&lt;std::shared_mutex&gt; lock(mutex);      <b class="calibre24"><i class="calibre6">4</i></b>
+            bucket_iterator const found_entry=find_entry_for(key);
+            if(found_entry==data.end())
+            {
+                data.push_back(bucket_value(key,value));
+            }
+            else
+            {
+                found_entry-&gt;second=value;
+            }
+        }
+        void remove_mapping(Key const&amp; key)
+        {
+            std::unique_lock&lt;std::shared_mutex&gt; lock(mutex);      <b class="calibre24"><i class="calibre6">5</i></b>
+            bucket_iterator const found_entry=find_entry_for(key);
+            if(found_entry!=data.end())
+            {
+                data.erase(found_entry);
+            }
+        }
+    };
+    std::vector&lt;std::unique_ptr&lt;bucket_type&gt; &gt; buckets;           <b class="calibre24"><i class="calibre6">6</i></b>
+    Hash hasher;
+    bucket_type&amp; get_bucket(Key const&amp; key) const                 <b class="calibre24"><i class="calibre6">7</i></b>
+    {
+        std::size_t const bucket_index=hasher(key)%buckets.size();
+        return *buckets[bucket_index];
+    }
+public:
+    typedef Key key_type;
+    typedef Value mapped_type;
+    typedef Hash hash_type;
+    threadsafe_lookup_table(
+        unsigned num_buckets=19,Hash const&amp; hasher_=Hash()):
+        buckets(num_buckets),hasher(hasher_)
+    {
+        for(unsigned i=0;i&lt;num_buckets;++i)
+        {
+            buckets[i].reset(new bucket_type);
+        }
+    }
+    threadsafe_lookup_table(threadsafe_lookup_table const&amp; other)=delete;
+    threadsafe_lookup_table&amp; operator=(
+        threadsafe_lookup_table const&amp; other)=delete;
+    Value value_for(Key const&amp; key,
+                    Value const&amp; default_value=Value()) const
+    {
+        return get_bucket(key).value_for(key,default_value);      <b class="calibre24"><i class="calibre6">8</i></b>
+    }
+    void add_or_update_mapping(Key const&amp; key,Value const&amp; value)
+    {
+        get_bucket(key).add_or_update_mapping(key,value);         <b class="calibre24"><i class="calibre6">9</i></b>
+    }
+    void remove_mapping(Key const&amp; key)
+    {
+        get_bucket(key).remove_mapping(key);                      <b class="calibre24"><i class="calibre6">10</i></b>
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1010" class="calibre4"></a><a id="iddle1370" class="calibre4"></a><a id="iddle1425" class="calibre4"></a>This implementation uses a <kbd class="calibre17">std::vector&lt;std::unique_ptr&lt;bucket_type&gt;&gt;</kbd> <b class="calibre24"><i class="calibre6">6</i></b> to hold the buckets, which allows the number of buckets to be specified in the constructor. The default is 19, which is an
+         arbitrary prime number; hash tables work best with a prime number of buckets. Each bucket is protected with an instance of
+         <kbd class="calibre17">std::shared_mutex</kbd> <b class="calibre24"><i class="calibre6">1</i></b> to allow many concurrent reads or a single call to either of the modification functions per bucket.
+      </p>
+      
+      <p class="noind">Because the number of buckets is fixed, the <kbd class="calibre17">get_bucket()</kbd> function <b class="calibre24"><i class="calibre6">7</i></b> can be called without any locking (<b class="calibre24"><i class="calibre6">8</i></b>, <b class="calibre24"><i class="calibre6">9</i></b>, and <b class="calibre24"><i class="calibre6">10</i></b>), and then the bucket mutex can be locked either for shared (read-only) ownership <b class="calibre24"><i class="calibre6">3</i></b>, or unique (read/write) ownership, <b class="calibre24"><i class="calibre6">4</i></b> and <b class="calibre24"><i class="calibre6">5</i></b>, as appropriate for each function.
+      </p>
+      
+      <p class="noind">All three functions make use of the <kbd class="calibre17">find_entry_for()</kbd> member function <b class="calibre24"><i class="calibre6">2</i></b> on the bucket to determine whether the entry is in the bucket. Each bucket contains just an <kbd class="calibre17">std::list&lt;&gt;</kbd> of key/value pairs, so adding and removing entries is easy.
+      </p>
+      
+      <p class="noind">I’ve already covered the concurrency angle, and everything is suitably protected with mutex locks, so what about exception
+         safety? <kbd class="calibre17">value_for</kbd> doesn’t modify anything, so that’s fine; if it throws an exception, it won’t affect the data structure. <kbd class="calibre17">remove_mapping</kbd> modifies the list with the call to <kbd class="calibre17">erase</kbd>, but this is guaranteed not to throw, so that’s safe. This leaves <kbd class="calibre17">add_or_update_mapping</kbd>, which might throw in either of the two branches of <kbd class="calibre17">if</kbd>. <kbd class="calibre17">push_back</kbd> is exception-safe and will leave the list in the original state if it throws, so that branch is fine. The only problem is
+         with the assignment in the case where you’re replacing an existing value; if the assignment throws, you’re relying on it leaving
+         the original unchanged. But this doesn’t affect the data structure as a whole and is entirely a property of the user-supplied
+         type, so you can safely leave it up to the user to handle this.
+      </p>
+      
+      <p class="noind"><a id="iddle1525" class="calibre4"></a><a id="iddle1564" class="calibre4"></a><a id="iddle2539" class="calibre4"></a>At the beginning of this section, I mentioned that one nice-to-have feature of such a lookup table would be the option of
+         retrieving a snapshot of the current state into, for example, a <kbd class="calibre17">std::map&lt;&gt;</kbd>. This would require locking the entire container in order to ensure that a consistent copy of the state is retrieved, which
+         requires locking all the buckets. Because the “normal” operations on the lookup table require a lock on only one bucket at
+         a time, this would be the only operation that requires a lock on all the buckets. Therefore, provided you lock them in the
+         same order every time (for example, increasing bucket index), there’ll be no opportunity for deadlock. This implementation
+         is shown in the following listing.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06ex12">Listing 6.12. <a id="ch06ex12__title" class="calibre4"></a>Obtaining contents of a <kbd class="calibre17">threadsafe_lookup_table</kbd> as <kbd class="calibre17">std::map&lt;&gt;</kbd></h5>
+      <pre id="PLd0e24130" class="calibre5">std::map&lt;Key,Value&gt; threadsafe_lookup_table::get_map() const
+{
+    std::vector&lt;std::unique_lock&lt;std::shared_mutex&gt; &gt; locks;
+    for(unsigned i=0;i&lt;buckets.size();++i)
+    {
+        locks.push_back(
+            std::unique_lock&lt;std::shared_mutex&gt;(buckets[i].mutex));
+    }
+    std::map&lt;Key,Value&gt; res;
+    for(unsigned i=0;i&lt;buckets.size();++i)
+    {
+        for(bucket_iterator it=buckets[i].data.begin();
+            it!=buckets[i].data.end();
+            ++it)
+        {
+            res.insert(*it);
+        }
+    }
+    return res;
+}</pre>
+      
+      <p class="noind">The lookup table implementation from <a href="#ch06ex11" class="calibre4">listing 6.11</a> increases the opportunity for concurrency of the lookup table as a whole by locking each bucket separately and by using a
+         <kbd class="calibre17">std::shared_mutex</kbd> to allow reader concurrency on each bucket. But what if you could increase the potential for concurrency on a bucket by even
+         finer-grained locking? In the next section, you’ll do exactly that by using a thread-safe list container with iterator support.
+      </p>
+      
+      
+      
+      
+      <h4 id="ch06lev2sec6" class="calibre23">6.3.2. <a id="ch06lev2sec6__title" class="calibre4"></a>Writing a thread-safe list using locks
+      </h4>
+      
+      <p class="noind">A list is one of the most basic data structures, so it should be straightforward to write a thread-safe one, shouldn’t it?
+         Well, that depends on what facilities you’re after, and you need one that offers iterator support, something I shied away
+         from adding to your map on the basis that it was too complicated. The basic issue with STL-style iterator support is that
+         the iterator must hold some kind of reference into the internal data structure of the container. If the container can be modified
+         from another thread, this reference must somehow remain valid, which requires that the iterator hold a lock on <a id="iddle1386" class="calibre4"></a>some part of the structure. Given that the lifetime of an STL-style iterator is completely outside the control of the container,
+         this is a bad idea.
+      </p>
+      
+      <p class="noind">The alternative is to provide iteration functions such as <kbd class="calibre17">for_each</kbd> as part of the container itself. This puts the container squarely in charge of the iteration and locking, but it does fall
+         foul of the deadlock avoidance guidelines from <a href="kindle_split_013.html#ch03" class="calibre4">chapter 3</a>. In order for <kbd class="calibre17">for_each</kbd> to do anything useful, it must call user-supplied code while holding the internal lock. Not only that, but it must also pass
+         a reference to each item to this user-supplied code in order for the user-supplied code to work on this item. You could avoid
+         this by passing a copy of each item to the user-supplied code, but that would be expensive if the data items were large.
+      </p>
+      
+      <p class="noind">So, for now you’ll leave it up to the user to ensure that they don’t cause deadlock by acquiring locks in the user-supplied
+         operations and don’t cause data races by storing the references for access outside the locks. In the case of the list being
+         used by the lookup table, this is perfectly safe, because you know you’re not going to do anything naughty.
+      </p>
+      
+      <p class="noind">That leaves you with the question of which operations to supply for your list. If you cast your eyes back to <a href="#ch06ex11" class="calibre4">listings 6.11</a> and <a href="#ch06ex12" class="calibre4">6.12</a>, you can see the sorts of operations you require:
+      </p>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22">Add an item to the list.</li>
+         
+         <li class="calibre22">Remove an item from the list if it meets a certain condition.</li>
+         
+         <li class="calibre22">Find an item in the list that meets a certain condition.</li>
+         
+         <li class="calibre22">Update an item that meets a certain condition.</li>
+         
+         <li class="calibre22">Copy each item in the list to another container.</li>
+         
+      </ul>
+      
+      <p class="noind">For this to be a good general-purpose list container, it would be helpful to add further operations, such as a positional
+         insert, but this is unnecessary for your lookup table, so I’ll leave it as an exercise for the reader.
+      </p>
+      
+      <p class="noind">The basic idea with fine-grained locking for a linked list is to have one mutex per node. If the list gets big, that’s a lot
+         of mutexes! The benefit here is that operations on separate parts of the list are truly concurrent: each operation holds only
+         the locks on the nodes it’s interested in and unlocks each node as it moves on to the next. The next listing shows an implementation
+         of this list.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="ch06ex13">Listing 6.13. <a id="ch06ex13__title" class="calibre4"></a>A thread-safe list with iteration support
+      </h5>
+      <pre id="PLd0e24222" class="calibre5">template&lt;typename T&gt;
+class threadsafe_list
+{
+    struct node                                                  <b class="calibre24"><i class="calibre6">1</i></b>
+    {
+        std::mutex m;
+        std::shared_ptr&lt;T&gt; data;
+        std::unique_ptr&lt;node&gt; next;
+        node():                                                  <b class="calibre24"><i class="calibre6">2</i></b>
+            next()
+        {}
+        node(T const&amp; value):                                   <b class="calibre24"><i class="calibre6">3</i></b>
+            data(std::make_shared&lt;T&gt;(value))
+        {}
+    };
+    node head;
+public:
+    threadsafe_list()
+    {}
+    ~threadsafe_list()
+    {
+        remove_if([](node const&amp;){return true;});
+    }
+    threadsafe_list(threadsafe_list const&amp; other)=delete;
+    threadsafe_list&amp; operator=(threadsafe_list const&amp; other)=delete;
+    void push_front(T const&amp; value)
+    {
+        std::unique_ptr&lt;node&gt; new_node(new node(value));        <b class="calibre24"><i class="calibre6">4</i></b>
+        std::lock_guard&lt;std::mutex&gt; lk(head.m);
+        new_node-&gt;next=std::move(head.next);                    <b class="calibre24"><i class="calibre6">5</i></b>
+        head.next=std::move(new_node);                          <b class="calibre24"><i class="calibre6">6</i></b>
+    }
+    template&lt;typename Function&gt;
+    void for_each(Function f)                                   <b class="calibre24"><i class="calibre6">7</i></b>
+    {
+        node* current=&amp;head;
+        std::unique_lock&lt;std::mutex&gt; lk(head.m);                <b class="calibre24"><i class="calibre6">8</i></b>
+        while(node* const next=current-&gt;next.get())             <b class="calibre24"><i class="calibre6">9</i></b>
+        {
+            std::unique_lock&lt;std::mutex&gt; next_lk(next-&gt;m);      <b class="calibre24"><i class="calibre6">10</i></b>
+            lk.unlock();                                        <b class="calibre24"><i class="calibre6">11</i></b>
+            f(*next-&gt;data);                                     <b class="calibre24"><i class="calibre6">12</i></b>
+            current=next;
+            lk=std::move(next_lk);                              <b class="calibre24"><i class="calibre6">13</i></b>
+        }
+    }
+    template&lt;typename Predicate&gt;
+    std::shared_ptr&lt;T&gt; find_first_if(Predicate p)               <b class="calibre24"><i class="calibre6">14</i></b>
+    {
+        node* current=&amp;head;
+        std::unique_lock&lt;std::mutex&gt; lk(head.m);
+        while(node* const next=current-&gt;next.get())
+        {
+            std::unique_lock&lt;std::mutex&gt; next_lk(next-&gt;m);
+            lk.unlock();
+            if(p(*next-&gt;data))                                  <b class="calibre24"><i class="calibre6">15</i></b>
+            {
+                return next-&gt;data;                              <b class="calibre24"><i class="calibre6">16</i></b>
+            }
+            current=next;
+            lk=std::move(next_lk);
+        }
+        return std::shared_ptr&lt;T&gt;();
+    }
+    template&lt;typename Predicate&gt;
+    void remove_if(Predicate p)                                 <b class="calibre24"><i class="calibre6">17</i></b>
+    {
+        node* current=&amp;head;
+        std::unique_lock&lt;std::mutex&gt; lk(head.m);
+        while(node* const next=current-&gt;next.get())
+        {
+            std::unique_lock&lt;std::mutex&gt; next_lk(next-&gt;m);
+            if(p(*next-&gt;data))                                  <b class="calibre24"><i class="calibre6">18</i></b>
+            {
+                std::unique_ptr&lt;node&gt; old_next=std::move(current-&gt;next);
+                current-&gt;next=std::move(next-&gt;next);            <b class="calibre24"><i class="calibre6">19</i></b>
+                next_lk.unlock();
+            }                                                   <b class="calibre24"><i class="calibre6">20</i></b>
+            else
+            {
+                lk.unlock();                                    <b class="calibre24"><i class="calibre6">21</i></b>
+                current=next;
+                lk=std::move(next_lk);
+            }
+        }
+    }
+};</pre>
+      
+      <p class="noind"><a id="iddle1826" class="calibre4"></a>The <kbd class="calibre17">threadsafe_list&lt;&gt;</kbd> from <a href="#ch06ex13" class="calibre4">listing 6.13</a> is a singly linked list, where each entry is a <kbd class="calibre17">node</kbd> structure <b class="calibre24"><i class="calibre6">1</i></b>. A default-constructed <kbd class="calibre17">node</kbd> is used for the <kbd class="calibre17">head</kbd> of the list, which starts with a <kbd class="calibre17">NULL next</kbd> pointer <b class="calibre24"><i class="calibre6">2</i></b>. New nodes are added with the <kbd class="calibre17">push_front()</kbd> function; first a new node is constructed <b class="calibre24"><i class="calibre6">4</i></b>, which allocates the stored data on the heap <b class="calibre24"><i class="calibre6">3</i></b>, while leaving the <kbd class="calibre17">next</kbd> pointer as <kbd class="calibre17">NULL</kbd>. You then need to acquire the lock on the mutex for the <kbd class="calibre17">head</kbd> node in order to get the appropriate <kbd class="calibre17">next</kbd> value <b class="calibre24"><i class="calibre6">5</i></b> and insert the node at the front of the list by setting <kbd class="calibre17">head.next</kbd> to point to your new node <b class="calibre24"><i class="calibre6">6</i></b>. So far, so good: you only need to lock one mutex in order to add a new item to the list, so there’s no risk of deadlock.
+         Also, the slow memory allocation happens outside the lock, so the lock is only protecting the update of a couple of pointer
+         values that can’t fail. On to the iterative functions.
+      </p>
+      
+      <p class="noind">First up, let’s look at <kbd class="calibre17">for_each()</kbd> <b class="calibre24"><i class="calibre6">7</i></b>. This operation takes a <kbd class="calibre17">Function</kbd> of some type to apply to each element in the list; in common with most standard library algorithms, it takes this function
+         by value and will work with either a genuine function or an object of a type with a function call operator. In this case,
+         the function must accept a value of type <kbd class="calibre17">T</kbd> as the sole parameter. Here’s where you do the hand-over-hand locking. To start with, you lock the mutex on the <kbd class="calibre17">head</kbd> node <b class="calibre24"><i class="calibre6">8</i></b>. It’s then safe to obtain the pointer to the <kbd class="calibre17">next</kbd> node (using <kbd class="calibre17">get()</kbd> because you’re not taking ownership of the pointer). If that pointer isn’t <kbd class="calibre17">NULL</kbd> <b class="calibre24"><i class="calibre6">9</i></b>, you lock the mutex on that node <b class="calibre24"><i class="calibre6">10</i></b> in order to process the data. Once you have the lock on that node, you can release the lock on the previous node <b class="calibre24"><i class="calibre6">11</i></b> and call the specified function <b class="calibre24"><i class="calibre6">12</i></b>. Once the function completes, you can update the <kbd class="calibre17">current</kbd> pointer to the node you processed and <kbd class="calibre17">move</kbd> the ownership of the lock from <kbd class="calibre17">next_lk</kbd> out to <kbd class="calibre17">lk</kbd> <b class="calibre24"><i class="calibre6">13</i></b>. Because <kbd class="calibre17">for_each</kbd> passes each data item <a id="iddle1371" class="calibre4"></a><a id="iddle1387" class="calibre4"></a><a id="iddle1861" class="calibre4"></a>directly to the supplied <kbd class="calibre17">Function</kbd>, you can use this to update the items if necessary, or copy them into another container, or whatever. This is entirely safe
+         if the function is well behaved, because the mutex for the node holding the data item is held across the call.
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">find_first_if()</kbd> <b class="calibre24"><i class="calibre6">14</i></b> is similar to <kbd class="calibre17">for_each()</kbd>; the crucial difference is that the supplied <kbd class="calibre17">Predicate</kbd> must return <kbd class="calibre17">true</kbd> to indicate a match or <kbd class="calibre17">false</kbd> to indicate no match <b class="calibre24"><i class="calibre6">15</i></b>. Once you have a match, you return the found data <b class="calibre24"><i class="calibre6">16</i></b>, rather than continuing to search. You could do this with <kbd class="calibre17">for_each()</kbd>, but it would needlessly continue processing the rest of the list even once a match had been found.
+      </p>
+      
+      <p class="noind"><kbd class="calibre17">remove_if()</kbd> <b class="calibre24"><i class="calibre6">17</i></b> is slightly different, because this function has to update the list; you can’t use <kbd class="calibre17">for_each()</kbd> for this. If the <kbd class="calibre17">Predicate</kbd> returns <kbd class="calibre17">true</kbd> <b class="calibre24"><i class="calibre6">18</i></b>, you remove the node from the list by updating <kbd class="calibre17">current-&gt;next</kbd> <b class="calibre24"><i class="calibre6">19</i></b>. Once you’ve done that, you can release the lock held on the mutex for the <kbd class="calibre17">next</kbd> node. The node is deleted when the <kbd class="calibre17">std::unique_ptr&lt;node&gt;</kbd> you moved it into goes out of scope <b class="calibre24"><i class="calibre6">20</i></b>. In this case, you don’t update <kbd class="calibre17">current</kbd> because you need to check the new <kbd class="calibre17">next</kbd> node. If the <kbd class="calibre17">Predicate</kbd> returns <kbd class="calibre17">false</kbd>, you want to move on as before <b class="calibre24"><i class="calibre6">21</i></b>.
+      </p>
+      
+      <p class="noind">So, are there any deadlocks or race conditions with all these mutexes? The answer here is quite definitely no, provided that
+         the supplied predicates and functions are well behaved. The iteration is always one way, always starting from the <kbd class="calibre17">head</kbd> node, and always locking the next mutex before releasing the current one, so there’s no possibility of different lock orders
+         in different threads. The only potential candidate for a race condition is the deletion of the removed node in <kbd class="calibre17">remove_if()</kbd> <b class="calibre24"><i class="calibre6">20</i></b>, because you do this after you’ve unlocked the mutex (it’s undefined behavior to destroy a locked mutex). But a few moments’
+         thought reveals that this is indeed safe, because you still hold the mutex on the previous node (<kbd class="calibre17">current</kbd>), so no new thread can try to acquire the lock on the node you’re deleting.
+      </p>
+      
+      <p class="noind">What about opportunities for concurrency? The whole point of this fine-grained locking was to improve the possibilities for
+         concurrency over a single mutex, so have you achieved that? Yes, you have: different threads can be working on different nodes
+         in the list at the same time, whether they’re processing each item with <kbd class="calibre17">for_each()</kbd>, searching with <kbd class="calibre17">find_first_if()</kbd>, or removing items with <kbd class="calibre17">remove_if()</kbd>. But because the mutex for each node must be locked in turn, the threads can’t pass each other. If one thread is spending
+         a long time processing a particular node, other threads will have to wait when they reach that particular node.
+      </p>
+      
+      
+      
+      
+      <h3 id="ch06lev1sec4" class="chapter"><a id="ch06lev1sec4__title" class="calibre3"></a>Summary
+      </h3>
+      
+      <p class="noind">This chapter started by looking at what it means to design a data structure for concurrency and providing some guidelines
+         for doing so. We then worked through several common data structures (stack, queue, hash map, and linked list), looking at
+         how to apply those guidelines to implement them in a way designed for concurrent access, using locks to protect the data and
+         prevent data races. You should now be <a id="iddle1523" class="calibre4"></a>able to look at the design of your own data structures to see where the opportunities for concurrency lie and where there’s
+         potential for race conditions.
+      </p>
+      
+      <p class="noind">In <a href="kindle_split_017.html#ch07" class="calibre4">chapter 7</a> we’ll look at ways of avoiding locks entirely, using the low-level atomic operations to provide the necessary ordering constraints,
+         while sticking to the same set of guidelines.
+      </p>
+      
+      
+      
+      
+      <div class="calibre13" id="calibre_pb_24"></div>
+</body></html>

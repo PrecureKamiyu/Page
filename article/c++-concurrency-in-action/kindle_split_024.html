@@ -1,0 +1,955 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:mbp="Kindle">
+  <head>
+    <title>C++ Concurrency in Action, Second Edition</title>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+  <link href="stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+<h2 class="part" id="app03">Appendix C. <a id="app03__title" class="calibre3"></a>A message-passing framework and complete ATM example
+      </h2>
+      
+      
+      
+      <p class="noind"><a id="iddle1085" class="calibre4"></a><a id="iddle1620" class="calibre4"></a><a id="iddle1624" class="calibre4"></a><a id="iddle2671" class="calibre4"></a>Back in <a href="kindle_split_014.html#ch04" class="calibre4">chapter 4</a>, I presented an example of sending messages between threads using a message-passing framework, using a simple implementation
+         of the code in an ATM as an example. What follows is the complete code for this example, including the message-passing framework.
+      </p>
+      
+      <p class="noind">Listing C.1 shows the message queue. It stores a list of messages as pointers to a base class; the specific message type is
+         handled with a template class derived from that base class. Pushing an entry constructs an appropriate instance of the wrapper
+         class and stores a pointer to it; popping an entry returns that pointer. Because the <kbd class="calibre17">message_base</kbd> class doesn’t have any member functions, the popping thread will need to cast the pointer to a suitable <kbd class="calibre17">wrapped_message&lt;T&gt;</kbd> pointer before it can access the stored message.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="app03ex01">Listing C.1. <a id="app03ex01__title" class="calibre4"></a>A simple message queue
+      </h5>
+      <pre id="PLd0e42450" class="calibre5">#include &lt;mutex&gt;
+#include &lt;condition_variable&gt;
+#include &lt;queue&gt;
+#include &lt;memory&gt;
+namespace messaging
+{
+    struct message_base                                       <b class="calibre24"><i class="calibre6">1</i></b>
+    {
+        virtual ~message_base()
+        {}
+    };
+    template&lt;typename Msg&gt;
+    struct wrapped_message:                                      <b class="calibre24"><i class="calibre6">2</i></b>
+        message_base
+    {
+        Msg contents;
+        explicit wrapped_message(Msg const&amp; contents_):
+            contents(contents_)
+        {}
+    };
+    class queue                                                  <b class="calibre24"><i class="calibre6">3</i></b>
+    {
+        std::mutex m;
+        std::condition_variable c;
+        std::queue&lt;std::shared_ptr&lt;message_base&gt; &gt; q;            <b class="calibre24"><i class="calibre6">4</i></b>
+    public:
+        template&lt;typename T&gt;
+        void push(T const&amp; msg)
+        {
+            std::lock_guard&lt;std::mutex&gt; lk(m);
+            q.push(std::make_shared&lt;wrapped_message&lt;T&gt; &gt;(msg));  <b class="calibre24"><i class="calibre6">5</i></b>
+            c.notify_all();
+        }
+        std::shared_ptr&lt;message_base&gt; wait_and_pop()
+        {
+            std::unique_lock&lt;std::mutex&gt; lk(m);
+            c.wait(lk,[&amp;]{return !q.empty();});                  <b class="calibre24"><i class="calibre6">6</i></b>
+            auto res=q.front();
+            q.pop();
+            return res;
+        }
+    };
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><a id="iddle1887" class="calibre4"></a><b class="calibre24"><i class="calibre6">1</i> Base class of your queue entries</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Each message type has a specialization.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">3</i> Your message queue</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">4</i> Internal queue stores pointers to message_base</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">5</i> Wrap posted message and store pointer</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">6</i> Block until queue isn’t empty</b></li>
+         
+      </ul>
+      
+      <p class="noind">Sending messages is handled through an instance of the <kbd class="calibre17">sender</kbd> class shown in listing C.2. This is a thin wrapper around a message queue that only allows messages to be pushed. Copying
+         instances of <kbd class="calibre17">sender</kbd> copies the pointer to the queue rather than the queue itself.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="app03ex02">Listing C.2. <a id="app03ex02__title" class="calibre4"></a>The <kbd class="calibre17">sender</kbd> class
+      </h5>
+      <pre id="PLd0e42549" class="calibre5">namespace messaging
+{
+    class sender
+    {
+        queue*q;                      <b class="calibre24"><i class="calibre6">1</i></b>
+    public:
+        sender():                     <b class="calibre24"><i class="calibre6">2</i></b>
+            q(nullptr)
+        {}
+        explicit sender(queue*q_):    <b class="calibre24"><i class="calibre6">3</i></b>
+            q(q_)
+        {}
+        template&lt;typename Message&gt;
+        void send(Message const&amp; msg)
+        {
+            if(q)
+            {
+                q-&gt;push(msg);         <b class="calibre24"><i class="calibre6">4</i></b>
+            }
+        }
+    };
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><a id="iddle1289" class="calibre4"></a><a id="iddle1847" class="calibre4"></a><b class="calibre24"><i class="calibre6">1</i> sender is a wrapper around the queue pointer.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Default-constructed sender has no queue</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">3</i> Allow construction from pointer to queue</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">4</i> Sending pushes message on the queue</b></li>
+         
+      </ul>
+      
+      <p class="noind">Receiving messages is a bit more complicated. Not only do you have to wait for a message from the queue, but you also have
+         to check to see if the type matches any of the message types being waited on and call the appropriate handler function. This
+         all starts with the <kbd class="calibre17">receiver</kbd> class, shown in the following listing.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="app03ex03">Listing C.3. <a id="app03ex03__title" class="calibre4"></a>The <kbd class="calibre17">receiver</kbd> class
+      </h5>
+      <pre id="PLd0e42628" class="calibre5">namespace messaging
+{
+    class receiver
+    {
+        queue q;                  <b class="calibre24"><i class="calibre6">1</i></b>
+    public:
+        operator sender()         <b class="calibre24"><i class="calibre6">2</i></b>
+        {
+            return sender(&amp;q);
+        }
+        dispatcher wait()         <b class="calibre24"><i class="calibre6">3</i></b>
+        {
+            return dispatcher(&amp;q);
+        }
+    };
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> A receiver owns the queue.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> Allow implicit conversion to a sender that references the queue.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">3</i> Waiting for a queue creates a dispatcher</b></li>
+         
+      </ul>
+      
+      <p class="noind"><a id="iddle1111" class="calibre4"></a><a id="iddle2624" class="calibre4"></a><a id="iddle2625" class="calibre4"></a>Whereas a <kbd class="calibre17">sender</kbd> references a message queue, a <kbd class="calibre17">receiver</kbd> owns it. You can obtain a <kbd class="calibre17">sender</kbd> that references the queue by using the implicit conversion. The complexity of doing the message dispatch starts with a call
+         to <kbd class="calibre17">wait()</kbd>. This creates a <kbd class="calibre17">dispatcher</kbd> object that references the queue from the <kbd class="calibre17">receiver</kbd>. The <kbd class="calibre17">dispatcher</kbd> class is shown in the next listing; as you can see, the work is done in the destructor. In this case, that work consists
+         of waiting for a message and dispatching it.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="app03ex04">Listing C.4. <a id="app03ex04__title" class="calibre4"></a>The <kbd class="calibre17">dispatcher</kbd> class
+      </h5>
+      <pre id="PLd0e42719" class="calibre5">namespace messaging
+{
+    class close_queue                                          <b class="calibre24"><i class="calibre6">1</i></b>
+    {};
+    class dispatcher
+    {
+        queue* q;
+        bool chained;
+        dispatcher(dispatcher const&amp;)=delete;                  <b class="calibre24"><i class="calibre6">2</i></b>
+        dispatcher&amp; operator=(dispatcher const&amp;)=delete;
+        template&lt;
+            typename Dispatcher,
+            typename Msg,
+            typename Func&gt;                                     <b class="calibre24"><i class="calibre6">3</i></b>
+        friend class TemplateDispatcher;
+        void wait_and_dispatch()
+        {
+            for(;;)                                            <b class="calibre24"><i class="calibre6">4</i></b>
+            {
+                auto msg=q-&gt;wait_and_pop();
+                dispatch(msg);
+            }
+        }
+        bool dispatch(                                         <b class="calibre24"><i class="calibre6">5</i></b>
+            std::shared_ptr&lt;message_base&gt; const&amp; msg)
+        {
+            if(dynamic_cast&lt;wrapped_message&lt;close_queue&gt;*&gt;(msg.get()))
+            {
+                throw close_queue();
+            }
+            return false;
+        }
+    public:
+        dispatcher(dispatcher&amp;&amp; other):                        <b class="calibre24"><i class="calibre6">6</i></b>
+            q(other.q),chained(other.chained)
+        {
+            other.chained=true;                                <b class="calibre24"><i class="calibre6">7</i></b>
+        }
+        explicit dispatcher(queue* q_):
+            q(q_),chained(false)
+        {}
+        template&lt;typename Message,typename Func&gt;
+        TemplateDispatcher&lt;dispatcher,Message,Func&gt;
+        handle(Func&amp;&amp; f)                                       <b class="calibre24"><i class="calibre6">8</i></b>
+        {
+            return TemplateDispatcher&lt;dispatcher,Message,Func&gt;(
+                q,this,std::forward&lt;Func&gt;(f));
+        }
+        ~dispatcher() noexcept(false)                          <b class="calibre24"><i class="calibre6">9</i></b>
+        {
+            if(!chained)
+            {
+                wait_and_dispatch();
+            }
+        }
+    };
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><a id="iddle1439" class="calibre4"></a><a id="iddle2058" class="calibre4"></a><a id="iddle2458" class="calibre4"></a><b class="calibre24"><i class="calibre6">1</i> The message for closing the queue</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> dispatcher instances cannot be copied.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">3</i> Allow TemplateDispatcher instances to access the internals.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">4</i> Loop, waiting for, and dispatching messages</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">5</i> dispatch() checks for a close_queue message, and throws.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">6</i> Dispatcher instances can be moved.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">7</i> The source shouldn’t wait for messages.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">8</i> Handle a specific type of message with a TemplateDispatcher.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">9</i> The destructor might throw exceptions.</b></li>
+         
+      </ul>
+      
+      <p class="noind">The <kbd class="calibre17">dispatcher</kbd> instance that’s returned from <kbd class="calibre17">wait()</kbd> will be destroyed immediately, because it’s temporary, and as mentioned, the destructor does the work. The destructor calls
+         <kbd class="calibre17">wait_and_dispatch()</kbd>, which is a loop <b class="calibre24"><i class="calibre6">4</i></b> that waits for a message and passes it to <kbd class="calibre17">dispatch()</kbd>. <kbd class="calibre17">dispatch()</kbd> itself <b class="calibre24"><i class="calibre6">5</i></b> is rather simple, it checks whether the message is a <kbd class="calibre17">close_queue</kbd> message and throws an exception if it is; otherwise, it returns <kbd class="calibre17">false</kbd> to indicate that the message was unhandled. This <kbd class="calibre17">close_queue</kbd> exception is why the destructor is marked <kbd class="calibre17">noexcept(false)</kbd>; without this annotation, the default exception specification for the destructor would be <kbd class="calibre17">noexcept(true)</kbd> <b class="calibre24"><i class="calibre6">9</i></b>, indicating that no exceptions can be thrown, and the <kbd class="calibre17">close_queue</kbd> exception would terminate the program.
+      </p>
+      
+      <p class="noind">It’s not often that you’re going to call <kbd class="calibre17">wait()</kbd> on its own, though; most of the time you’ll want to handle a message. This is where the <kbd class="calibre17">handle()</kbd> member function <b class="calibre24"><i class="calibre6">8</i></b> comes in. It’s a template, and the message type isn’t deducible, so you must specify which message type to handle and pass
+         in a function (or callable object) to handle it. <kbd class="calibre17">handle()</kbd> itself passes the queue, the current <kbd class="calibre17">dispatcher</kbd> object, and the handler function to a new instance of the <kbd class="calibre17">TemplateDispatcher</kbd> class template, to handle messages of the specified type, shown in listing C.5. This is why you test the <kbd class="calibre17">chained</kbd> value in the destructor before waiting for messages; not only does it prevent moved-from objects waiting for messages, but
+         it also allows you to transfer the responsibility of waiting to your new <kbd class="calibre17">TemplateDispatcher</kbd> instance.<a id="iddle2626" class="calibre4"></a></p>
+      
+      
+      <p class="noind"></p>
+      
+      
+      <h5 class="notetitle" id="app03ex05">Listing C.5. <a id="app03ex05__title" class="calibre4"></a>The <kbd class="calibre17">TemplateDispatcher</kbd> class template
+      </h5>
+      <pre id="PLd0e42946" class="calibre5">namespace messaging
+{
+    template&lt;typename PreviousDispatcher,typename Msg,typename Func&gt;
+    class TemplateDispatcher
+    {
+        queue* q;
+        PreviousDispatcher* prev;
+        Func f;
+        bool chained;
+        TemplateDispatcher(TemplateDispatcher const&amp;)=delete;
+        TemplateDispatcher&amp; operator=(TemplateDispatcher const&amp;)=delete;
+        template&lt;typename Dispatcher,typename OtherMsg,typename OtherFunc&gt;
+        friend class TemplateDispatcher;                                   <b class="calibre24"><i class="calibre6">1</i></b>
+        void wait_and_dispatch()
+        {
+            for(;;)
+            {
+                auto msg=q-&gt;wait_and_pop();
+                if(dispatch(msg))                                          <b class="calibre24"><i class="calibre6">2</i></b>
+                    break;
+            }
+        }
+        bool dispatch(std::shared_ptr&lt;message_base&gt; const&amp; msg)
+        {
+            if(wrapped_message&lt;Msg&gt;* wrapper=
+                dynamic_cast&lt;wrapped_message&lt;Msg&gt;*&gt;(msg.get()))            <b class="calibre24"><i class="calibre6">3</i></b>
+            {
+                f(wrapper-&gt;contents);
+                return true;
+            }
+            else
+            {
+                return prev-&gt;dispatch(msg);                                <b class="calibre24"><i class="calibre6">4</i></b>
+            }
+        }
+    public:
+        TemplateDispatcher(TemplateDispatcher&amp;&amp; other):
+            q(other.q),prev(other.prev),f(std::move(other.f)),
+            chained(other.chained)
+        {
+            other.chained=true;
+        }
+        TemplateDispatcher(queue* q_,PreviousDispatcher* prev_,Func&amp;&amp; f_):
+            q(q_),prev(prev_),f(std::forward&lt;Func&gt;(f_)),chained(false)
+        {
+            prev_-&gt;chained=true;
+        }
+        template&lt;typename OtherMsg,typename OtherFunc&gt;
+        TemplateDispatcher&lt;TemplateDispatcher,OtherMsg,OtherFunc&gt;
+        handle(OtherFunc&amp;&amp; of)                                             <b class="calibre24"><i class="calibre6">5</i></b>
+        {
+            return TemplateDispatcher&lt;
+                TemplateDispatcher,OtherMsg,OtherFunc&gt;(
+                    q,this,std::forward&lt;OtherFunc&gt;(of));
+        }
+        ~TemplateDispatcher() noexcept(false)                              <b class="calibre24"><i class="calibre6">6</i></b>
+        {
+            if(!chained)
+            {
+                wait_and_dispatch();
+            }
+        }
+    };
+}</pre>
+      
+      <p class="calibre19"></p>
+      <ul class="calibre21">
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">1</i> TemplateDispatcher instantiations are friends of each other.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">2</i> If you handle the message, break out of the loop.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">3</i> Check the message type and call the function.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">4</i> Chain to the previous dispatcher.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">5</i> Additional handlers can be chained.</b></li>
+         
+         <li class="calibre22"><b class="calibre24"><i class="calibre6">6</i> The destructor is noexcept(false) again.</b></li>
+         
+      </ul>
+      
+      <p class="noind">The <kbd class="calibre17">TemplateDispatcher&lt;&gt;</kbd> class template is modeled on the <kbd class="calibre17">dispatcher</kbd> class and is almost identical. In particular, the destructor still calls <kbd class="calibre17">wait_and_dispatch()</kbd> to wait for a message.
+      </p>
+      
+      <p class="noind">Because you don’t throw exceptions if you handle the message, you now need to check whether you did handle the message in
+         your message loop <b class="calibre24"><i class="calibre6">2</i></b>. Your message processing stops when you’ve successfully handled a message, so that you can wait for a different set of messages
+         next time. If you do get a match for the specified message type, the supplied function is called <b class="calibre24"><i class="calibre6">3</i></b> rather than throwing an exception (although the handler function may throw an exception itself). If you don’t get a match,
+         you chain to the previous dispatcher <b class="calibre24"><i class="calibre6">4</i></b>. In the first instance, this will be a <kbd class="calibre17">dispatcher</kbd>, but if you chain calls to <kbd class="calibre17">handle()</kbd> <b class="calibre24"><i class="calibre6">5</i></b> to allow multiple types of messages to be handled, this may be a prior instantiation of <kbd class="calibre17">TemplateDispatcher&lt;&gt;</kbd>, which will in turn chain to the previous handler if the message doesn’t match. Because any of the handlers might throw an
+         exception (including the <kbd class="calibre17">dispatcher</kbd>’s default handler for <kbd class="calibre17">close_queue</kbd> messages), the destructor must once again be declared <kbd class="calibre17">noexcept(false)</kbd> <b class="calibre24"><i class="calibre6">6</i></b>.
+      </p>
+      
+      <p class="noind">This simple framework allows you to push any type of message on the queue and then selectively match against messages you
+         can handle on the receiving end. It also allows you to pass around a reference to the queue for pushing messages on, while
+         keeping the receiving end private.
+      </p>
+      
+      <p class="noind">To complete the example from <a href="kindle_split_014.html#ch04" class="calibre4">chapter 4</a>, the messages are given in listing C.6, the various state machines in listings C.7, C.8, and C.9, and the driving code in
+         listing C.10.
+      </p>
+      
+      
+      
+      <h5 class="notetitle" id="app03ex06">Listing C.6. <a id="app03ex06__title" class="calibre4"></a>ATM messages
+      </h5>
+      <pre id="PLd0e43090" class="calibre5">struct withdraw
+{
+    std::string account;
+    unsigned amount;
+    mutable messaging::sender atm_queue;
+    withdraw(std::string const&amp; account_,
+             unsigned amount_,
+             messaging::sender atm_queue_):
+        account(account_),amount(amount_),
+        atm_queue(atm_queue_)
+    {}
+};
+struct withdraw_ok
+{};
+struct withdraw_denied
+{};
+struct cancel_withdrawal
+{
+    std::string account;
+    unsigned amount;
+    cancel_withdrawal(std::string const&amp; account_,
+                      unsigned amount_):
+        account(account_),amount(amount_)
+    {}
+};
+struct withdrawal_processed
+{
+    std::string account;
+    unsigned amount;
+    withdrawal_processed(std::string const&amp; account_,
+                         unsigned amount_):
+        account(account_),amount(amount_)
+    {}
+};
+struct card_inserted
+{
+    std::string account;
+    explicit card_inserted(std::string const&amp; account_):
+        account(account_)
+    {}
+
+};
+struct digit_pressed
+{
+    char digit;
+    explicit digit_pressed(char digit_):
+        digit(digit_)
+    {}
+
+};
+struct clear_last_pressed
+{};
+struct eject_card
+{};
+struct withdraw_pressed
+{
+    unsigned amount;
+    explicit withdraw_pressed(unsigned amount_):
+        amount(amount_)
+    {}
+
+};
+struct cancel_pressed
+{};
+struct issue_money
+{
+    unsigned amount;
+    issue_money(unsigned amount_):
+        amount(amount_)
+    {}
+};
+struct verify_pin
+{
+    std::string account;
+    std::string pin;
+    mutable messaging::sender atm_queue;
+    verify_pin(std::string const&amp; account_,std::string const&amp; pin_,
+               messaging::sender atm_queue_):
+        account(account_),pin(pin_),atm_queue(atm_queue_)
+    {}
+};
+struct pin_verified
+{};
+struct pin_incorrect
+{};
+struct display_enter_pin
+{};
+struct display_enter_card
+{};
+struct display_insufficient_funds
+{};
+struct display_withdrawal_cancelled
+{};
+struct display_pin_incorrect_message
+{};
+struct display_withdrawal_options
+{};
+struct get_balance
+{
+    std::string account;
+    mutable messaging::sender atm_queue;
+    get_balance(std::string const&amp; account_,messaging::sender atm_queue_):
+        account(account_),atm_queue(atm_queue_)
+    {}
+};
+struct balance
+{
+    unsigned amount;
+
+    explicit balance(unsigned amount_):
+        amount(amount_)
+    {}
+};
+struct display_balance
+{
+    unsigned amount;
+    explicit display_balance(unsigned amount_):
+        amount(amount_)
+    {}
+};
+struct balance_pressed
+{};</pre>
+      
+      
+      
+      <h5 class="notetitle" id="app03ex07">Listing C.7. <a id="app03ex07__title" class="calibre4"></a>The ATM state machine
+      </h5>
+      <pre id="PLd0e43107" class="calibre5">class atm
+{
+    messaging::receiver incoming;
+    messaging::sender bank;
+    messaging::sender interface_hardware;
+    void (atm::*state)();
+    std::string account;
+    unsigned withdrawal_amount;
+    std::string pin;
+    void process_withdrawal()
+    {
+        incoming.wait()
+            .handle&lt;withdraw_ok&gt;(
+                [&amp;](withdraw_ok const&amp; msg)
+                {
+                    interface_hardware.send(
+                        issue_money(withdrawal_amount));
+                    bank.send(
+                        withdrawal_processed(account,withdrawal_amount));
+                    state=&amp;atm::done_processing;
+                }
+                )
+            .handle&lt;withdraw_denied&gt;(
+                [&amp;](withdraw_denied const&amp; msg)
+                {
+                    interface_hardware.send(display_insufficient_funds());
+                    state=&amp;atm::done_processing;
+                }
+                )
+            .handle&lt;cancel_pressed&gt;(
+                [&amp;](cancel_pressed const&amp; msg)
+                {
+                    bank.send(
+                        cancel_withdrawal(account,withdrawal_amount));
+                    interface_hardware.send(
+                        display_withdrawal_cancelled());
+                    state=&amp;atm::done_processing;
+                }
+                );
+    }
+    void process_balance()
+    {
+        incoming.wait()
+            .handle&lt;balance&gt;(
+                [&amp;](balance const&amp; msg)
+                {
+                    interface_hardware.send(display_balance(msg.amount));
+                    state=&amp;atm::wait_for_action;
+                }
+                )
+            .handle&lt;cancel_pressed&gt;(
+                [&amp;](cancel_pressed const&amp; msg)
+                {
+                    state=&amp;atm::done_processing;
+                }
+                );
+    }
+    void wait_for_action()
+    {
+        interface_hardware.send(display_withdrawal_options());
+        incoming.wait()
+            .handle&lt;withdraw_pressed&gt;(
+                [&amp;](withdraw_pressed const&amp; msg)
+                {
+                    withdrawal_amount=msg.amount;
+                    bank.send(withdraw(account,msg.amount,incoming));
+                    state=&amp;atm::process_withdrawal;
+                }
+                )
+            .handle&lt;balance_pressed&gt;(
+                [&amp;](balance_pressed const&amp; msg)
+                {
+                    bank.send(get_balance(account,incoming));
+                    state=&amp;atm::process_balance;
+                }
+                )
+            .handle&lt;cancel_pressed&gt;(
+                [&amp;](cancel_pressed const&amp; msg)
+                {
+                    state=&amp;atm::done_processing;
+                }
+                );
+    }
+    void verifying_pin()
+    {
+        incoming.wait()
+            .handle&lt;pin_verified&gt;(
+                [&amp;](pin_verified const&amp; msg)
+                {
+                    state=&amp;atm::wait_for_action;
+                }
+                )
+            .handle&lt;pin_incorrect&gt;(
+                [&amp;](pin_incorrect const&amp; msg)
+                {
+                    interface_hardware.send(
+                        display_pin_incorrect_message());
+                    state=&amp;atm::done_processing;
+                }
+                )
+            .handle&lt;cancel_pressed&gt;(
+                [&amp;](cancel_pressed const&amp; msg)
+                {
+                    state=&amp;atm::done_processing;
+                }
+                );
+    }
+    void getting_pin()
+    {
+        incoming.wait()
+            .handle&lt;digit_pressed&gt;(
+                [&amp;](digit_pressed const&amp; msg)
+                {
+                    unsigned const pin_length=4;
+                    pin+=msg.digit;
+                    if(pin.length()==pin_length)
+                    {
+                        bank.send(verify_pin(account,pin,incoming));
+                        state=&amp;atm::verifying_pin;
+                    }
+                }
+                )
+            .handle&lt;clear_last_pressed&gt;(
+                [&amp;](clear_last_pressed const&amp; msg)
+                {
+                    if(!pin.empty())
+                    {
+                        pin.pop_back();
+                    }
+                }
+                )
+            .handle&lt;cancel_pressed&gt;(
+                [&amp;](cancel_pressed const&amp; msg)
+                {
+                    state=&amp;atm::done_processing;
+                }
+                );
+    }
+    void waiting_for_card()
+    {
+        interface_hardware.send(display_enter_card());
+        incoming.wait()
+            .handle&lt;card_inserted&gt;(
+                [&amp;](card_inserted const&amp; msg)
+                {
+                    account=msg.account;
+                    pin="";
+                    interface_hardware.send(display_enter_pin());
+                    state=&amp;atm::getting_pin;
+                }
+                );
+    }
+    void done_processing()
+    {
+        interface_hardware.send(eject_card());
+        state=&amp;atm::waiting_for_card;
+    }
+    atm(atm const&amp;)=delete;
+    atm&amp; operator=(atm const&amp;)=delete;
+public:
+    atm(messaging::sender bank_,
+        messaging::sender interface_hardware_):
+        bank(bank_),interface_hardware(interface_hardware_)
+    {}
+    void done()
+    {
+        get_sender().send(messaging::close_queue());
+    }
+    void run()
+    {
+        state=&amp;atm::waiting_for_card;
+        try
+        {
+            for(;;)
+            {
+                (this-&gt;*state)();
+            }
+        }
+        catch(messaging::close_queue const&amp;)
+        {
+        }
+    }
+    messaging::sender get_sender()
+    {
+        return incoming;
+    }
+};</pre>
+      
+      
+      
+      <h5 class="notetitle" id="app03ex08">Listing C.8. <a id="app03ex08__title" class="calibre4"></a>The bank state machine
+      </h5>
+      <pre id="PLd0e43124" class="calibre5">class bank_machine
+{
+    messaging::receiver incoming;
+    unsigned balance;
+public:
+    bank_machine():
+        balance(199)
+    {}
+    void done()
+    {
+        get_sender().send(messaging::close_queue());
+    }
+    void run()
+    {
+        try
+        {
+            for(;;)
+            {
+                incoming.wait()
+                    .handle&lt;verify_pin&gt;(
+                        [&amp;](verify_pin const&amp; msg)
+                        {
+                            if(msg.pin=="1937")
+                            {
+                                msg.atm_queue.send(pin_verified());
+                            }
+                            else
+                            {
+                                msg.atm_queue.send(pin_incorrect());
+                            }
+                        }
+                        )
+                    .handle&lt;withdraw&gt;(
+                        [&amp;](withdraw const&amp; msg)
+                        {
+                            if(balance&gt;=msg.amount)
+                            {
+                                msg.atm_queue.send(withdraw_ok());
+                                balance-=msg.amount;
+                            }
+                            else
+                            {
+                                msg.atm_queue.send(withdraw_denied());
+                            }
+                        }
+                        )
+                    .handle&lt;get_balance&gt;(
+                        [&amp;](get_balance const&amp; msg)
+                        {
+                            msg.atm_queue.send(::balance(balance));
+                        }
+                        )
+                    .handle&lt;withdrawal_processed&gt;(
+                        [&amp;](withdrawal_processed const&amp; msg)
+                        {
+                        }
+                        )
+                    .handle&lt;cancel_withdrawal&gt;(
+                        [&amp;](cancel_withdrawal const&amp; msg)
+                        {
+                        }
+                        );
+            }
+        }
+        catch(messaging::close_queue const&amp;)
+        {
+        }
+    }
+
+    messaging::sender get_sender()
+    {
+        return incoming;
+    }
+};</pre>
+      
+      <p class="noind"> <a id="iddle2608" class="calibre4"></a></p>
+      
+      
+      <p class="noind"></p>
+      
+      
+      <h5 class="notetitle" id="app03ex09">Listing C.9. <a id="app03ex09__title" class="calibre4"></a>The user-interface state machine
+      </h5>
+      <pre id="PLd0e43149" class="calibre5">class interface_machine
+{
+    messaging::receiver incoming;
+public:
+    void done()
+    {
+        get_sender().send(messaging::close_queue());
+    }
+    void run()
+    {
+        try
+        {
+            for(;;)
+            {
+                incoming.wait()
+                    .handle&lt;issue_money&gt;(
+                        [&amp;](issue_money const&amp; msg)
+                        {
+                            {
+                                std::lock_guard&lt;std::mutex&gt; lk(iom);
+                                std::cout&lt;&lt;"Issuing "
+                                         &lt;&lt;msg.amount&lt;&lt;std::endl;
+                            }
+                        }
+                        )
+                    .handle&lt;display_insufficient_funds&gt;(
+                        [&amp;](display_insufficient_funds const&amp; msg)
+                        {
+                            {
+                                std::lock_guard&lt;std::mutex&gt; lk(iom);
+                                std::cout&lt;&lt;"Insufficient funds"&lt;&lt;std::endl;
+                            }
+                        }
+                        )
+                    .handle&lt;display_enter_pin&gt;(
+                        [&amp;](display_enter_pin const&amp; msg)
+                        {
+                            {
+                                std::lock_guard&lt;std::mutex&gt; lk(iom);
+                                std::cout
+                                    &lt;&lt;"Please enter your PIN (0-9)"
+                                    &lt;&lt;std::endl;
+                            }
+                        }
+                        )
+                    .handle&lt;display_enter_card&gt;(
+                        [&amp;](display_enter_card const&amp; msg)
+                        {
+                            {
+                                std::lock_guard&lt;std::mutex&gt; lk(iom);
+                                std::cout&lt;&lt;"Please enter your card (I)"
+                                         &lt;&lt;std::endl;
+                            }
+                        }
+                        )
+                    .handle&lt;display_balance&gt;(
+                        [&amp;](display_balance const&amp; msg)
+                        {
+                            {
+                                std::lock_guard&lt;std::mutex&gt; lk(iom);
+                                std::cout
+                                    &lt;&lt;"The balance of your account is "
+                                    &lt;&lt;msg.amount&lt;&lt;std::endl;
+                            }
+                        }
+                        )
+                    .handle&lt;display_withdrawal_options&gt;(
+                        [&amp;](display_withdrawal_options const&amp; msg)
+                        {
+                            {
+                                std::lock_guard&lt;std::mutex&gt; lk(iom);
+                                std::cout&lt;&lt;"Withdraw 50? (w)"&lt;&lt;std::endl;
+                                std::cout&lt;&lt;"Display Balance? (b)"
+                                         &lt;&lt;std::endl;
+                                std::cout&lt;&lt;"Cancel? (c)"&lt;&lt;std::endl;
+                            }
+                        }
+                        )
+                    .handle&lt;display_withdrawal_cancelled&gt;(
+                        [&amp;](display_withdrawal_cancelled const&amp; msg)
+                        {
+                            {
+                                std::lock_guard&lt;std::mutex&gt; lk(iom);
+                                std::cout&lt;&lt;"Withdrawal cancelled"
+                                         &lt;&lt;std::endl;
+                            }
+                        }
+                        )
+                    .handle&lt;display_pin_incorrect_message&gt;(
+                        [&amp;](display_pin_incorrect_message const&amp; msg)
+                        {
+                            {
+                                std::lock_guard&lt;std::mutex&gt; lk(iom);
+                                std::cout&lt;&lt;"PIN incorrect"&lt;&lt;std::endl;
+                            }
+                        }
+                        )
+                    .handle&lt;eject_card&gt;(
+                        [&amp;](eject_card const&amp; msg)
+                        {
+                            {
+                                std::lock_guard&lt;std::mutex&gt; lk(iom);
+                                std::cout&lt;&lt;"Ejecting card"&lt;&lt;std::endl;
+                            }
+                        }
+                        );
+            }
+        }
+        catch(messaging::close_queue&amp;)
+        {
+        }
+    }
+    messaging::sender get_sender()
+    {
+        return incoming;
+    }
+};</pre>
+      
+      
+      
+      <h5 class="notetitle" id="app03ex10">Listing C.10. <a id="app03ex10__title" class="calibre4"></a>The driving code
+      </h5>
+      <pre id="PLd0e43164" class="calibre5">int main()
+{
+    bank_machine bank;
+    interface_machine interface_hardware;
+    atm machine(bank.get_sender(),interface_hardware.get_sender());
+    std::thread bank_thread(&amp;bank_machine::run,&amp;bank);
+    std::thread if_thread(&amp;interface_machine::run,&amp;interface_hardware);
+    std::thread atm_thread(&amp;atm::run,&amp;machine);
+    messaging::sender atmqueue(machine.get_sender());
+    bool quit_pressed=false;
+    while(!quit_pressed)
+    {
+        char c=getchar();
+        switch(c)
+        {
+        case '0':
+        case '1':
+        case '2':
+        case '3':
+        case '4':
+        case '5':
+        case '6':
+        case '7':
+        case '8':
+        case '9':
+            atmqueue.send(digit_pressed(c));
+            break;
+        case 'b':
+            atmqueue.send(balance_pressed());
+            break;
+        case 'w':
+            atmqueue.send(withdraw_pressed(50));
+            break;
+        case 'c':
+            atmqueue.send(cancel_pressed());
+            break;
+        case 'q':
+            quit_pressed=true;
+            break;
+        case 'i':
+            atmqueue.send(card_inserted("acc1234"));
+            break;
+        }
+    }
+    bank.done();
+    machine.done();
+    interface_hardware.done();
+    atm_thread.join();
+    bank_thread.join();
+    if_thread.join();
+}</pre>
+      
+      </body></html>

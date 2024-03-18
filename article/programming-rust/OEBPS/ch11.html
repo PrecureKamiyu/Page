@@ -1,0 +1,898 @@
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Traits and Generics</title><link href="epub.css" rel="stylesheet" type="text/css"/>
+<meta content="urn:uuid:3c2eb6f3-32dc-4c19-acd0-9e911067a895" name="Adept.expected.resource"/></head><body data-type="book"><section data-pdf-bookmark="Chapter 11. Traits and Generics" data-type="chapter" epub:type="chapter"><div class="chapter" id="traits-and-generics">
+<h1><span class="label">Chapter 11. </span>Traits and Generics</h1>
+
+<blockquote data-type="epigraph" epub:type="epigraph">
+<p>
+[A] computer scientist tends to be able to deal with nonuniform structures—case 1, case 2, case 3—while a mathematician will tend to want one unifying axiom that governs an entire system.
+</p>
+<p data-type="attribution">
+Donald Knuth
+</p>
+</blockquote>
+
+<p>One of the great discoveries in programming is that it’s possible to write code that operates on values of many different types, <em>even types that haven’t been invented yet.</em> Here are two examples:</p>
+<ul>
+<li><p><code>Vec&lt;T&gt;</code> is generic: you can create a vector of any type of value, including types defined in your program that the authors of <code>Vec</code> never anticipated.</p></li>
+<li><p>Many things have <code>.write()</code> methods, including <code>File</code>s and <code>TcpStream</code>s. Your code can take a writer by reference, any writer, and send data to it. Your code doesn’t have to care what type of writer it is. Later, if someone adds a new type of writer, your code will already support it.</p></li>
+</ul>
+<p><a contenteditable="false" data-primary="polymorphism" data-type="indexterm" id="idm140543290693936"/>Of course, this capability is hardly new with Rust. It’s called <em>polymorphism</em>, and it was the hot new programming language technology of the 1970s. By now it’s effectively universal. Rust supports polymorphism with two related features: traits and generics. These concepts will be familiar to many programmers, but Rust takes a fresh approach inspired by Haskell’s typeclasses.</p>
+<p><a contenteditable="false" data-primary="traits" data-secondary="defined" data-type="indexterm" id="idm140543290691680"/><em>Traits</em> are Rust’s take on interfaces or abstract base classes. At first, they look just like interfaces in Java or C#. The trait for writing bytes is called <code>std::io::Write</code>, and its definition in the standard library starts out like this:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">trait</code><code class="w"> </code><code class="n">Write</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">write</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">buf</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="kt">u8</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="nb">Result</code><code class="o">&lt;</code><code class="kt">usize</code><code class="o">&gt;</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">flush</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="k">fn</code> <code class="nf">write_all</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">buf</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="kt">u8</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="p">...</code><code class="w"> </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>This trait offers several methods; we’ve shown only the first three.</p>
+<p>The standard types <code>File</code> and <code>TcpStream</code> both implement <code>std::io::Write</code>. So does <code>Vec&lt;u8&gt;</code>. All three types provide methods named <code>.write()</code>, <code>.flush()</code>, and so on. Code that uses a writer without caring about its type looks like this:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">io</code>::<code class="n">Write</code><code class="p">;</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">say_hello</code><code class="p">(</code><code class="n">out</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Write</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">std</code>::<code class="n">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">out</code><code class="p">.</code><code class="n">write_all</code><code class="p">(</code><code class="s">b"hello world</code><code class="se">\n</code><code class="s">"</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="n">out</code><code class="p">.</code><code class="n">flush</code><code class="p">()</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>The type of <code>out</code> is <code>&amp;mut Write</code>, meaning “a mutable reference to any value that implements the <code>Write</code> trait.”</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">fs</code>::<code class="n">File</code><code class="p">;</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">local_file</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">File</code>::<code class="n">create</code><code class="p">(</code><code class="s">"hello.txt"</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+<code class="n">say_hello</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">local_file</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w">  </code><code class="c1">// works</code>
+
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">bytes</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[];</code><code class="w"/>
+<code class="n">say_hello</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">bytes</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w">  </code><code class="c1">// also works</code>
+<code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">bytes</code><code class="p">,</code><code class="w"> </code><code class="s">b"hello world</code><code class="se">\n</code><code class="s">"</code><code class="p">);</code><code class="w"/></pre>
+<p>This chapter begins by showing how traits are used, how they work, and how to define your own. But there is more to traits than we’ve hinted at so far. We’ll use them to add extension methods to existing types, even built-in types like <code>str</code> and <code>bool</code>. We’ll explain why adding a trait to a type costs no extra memory and how to use traits without virtual method call overhead. We’ll see that built-in traits are the hook into the language that Rust provides for operator overloading and other features. And we’ll cover the <code>Self</code> type, associated methods, and associated types, three features Rust lifted from Haskell that elegantly solve problems that other languages address with workarounds and hacks.</p>
+<p><a contenteditable="false" data-primary="generics" data-secondary="defined" data-type="indexterm" id="idm140543290539056"/><em>Generics</em> are the other flavor of polymorphism in Rust. Like a C++ template, a generic function or type can be used with values of many different types.</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// Given two values, pick whichever one is less.</code>
+<code class="k">fn</code> <code class="nf">min</code><code class="o">&lt;</code><code class="n">T</code>: <code class="nb">Ord</code><code class="o">&gt;</code><code class="p">(</code><code class="n">value1</code>: <code class="nc">T</code><code class="p">,</code><code class="w"> </code><code class="n">value2</code>: <code class="nc">T</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">T</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">if</code><code class="w"> </code><code class="n">value1</code><code class="w"> </code><code class="o">&lt;=</code><code class="w"> </code><code class="n">value2</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">value1</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"> </code><code class="k">else</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">value2</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>The <code>&lt;T: Ord&gt;</code> in this function means that <code>min</code> can be used with arguments of any type <code>T</code> that implements the <code>Ord</code> trait—that is, any ordered type. The compiler generates custom machine code for each type <code>T</code> that you actually use.</p>
+<p>Generics and traits are closely related. Rust makes us declare the <code>T: Ord</code> requirement (called a <em>bound</em>) up front, before using the <code>&lt;=</code> operator to compare two values of type <code>T</code>. So we’ll also talk about how <code>&amp;mut Write</code> and <code>&lt;T: Write&gt;</code> are similar, how they’re different, and how to choose between these two ways of using traits.</p>
+
+<section data-pdf-bookmark="Using Traits" data-type="sect1"><div class="sect1" id="using-traits">
+<h1>Using Traits</h1>
+
+<p><a contenteditable="false" data-primary="traits" data-secondary="using" data-type="indexterm" id="C11-traits.html0"/>A trait is a feature that any given type may or may not support. Most often, a trait represents a capability: something a type can do.</p>
+
+<ul>
+<li><p>A value that implements <code>std::io::Write</code> can write out bytes.</p></li>
+<li><p>A value that implements <code>std::iter::Iterator</code> can produce a sequence of values.</p></li>
+<li><p>A value that implements <code>std::clone::Clone</code> can make clones of itself in memory.</p></li>
+<li><p>A value that implements <code>std::fmt::Debug</code> can be printed using <code>println!()</code> with the <code>{:?}</code> format specifier.</p></li>
+</ul>
+<p>These traits are all part of Rust’s standard library, and many standard types implement them.</p>
+<ul>
+
+<li><p><code>std::fs::File</code> implements the <code>Write</code> trait; it writes bytes to a local file. <code>std::net::TcpStream</code> writes to a network connection. <code>Vec&lt;u8&gt;</code> also implements <code>Write</code>. Each <code>.write()</code> call on a vector of bytes appends some data to the end.</p></li>
+<li><p><code>Range&lt;i32&gt;</code> (the type of <code>0..10</code>) implements the <code>Iterator</code> trait, as do some iterator types associated with slices, hash tables, and so on.</p></li>
+<li><p>Most standard library types implement <code>Clone</code>. The exceptions are mainly types like <code>TcpStream</code> that represent more than just data in memory.</p></li>
+<li><p>Likewise, most standard library types support <code>Debug</code>.</p></li>
+</ul>
+
+<p>There is one unusual rule about trait methods: the trait itself must be in scope. Otherwise, all its methods are hidden.</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">buf</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="kt">u8</code><code class="o">&gt;</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[];</code><code class="w"/>
+<code class="n">buf</code><code class="p">.</code><code class="n">write_all</code><code class="p">(</code><code class="s">b"hello"</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w">  </code><code class="c1">// error: no method named `write_all`</code></pre>
+<p class="pagebreak-before">In this case, the compiler prints a friendly error message that suggests adding <code>use std::io::Write;</code> and indeed that fixes the problem:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">io</code>::<code class="n">Write</code><code class="p">;</code><code class="w"/>
+
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">buf</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="kt">u8</code><code class="o">&gt;</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[];</code><code class="w"/>
+<code class="n">buf</code><code class="p">.</code><code class="n">write_all</code><code class="p">(</code><code class="s">b"hello"</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w">  </code><code class="c1">// ok</code></pre>
+
+<p>Rust has this rule because, as we’ll see later in this chapter, you can use traits to add new methods to any type—even standard library types like <code>u32</code> and <code>str</code>. Third-party crates can do the same thing. Clearly, this could lead to naming conflicts! But since Rust makes you import the traits you plan to use, crates are free to take advantage of this superpower, and conflicts are rare in practice.</p>
+
+<p><a contenteditable="false" data-primary="standard prelude" data-type="indexterm" id="idm140543290191776"/>The reason <code>Clone</code> and <code>Iterator</code> methods work without any special imports is that they’re always in scope by default: they’re part of the standard prelude, names that Rust automatically imports into every module. In fact, the prelude is mostly a carefully chosen selection of traits. We’ll cover many of them in <a data-type="xref" href="ch13.html#utility-traits">Chapter 13</a>.</p>
+
+<p>C++ and C# programmers will already have noticed that trait methods are like virtual methods. Still, calls like the one shown above are fast, as fast as any other method call. Simply put, there’s no polymorphism here. It’s obvious that <code>buf</code> is a vector, not a file or a network connection. The compiler can emit a simple call to <code>Vec&lt;u8&gt;::write()</code>. It can even inline the method. (C++ and C# will often do the same, although the possibility of subclassing sometimes precludes this.) Only calls through <code>&amp;mut Write</code> incur the overhead of a virtual method call.</p>
+
+<section data-pdf-bookmark="Trait Objects" data-type="sect2"><div class="sect2" id="trait-objects">
+<h2>Trait Objects</h2>
+
+<p><a contenteditable="false" data-primary="trait objects" data-type="indexterm" id="C11-traits.html1"/>There <a contenteditable="false" data-primary="trait objects" data-secondary="about" data-type="indexterm" id="idm140543290182784"/>are two ways of using traits to write polymorphic code in Rust: trait objects and generics. We’ll present trait objects first and turn to generics in the next section.</p>
+
+<p>Rust doesn’t permit variables of type <code>Write</code>:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">io</code>::<code class="n">Write</code><code class="p">;</code><code class="w"/>
+
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">buf</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="kt">u8</code><code class="o">&gt;</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[];</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">writer</code>: <code class="nc">Write</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">buf</code><code class="p">;</code><code class="w">  </code><code class="c1">// error: `Write` does not have a constant size</code></pre>
+<p>A variable’s size has to be known at compile time, and types that implement <code>Write</code> can be any size.</p>
+<p>This may be surprising if you’re coming from C# or Java, but the reason is simple. In Java, a variable of type <code>OutputStream</code> (the Java standard interface analogous to <code>std::io::Write</code>) is a reference to any object that implements <code>OutputStream</code>. The fact that it’s a reference goes without saying. It’s the same with interfaces in C# and most other languages.</p>
+
+<p>What we want in Rust is the same thing, but in Rust, references are explicit:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">buf</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="kt">u8</code><code class="o">&gt;</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[];</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">writer</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Write</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">buf</code><code class="p">;</code><code class="w">  </code><code class="c1">// ok</code></pre>
+<p><a contenteditable="false" data-primary="trait objects" data-secondary="defined" data-type="indexterm" id="idm140543290358272"/>A reference to a trait type, like <code>writer</code>, is called a <em>trait object</em>. Like any other reference, a trait object points to some value, it has a lifetime, and it can be either <code>mut</code> or shared.</p>
+<p>What makes a trait object different is that Rust usually doesn’t know the type of the referent at compile time. So a trait object includes a little extra information about the referent’s type. This is strictly for Rust’s own use behind the scenes: when you call <code>writer.write(data)</code>, Rust needs the type information to dynamically call the right <code>write</code> method depending on the type of <code>*writer</code>. You can’t query the type information directly, and Rust does not support downcasting from the trait object <code>&amp;mut Write</code> back to a concrete type like <code>Vec&lt;u8&gt;</code>.</p>
+</div></section>
+
+<section data-pdf-bookmark="Trait Object Layout" data-type="sect2"><div class="sect2" id="trait-object-layout">
+<h2>Trait Object Layout</h2>
+
+<p><a contenteditable="false" data-primary="trait objects" data-secondary="layout" data-type="indexterm" id="idm140543290044384"/>In memory, a trait object is a fat pointer consisting of a pointer to the value, plus a pointer to a table representing that value’s type. Each trait object therefore takes up two machine words, as shown in <a data-type="xref" href="#figure-trait-object">Figure 11-1</a>.</p>
+
+<figure><div class="figure" id="figure-trait-object">
+<img alt="A diagram showing trait objects in memory." src="assets/rust_1101.png"/>
+<h6><span class="label">Figure 11-1. </span>
+Trait objects in memory
+</h6>
+</div></figure>
+
+<p><a contenteditable="false" data-primary="virtual table (vtable)" data-type="indexterm" id="idm140543290039440"/>C++ has this kind of run-time type information as well. It’s called a <em>virtual table</em>, or <em>vtable</em>. In Rust, as in C++, the vtable is generated once, at compile time, and shared by all objects of the same type. Everything shown in dark gray in <a data-type="xref" href="#figure-trait-object">Figure 11-1</a>, including the vtable, is a private implementation detail of Rust. Again, these aren’t fields and data structures that you can access directly. Instead, the language automatically uses the vtable when you call a method of a trait object, to determine which implementation to call.</p>
+<p>Seasoned C++ programmers will notice that Rust and C++ use memory a bit differently. In C++, the vtable pointer, or <em>vptr</em>, is stored as part of the struct. Rust uses fat pointers instead. The struct itself contains nothing but its fields. This way, a struct can implement dozens of traits without containing dozens of vptrs. Even types like <code>i32</code>, which aren’t big enough to accommodate a vptr, can implement traits.</p>
+<p>Rust automatically converts ordinary references into trait objects when needed. This is why we’re able to pass <code>&amp;mut local_file</code> to <code>say_hello</code> in this example:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">local_file</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">File</code>::<code class="n">create</code><code class="p">(</code><code class="s">"hello.txt"</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+<code class="n">say_hello</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">local_file</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w"/></pre>
+<p>The type of <code>&amp;mut local_file</code> is <code>&amp;mut File</code>, and the type of the argument to <code>say_hello</code> is <code>&amp;mut Write</code>. Since a <code>File</code> is a kind of writer, Rust allows this, automatically converting the plain reference to a trait object.</p>
+<p>Likewise, Rust will happily convert a <code>Box&lt;File&gt;</code> to a <code>Box&lt;Write&gt;</code>, a value that owns a writer in the heap:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="kd">let</code><code class="w"> </code><code class="n">w</code>: <code class="nb">Box</code><code class="o">&lt;</code><code class="n">Write</code><code class="o">&gt;</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="nb">Box</code>::<code class="n">new</code><code class="p">(</code><code class="n">local_file</code><code class="p">);</code><code class="w"/></pre>
+
+<p><code>Box&lt;Write&gt;</code>, like <code>&amp;mut Write</code>, is a fat pointer: it contains the address of the writer itself and the address of the vtable. The same goes for other pointer types, like <code>Rc&lt;Write&gt;</code>.</p>
+
+<p>This kind of conversion is the only way to create a trait object. What the computer is actually doing here is very simple. At the point where the conversion happens, Rust knows the referent’s true type (in this case, <code>File</code>), so it just adds the address of the appropriate vtable, turning the regular pointer into a fat pointer.<a contenteditable="false" data-primary="" data-startref="11-traits.html1" data-type="indexterm" id="idm140543289980256"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Generic Functions" data-type="sect2"><div class="sect2" id="generic-functions">
+<h2>Generic Functions</h2>
+
+<p><a contenteditable="false" data-primary="generic functions" data-type="indexterm" id="C11-traits.html2"/>At the beginning of this chapter, we showed a <code>say_hello()</code> function that took a trait object as an argument. Let’s rewrite that function as a generic function:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">fn</code> <code class="nf">say_hello</code><code class="o">&lt;</code><code class="n">W</code>: <code class="nc">Write</code><code class="o">&gt;</code><code class="p">(</code><code class="n">out</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">W</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">std</code>::<code class="n">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">out</code><code class="p">.</code><code class="n">write_all</code><code class="p">(</code><code class="s">b"hello world</code><code class="se">\n</code><code class="s">"</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="n">out</code><code class="p">.</code><code class="n">flush</code><code class="p">()</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Only the type signature has changed:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">fn</code> <code class="nf">say_hello</code><code class="p">(</code><code class="n">out</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Write</code><code class="p">)</code><code class="w">         </code><code class="c1">// plain function</code>
+
+<code class="k">fn</code> <code class="nf">say_hello</code><code class="o">&lt;</code><code class="n">W</code>: <code class="nc">Write</code><code class="o">&gt;</code><code class="p">(</code><code class="n">out</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">W</code><code class="p">)</code><code class="w">   </code><code class="c1">// generic function</code></pre>
+
+<p><a contenteditable="false" data-primary="type parameters" data-type="indexterm" id="idm140543290119680"/>The phrase <code>&lt;W: Write&gt;</code> is what makes the function generic. This is a <em>type parameter</em>. It means that throughout the body of this function, <code>W</code> stands for some type that implements the <code>Write</code> trait. Type parameters are usually single uppercase letters, by convention.</p>
+
+<p>Which type <code>W</code> stands for depends on how the generic function is used:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="n">say_hello</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">local_file</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w">  </code><code class="c1">// calls say_hello::&lt;File&gt;</code>
+<code class="n">say_hello</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">bytes</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w">       </code><code class="c1">// calls say_hello::&lt;Vec&lt;u8&gt;&gt;</code></pre>
+<p>When you pass <code>&amp;mut local_file</code> to the generic <code>say_hello()</code> function, you’re calling <code>say_hello::&lt;File&gt;()</code>. Rust generates machine code for this function that calls <code>File::write_all()</code> and <code>File::flush()</code>. When you pass <code>&amp;mut bytes</code>, you’re calling <code>say_hello::&lt;Vec&lt;u8&gt;&gt;()</code>. Rust generates separate machine code for this version of the function, calling the corresponding <code>Vec&lt;u8&gt;</code> methods. In both cases, Rust infers the type <code>W</code> from the type of the argument. You can always spell out the type <span class="keep-together">parameters:</span></p>
+<pre data-code-language="rust" data-type="programlisting"><code class="n">say_hello</code>::<code class="o">&lt;</code><code class="n">File</code><code class="o">&gt;</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">local_file</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w"/></pre>
+<p>but it’s seldom necessary, because Rust can usually deduce the type parameters by looking at the arguments. Here, the <code>say_hello</code> generic function expects a <code>&amp;mut W</code> argument, and we’re passing it a <code>&amp;mut File</code>, so Rust infers that <code>W = File</code>.</p>
+<p>If the generic function you’re calling doesn’t have any arguments that provide useful clues, you may have to spell it out:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// calling a generic method collect&lt;C&gt;() that takes no arguments</code>
+<code class="kd">let</code><code class="w"> </code><code class="n">v1</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="p">(</code><code class="mi">0</code><code class="w"> </code><code class="p">..</code><code class="w"> </code><code class="mi">1000</code><code class="p">).</code><code class="n">collect</code><code class="p">();</code><code class="w">  </code><code class="c1">// error: can't infer type</code>
+<code class="kd">let</code><code class="w"> </code><code class="n">v2</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="p">(</code><code class="mi">0</code><code class="w"> </code><code class="p">..</code><code class="w"> </code><code class="mi">1000</code><code class="p">).</code><code class="n">collect</code>::<code class="o">&lt;</code><code class="nb">Vec</code><code class="o">&lt;</code><code class="kt">i32</code><code class="o">&gt;&gt;</code><code class="p">();</code><code class="w"> </code><code class="c1">// ok</code></pre>
+<p>Sometimes we need multiple abilities from a type parameter. For example, if we want to print out the top 10 most common values in a vector, we’ll need for those values to be printable:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">fmt</code>::<code class="n">Debug</code><code class="p">;</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">top_ten</code><code class="o">&lt;</code><code class="n">T</code>: <code class="nc">Debug</code><code class="o">&gt;</code><code class="p">(</code><code class="n">values</code>: <code class="kp">&amp;</code><code class="nb">Vec</code><code class="o">&lt;</code><code class="n">T</code><code class="o">&gt;</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="p">...</code><code class="w"> </code><code class="p">}</code><code class="w"/></pre>
+
+<p>But this isn’t good enough. How are we planning to determine which values are the most common? The usual way is to use the values as keys in a hash table. That means the values need to support the <code>Hash</code> and <code>Eq</code> operations. The bounds on <code>T</code> must include these as well as <code>Debug</code>. The syntax for this uses the <code>+</code> sign:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">fn</code> <code class="nf">top_ten</code><code class="o">&lt;</code><code class="n">T</code>: <code class="nc">Debug</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">Hash</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="nb">Eq</code><code class="o">&gt;</code><code class="p">(</code><code class="n">values</code>: <code class="kp">&amp;</code><code class="nb">Vec</code><code class="o">&lt;</code><code class="n">T</code><code class="o">&gt;</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="p">...</code><code class="w"> </code><code class="p">}</code><code class="w"/></pre>
+
+<p>Some types implement <code>Debug</code>, some implement <code>Hash</code>, some support <code>Eq</code>; and a few, like <code>u32</code> and <code>String</code>, implement all three, as shown in <a data-type="xref" href="#figure-trait-venn-diagram">Figure 11-2</a>.</p>
+
+<figure><div class="figure" id="figure-trait-venn-diagram">
+<img alt="A Venn diagram shows the three sets of types." src="assets/rust_1102.png"/>
+<h6><span class="label">Figure 11-2. </span>
+Traits as sets of types
+</h6>
+</div></figure>
+
+<p>It’s also possible for a type parameter to have no bounds at all, but you can’t do much with a value if you haven’t specified any bounds for it. You can move it. You can put it into a box or vector. That’s about it.</p>
+<p>Generic functions can have multiple type parameters:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// Run a query on a large, partitioned data set.</code>
+<code class="sd">/// See &lt;http://research.google.com/archive/mapreduce.html&gt;.</code>
+<code class="k">fn</code> <code class="nf">run_query</code><code class="o">&lt;</code><code class="n">M</code>: <code class="nc">Mapper</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">Serialize</code><code class="p">,</code><code class="w"> </code><code class="n">R</code>: <code class="nc">Reducer</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">Serialize</code><code class="o">&gt;</code><code class="p">(</code><code class="w"/>
+<code class="w">    </code><code class="n">data</code>: <code class="kp">&amp;</code><code class="nc">DataSet</code><code class="p">,</code><code class="w"> </code><code class="n">map</code>: <code class="nc">M</code><code class="p">,</code><code class="w"> </code><code class="n">reduce</code>: <code class="nc">R</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Results</code><code class="w"/>
+<code class="p">{</code><code class="w"> </code><code class="p">...</code><code class="w"> </code><code class="p">}</code><code class="w"/></pre>
+<p>As this example shows, the bounds can get to be so long that they are hard on the eyes. Rust provides an alternative syntax using the keyword <code>where</code>:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">fn</code> <code class="nf">run_query</code><code class="o">&lt;</code><code class="n">M</code><code class="p">,</code><code class="w"> </code><code class="n">R</code><code class="o">&gt;</code><code class="p">(</code><code class="n">data</code>: <code class="kp">&amp;</code><code class="nc">DataSet</code><code class="p">,</code><code class="w"> </code><code class="n">map</code>: <code class="nc">M</code><code class="p">,</code><code class="w"> </code><code class="n">reduce</code>: <code class="nc">R</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Results</code><code class="w"/>
+<code class="w">    </code><code class="k">where</code><code class="w"> </code><code class="n">M</code>: <code class="nc">Mapper</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">Serialize</code><code class="p">,</code><code class="w"/>
+<code class="w">          </code><code class="n">R</code>: <code class="nc">Reducer</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">Serialize</code><code class="w"/>
+<code class="p">{</code><code class="w"> </code><code class="p">...</code><code class="w"> </code><code class="p">}</code><code class="w"/></pre>
+<p>The type parameters <code>M</code> and <code>R</code> are still declared up front, but the bounds are moved to separate lines. This kind of <code>where</code> clause is also allowed on generic structs, enums, type aliases, and methods—anywhere bounds are permitted.</p>
+<p>Of course, an alternative to <code>where</code> clauses is to keep it simple: find a way to write the program without using generics quite so intensively.</p>
+<p><a data-type="xref" href="ch05.html#receiving-references-as-parameters">“Receiving References as Parameters”</a> introduced the syntax for lifetime parameters. <a contenteditable="false" data-primary="lifetime" data-secondary="parameters for generic functions" data-type="indexterm" id="idm140543289455408"/>A generic function can have both lifetime parameters and type parameters. Lifetime parameters come first.</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// Return a reference to the point in `candidates` that's</code>
+<code class="sd">/// closest to the `target` point.</code>
+<code class="k">fn</code> <code class="nf">nearest</code><code class="o">&lt;</code><code class="na">'t</code><code class="p">,</code><code class="w"> </code><code class="na">'c</code><code class="p">,</code><code class="w"> </code><code class="n">P</code><code class="o">&gt;</code><code class="p">(</code><code class="n">target</code>: <code class="kp">&amp;</code><code class="na">'t</code><code class="w"> </code><code class="n">P</code><code class="p">,</code><code class="w"> </code><code class="n">candidates</code>: <code class="kp">&amp;</code><code class="na">'c</code><code class="w"> </code><code class="p">[</code><code class="n">P</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="kp">&amp;</code><code class="na">'c</code><code class="w"> </code><code class="n">P</code><code class="w"/>
+<code class="w">    </code><code class="k">where</code><code class="w"> </code><code class="n">P</code>: <code class="nc">MeasureDistance</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>This function takes two arguments, <code>target</code> and <code>candidates</code>. Both are references, and we give them distinct lifetimes <code>'t</code> and <code>'c</code> (as discussed in <a data-type="xref" href="ch05.html#distinct-lifetime-parameters">“Distinct Lifetime Parameters”</a>). Furthermore, the function works with any type <code>P</code> that implements the <code>MeasureDistance</code> trait, so we might use it on <code>Point2d</code> values in one program and <code>Point3d</code> values in another.</p>
+
+<p>Lifetimes never have any impact on machine code. Two calls to <code>nearest()</code> using the same type <code>P</code>, but different lifetimes, will call the same compiled function. Only differing types cause Rust to compile multiple copies of a generic function.</p>
+
+<p>Of course, functions are not the only kind of generic code in Rust.</p>
+
+<ul>
+<li><p>We’ve already covered generic types in <a data-type="xref" href="ch09.html#generic-structs">“Generic Structs”</a> and <a data-type="xref" href="ch10.html#generic-enums">“Generic Enums”</a>.</p></li>
+<li><p>An individual method can be generic, even if the type it’s defined on is not generic:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">impl</code><code class="w"> </code><code class="n">PancakeStack</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">push</code><code class="o">&lt;</code><code class="n">T</code>: <code class="nc">Topping</code><code class="o">&gt;</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">goop</code>: <code class="nc">T</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">PancakeResult</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre></li>
+<li><p>Type aliases can be generic, too:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">type</code> <code class="nc">PancakeResult</code><code class="o">&lt;</code><code class="n">T</code><code class="o">&gt;</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="nb">Result</code><code class="o">&lt;</code><code class="n">T</code><code class="p">,</code><code class="w"> </code><code class="n">PancakeError</code><code class="o">&gt;</code><code class="p">;</code><code class="w"/></pre></li>
+<li><p>We’ll cover generic traits later in this chapter.</p></li>
+</ul>
+
+<p>All the features introduced in this section—bounds, <code>where</code> clauses, lifetime parameters, and so forth—can be used on all generic items, not just functions.<a contenteditable="false" data-primary="" data-startref="11-traits.html2" data-type="indexterm" id="idm140543289226784"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Which to Use" data-type="sect2"><div class="sect2" id="which-to-use">
+<h2>Which to Use</h2>
+
+<p><a contenteditable="false" data-primary="generic code" data-secondary="trait objects vs." data-type="indexterm" id="C11-traits.html3"/><a contenteditable="false" data-primary="trait objects" data-secondary="generic code vs." data-type="indexterm" id="C11-traits.html4"/>The choice of whether to use trait objects or generic code is subtle. Since both features are based on traits, they have a lot in common.</p>
+<p>Trait objects are the right choice whenever you need a collection of values of mixed types, all together. It is technically possible to make generic salad:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">trait</code><code class="w"> </code><code class="n">Vegetable</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="k">struct</code> <code class="nc">Salad</code><code class="o">&lt;</code><code class="n">V</code>: <code class="nc">Vegetable</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">veggies</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="n">V</code><code class="o">&gt;</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>but this is a rather severe design. Each such salad consists entirely of a single type of vegetable. Not everyone is cut out for this sort of thing. One of your authors once paid $14 for a <code>Salad&lt;IcebergLettuce&gt;</code> and has never quite gotten over the experience.</p>
+<p>How can we build a better salad? Since <code>Vegetable</code> values can be all different sizes, we can’t ask Rust for a <code>Vec&lt;Vegetable&gt;</code>:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">struct</code> <code class="nc">Salad</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">veggies</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="n">Vegetable</code><code class="o">&gt;</code><code class="w">  </code><code class="c1">// error: `Vegetable` does not have</code>
+<code class="w">                             </code><code class="c1">//        a constant size</code>
+<code class="p">}</code><code class="w"/></pre>
+<p>Trait objects are the solution:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">struct</code> <code class="nc">Salad</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">veggies</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="nb">Box</code><code class="o">&lt;</code><code class="n">Vegetable</code><code class="o">&gt;&gt;</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>Each <code>Box&lt;Vegetable&gt;</code> can own any type of vegetable, but the box itself has a constant size—two pointers—suitable for storing in a vector. Apart from the unfortunate mixed metaphor of having boxes in one’s food, this is precisely what’s called for, and it would work out just as well for shapes in a drawing app, monsters in a game, pluggable routing algorithms in a network router, and so on.</p>
+
+<p>Another possible reason to use trait objects is to reduce the total amount of compiled code. Rust may have to compile a generic function many times, once for each type it’s used with. This could make the binary large, a phenomenon called <em>code bloat</em> in <span class="keep-together">C++</span> circles. These days, memory is plentiful, and most of us have the luxury of ignoring code size; but constrained environments do exist.</p>
+
+<p>Outside of situations involving salad or microcontrollers, generics have two important advantages over trait objects, with the result that in Rust, generics are the more common choice.</p>
+<p>The first advantage is speed. Each time the Rust compiler generates machine code for a generic function, it knows which types it’s working with, so it knows at that time which <code>write</code> method to call. There’s no need for dynamic dispatch.</p> 
+
+<p>The generic <code>min()</code> function shown in the introduction is just as fast as if we had written separate functions <code>min_u8</code>, <code>min_i64</code>, <code>min_string</code>, and so on. The compiler can inline it, like any other function, so in a release build, a call to <code>min::&lt;i32&gt;</code> is likely just two or three instructions. A call with constant arguments, like <code>min(5, 3)</code>, will be even faster: Rust can evaluate it at compile time, so that there’s no runtime cost at all.</p>
+
+<p>Or consider this generic function call:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">sink</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">std</code>::<code class="n">io</code>::<code class="n">sink</code><code class="p">();</code><code class="w"/>
+<code class="n">say_hello</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">sink</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w"/></pre>
+<p><code>std::io::sink()</code> returns a writer of type <code>Sink</code> that quietly discards all bytes written to it.</p>
+<p>When Rust generates machine code for this, it could emit code that calls <code>Sink::write_all</code>, checks for errors, then calls <code>Sink::flush</code>. That’s what the body of the generic function says to do.</p>
+<p>Or, Rust could look at those methods and realize the following:</p>
+<ul>
+<li><p><code>Sink::write_all()</code> does nothing.</p></li>
+<li><p><code>Sink::flush()</code> does nothing.</p></li>
+<li><p>Neither method ever returns an error.</p></li>
+</ul>
+<p>In short, Rust has all the information it needs to optimize away this function entirely.</p>
+
+<p>Compare that to the behavior with trait objects. Rust never knows what type of value a trait object points to until run time. So even if you pass a <code>Sink</code>, the overhead of calling virtual methods and checking for errors still applies.</p>
+
+<p>The second advantage of generics is that not every trait can support trait objects. Traits support several features, such as static methods, that work only with generics: they rule out trait objects entirely. We’ll point out these features as we come to them<a contenteditable="false" data-primary="" data-startref="11-traits.html4" data-type="indexterm" id="idm140543289065280"/><a contenteditable="false" data-primary="" data-startref="11-traits.html3" data-type="indexterm" id="idm140543289063904"/>.<a contenteditable="false" data-primary="" data-startref="11-traits.html0" data-type="indexterm" id="idm140543289062400"/></p>
+</div></section>
+</div></section>
+
+<section data-pdf-bookmark="Defining and Implementing Traits" data-type="sect1"><div class="sect1" id="defining-and-implementing-traits">
+<h1>Defining and Implementing Traits</h1>
+
+<p><a contenteditable="false" data-primary="traits" data-secondary="defining and implementing" data-type="indexterm" id="C11-traits.html5"/>Defining a trait is simple. Give it a name and list the type signatures of the trait methods. If we’re writing a game, we might have a trait like this:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// A trait for characters, items, and scenery -</code>
+<code class="sd">/// anything in the game world that's visible on screen.</code>
+<code class="k">trait</code><code class="w"> </code><code class="n">Visible</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="sd">/// Render this object on the given canvas.</code>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">draw</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">canvas</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Canvas</code><code class="p">);</code><code class="w"/>
+
+<code class="w">    </code><code class="sd">/// Return true if clicking at (x, y) should</code>
+<code class="w">    </code><code class="sd">/// select this object.</code>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">hit_test</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">x</code>: <code class="kt">i32</code><code class="p">,</code><code class="w"> </code><code class="n">y</code>: <code class="kt">i32</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="kt">bool</code><code class="p">;</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>To implement a trait, use the syntax <code>impl <var>TraitName</var> for <var>Type</var></code>:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">impl</code><code class="w"> </code><code class="n">Visible</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">Broom</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">draw</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">canvas</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Canvas</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="k">for</code><code class="w"> </code><code class="n">y</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">y</code><code class="w"> </code><code class="o">-</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">height</code><code class="w"> </code><code class="o">-</code><code class="w"> </code><code class="mi">1</code><code class="w"> </code><code class="p">..</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">y</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">            </code><code class="n">canvas</code><code class="p">.</code><code class="n">write_at</code><code class="p">(</code><code class="bp">self</code><code class="p">.</code><code class="n">x</code><code class="p">,</code><code class="w"> </code><code class="n">y</code><code class="p">,</code><code class="w"> </code><code class="sc">'|'</code><code class="p">);</code><code class="w"/>
+<code class="w">        </code><code class="p">}</code><code class="w"/>
+<code class="w">        </code><code class="n">canvas</code><code class="p">.</code><code class="n">write_at</code><code class="p">(</code><code class="bp">self</code><code class="p">.</code><code class="n">x</code><code class="p">,</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">y</code><code class="p">,</code><code class="w"> </code><code class="sc">'M'</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+
+<code class="w">    </code><code class="k">fn</code> <code class="nf">hit_test</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">x</code>: <code class="kt">i32</code><code class="p">,</code><code class="w"> </code><code class="n">y</code>: <code class="kt">i32</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="kt">bool</code> <code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="bp">self</code><code class="p">.</code><code class="n">x</code><code class="w"> </code><code class="o">==</code><code class="w"> </code><code class="n">x</code><code class="w"/>
+<code class="w">        </code><code class="o">&amp;&amp;</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">y</code><code class="w"> </code><code class="o">-</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">height</code><code class="w"> </code><code class="o">-</code><code class="w"> </code><code class="mi">1</code><code class="w"> </code><code class="o">&lt;=</code><code class="w"> </code><code class="n">y</code><code class="w"/>
+<code class="w">        </code><code class="o">&amp;&amp;</code><code class="w"> </code><code class="n">y</code><code class="w"> </code><code class="o">&lt;=</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">y</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>Note that this <code>impl</code> contains an implementation for each method of the <code>Visible</code> trait, and nothing else. Everything defined in a trait <code>impl</code> must actually be a feature of the trait; if we wanted to add a helper method in support of <code>Broom::draw()</code>, we would have to define it in a separate <code>impl</code> block:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">impl</code><code class="w"> </code><code class="n">Broom</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="sd">/// Helper function used by Broom::draw() below.</code>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">broomstick_range</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Range</code><code class="o">&lt;</code><code class="kt">i32</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="bp">self</code><code class="p">.</code><code class="n">y</code><code class="w"> </code><code class="o">-</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">height</code><code class="w"> </code><code class="o">-</code><code class="w"> </code><code class="mi">1</code><code class="w"> </code><code class="p">..</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">y</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="k">impl</code><code class="w"> </code><code class="n">Visible</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">Broom</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">draw</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">canvas</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Canvas</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="k">for</code><code class="w"> </code><code class="n">y</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">broomstick_range</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">            </code><code class="p">...</code><code class="w"/>
+<code class="w">        </code><code class="p">}</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<section data-pdf-bookmark="Default Methods" data-type="sect2"><div class="sect2" id="default-methods">
+<h2>Default Methods</h2>
+
+<p><a contenteditable="false" data-primary="default implementation" data-type="indexterm" id="idm140543288476544"/><a contenteditable="false" data-primary="traits" data-secondary="default methods for defining/implementing" data-type="indexterm" id="idm140543288475552"/>The <code>Sink</code> writer type we discussed earlier can be implemented in a few lines of code. First, we define the type:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// A Writer that ignores whatever data you write to it.</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">struct</code> <code class="nc">Sink</code><code class="p">;</code><code class="w"/></pre>
+<p><code>Sink</code> is an empty struct, since we don’t need to store any data in it. Next, we provide an implementation of the <code>Write</code> trait for <code>Sink</code>:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">io</code>::<code class="p">{</code><code class="n">Write</code><code class="p">,</code><code class="w"> </code><code class="nb">Result</code><code class="p">};</code><code class="w"/>
+
+<code class="k">impl</code><code class="w"> </code><code class="n">Write</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">Sink</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">write</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">buf</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="kt">u8</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="nb">Result</code><code class="o">&lt;</code><code class="kt">usize</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="c1">// Claim to have successfully written the whole buffer.</code>
+<code class="w">        </code><code class="nb">Ok</code><code class="p">(</code><code class="n">buf</code><code class="p">.</code><code class="n">len</code><code class="p">())</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+
+<code class="w">    </code><code class="k">fn</code> <code class="nf">flush</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="nb">Ok</code><code class="p">(())</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>So far, this is very much like the <code>Visible</code> trait. But we have also seen that the <code>Write</code> trait has a <code>write_all</code> method:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="n">out</code><code class="p">.</code><code class="n">write_all</code><code class="p">(</code><code class="s">b"hello world</code><code class="se">\n</code><code class="s">"</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w"/></pre>
+<p>Why does Rust let us <code>impl Write for Sink</code> without defining this method? The answer is that the standard library’s definition of the <code>Write</code> trait contains a <em>default implementation</em> for <code>write_all</code>:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">trait</code><code class="w"> </code><code class="n">Write</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">write</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">buf</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="kt">u8</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="nb">Result</code><code class="o">&lt;</code><code class="kt">usize</code><code class="o">&gt;</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">flush</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="k">fn</code> <code class="nf">write_all</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">buf</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="kt">u8</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">bytes_written</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="mi">0</code><code class="p">;</code><code class="w"/>
+<code class="w">        </code><code class="k">while</code><code class="w"> </code><code class="n">bytes_written</code><code class="w"> </code><code class="o">&lt;</code><code class="w"> </code><code class="n">buf</code><code class="p">.</code><code class="n">len</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">            </code><code class="n">bytes_written</code><code class="w"> </code><code class="o">+=</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">write</code><code class="p">(</code><code class="o">&amp;</code><code class="n">buf</code><code class="p">[</code><code class="n">bytes_written</code><code class="p">..])</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+<code class="w">        </code><code class="p">}</code><code class="w"/>
+<code class="w">        </code><code class="nb">Ok</code><code class="p">(())</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>The <code>write</code> and <code>flush</code> methods are the basic methods that every writer must implement. A writer may also implement <code>write_all</code>, but if not, the default implementation shown above will be used.</p>
+<p>Your own traits can include default implementations using the same syntax.</p>
+<p>The most dramatic use of default methods in the standard library is the <code>Iterator</code> trait, which has one required method (<code>.next()</code>) and dozens of default methods. <a data-type="xref" href="ch15.html#iterators">Chapter 15</a> explains why.</p>
+</div></section>
+
+<section data-pdf-bookmark="Traits and Other People’s Types" data-type="sect2"><div class="sect2" id="traits-and-other-peoples-types">
+<h2>Traits and Other People’s Types</h2>
+
+<p><a contenteditable="false" data-primary="traits" data-secondary="and other people's types" data-type="indexterm" id="C11-traits.html6"/>Rust lets you implement any trait on any type, as long as either the trait or the type is introduced in the current crate.</p>
+<p><a contenteditable="false" data-primary="types" data-secondary="traits for adding methods to" data-type="indexterm" id="idm140543288233200"/>This means that any time you want to add a method to any type, you can use a trait to do it:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">trait</code><code class="w"> </code><code class="n">IsEmoji</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">is_emoji</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="kt">bool</code><code class="p">;</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="sd">/// Implement IsEmoji for the built-in character type.</code>
+<code class="k">impl</code><code class="w"> </code><code class="n">IsEmoji</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">char</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">is_emoji</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="kt">bool</code> <code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="sc">'$'</code><code class="p">.</code><code class="n">is_emoji</code><code class="p">(),</code><code class="w"> </code><code class="kc">false</code><code class="p">);</code><code class="w"/></pre>
+<p>Like any other trait method, this new <code>is_emoji</code> method is  only visible when <code>IsEmoji</code> is in scope.</p>
+<p><a contenteditable="false" data-primary="extension traits" data-type="indexterm" id="idm140543288175616"/>The sole purpose of this particular trait is to add a method to an existing type, <code>char</code>. This is called an <em>extension trait</em>. Of course, you can add this trait to types, too, by writing <code>impl IsEmoji for str { ... }</code> and so forth.</p>
+<p>You can even use a generic <code>impl</code> block to add an extension trait to a whole family of types at once. The following extension trait adds a method to all Rust writers:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">io</code>::<code class="p">{</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">Write</code><code class="p">};</code><code class="w"/>
+
+<code class="sd">/// Trait for values to which you can send HTML.</code>
+<code class="k">trait</code><code class="w"> </code><code class="n">WriteHtml</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">write_html</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="o">&amp;</code><code class="n">HtmlDocument</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="p">;</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="sd">/// You can write HTML to any std::io writer.</code>
+<code class="k">impl</code><code class="o">&lt;</code><code class="n">W</code>: <code class="nc">Write</code><code class="o">&gt;</code><code class="w"> </code><code class="n">WriteHtml</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">W</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">write_html</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">html</code>: <code class="kp">&amp;</code><code class="nc">HtmlDocument</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>The line <code>impl&lt;W: Write&gt; WriteHtml for W</code> means “for every type <code>W</code> that implements <code>Write</code>, here’s an implementation of <code>WriteHtml</code> for <code>W</code>.”</p>
+
+<p><a contenteditable="false" data-primary="serde library/crate" data-type="indexterm" id="idm140543288088304"/>The <code>serde</code> library offers a nice example of how useful it can be to implement user-defined traits on standard types. <code>serde</code> is a serialization library. That is, you can use it to write Rust data structures to disk and reload them later. The library defines a trait, <code>Serialize</code>, that’s implemented for every data type the library supports. So in the <code>serde</code> source code, there is code implementing <code>Serialize</code> for <code>bool</code>, <code>i8</code>, <code>i16</code>, <code>i32</code>, array and tuple types, and so on, through all the standard data structures like <code>Vec</code> and <code>HashMap</code>.</p>
+<p>The upshot of all this is that <code>serde</code> adds a <code>.serialize()</code> method to all these types. It can be used like this:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">serde</code>::<code class="n">Serialize</code><code class="p">;</code><code class="w"/>
+<code class="k">use</code><code class="w"> </code><code class="n">serde_json</code><code class="p">;</code><code class="w"/>
+
+<code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">save_configuration</code><code class="p">(</code><code class="n">config</code>: <code class="kp">&amp;</code><code class="nc">HashMap</code><code class="o">&lt;</code><code class="nb">String</code><code class="p">,</code><code class="w"> </code><code class="nb">String</code><code class="o">&gt;</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code>-&gt; <code class="nc">std</code>::<code class="n">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="c1">// Create a JSON serializer to write the data to a file.</code>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">writer</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">File</code>::<code class="n">create</code><code class="p">(</code><code class="n">config_filename</code><code class="p">())</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">serializer</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">serde_json</code>::<code class="n">Serializer</code>::<code class="n">new</code><code class="p">(</code><code class="n">writer</code><code class="p">);</code><code class="w"/>
+
+<code class="w">    </code><code class="c1">// The serde `.serialize()` method does the rest.</code>
+<code class="w">    </code><code class="n">config</code><code class="p">.</code><code class="n">serialize</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">serializer</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="nb">Ok</code><code class="p">(())</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p><a contenteditable="false" data-primary="coherence rule" data-type="indexterm" id="idm140543288014368"/>We said earlier that when you implement a trait, either the trait or the type must be new in the current crate. This is called the <em>coherence rule</em>. It helps Rust ensure that trait implementations are unique. Your code can’t <code>impl Write for u8</code>, because both <code>Write</code> and <code>u8</code> are defined in the standard library. If Rust let crates do that, there could be multiple implementations of <code>Write</code> for <code>u8</code>, in different crates, and Rust would have no reasonable way to decide which implementation to use for a given method call.</p>
+<p>(C++ has a similar uniqueness restriction: the One Definition Rule. In typical C++ fashion, it isn’t enforced by the compiler, except in the simplest cases, and you get undefined behavior if you break it.)<a contenteditable="false" data-primary="" data-startref="11-traits.html6" data-type="indexterm" id="idm140543287926160"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Self in Traits" data-type="sect2"><div class="sect2" id="self-in-traits">
+<h2>Self in Traits</h2>
+
+<p><a contenteditable="false" data-primary="Self keyword" data-type="indexterm" id="idm140543287922944"/><a contenteditable="false" data-primary="traits" data-secondary="Self as type" data-type="indexterm" id="idm140543287921840"/>A trait can use the keyword <code>Self</code> as a type. The standard <code>Clone</code> trait, for example, looks like this (slightly simplified):</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">pub</code><code class="w"> </code><code class="k">trait</code><code class="w"> </code><code class="nb">Clone</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">clone</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Self</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>Using <code>Self</code> as the return type here means that the type of <code>x.clone()</code> is the same as the type of <code>x</code>, whatever that might be. If <code>x</code> is a <code>String</code>, then the type of <code>x.clone()</code> is <code>String</code>—not <code>Clone</code> or any other cloneable type.</p>
+<p>Likewise, if we define this trait:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">pub</code><code class="w"> </code><code class="k">trait</code><code class="w"> </code><code class="n">Spliceable</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">splice</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">other</code>: <code class="kp">&amp;</code><code class="nc">Self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Self</code><code class="p">;</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>with two implementations:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">impl</code><code class="w"> </code><code class="n">Spliceable</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">CherryTree</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">splice</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">other</code>: <code class="kp">&amp;</code><code class="nc">Self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Self</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="k">impl</code><code class="w"> </code><code class="n">Spliceable</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">Mammoth</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">splice</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">other</code>: <code class="kp">&amp;</code><code class="nc">Self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Self</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>then inside the first <code>impl</code>, <code>Self</code> is simply an alias for <code>CherryTree</code>, and in the second, it’s an alias for <code>Mammoth</code>. This means that we can splice together two cherry trees or two mammoths, not that we can create a mammoth-cherry hybrid. The type of <code>self</code> and the type of <code>other</code> must match.</p>
+<p>A trait that uses the <code>Self</code> type is incompatible with trait objects:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// error: the trait `Spliceable` cannot be made into an object</code>
+<code class="k">fn</code> <code class="nf">splice_anything</code><code class="p">(</code><code class="n">left</code>: <code class="kp">&amp;</code><code class="nc">Spliceable</code><code class="p">,</code><code class="w"> </code><code class="n">right</code>: <code class="kp">&amp;</code><code class="nc">Spliceable</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">combo</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">left</code><code class="p">.</code><code class="n">splice</code><code class="p">(</code><code class="n">right</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>The reason is something we’ll see again and again as we dig into the advanced features of traits. Rust rejects this code because it has no way to type-check the call <code>left.splice(right)</code>. The whole point of trait objects is that the type isn’t known until runtime. Rust has no way to know at compile time if <code>left</code> and <code>right</code> will be the same type, as required.</p>
+
+<p>Trait objects are really intended for the simplest kinds of traits, the kinds that could be implemented using interfaces in Java or abstract base classes in C++. The more advanced features of traits are useful, but they can’t coexist with trait objects because with trait objects, you lose the type information Rust needs to type-check your program.</p>
+<p>Now, had we wanted genetically improbable splicing, we could have designed a trait-object-friendly trait:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">pub</code><code class="w"> </code><code class="k">trait</code><code class="w"> </code><code class="n">MegaSpliceable</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">splice</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">other</code>: <code class="kp">&amp;</code><code class="nc">MegaSpliceable</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nb">Box</code><code class="o">&lt;</code><code class="n">MegaSpliceable</code><code class="o">&gt;</code><code class="p">;</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>This trait is compatible with trait objects. There’s no problem type-checking calls to this <code>.splice()</code> method because the type of the argument <code>other</code> is not required to match the type of <code>self</code>, as long as both types are <code>MegaSpliceable</code>.</p>
+</div></section>
+
+<section data-pdf-bookmark="Subtraits" data-type="sect2"><div class="sect2" id="subtraits">
+<h2>Subtraits</h2>
+
+<p><a contenteditable="false" data-primary="subtraits" data-type="indexterm" id="idm140543287484080"/><a contenteditable="false" data-primary="traits" data-secondary="subtraits" data-type="indexterm" id="idm140543287482976"/>We can declare that a trait is an extension of another trait:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// Someone in the game world, either the player or some other</code>
+<code class="sd">/// pixie, gargoyle, squirrel, ogre, etc.</code>
+<code class="k">trait</code><code class="w"> </code><code class="n">Creature</code>: <code class="nc">Visible</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">position</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="p">(</code><code class="kt">i32</code><code class="p">,</code><code class="w"> </code><code class="kt">i32</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">facing</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Direction</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>The phrase <code>trait Creature: Visible</code> means that all creatures are visible. Every type that implements <code>Creature</code> must also implement the <code>Visible</code> trait:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">impl</code><code class="w"> </code><code class="n">Visible</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">Broom</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="k">impl</code><code class="w"> </code><code class="n">Creature</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">Broom</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>We can implement the two traits in either order, but it’s an error to implement <code>Creature</code> for a type without also implementing <code>Visible</code>.</p>
+<p>Subtraits are like subinterfaces in Java or C#. They’re a way to describe a trait that extends an existing trait with a few more methods. In this example, all your code that works with <code>Creature</code>s can also use the methods from the <code>Visible</code> trait.</p>
+</div></section>
+
+<section data-pdf-bookmark="Static Methods" data-type="sect2"><div class="sect2" id="traits-with-static-methods">
+<h2>Static Methods</h2>
+
+<p><a contenteditable="false" data-primary="traits" data-secondary="static methods and" data-type="indexterm" id="idm140543287575568"/>In most object-oriented languages, interfaces can’t include static methods or constructors. However, Rust traits can include static methods and constructors, here is how:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">trait</code><code class="w"> </code><code class="n">StringSet</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="sd">/// Return a new empty set.</code>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">new</code><code class="p">()</code><code class="w"> </code>-&gt; <code class="nc">Self</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="sd">/// Return a set that contains all the strings in `strings`.</code>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">from_slice</code><code class="p">(</code><code class="n">strings</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="o">&amp;</code><code class="kt">str</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="nc">Self</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="sd">/// Find out if this set contains a particular `value`.</code>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">contains</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">string</code>: <code class="kp">&amp;</code><code class="kt">str</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="kt">bool</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="sd">/// Add a string to this set.</code>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">add</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">string</code>: <code class="kp">&amp;</code><code class="kt">str</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>Every type that implements the <code>StringSet</code> trait must implement these four associated functions. The first two, <code>new()</code> and <code>from_slice()</code>, don’t take a <code>self</code> argument. They serve as constructors.</p>
+<p>In nongeneric code, these functions can be called using <code>::</code> syntax, just like any other static method:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// Create sets of two hypothetical types that impl StringSet:</code>
+<code class="kd">let</code><code class="w"> </code><code class="n">set1</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">SortedStringSet</code>::<code class="n">new</code><code class="p">();</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">set2</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">HashedStringSet</code>::<code class="n">new</code><code class="p">();</code><code class="w"/></pre>
+
+<p>In generic code, it’s the same, except the type is often a type variable, as in the call to <code>S::new()</code> shown here:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// Return the set of words in `document` that aren't in `wordlist`.</code>
+<code class="k">fn</code> <code class="nf">unknown_words</code><code class="o">&lt;</code><code class="n">S</code>: <code class="nc">StringSet</code><code class="o">&gt;</code><code class="p">(</code><code class="n">document</code>: <code class="kp">&amp;</code><code class="nb">Vec</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="p">,</code><code class="w"> </code><code class="n">wordlist</code>: <code class="kp">&amp;</code><code class="nc">S</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">S</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">unknowns</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">S</code>::<code class="n">new</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">word</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">document</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="k">if</code><code class="w"> </code><code class="o">!</code><code class="n">wordlist</code><code class="p">.</code><code class="n">contains</code><code class="p">(</code><code class="n">word</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">            </code><code class="n">unknowns</code><code class="p">.</code><code class="n">add</code><code class="p">(</code><code class="n">word</code><code class="p">);</code><code class="w"/>
+<code class="w">        </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="n">unknowns</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>Like Java and C# interfaces, trait objects don’t support static methods. If you want to use <code>&amp;StringSet</code> trait objects, you must change the trait, adding the bound <code>where Self: Sized</code> to each static method:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">trait</code><code class="w"> </code><code class="n">StringSet</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">new</code><code class="p">()</code><code class="w"> </code>-&gt; <code class="nc">Self</code><code class="w"/>
+<code class="w">        </code><code class="k">where</code><code class="w"> </code><code class="n">Self</code>: <code class="nb">Sized</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="k">fn</code> <code class="nf">from_slice</code><code class="p">(</code><code class="n">strings</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="o">&amp;</code><code class="kt">str</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="nc">Self</code><code class="w"/>
+<code class="w">        </code><code class="k">where</code><code class="w"> </code><code class="n">Self</code>: <code class="nb">Sized</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="k">fn</code> <code class="nf">contains</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">string</code>: <code class="kp">&amp;</code><code class="kt">str</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="kt">bool</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="k">fn</code> <code class="nf">add</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">string</code>: <code class="kp">&amp;</code><code class="kt">str</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>This bound tells Rust that trait objects are excused from supporting this method. <code>StringSet</code> trait objects are then allowed; they still don’t support the two static methods, but you can create them and use them to call <code>.contains()</code> and <code>.add()</code>. The same trick works for any other method that is incompatible with trait objects. (We will forgo the rather tedious technical explanation of why this works, but the <code>Sized</code> trait is covered in <a data-type="xref" href="ch13.html#utility-traits">Chapter 13</a>.)<a contenteditable="false" data-primary="" data-startref="11-traits.html5" data-type="indexterm" id="idm140543286956992"/></p>
+</div></section>
+</div></section>
+
+<section data-pdf-bookmark="Fully Qualified Method Calls" data-type="sect1"><div class="sect1" id="fully-qualified-method-calls">
+<h1>Fully Qualified Method Calls</h1>
+
+<p><a contenteditable="false" data-primary="fully qualified method calls" data-type="indexterm" id="C11-traits.html7"/><a contenteditable="false" data-primary="method calls, fully qualified" data-type="indexterm" id="C11-traits.html8"/><a contenteditable="false" data-primary="methods" data-secondary="fully qualified method calls" data-type="indexterm" id="C11-traits.html9"/><a contenteditable="false" data-primary="traits" data-secondary="fully qualified method calls and" data-type="indexterm" id="C11-traits.html10"/>A method is just a special kind of function. These two calls are equivalent:</p>
+<pre data-code-language="rust" data-testing-pragma="oneliners" data-type="programlisting"><code class="s">"hello"</code><code class="p">.</code><code class="n">to_string</code><code class="p">()</code><code class="w"/>
+
+<code class="kt">str</code>::<code class="n">to_string</code><code class="p">(</code><code class="s">"hello"</code><code class="p">)</code><code class="w"/></pre>
+<p>The second form looks exactly like a static method call. This works even though the <code>to_string</code> method takes a <code>self</code> argument. Simply pass <code>self</code> as the function’s first argument.</p>
+<p>Since <code>to_string</code> is a method of the standard <code>ToString</code> trait, there are two more forms you can use:</p>
+<pre data-code-language="rust" data-testing-pragma="oneliners" data-type="programlisting"><code class="nb">ToString</code>::<code class="n">to_string</code><code class="p">(</code><code class="s">"hello"</code><code class="p">)</code><code class="w"/>
+
+<code class="o">&lt;</code><code class="kt">str</code><code class="w"> </code><code class="k">as</code><code class="w"> </code><code class="nb">ToString</code><code class="o">&gt;</code>::<code class="n">to_string</code><code class="p">(</code><code class="s">"hello"</code><code class="p">)</code><code class="w"/></pre>
+<p>All four of these method calls do exactly the same thing. Most often, you’ll just write <code>value.method()</code>. The other forms are <em>qualified</em> method calls. They specify the type or trait that a method is associated with. The last form, with the angle brackets, specifies both: a <em>fully qualified</em> method call.</p>
+<p>When you write <code>"hello".to_string()</code>, using the <code>.</code> operator, you don’t say exactly which <code>to_string</code> method you’re calling. Rust has a method lookup algorithm that figures this out, depending on the types, deref coercions, and so on. With fully qualified calls, you can say exactly which method you mean, and that can help in a few odd cases:</p>
+
+<ul>
+<li><p>When two methods have the same name. The classic hokey example is the <code>Outlaw</code> with two <code>.draw()</code> methods from two different traits, one for drawing it on the screen and one for interacting with the law:</p>
+
+<pre data-code-language="rust" data-testing-pragma="oneliners" data-type="programlisting"><code class="n">outlaw</code><code class="p">.</code><code class="n">draw</code><code class="p">();</code><code class="w">  </code><code class="c1">// error: draw on screen or draw pistol?</code>
+
+<code class="n">Visible</code>::<code class="n">draw</code><code class="p">(</code><code class="o">&amp;</code><code class="n">outlaw</code><code class="p">);</code><code class="w">  </code><code class="c1">// ok: draw on screen</code>
+<code class="n">HasPistol</code>::<code class="n">draw</code><code class="p">(</code><code class="o">&amp;</code><code class="n">outlaw</code><code class="p">);</code><code class="w">  </code><code class="c1">// ok: corral</code></pre>
+<p>Normally you’re better off just renaming one of the methods, but sometimes you can’t.</p></li>
+<li><p>When the type of the <code>self</code> argument can’t be inferred:</p>
+<pre data-code-language="rust" data-testing-pragma="oneliners" data-type="programlisting"><code class="kd">let</code><code class="w"> </code><code class="n">zero</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="mi">0</code><code class="p">;</code><code class="w">  </code><code class="c1">// type unspecified; could be `i8`, `u8`, ...</code>
+
+<code class="n">zero</code><code class="p">.</code><code class="n">abs</code><code class="p">();</code><code class="w">  </code><code class="c1">// error: method `abs` not found</code>
+<code class="kt">i64</code>::<code class="n">abs</code><code class="p">(</code><code class="n">zero</code><code class="p">);</code><code class="w">  </code><code class="c1">// ok</code></pre></li>
+<li><p>When using the function itself as a function value:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="kd">let</code><code class="w"> </code><code class="n">words</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="w"> </code><code class="o">=</code><code class="w"/>
+<code class="w">    </code><code class="n">line</code><code class="p">.</code><code class="n">split_whitespace</code><code class="p">()</code><code class="w">  </code><code class="c1">// iterator produces &amp;str values</code>
+<code class="w">        </code><code class="p">.</code><code class="n">map</code><code class="p">(</code><code class="o">&lt;</code><code class="kt">str</code><code class="w"> </code><code class="k">as</code><code class="w"> </code><code class="nb">ToString</code><code class="o">&gt;</code>::<code class="n">to_string</code><code class="p">)</code><code class="w">  </code><code class="c1">// ok</code>
+<code class="w">        </code><code class="p">.</code><code class="n">collect</code><code class="p">();</code><code class="w"/></pre>
+<p>Here the fully qualified <code>&lt;str as ToString&gt;::to_string</code> is just a way to name the specific function we want to pass to <code>.map()</code>.</p></li>
+<li><p>When calling trait methods in macros. We’ll explain in <a data-type="xref" href="ch20.html#macros">Chapter 20</a>.</p></li>
+</ul>
+
+<p>Fully qualified syntax also works for static methods. In the previous section, we wrote <code>S::new()</code> to create a new set in a generic function. We could also have written <code>StringSet::new()</code> or <code>&lt;S as StringSet&gt;::new()</code>.<a contenteditable="false" data-primary="" data-startref="11-traits.html10" data-type="indexterm" id="idm140543287099728"/><a contenteditable="false" data-primary="" data-startref="11-traits.html9" data-type="indexterm" id="idm140543287098320"/><a contenteditable="false" data-primary="" data-startref="11-traits.html8" data-type="indexterm" id="idm140543287096944"/><a contenteditable="false" data-primary="" data-startref="11-traits.html7" data-type="indexterm" id="idm140543287095568"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Traits That Define Relationships Between Types" data-type="sect1"><div class="sect1" id="traits-that-define-relationships-between-types">
+<h1>Traits That Define Relationships Between Types</h1>
+
+<p><a contenteditable="false" data-primary="traits" data-secondary="for defining relationships between types" data-type="indexterm" id="C11-traits.html11"/><a contenteditable="false" data-primary="types" data-secondary="traits for defining relationships between" data-type="indexterm" id="C11-traits.html12"/>So far, every trait we’ve looked at stands alone: a trait is a set of methods that types can implement. Traits can also be used in situations where there are multiple types that have to work together. They can describe relationships between types.</p>
+
+<ul>
+<li><p>The <code>std::iter::Iterator</code> trait relates each iterator type with the type of value it produces.</p></li>
+<li><p>The <code>std::ops::Mul</code> trait relates types that can be multiplied. In the expression <span class="keep-together"><code>a * b</code></span>, the values <code>a</code> and <code>b</code> can be either the same type, or different types.</p></li>
+<li><p>The <code>rand</code> crate includes both a trait for random number generators (<code>rand::Rng</code>) and a trait for types that can be randomly generated (<code>rand::Rand</code>). The traits themselves define exactly how these types work together.</p></li>
+</ul>
+
+<p>You won’t need to create traits like these every day, but you’ll come across them throughout the standard library and in third-party crates. In this section, we’ll show how each of these examples is implemented, picking up relevant Rust language features as we need them. The key skill here is the ability to read traits and method signatures and figure out what they say about the types involved.</p>
+
+<section data-pdf-bookmark="Associated Types (or How Iterators Work)" data-type="sect2"><div class="sect2" id="associated-types-or-how-iterators-work">
+<h2>Associated Types (or How Iterators Work)</h2>
+
+<p><a contenteditable="false" data-primary="associated types" data-type="indexterm" id="C11-traits.html13"/><a contenteditable="false" data-primary="iterators" data-secondary="and associated types" data-type="indexterm" id="C11-traits.html14"/><a contenteditable="false" data-primary="traits" data-secondary="iterators and associated types" data-type="indexterm" id="C11-traits.html15"/><a contenteditable="false" data-primary="types" data-secondary="iterators and associated types" data-type="indexterm" id="C11-traits.html16"/>We’ll start with iterators. By now every object-oriented language has some sort of built-in support for iterators, objects that represent the traversal of some sequence of values.</p>
+<p><a contenteditable="false" data-primary="Iterator trait" data-secondary="standard" data-type="indexterm" id="idm140543286774160"/>Rust has a standard <code>Iterator</code> trait, defined like this:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">pub</code><code class="w"> </code><code class="k">trait</code><code class="w"> </code><code class="nb">Iterator</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">type</code> <code class="nc">Item</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="k">fn</code> <code class="nf">next</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nb">Option</code><code class="o">&lt;</code><code class="n">Self</code>::<code class="n">Item</code><code class="o">&gt;</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>The first feature of this trait, <code>type Item;</code>, is an <em>associated type</em>. Each type that implements <code>Iterator</code> must specify what type of item it produces.</p>
+
+<p>The second feature, the <code>next()</code> method, uses the associated type in its return value. <code>next()</code> returns an <code>Option&lt;Self::Item&gt;</code>: either <code>Some(item)</code>, the next value in the sequence, or <code>None</code> when there are no more values to visit. The type is written as <code>Self::Item</code>, not just plain <code>Item</code>, because <code>Item</code> is a feature of each type of iterator, not a standalone type. As always, <code>self</code> and the <code>Self</code> type show up explicitly in the code everywhere their fields, methods, and so on are used.</p>
+<p>Here’s what it looks like to implement <code>Iterator</code> for a type:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// (code from the std::env standard library module)</code>
+<code class="k">impl</code><code class="w"> </code><code class="nb">Iterator</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">Args</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">type</code> <code class="nc">Item</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="nb">String</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="k">fn</code> <code class="nf">next</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nb">Option</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p><code>std::env::Args</code> is the type of iterator returned by the standard library function <code>std::env::args()</code> that we used in <a data-type="xref" href="ch02.html#a-tour-of-rust">Chapter 2</a> to access command-line arguments. It produces <code>String</code> values, so the <code>impl</code> declares <code>type Item = String;</code>.</p>
+<p>Generic code can use associated types:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// Loop over an iterator, storing the values in a new vector.</code>
+<code class="k">fn</code> <code class="nf">collect_into_vector</code><code class="o">&lt;</code><code class="n">I</code>: <code class="nb">Iterator</code><code class="o">&gt;</code><code class="p">(</code><code class="n">iter</code>: <code class="nc">I</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nb">Vec</code><code class="o">&lt;</code><code class="n">I</code>::<code class="n">Item</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">results</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="nb">Vec</code>::<code class="n">new</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">value</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">iter</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">results</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="n">value</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="n">results</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>Inside the body of this function, Rust infers the type of <code>value</code> for us, which is nice; but we must spell out the return type of <code>collect_into_vector</code>, and the <code>Item</code> associated type is the only way to do that. (<code>Vec&lt;I&gt;</code> would be simply wrong: we would be claiming to return a vector of iterators!)</p>
+
+<p>The preceding example is not code that you would write out yourself, because after reading <a data-type="xref" href="ch15.html#iterators">Chapter 15</a>, you’ll know that iterators already have a standard method that does this: <code>iter.collect()</code>. So let’s look at one more example before moving on.</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// Print out all the values produced by an iterator</code>
+<code class="k">fn</code> <code class="nf">dump</code><code class="o">&lt;</code><code class="n">I</code><code class="o">&gt;</code><code class="p">(</code><code class="n">iter</code>: <code class="nc">I</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code><code class="k">where</code><code class="w"> </code><code class="n">I</code>: <code class="nb">Iterator</code>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="p">(</code><code class="n">index</code><code class="p">,</code><code class="w"> </code><code class="n">value</code><code class="p">)</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">iter</code><code class="p">.</code><code class="n">enumerate</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">println</code><code class="o">!</code><code class="p">(</code><code class="s">"{}: {:?}"</code><code class="p">,</code><code class="w"> </code><code class="n">index</code><code class="p">,</code><code class="w"> </code><code class="n">value</code><code class="p">);</code><code class="w">   </code><code class="c1">// error</code>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>This almost works. There is just one problem: <code>value</code> might not be a printable type.</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="go">error[E0277]: the trait bound `&lt;I as std::iter::Iterator&gt;::Item:</code>
+<code class="go">              std::fmt::Debug` is not satisfied</code>
+<code class="go">  --&gt; traits_dump.rs:10:37</code>
+<code class="go">   |</code>
+<code class="go">10 | println!("{}: {:?}", index, value);   // error</code>
+<code class="go">   |                             ^^^^^ the trait `std::fmt::Debug`</code>
+<code class="go">   |                                   is not implemented for</code>
+<code class="go">   |                                   `&lt;I as std::iter::Iterator&gt;::Item`</code>
+<code class="go">   |</code>
+<code class="go">   = help: consider adding a</code>
+<code class="go">           `where &lt;I as std::iter::Iterator&gt;::Item: std::fmt::Debug` bound</code>
+<code class="go">   = note: required by `std::fmt::Debug::fmt`</code></pre>
+<p>The error message is slightly obfuscated by Rust’s use of the syntax <code>&lt;I as std::iter::Iterator&gt;::Item</code>, which is a long, maximally explicit way of saying <code>I::Item</code>. This is valid Rust syntax, but you’ll rarely actually need to write a type out that way.</p>
+
+<p>The gist of the error message is that to make this generic function compile, we must ensure that <code>I::Item</code> implements the <code>Debug</code> trait, the trait for formatting values with <code>{:?}</code>. We can do this by placing a bound on <code>I::Item</code>:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">fmt</code>::<code class="n">Debug</code><code class="p">;</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">dump</code><code class="o">&lt;</code><code class="n">I</code><code class="o">&gt;</code><code class="p">(</code><code class="n">iter</code>: <code class="nc">I</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code><code class="k">where</code><code class="w"> </code><code class="n">I</code>: <code class="nb">Iterator</code><code class="p">,</code><code class="w"> </code><code class="n">I</code>::<code class="n">Item</code>: <code class="nc">Debug</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Or, we could write, “<code>I</code> must be an iterator over <code>String</code> values”:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">fn</code> <code class="nf">dump</code><code class="o">&lt;</code><code class="n">I</code><code class="o">&gt;</code><code class="p">(</code><code class="n">iter</code>: <code class="nc">I</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code><code class="k">where</code><code class="w"> </code><code class="n">I</code>: <code class="nb">Iterator</code><code class="o">&lt;</code><code class="n">Item</code><code class="o">=</code><code class="nb">String</code><code class="o">&gt;</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p><code>Iterator&lt;Item=String&gt;</code> is itself a trait. If you think of <code>Iterator</code> as the set of all iterator types, then <code>Iterator&lt;Item=String&gt;</code> is a subset of <code>Iterator</code>: the set of iterator types that produce <code>String</code>s. This syntax can be used anywhere the name of a trait can be used, including trait object types:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">fn</code> <code class="nf">dump</code><code class="p">(</code><code class="n">iter</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="nb">Iterator</code><code class="o">&lt;</code><code class="n">Item</code><code class="o">=</code><code class="nb">String</code><code class="o">&gt;</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="p">(</code><code class="n">index</code><code class="p">,</code><code class="w"> </code><code class="n">s</code><code class="p">)</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">iter</code><code class="p">.</code><code class="n">enumerate</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">println</code><code class="o">!</code><code class="p">(</code><code class="s">"{}: {:?}"</code><code class="p">,</code><code class="w"> </code><code class="n">index</code><code class="p">,</code><code class="w"> </code><code class="n">s</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Traits with associated types, like <code>Iterator</code>, are compatible with trait methods, but only if all the associated types are spelled out, as shown here. Otherwise, the type of <code>s</code> could be anything, and again, Rust would have no way to type-check this code.</p>
+
+<p>We’ve shown a lot of examples involving iterators. It’s hard not to; they’re by far the most prominent use of associated types. But associated types are generally useful whenever a trait needs to cover more than just methods.</p>
+
+<ul>
+<li><p>In a thread pool library, a <code>Task</code> trait, representing a unit of work, could have an associated <code>Output</code> type.</p></li>
+<li><p>A <code>Pattern</code> trait, representing a way of searching a string, could have an associated <code>Match</code> type, representing all the information gathered by matching the pattern to the string.</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">trait</code><code class="w"> </code><code class="n">Pattern</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">type</code> <code class="nc">Match</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="k">fn</code> <code class="nf">search</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">string</code>: <code class="kp">&amp;</code><code class="kt">str</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nb">Option</code><code class="o">&lt;</code><code class="n">Self</code>::<code class="n">Match</code><code class="o">&gt;</code><code class="p">;</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="sd">/// You can search a string for a particular character.</code>
+<code class="k">impl</code><code class="w"> </code><code class="n">Pattern</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">char</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="sd">/// A "match" is just the location where the</code>
+<code class="w">    </code><code class="sd">/// character was found.</code>
+<code class="w">    </code><code class="k">type</code> <code class="nc">Match</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="kt">usize</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="k">fn</code> <code class="nf">search</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">string</code>: <code class="kp">&amp;</code><code class="kt">str</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nb">Option</code><code class="o">&lt;</code><code class="kt">usize</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>If you’re familiar with regular expressions, it’s easy to see how <code>impl Pattern for RegExp</code> would have a more elaborate <code>Match</code> type, probably a struct that would include the start and length of the match, the locations where parenthesized groups matched, and so on.</p></li>
+<li><p>A library for working with relational databases might have a <code>Database​Connection</code> trait with associated types representing transactions, cursors, prepared statements, and so on.</p></li>
+</ul>
+<p>Associated types are perfect for cases where each implementation has <em>one</em> specific related type: each type of <code>Task</code> produces a particular type of <code>Output</code>; each type of <code>Pattern</code> looks for a particular type of <code>Match</code>. However, as we’ll see, some relationships among types are not like this.<a contenteditable="false" data-primary="" data-startref="11-traits.html16" data-type="indexterm" id="idm140543286063568"/><a contenteditable="false" data-primary="" data-startref="11-traits.html15" data-type="indexterm" id="idm140543286062304"/><a contenteditable="false" data-primary="" data-startref="11-traits.html14" data-type="indexterm" id="idm140543286060928"/><a contenteditable="false" data-primary="" data-startref="11-traits.html13" data-type="indexterm" id="idm140543286059552"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Generic Traits (or How Operator Overloading Works)" data-type="sect2"><div class="sect2" id="generic-traits-or-how-operator-overloading-works">
+<h2>Generic Traits (or How Operator Overloading Works)</h2>
+
+<p><a contenteditable="false" data-primary="generic traits" data-type="indexterm" id="idm140543286056912"/><a contenteditable="false" data-primary="multiplication (mul)" data-type="indexterm" id="idm140543286055808"/><a contenteditable="false" data-primary="operator overloading" data-secondary="generic traits and" data-type="indexterm" id="idm140543286054704"/><a contenteditable="false" data-primary="traits" data-secondary="generic" data-type="indexterm" id="idm140543286053328"/>Multiplication in Rust uses this trait:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// std::ops::Mul, the trait for types that support `*`.</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">trait</code><code class="w"> </code><code class="n">Mul</code><code class="o">&lt;</code><code class="n">RHS</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="sd">/// The resulting type after applying the `*` operator</code>
+<code class="w">    </code><code class="k">type</code> <code class="nc">Output</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="sd">/// The method for the `*` operator</code>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">mul</code><code class="p">(</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">rhs</code>: <code class="nc">RHS</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Self</code>::<code class="n">Output</code><code class="p">;</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p><code>Mul</code> is a generic trait. The type parameter, <code>RHS</code>, is short for <em>right hand side</em>.</p>
+<p>The type parameter here means the same thing that it means on a struct or function: <code>Mul</code> is a generic trait, and its instances <code>Mul&lt;f64&gt;</code>, <code>Mul&lt;String&gt;</code>, <code>Mul&lt;Size&gt;</code>, etc. are all different traits, just as <code>min::&lt;i32&gt;</code> and <code>min::&lt;String&gt;</code> are different functions and <code>Vec&lt;i32&gt;</code> and <code>Vec&lt;String&gt;</code> are different types.</p>
+<p>A single type—say, <code>WindowSize</code>—can implement both <code>Mul&lt;f64&gt;</code> and <code>Mul&lt;i32&gt;</code>, and many more. You would then be able to multiply a <code>WindowSize</code> by many other types. Each implementation would have its own associated <code>Output</code> type.</p>
+
+<p>The trait shown above is missing one minor detail. The real <code>Mul</code> trait looks like this:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">pub</code><code class="w"> </code><code class="k">trait</code><code class="w"> </code><code class="n">Mul</code><code class="o">&lt;</code><code class="n">RHS</code><code class="o">=</code><code class="n">Self</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>The syntax <code>RHS=Self</code> means that <code>RHS</code> defaults to <code>Self</code>. If I write <code>impl Mul for Complex</code>, without specifying <code>Mul</code>’s type parameter, it means <code>impl Mul&lt;Complex&gt; for Complex</code>. In a bound, if I write <code>where T: Mul</code>, it means <code>where T: Mul&lt;T&gt;</code>.</p>
+<p><a contenteditable="false" data-primary="* operator" data-type="indexterm" id="idm140543286016704"/>In Rust, the expression <code>lhs * rhs</code> is shorthand for <code>Mul::mul(lhs, rhs)</code>. So overloading the <code>*</code> operator in Rust is as simple as implementing the <code>Mul</code> trait. We’ll show examples in the next chapter.</p>
+</div></section>
+
+<section data-pdf-bookmark="Buddy Traits (or How rand::random() Works)" data-type="sect2"><div class="sect2" id="buddy-traits-or-how-randrandom-works">
+<h2>Buddy Traits (or How rand::random() Works)</h2>
+
+<p><a contenteditable="false" data-primary="buddy traits" data-type="indexterm" id="C11-traits.html17"/><a contenteditable="false" data-primary="rand::random()" data-type="indexterm" id="C11-traits.html18"/><a contenteditable="false" data-primary="traits" data-secondary="buddy" data-type="indexterm" id="C11-traits.html19"/>There’s one more way to use traits to express relationships between types. This way is perhaps the simplest of the bunch, since you don’t have to learn any new language features to understand it: what we’ll call <em>buddy traits</em> are simply traits that are designed to work together.</p>
+<p>There’s a good example inside the <code>rand</code> crate, a popular crate for generating random numbers. The main feature of <code>rand</code> is the <code>random()</code> function, which returns a random value:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">rand</code>::<code class="n">random</code><code class="p">;</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">x</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">random</code><code class="p">();</code><code class="w"/></pre>
+<p>If Rust can’t infer the type of the random value, which is often the case, you must specify it:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="kd">let</code><code class="w"> </code><code class="n">x</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">random</code>::<code class="o">&lt;</code><code class="kt">f64</code><code class="o">&gt;</code><code class="p">();</code><code class="w">   </code><code class="c1">// a number, 0.0 &lt;= x &lt; 1.0</code>
+<code class="kd">let</code><code class="w"> </code><code class="n">b</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">random</code>::<code class="o">&lt;</code><code class="kt">bool</code><code class="o">&gt;</code><code class="p">();</code><code class="w">  </code><code class="c1">// true or false</code></pre>
+<p>For many programs, this one generic function is all you need. But the <code>rand</code> crate also offers several different, but interoperable, random number generators. All the random number generators in the library implement a common trait:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// A random number generator.</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">trait</code><code class="w"> </code><code class="n">Rng</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">next_u32</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="kt">u32</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p><a contenteditable="false" data-primary="Rng value" data-type="indexterm" id="idm140543285762096"/>An <code>Rng</code> is simply a value that can spit out integers on demand. The <code>rand</code> library provides a few different implementations, including <code>XorShiftRng</code> (a fast pseudorandom number generator) and <code>OsRng</code> (much slower, but truly unpredictable, for use in <span class="keep-together">cryptography</span>).</p>
+<p>The buddy trait is called <code>Rand</code>:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// A type that can be randomly generated using an `Rng`.</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">trait</code><code class="w"> </code><code class="n">Rand</code>: <code class="nb">Sized</code> <code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">rand</code><code class="o">&lt;</code><code class="n">R</code>: <code class="nc">Rng</code><code class="o">&gt;</code><code class="p">(</code><code class="n">rng</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">R</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Self</code><code class="p">;</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Types like <code>f64</code> and <code>bool</code> implement this trait. Pass any random number generator to their <code>::rand()</code> method, and it returns a random value:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="kd">let</code><code class="w"> </code><code class="n">x</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="kt">f64</code>::<code class="n">rand</code><code class="p">(</code><code class="n">rng</code><code class="p">);</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">b</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="kt">bool</code>::<code class="n">rand</code><code class="p">(</code><code class="n">rng</code><code class="p">);</code><code class="w"/></pre>
+<p>In fact <code>random()</code> is nothing but a thin wrapper that passes a globally allocated <code>Rng</code> to this <code>rand</code> method. One way to implement it is like this:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">random</code><code class="o">&lt;</code><code class="n">T</code>: <code class="nc">Rand</code><code class="o">&gt;</code><code class="p">()</code><code class="w"> </code>-&gt; <code class="nc">T</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">T</code>::<code class="n">rand</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">global_rng</code><code class="p">())</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>When you see traits that use other traits as bounds, the way <code>Rand::rand()</code> uses <code>Rng</code>, you know that those two traits are mix-and-match: any <code>Rng</code> can generate values of every <code>Rand</code> type. Since the methods involved are generic, Rust generates optimized machine code for each combination of <code>Rng</code> and <code>Rand</code> that your program actually uses.</p>
+
+<p>The two traits also serve to separate concerns. Whether you’re implementing <code>Rand</code> for your <code>Monster</code> type or implementing a spectacularly fast but not-so-random <code>Rng</code>, you don’t have to do anything special for those two pieces of code to be able to work together, as shown in <a data-type="xref" href="#figure-buddy-traits">Figure 11-3</a>.</p>
+
+<figure><div class="figure" id="figure-buddy-traits">
+<img alt="To the left, three types that implement Rng. To the right, four types that implement Rand. In the middle are the traits Rng and Rand, with a couple of pink hearts to show that they're best friends. These traits allow any random number generator to generate random values of any Rand type." src="assets/rust_1103.png"/>
+<h6><span class="label">Figure 11-3. </span>
+Buddy traits illustrated. The Rng types listed on the left are real random number generators provided by the rand crate.
+</h6>
+</div></figure>
+
+<p>The standard library’s support for computing hash codes provides another example of buddy traits. Types that implement <code>Hash</code> are hashable, so they can be used as hash table keys. Types that implement <code>Hasher</code> are hashing algorithms. The two are linked in the same way as <code>Rand</code> and <code>Rng</code>: <code>Hash</code> has a generic method <code>Hash::hash()</code> that accepts any type of <code>Hasher</code> as an argument.</p>
+
+<p><a contenteditable="false" data-primary="serde library/crate" data-type="indexterm" id="idm140543285663120"/><a contenteditable="false" data-primary="Serializer trait" data-type="indexterm" id="idm140543285661792"/>Another example is the <code>serde</code> library’s <code>Serialize</code> trait, which you saw in <a data-type="xref" href="#traits-and-other-peoples-types">“Traits and Other People’s Types”</a>. It has a buddy trait we didn’t talk about: the <code>Serializer</code> trait, which represents the output format. <code>serde</code> supports pluggable serialization formats. There are <code>Serializer</code> implementations for JSON, YAML, a binary format called CBOR, and so on. Thanks to the close relationship between the two traits, every format automatically supports every serializable type.<a contenteditable="false" data-primary="" data-startref="11-traits.html19" data-type="indexterm" id="idm140543285657248"/><a contenteditable="false" data-primary="" data-startref="11-traits.html18" data-type="indexterm" id="idm140543285655872"/><a contenteditable="false" data-primary="" data-startref="11-traits.html17" data-type="indexterm" id="idm140543285654496"/></p>
+
+<p>In the last three sections, we’ve shown three ways traits can describe relationships between types. All of these can also be seen as ways of avoiding virtual method overhead and downcasts, since they allow Rust to know more concrete types at compile time.<a contenteditable="false" data-primary="" data-startref="11-traits.html12" data-type="indexterm" id="idm140543285652560"/><a contenteditable="false" data-primary="" data-startref="11-traits.html11" data-type="indexterm" id="idm140543285651184"/></p>
+</div></section>
+</div></section>
+
+<section data-pdf-bookmark="Reverse-Engineering Bounds" data-type="sect1"><div class="sect1" id="reverse-engineering-bounds">
+<h1>Reverse-Engineering Bounds</h1>
+
+<p><a contenteditable="false" data-primary="bounds, reverse-engineering" data-type="indexterm" id="C11-traits.html20"/><a contenteditable="false" data-primary="generics" data-secondary="reverse-engineering bounds" data-type="indexterm" id="C11-traits.html21"/><a contenteditable="false" data-primary="traits" data-secondary="reverse-engineering bounds" data-type="indexterm" id="C11-traits.html22"/>Writing generic code can be a real slog when there’s no single trait that does everything you need. Suppose we have written this nongeneric function to do some <span class="keep-together">computation:</span></p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">fn</code> <code class="nf">dot</code><code class="p">(</code><code class="n">v1</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="kt">i64</code><code class="p">],</code><code class="w"> </code><code class="n">v2</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="kt">i64</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="kt">i64</code> <code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">total</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="mi">0</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">i</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="mi">0</code><code class="w"> </code><code class="p">..</code><code class="w"> </code><code class="n">v1</code><code class="p">.</code><code class="n">len</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">total</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">total</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">v1</code><code class="p">[</code><code class="n">i</code><code class="p">]</code><code class="w"> </code><code class="o">*</code><code class="w"> </code><code class="n">v2</code><code class="p">[</code><code class="n">i</code><code class="p">];</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="n">total</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>Now we want to use the same code with floating-point values. We might try something like this:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">fn</code> <code class="nf">dot</code><code class="o">&lt;</code><code class="n">N</code><code class="o">&gt;</code><code class="p">(</code><code class="n">v1</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">N</code><code class="p">],</code><code class="w"> </code><code class="n">v2</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">N</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="nc">N</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">total</code>: <code class="nc">N</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="mi">0</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">i</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="mi">0</code><code class="w"> </code><code class="p">..</code><code class="w"> </code><code class="n">v1</code><code class="p">.</code><code class="n">len</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">total</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">total</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">v1</code><code class="p">[</code><code class="n">i</code><code class="p">]</code><code class="w"> </code><code class="o">*</code><code class="w"> </code><code class="n">v2</code><code class="p">[</code><code class="n">i</code><code class="p">];</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="n">total</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>No such luck: Rust complains about the use of <code>+</code> and <code>*</code> and the type of <code>0</code>. We can require <code>N</code> to be a type that supports <code>+</code> and <code>*</code> using the <code>Add</code> and <code>Mul</code> traits. Our use of <code>0</code> needs to change, though, because <code>0</code> is always an integer in Rust; the corresponding floating-point value is <code>0.0</code>. Fortunately, there is a standard <code>Default</code> trait for types that have default values. For numeric types, the default is always 0.</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">ops</code>::<code class="p">{</code><code class="n">Add</code><code class="p">,</code><code class="w"> </code><code class="n">Mul</code><code class="p">};</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">dot</code><code class="o">&lt;</code><code class="n">N</code>: <code class="nc">Add</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">Mul</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="nb">Default</code><code class="o">&gt;</code><code class="p">(</code><code class="n">v1</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">N</code><code class="p">],</code><code class="w"> </code><code class="n">v2</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">N</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="nc">N</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">total</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">N</code>::<code class="n">default</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">i</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="mi">0</code><code class="w"> </code><code class="p">..</code><code class="w"> </code><code class="n">v1</code><code class="p">.</code><code class="n">len</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">total</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">total</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">v1</code><code class="p">[</code><code class="n">i</code><code class="p">]</code><code class="w"> </code><code class="o">*</code><code class="w"> </code><code class="n">v2</code><code class="p">[</code><code class="n">i</code><code class="p">];</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="n">total</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>This is closer, but still does not quite work:</p>
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="go">error[E0308]: mismatched types</code>
+<code class="go">  --&gt; traits_generic_dot_2.rs:11:25</code>
+<code class="go">   |</code>
+<code class="go">11 | total = total + v1[i] * v2[i];</code>
+<code class="go">   |                 ^^^^^^^^^^^^^ expected type parameter, found associated type</code>
+<code class="go">   |</code>
+<code class="go">   = note: expected type `N`</code>
+<code class="go">              found type `&lt;N as std::ops::Mul&gt;::Output`</code></pre>
+
+<p>Our new code assumes that that multiplying two values of type <code>N</code> produces another value of type <code>N</code>. This isn’t necessarily the case. You can overload the multiplication operator to return whatever type you want. We need to somehow tell Rust that this generic function only works with types that have the normal flavor of multiplication, where multiplying <code>N * N</code> returns an <code>N</code>. We do this by replacing <code>Mul</code> with <code>Mul&lt;Output=N&gt;</code>, and the same for <code>Add</code>:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">fn</code> <code class="nf">dot</code><code class="o">&lt;</code><code class="n">N</code>: <code class="nc">Add</code><code class="o">&lt;</code><code class="n">Output</code><code class="o">=</code><code class="n">N</code><code class="o">&gt;</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">Mul</code><code class="o">&lt;</code><code class="n">Output</code><code class="o">=</code><code class="n">N</code><code class="o">&gt;</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="nb">Default</code><code class="o">&gt;</code><code class="p">(</code><code class="n">v1</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">N</code><code class="p">],</code><code class="w"> </code><code class="n">v2</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">N</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="nc">N</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>At this point, the bounds are starting to pile up, making the code hard to read. Let’s move the bounds into a <code>where</code> clause:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">fn</code> <code class="nf">dot</code><code class="o">&lt;</code><code class="n">N</code><code class="o">&gt;</code><code class="p">(</code><code class="n">v1</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">N</code><code class="p">],</code><code class="w"> </code><code class="n">v2</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">N</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="nc">N</code><code class="w"/>
+<code class="w">    </code><code class="k">where</code><code class="w"> </code><code class="n">N</code>: <code class="nc">Add</code><code class="o">&lt;</code><code class="n">Output</code><code class="o">=</code><code class="n">N</code><code class="o">&gt;</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">Mul</code><code class="o">&lt;</code><code class="n">Output</code><code class="o">=</code><code class="n">N</code><code class="o">&gt;</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="nb">Default</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>Great. But Rust still complains about this line of code:</p>
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="go">error[E0508]: cannot move out of type `[N]`, a non-copy array</code>
+<code class="go"> --&gt; traits_generic_dot_3.rs:7:25</code>
+<code class="go">  |</code>
+<code class="go">7 |         total = total + v1[i] * v2[i];</code>
+<code class="go">  |                         ^^^^^ cannot move out of here</code></pre>
+<p>This one might be a real puzzle, even though by now we’re familiar with the terminology. Yes, it would be illegal to move the value <code>v1[i]</code> out of the slice. But numbers are copyable. So what’s the problem?</p>
+<p>The answer is that <em>Rust doesn’t know</em> <code>v1[i]</code> is a number. In fact, it isn’t—the type <code>N</code> can be any type that satisfies the bounds we’ve given it. If we also want <code>N</code> to be a copyable type, we must say so:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">where</code><code class="w"> </code><code class="n">N</code>: <code class="nc">Add</code><code class="o">&lt;</code><code class="n">Output</code><code class="o">=</code><code class="n">N</code><code class="o">&gt;</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">Mul</code><code class="o">&lt;</code><code class="n">Output</code><code class="o">=</code><code class="n">N</code><code class="o">&gt;</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="nb">Default</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="nb">Copy</code><code class="w"/></pre>
+<p>With this, the code compiles and runs. The final code looks like this:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">ops</code>::<code class="p">{</code><code class="n">Add</code><code class="p">,</code><code class="w"> </code><code class="n">Mul</code><code class="p">};</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">dot</code><code class="o">&lt;</code><code class="n">N</code><code class="o">&gt;</code><code class="p">(</code><code class="n">v1</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">N</code><code class="p">],</code><code class="w"> </code><code class="n">v2</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">N</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="nc">N</code><code class="w"/>
+<code class="w">    </code><code class="k">where</code><code class="w"> </code><code class="n">N</code>: <code class="nc">Add</code><code class="o">&lt;</code><code class="n">Output</code><code class="o">=</code><code class="n">N</code><code class="o">&gt;</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">Mul</code><code class="o">&lt;</code><code class="n">Output</code><code class="o">=</code><code class="n">N</code><code class="o">&gt;</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="nb">Default</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="nb">Copy</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">total</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">N</code>::<code class="n">default</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">i</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="mi">0</code><code class="w"> </code><code class="p">..</code><code class="w"> </code><code class="n">v1</code><code class="p">.</code><code class="n">len</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">total</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">total</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">v1</code><code class="p">[</code><code class="n">i</code><code class="p">]</code><code class="w"> </code><code class="o">*</code><code class="w"> </code><code class="n">v2</code><code class="p">[</code><code class="n">i</code><code class="p">];</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="n">total</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="cp">#[test]</code><code class="w"/>
+<code class="k">fn</code> <code class="nf">test_dot</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">dot</code><code class="p">(</code><code class="o">&amp;</code><code class="p">[</code><code class="mi">1</code><code class="p">,</code><code class="w"> </code><code class="mi">2</code><code class="p">,</code><code class="w"> </code><code class="mi">3</code><code class="p">,</code><code class="w"> </code><code class="mi">4</code><code class="p">],</code><code class="w"> </code><code class="o">&amp;</code><code class="p">[</code><code class="mi">1</code><code class="p">,</code><code class="w"> </code><code class="mi">1</code><code class="p">,</code><code class="w"> </code><code class="mi">1</code><code class="p">,</code><code class="w"> </code><code class="mi">1</code><code class="p">]),</code><code class="w"> </code><code class="mi">10</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">dot</code><code class="p">(</code><code class="o">&amp;</code><code class="p">[</code><code class="mf">53.0</code><code class="p">,</code><code class="w"> </code><code class="mf">7.0</code><code class="p">],</code><code class="w"> </code><code class="o">&amp;</code><code class="p">[</code><code class="mf">1.0</code><code class="p">,</code><code class="w"> </code><code class="mf">5.0</code><code class="p">]),</code><code class="w"> </code><code class="mf">88.0</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>This occasionally happens in Rust: there is a period of intense arguing with the compiler, at the end of which the code looks rather nice, as if it had been a breeze to write, and runs beautifully.</p>
+
+<p>What we’ve been doing here is reverse-engineering the bounds on <code>N</code>, using the compiler to guide and check our work. The reason it was a bit of a pain is that there wasn’t a single <code>Number</code> trait in the standard library that included all the operators and methods we wanted to use. As it happens, there’s a popular open source crate called <code>num</code> that defines such a trait! Had we known, we could have added <code>num</code> to our <em>Cargo.toml</em> and written:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">num</code>::<code class="n">Num</code><code class="p">;</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">dot</code><code class="o">&lt;</code><code class="n">N</code>: <code class="nc">Num</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="nb">Copy</code><code class="o">&gt;</code><code class="p">(</code><code class="n">v1</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">N</code><code class="p">],</code><code class="w"> </code><code class="n">v2</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">N</code><code class="p">])</code><code class="w"> </code>-&gt; <code class="nc">N</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">total</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">N</code>::<code class="n">zero</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">i</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="mi">0</code><code class="w"> </code><code class="p">..</code><code class="w"> </code><code class="n">v1</code><code class="p">.</code><code class="n">len</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">total</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">total</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">v1</code><code class="p">[</code><code class="n">i</code><code class="p">]</code><code class="w"> </code><code class="o">*</code><code class="w"> </code><code class="n">v2</code><code class="p">[</code><code class="n">i</code><code class="p">];</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="n">total</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Just as in object-oriented programming, the right interface makes everything nice, in generic programming, the right trait makes everything nice.</p> 
+
+<p>Still, why go to all this trouble? Why didn’t Rust’s designers make the generics more like C++ templates, where the constraints are left implicit in the code, à la “duck <span class="keep-together">typing?”</span></p>
+
+<p>One advantage of Rust’s approach is forward compatibility of generic code. You can change the implementation of a public generic function or method, and if you didn’t change the signature, you haven’t broken any of its users.</p>
+<p>Another advantage of bounds is that when you do get a compiler error, at least the compiler can tell you where the trouble is. C++ compiler error messages involving templates can be much longer than Rust’s, pointing at many different lines of code, because the compiler has no way to tell who’s to blame for a problem: the template—or its caller, which might also be a template—or <em>that</em> template’s caller...</p>
+<p>Perhaps the most important advantage of writing out the bounds explicitly is simply that they are there, in the code and in the documentation. You can look at the signature of a generic function in Rust and see exactly what kind of arguments it accepts. The same can’t be said for templates. The work that goes into fully documenting argument types in C++ libraries like Boost is even <em>more</em> arduous than what we went through here. The Boost developers don’t have a compiler that checks their work.<a contenteditable="false" data-primary="" data-startref="11-traits.html22" data-type="indexterm" id="idm140543284704544"/><a contenteditable="false" data-primary="" data-startref="11-traits.html21" data-type="indexterm" id="idm140543284703168"/><a contenteditable="false" data-primary="" data-startref="11-traits.html20" data-type="indexterm" id="idm140543284701792"/></p>
+</div></section>
+<section data-pdf-bookmark="Conclusion" data-type="sect1"><div class="sect1" id="conclusion">
+<h1>Conclusion</h1>
+<p>Traits are one of the main organizing features in Rust, and with good reason. There’s nothing better to design a program or library around than a good interface.</p>
+<p>This chapter was a blizzard of syntax, rules, and explanations. Now that we’ve laid a foundation, we can start talking about the many ways traits and generics are used in Rust code. The fact is, we’ve only begun to scratch the surface. The next two chapters cover common traits provided by the standard library. Upcoming chapters cover closures, iterators, input/output, and concurrency. Traits and generics play a central role in all of these topics.</p>
+</div></section>
+</div></section></body></html>

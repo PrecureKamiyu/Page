@@ -1,0 +1,1129 @@
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Crates and Modules</title><link href="epub.css" rel="stylesheet" type="text/css"/>
+<meta content="urn:uuid:3c2eb6f3-32dc-4c19-acd0-9e911067a895" name="Adept.expected.resource"/></head><body data-type="book"><section data-pdf-bookmark="Chapter 8. Crates and Modules" data-type="chapter" epub:type="chapter"><div class="chapter" id="crates-and-modules">
+<h1><span class="label">Chapter 8. </span>Crates and Modules</h1>
+
+<blockquote data-type="epigraph" epub:type="epigraph">
+<p>This is one note in a Rust theme: systems programmers can have nice things.</p>
+<p data-type="attribution">Robert O’Callahan, <a href="http://robert.ocallahan.org/2016/08/random-thoughts-on-rust-cratesio-and.html">“Random Thoughts on Rust: Crates.io and IDEs”</a></p>
+</blockquote>
+
+<p>Suppose you’re writing a program that simulates the growth of ferns, from the level of individual cells on up. Your program, like a fern, will start out very simple, with all the code, perhaps, in a single file—just the spore of an idea. As it grows, it will start to have internal structure. Different pieces will have different purposes. It will branch out into multiple files. It may cover a whole directory tree. In time it may become a significant part of a whole software ecosystem.</p>
+<p>This chapter covers the features of Rust that help keep your program organized: crates and modules. We’ll also cover a wide range of topics that come up naturally as your project grows, including how to document and test Rust code, how to silence unwanted compiler warnings, how to use Cargo to manage project dependencies and versioning, how to publish open source libraries on crates.io, and more.</p>
+
+<section data-pdf-bookmark="Crates" data-type="sect1"><div class="sect1" id="crates">
+<h1>Crates</h1>
+
+<p><a contenteditable="false" data-primary="crates" data-type="indexterm" id="C08-crates.html0"/>Rust programs are made of <em>crates</em>. Each crate is a Rust project: all the source code for a single library or executable, plus any associated tests, examples, tools, configuration, and other junk. For your fern simulator, you might use third-party libraries for 3D graphics, bioinformatics, parallel computation, and so on. These libraries are distributed as crates (see <a data-type="xref" href="#crates-stacked">Figure 8-1</a>).</p>
+
+<figure><div class="figure" id="crates-stacked">
+<img src="assets/rust_0801.png"/>
+<h6><span class="label">Figure 8-1. </span>
+A crate and its dependencies
+</h6>
+</div></figure>
+
+<p><a contenteditable="false" data-primary="cargo build" data-type="indexterm" id="C08-crates.html1"/>The easiest way to see what crates are and how they work together is to use <code>cargo build</code> with the <code>--verbose</code> flag to build an existing project that has some dependencies. We did this, using <a data-type="xref" href="ch02.html#a-concurrent-mandelbrot-program">“A Concurrent Mandelbrot Program”</a> as our example. The results are shown here:</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="gp">$</code> <code class="nb">cd </code>mandelbrot
+<code class="gp">$</code> cargo clean    <code class="c"># delete previously compiled code</code>
+<code class="gp">$</code> cargo build --verbose
+<code class="go">    Updating registry `https://github.com/rust-lang/crates.io-index`</code>
+<code class="go"> Downloading image v0.6.1</code>
+<code class="go"> Downloading crossbeam v0.2.9</code>
+<code class="go"> Downloading gif v0.7.0</code>
+<code class="go"> Downloading png v0.4.2</code>
+
+<code class="go"> ... (downloading and compiling many more crates)</code>
+
+<code class="go">   Compiling png v0.4.2</code>
+<code class="go">     Running `rustc .../png-0.4.2/src/lib.rs</code>
+<code class="go">          --crate-name png</code>
+<code class="go">          --crate-type lib</code>
+<code class="go">          --extern num=.../libnum-a2e6e61627ca7fe5.rlib</code>
+<code class="go">          --extern inflate=.../libinflate-331fc425bf167339.rlib</code>
+<code class="go">          --extern flate2=.../libflate2-857dff75f2932d8a.rlib</code>
+<code class="go">          ...`</code>
+<code class="go">   Compiling image v0.6.1</code>
+<code class="go">     Running `rustc .../image-0.6.1/./src/lib.rs</code>
+<code class="go">          --crate-name image</code>
+<code class="go">          --crate-type lib</code>
+<code class="go">          --extern png=.../libpng-16c24f58491a5853.rlib</code>
+<code class="go">          ...`</code>
+<code class="go">   Compiling mandelbrot v0.1.0 (file://.../mandelbrot)</code>
+<code class="go">     Running `rustc src/main.rs</code>
+<code class="go">          --crate-name mandelbrot</code>
+<code class="go">          --crate-type bin</code>
+<code class="go">          --extern crossbeam=.../libcrossbeam-ba292320058da7df.rlib</code>
+<code class="go">          --extern image=.../libimage-254ec48c8f0684f2.rlib</code>
+<code class="go">          ...`</code>
+<code class="gp">$</code></pre>
+<p>We reformatted the <code>rustc</code> command lines for readability, and we deleted a lot of compiler options that aren’t relevant to our discussion, replacing them with an ellipsis (<code>...</code>).</p>
+
+<p>You might recall that by the time we were done, the Mandelbrot program’s <em>main.rs</em> contained three <code>extern crate</code> declarations:</p>
+
+<pre data-code-language="rust" data-testing-pragma="oneliners" data-type="programlisting"><code class="k">extern</code><code class="w"> </code><code class="k">crate</code><code class="w"> </code><code class="n">num</code><code class="p">;</code><code class="w"/>
+<code class="k">extern</code><code class="w"> </code><code class="k">crate</code><code class="w"> </code><code class="n">image</code><code class="p">;</code><code class="w"/>
+<code class="k">extern</code><code class="w"> </code><code class="k">crate</code><code class="w"> </code><code class="n">crossbeam</code><code class="p">;</code><code class="w"/></pre>
+
+<p>These lines simply tell Rust that <code>num</code>, <code>image</code>, and <code>crossbeam</code> are external libraries, not part of the Mandelbrot program itself.</p>
+
+<p>We also specified in our <em>Cargo.toml</em> file which version of each crate we wanted:</p>
+
+<pre class="toml" data-code-language="toml" data-type="programlisting">[dependencies]
+num = "0.1.27"
+image = "0.6.1"
+crossbeam = "0.2.8"</pre>
+
+<p><a contenteditable="false" data-primary="dependencies" data-secondary="in crate context" data-type="indexterm" id="idm140543303083088"/>The word <em>dependencies</em> here just means other crates this project uses: code we’re depending on. We found these crates on <a class="orm:hideurl" href="https://crates.io/">crates.io</a>, the Rust community’s site for open source crates. For example, we found out about the <code>image</code> library by going to crates.io and searching for an image library. Each crate’s page on crates.io provides links to documentation and source code, as well as a line of configuration like <code>image = "0.6.1"</code> that you can copy and add to your <em>Cargo.toml</em>. The version numbers shown here are simply the latest versions of these three packages at the time we wrote the program.</p>
+
+<p>The Cargo transcript tells the story of how this information is used. When we run <code>cargo build</code>, Cargo starts by downloading source code for the specified versions of these crates from crates.io. Then, it reads those crates’ <em>Cargo.toml</em> files, downloads <em>their</em> dependencies, and so on recursively. For example, the source code for version 0.6.1 of the <em>image</em> crate contains a <code>Cargo.toml</code> file that includes this:</p>
+
+<pre class="toml" data-code-language="toml" data-type="programlisting">[dependencies]
+byteorder = "0.4.0"
+num = "0.1.27"
+enum_primitive = "0.1.0"
+glob = "0.2.10"</pre>
+
+<p>Seeing this, Cargo knows that before it can use <code>image</code>, it must fetch these crates as well. Later on, we’ll see how to tell Cargo to fetch source code from a Git repository or the local filesystem rather than crates.io.</p>
+
+<p>Once it has obtained all the source code, Cargo compiles all the crates. It runs <code>rustc</code>, the Rust compiler, once for each crate in the project’s dependency graph. When compiling libraries, Cargo uses the <code>--crate-type lib</code> option. This tells <code>rustc</code> not to look for a <code>main()</code> function but instead to produce an <em>.rlib</em> file containing compiled code in a form that later <code>rustc</code> commands can use as input. When compiling a program, Cargo uses <code>--crate-type bin</code>, and the result is a binary executable for the target platform: <em>mandelbrot.exe</em> on Windows, for example.</p>
+
+<p>With each <code>rustc</code> command, Cargo passes <code>--extern</code> options giving the filename of each library the crate will use. That way, when <code>rustc</code> sees a line of code like <code>extern crate crossbeam;</code>, it knows where to find that compiled crate on disk. The Rust compiler needs access to these <em>.rlib</em> files because they contain the compiled code of the library. Rust will statically link that code into the final executable. The <em>.rlib</em> also contains type information, so Rust can check that the library features we’re using in our code actually exist in the crate, and that we’re using them correctly. It also contains a copy of the crate’s public inline functions, generics, and macros, features that can’t be fully compiled to machine code until Rust sees how we use them.</p>
+
+<p><code>cargo build</code> supports all sorts of options, most of which are beyond the scope of this book, but we will mention one here: <code>cargo build --release</code> produces an optimized build. Release builds run faster, but they take longer to compile, they don’t check for integer overflow, they skip <code>debug_assert!()</code> assertions, and the stack traces they generate on panic are generally less reliable.<a contenteditable="false" data-primary="" data-startref="08-crates.html1" data-type="indexterm" id="idm140543303006752"/></p>
+
+<section data-pdf-bookmark="Build Profiles" data-type="sect2"><div class="sect2" id="build-profiles">
+<h2>Build Profiles</h2>
+<p>There are several configuration settings you can put in your <em>Cargo.toml</em> file that affect the <code>rustc</code> command lines that <code>cargo</code> generates.</p>
+
+<table>
+<thead>
+<tr class="header">
+<th>Command line</th>
+<th>Cargo.toml section used</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>cargo build</code></td>
+<td><code>[profile.debug]</code></td>
+</tr>
+<tr class="even">
+<td><code>cargo build --release</code></td>
+<td><code>[profile.release]</code></td>
+</tr>
+<tr class="odd">
+<td><code>cargo test</code></td>
+<td><code>[profile.test]</code></td>
+</tr>
+</tbody>
+</table>
+
+<p><a contenteditable="false" data-primary="profiler" data-type="indexterm" id="idm140543302992816"/>The defaults are usually fine, but one exception we’ve found is when you want to use a profiler—a tool that measures where your program is spending its CPU time. To get the best data from a profiler, you need both optimizations (usually enabled only in release builds) and debug symbols (usually enabled only in debug builds). To enable both, add this to your <em>Cargo.toml</em>:</p>
+
+<pre class="toml" data-code-language="toml" data-type="programlisting">[profile.release]
+debug = true  # enable debug symbols in release builds</pre>
+
+<p>The <code>debug</code> setting controls the <code>-g</code> option to <code>rustc</code>. With this configuration, when you type <code>cargo build --release</code>, you’ll get a binary with debug symbols. The optimization settings are unaffected.</p>
+
+<p><a href="http://doc.crates.io/manifest.html">The Cargo documentation</a> lists many other settings you can adjust.<a contenteditable="false" data-primary="" data-startref="08-crates.html0" data-type="indexterm" id="idm140543303139664"/></p>
+</div></section>
+</div></section>
+
+<section data-pdf-bookmark="Modules" data-type="sect1"><div class="sect1" id="modules">
+<h1>Modules</h1>
+
+<p><a contenteditable="false" data-primary="modules" data-type="indexterm" id="C08-crates.html2"/><em>Modules</em> are Rust’s namespaces. They’re containers for the functions, types, constants, and so on that make up your Rust program or library. Whereas crates are about code sharing between projects, modules are about code organization <em>within</em> a project. They look like this:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">mod</code> <code class="nn">spores</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">use</code><code class="w"> </code><code class="n">cells</code>::<code class="n">Cell</code><code class="p">;</code><code class="w"/>
+
+<code class="w">    </code><code class="sd">/// A cell made by an adult fern. It disperses on the wind as part of</code>
+<code class="w">    </code><code class="sd">/// the fern life cycle. A spore grows into a prothallus -- a whole</code>
+<code class="w">    </code><code class="sd">/// separate organism, up to 5mm across -- which produces the zygote</code>
+<code class="w">    </code><code class="sd">/// that grows into a new fern. (Plant sex is complicated.)</code>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="k">struct</code> <code class="nc">Spore</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+
+<code class="w">    </code><code class="sd">/// Simulate the production of a spore by meiosis.</code>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">produce_spore</code><code class="p">(</code><code class="n">factory</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Sporangium</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Spore</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+
+<code class="w">    </code><code class="sd">/// Mix genes to prepare for meiosis (part of interphase).</code>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">recombine</code><code class="p">(</code><code class="n">parent</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Cell</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p><a contenteditable="false" data-primary="items" data-secondary="defined" data-type="indexterm" id="idm140543303132320"/>A module is a collection of <em>items</em>, named features like the <code>Spore</code> struct and the two functions in this example. The <code>pub</code> keyword makes an item public, so it can be accessed from outside the module. Anything that isn’t marked <code>pub</code> is private.</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="kd">let</code><code class="w"> </code><code class="n">s</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">spores</code>::<code class="n">produce_spore</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">factory</code><code class="p">);</code><code class="w">  </code><code class="c1">// ok</code>
+
+<code class="n">spores</code>::<code class="n">recombine</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">cell</code><code class="p">);</code><code class="w">  </code><code class="c1">// error: `recombine` is private</code></pre>
+<p>Modules can nest, and it’s fairly common to see a module that’s just a collection of submodules:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">mod</code> <code class="nn">plant_structures</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="k">mod</code> <code class="nn">roots</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="k">mod</code> <code class="nn">stems</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="k">mod</code> <code class="nn">leaves</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>In this way, we could write out a whole program, with a huge amount of code and a whole hierarchy of modules, all in a single source file. Actually working that way is a pain, though, so there’s an alternative.</p>
+
+<section data-pdf-bookmark="Modules in Separate Files" data-type="sect2"><div class="sect2" id="modules-in-separate-files">
+<h2>Modules in Separate Files</h2>
+
+<p><a contenteditable="false" data-primary="modules" data-secondary="in separate files" data-type="indexterm" id="idm140543302827328"/>A module can also be written like this:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">mod</code> <code class="nn">spores</code><code class="p">;</code><code class="w"/></pre>
+<p>Earlier, we included the body of the <code>spores</code> module, wrapped in curly braces. Here, we’re instead telling the Rust compiler that the <code>spores</code> module lives in a separate file, called <em>spores.rs</em>:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// spores.rs</code>
+
+<code class="sd">/// A cell made by an adult fern...</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">struct</code> <code class="nc">Spore</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="sd">/// Simulate the production of a spore by meiosis.</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">produce_spore</code><code class="p">(</code><code class="n">factory</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Sporangium</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Spore</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="sd">/// Mix genes to prepare for meiosis (part of interphase).</code>
+<code class="k">fn</code> <code class="nf">recombine</code><code class="p">(</code><code class="n">parent</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Cell</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p><em>spores.rs</em> contains only the items that make up the module. It doesn’t need any kind of boilerplate to declare that it’s a module.</p>
+
+<p>The location of the code is the <em>only</em> difference between this <code>spores</code> module and the version we showed in the previous section. The rules about what’s public and what’s private are exactly the same either way. And Rust never compiles modules separately, even if they’re in separate files: when you build a Rust crate, you’re recompiling all of its modules.</p>
+
+<p><a contenteditable="false" data-primary="directories" data-secondary="modules and" data-type="indexterm" id="idm140543302682784"/>A module can have its own directory. When Rust sees <code>mod spores;</code>, it checks for both <em>spores.rs</em> and <em>spores/mod.rs</em>; if neither file exists, or both exist, that’s an error. For this example, we used <em>spores.rs</em>, because the <code>spores</code> module did not have any submodules. But consider the <code>plant_structures</code> module we wrote out earlier. If we decide to split that module and its three submodules into their own files, the resulting project would look like this:</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="go">fern_sim/</code>
+<code class="go">├── Cargo.toml</code>
+<code class="go">└── src/</code>
+<code class="go">    ├── main.rs</code>
+<code class="go">    ├── spores.rs</code>
+<code class="go">    └── plant_structures/</code>
+<code class="go">        ├── mod.rs</code>
+<code class="go">        ├── leaves.rs</code>
+<code class="go">        ├── roots.rs</code>
+<code class="go">        └── stems.rs</code></pre>
+
+<p>In <em>main.rs</em>, we declare the <code>plant_structures</code> module:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">pub</code><code class="w"> </code><code class="k">mod</code> <code class="nn">plant_structures</code><code class="p">;</code><code class="w"/></pre>
+<p>This causes Rust to load <em>plant_structures/mod.rs</em>, which declares the three <span class="keep-together">submodules</span>:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// in plant_structures/mod.rs</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">mod</code> <code class="nn">roots</code><code class="p">;</code><code class="w"/>
+<code class="k">pub</code><code class="w"> </code><code class="k">mod</code> <code class="nn">stems</code><code class="p">;</code><code class="w"/>
+<code class="k">pub</code><code class="w"> </code><code class="k">mod</code> <code class="nn">leaves</code><code class="p">;</code><code class="w"/></pre>
+
+<p>The content of those three modules is stored in separate files named <em>leaves.rs</em>, <em>roots.rs</em>, and <em>stems.rs</em>, located alongside <em>mod.rs</em> in the <code>plant_structures</code> directory.</p>
+</div></section>
+
+<section data-pdf-bookmark="Paths and Imports" data-type="sect2"><div class="sect2" id="paths-and-imports">
+<h2>Paths and Imports</h2>
+
+<p><a contenteditable="false" data-primary="modules" data-secondary="paths and imports" data-type="indexterm" id="C08-crates.html3"/><a contenteditable="false" data-primary="paths" data-type="indexterm" id="C08-crates.html4"/>The <code>::</code> operator is used to access features of a module. <a contenteditable="false" data-primary="absolute path" data-type="indexterm" id="idm140543302560512"/>Code anywhere in your project can refer to any standard library feature by writing out its <em>absolute path</em>:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">if</code><code class="w"> </code><code class="n">s1</code><code class="w"> </code><code class="o">&gt;</code><code class="w"> </code><code class="n">s2</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code>::<code class="n">std</code>::<code class="n">mem</code>::<code class="n">swap</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">s1</code><code class="p">,</code><code class="w"> </code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">s2</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>This function name, <code>::std::mem::swap</code>, is an absolute path, because it starts with a double colon. The path <code>::std</code> refers to the top-level module of the standard library. <code>::std::mem</code> is a submodule within the standard library, and <code>::std::mem::swap</code> is a public function in that module.</p>
+<p>You could write all your code this way, spelling out <code>::std::f64::consts::PI</code> and <code>::std::collections::HashMap::new</code> every time you want a circle or a dictionary, but it would be tedious to type and hard to read. <a contenteditable="false" data-primary="imports" data-type="indexterm" id="idm140543302419824"/>The alternative is to <em>import</em> features into the modules where they’re used:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">mem</code><code class="p">;</code><code class="w"/>
+
+<code class="k">if</code><code class="w"> </code><code class="n">s1</code><code class="w"> </code><code class="o">&gt;</code><code class="w"> </code><code class="n">s2</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">mem</code>::<code class="n">swap</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">s1</code><code class="p">,</code><code class="w"> </code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">s2</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>The <code>use</code> declaration causes the name <code>mem</code> to be a local alias for <code>::std::mem</code> throughout the enclosing block or module. Paths in <code>use</code> declarations are automatically absolute paths, so there is no need for a leading <code>::</code>.</p>
+
+<p>We could write <code>use std::mem::swap;</code> to import the <code>swap</code> function itself instead of the <code>mem</code> module. However, what we did above is generally considered the best style: import types, traits, and modules (like <code>std::mem</code>), then use relative paths to access the functions, constants, and other members within.</p>
+
+<p>Several names can be imported at once:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">collections</code>::<code class="p">{</code><code class="n">HashMap</code><code class="p">,</code><code class="w"> </code><code class="n">HashSet</code><code class="p">};</code><code class="w">  </code><code class="c1">// import both</code>
+
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">io</code>::<code class="n">prelude</code>::<code class="o">*</code><code class="p">;</code><code class="w">  </code><code class="c1">// import everything</code></pre>
+<p>This is just shorthand for writing out all the individual imports:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">collections</code>::<code class="n">HashMap</code><code class="p">;</code><code class="w"/>
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">collections</code>::<code class="n">HashSet</code><code class="p">;</code><code class="w"/>
+
+<code class="c1">// all the public items in std::io::prelude:</code>
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">io</code>::<code class="n">prelude</code>::<code class="n">Read</code><code class="p">;</code><code class="w"/>
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">io</code>::<code class="n">prelude</code>::<code class="n">Write</code><code class="p">;</code><code class="w"/>
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">io</code>::<code class="n">prelude</code>::<code class="n">BufRead</code><code class="p">;</code><code class="w"/>
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">io</code>::<code class="n">prelude</code>::<code class="n">Seek</code><code class="p">;</code><code class="w"/></pre>
+
+<p>Modules do <em>not</em> automatically inherit names from their parent modules. For example, suppose we have this in our <em>proteins/mod.rs</em>:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// proteins/mod.rs</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">enum</code> <code class="nc">AminoAcid</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="p">...</code><code class="w"> </code><code class="p">}</code><code class="w"/>
+<code class="k">pub</code><code class="w"> </code><code class="k">mod</code> <code class="nn">synthesis</code><code class="p">;</code><code class="w"/></pre>
+
+<p>Then the code in <em>synthesis.rs</em> does not automatically see the type <code>AminoAcid</code>:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// proteins/synthesis.rs</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">synthesize</code><code class="p">(</code><code class="n">seq</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">AminoAcid</code><code class="p">])</code><code class="w">  </code><code class="c1">// error: can't find type `AminoAcid`</code>
+<code class="w">    </code><code class="p">...</code><code class="w"/></pre>
+
+<p>Instead, each module starts with a blank slate and must import the names it uses:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// proteins/synthesis.rs</code>
+<code class="k">use</code><code class="w"> </code><code class="k">super</code>::<code class="n">AminoAcid</code><code class="p">;</code><code class="w">  </code><code class="c1">// explicitly import from parent</code>
+
+<code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">synthesize</code><code class="p">(</code><code class="n">seq</code>: <code class="kp">&amp;</code><code class="p">[</code><code class="n">AminoAcid</code><code class="p">])</code><code class="w">  </code><code class="c1">// ok</code>
+<code class="w">    </code><code class="p">...</code><code class="w"/></pre>
+
+<p>The keyword <code>super</code> has a special meaning in imports: it’s an alias for the parent module. Similarly, <code>self</code> is an alias for the current module.</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// in proteins/mod.rs</code>
+
+<code class="c1">// import from a submodule</code>
+<code class="k">use</code><code class="w"> </code><code class="bp">self</code>::<code class="n">synthesis</code>::<code class="n">synthesize</code><code class="p">;</code><code class="w"/>
+
+<code class="c1">// import names from an enum,</code>
+<code class="c1">// so we can write `Lys` for lysine, rather than `AminoAcid::Lys`</code>
+<code class="k">use</code><code class="w"> </code><code class="bp">self</code>::<code class="n">AminoAcid</code>::<code class="o">*</code><code class="p">;</code><code class="w"/></pre>
+<p>While paths in imports are treated as absolute paths by default, <code>self</code> and <code>super</code> let you override that and import from relative paths.</p>
+<p>(The <code>AminoAcid</code> example here is, of course, a departure from the style rule we mentioned earlier about only importing types, traits, and modules. If our program includes long amino acid sequences, this is justified under Orwell’s Sixth Rule: “Break any of these rules sooner than say anything outright barbarous.”)</p>
+<p><a contenteditable="false" data-primary="submodules" data-type="indexterm" id="idm140543302078352"/>Submodules can access private items in their parent modules, but they have to import each one by name. <code>use super::*;</code> only imports items that are marked <code>pub</code>.</p>
+<p>Modules aren’t the same thing as files, but there is a natural analogy between modules and the files and directories of a Unix filesystem. The <code>use</code> keyword creates aliases, just as the <code>ln</code> command creates links. Paths, like filenames, come in absolute and relative forms. <code>self</code> and <code>super</code> are like the <code>.</code> and <code>..</code> special directories. And <code>extern crate</code> grafts another crate’s root module into your project. It is a lot like mounting a <span class="keep-together">filesystem.</span><a contenteditable="false" data-primary="" data-startref="08-crates.html4" data-type="indexterm" id="idm140543302071776"/><a contenteditable="false" data-primary="" data-startref="08-crates.html3" data-type="indexterm" id="idm140543302070400"/></p>
+</div></section>
+
+<section data-pdf-bookmark="The Standard Prelude" data-type="sect2"><div class="sect2" id="the-standard-prelude">
+<h2>The Standard Prelude</h2>
+
+<p><a contenteditable="false" data-primary="modules" data-secondary="standard prelude" data-type="indexterm" id="idm140543302067648"/><a contenteditable="false" data-primary="standard prelude" data-type="indexterm" id="idm140543302066272"/>We said a moment ago that each module starts with a “blank slate,” as far as imported names are concerned. But the slate is not <em>completely</em> blank.</p>
+
+<p>For one thing, the standard library <code>std</code> is automatically linked with every project. It’s as though your <em>lib.rs</em> or <em>main.rs</em> contained an invisible declaration for it:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">extern</code><code class="w"> </code><code class="k">crate</code><code class="w"> </code><code class="n">std</code><code class="p">;</code><code class="w"/></pre>
+
+<p>Furthermore, a few particularly handy names, like <code>Vec</code> and <code>Result</code>, are included in the <em>standard prelude</em> and automatically imported. Rust behaves as though every module, including the root module, started with the following import:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">prelude</code>::<code class="n">v1</code>::<code class="o">*</code><code class="p">;</code><code class="w"/></pre>
+<p>The standard prelude contains a few dozen commonly used traits and types. It does <em>not</em> contain <code>std</code>. So if your module refers to <code>std</code>, you’ll have to import it explicitly, like this:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code><code class="p">;</code><code class="w"/></pre>
+<p>Usually, it makes more sense to import the particular feature of <code>std</code> that you’re using.</p>
+
+<p>In <a data-type="xref" href="ch02.html#a-tour-of-rust">Chapter 2</a>, we mentioned that libraries sometimes provide modules named <span class="keep-together"><code>prelude</code></span>. But <code>std::prelude::v1</code> is the only prelude that is ever imported automatically. Naming a module <code>prelude</code> is just a convention that tells users it’s meant to be imported using <code>*</code>.</p>
+</div></section>
+
+<section data-pdf-bookmark="Items, the Building Blocks of Rust" data-type="sect2"><div class="sect2" id="items">
+<h2>Items, the Building Blocks of Rust</h2>
+
+<p><a contenteditable="false" data-primary="items" data-type="indexterm" id="C08-crates.html5"/><a contenteditable="false" data-primary="modules" data-secondary="items" data-type="indexterm" id="C08-crates.html6"/>A module is made up of <em>items</em>. There are several kinds of item, and the list is really a list of the language’s major features:</p>
+
+<dl>
+<dt>Functions</dt> 
+<dd><p>We have seen a great many of these already.</p></dd>
+
+<dt>Types</dt> 
+<dd><p><a contenteditable="false" data-primary="types" data-secondary="user-defined" data-type="indexterm" id="idm140543302016448"/><a contenteditable="false" data-primary="user-defined types" data-type="indexterm" id="idm140543302015072"/>User-defined types are introduced using the <code>struct</code>, <code>enum</code>, and <code>trait</code> keywords. We’ll dedicate a chapter to each of them, in good time; a simple struct looks like this:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">pub</code><code class="w"> </code><code class="k">struct</code> <code class="nc">Fern</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="n">roots</code>: <code class="nc">RootSet</code><code class="p">,</code><code class="w"/>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="n">stems</code>: <code class="nc">StemSet</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>A struct’s fields, even private fields, are accessible throughout the module where the struct is declared. Outside the module, only public fields are accessible.</p>
+<p>It turns out that enforcing access control by module, rather than by class as in Java or C++, is surprisingly helpful for software design. It cuts down on boilerplate “getter” and “setter” methods, and it largely eliminates the need for anything like C++ <code>friend</code> declarations. A single module can define several types that work closely together, such as perhaps <code>frond::LeafMap</code> and <code>frond::LeafMapIter</code>, accessing each other’s private fields as needed, while still hiding those implementation details from the rest of your program.</p></dd>
+
+<dt>Type aliases</dt>
+<dd><p><a contenteditable="false" data-primary="type aliases" data-type="indexterm" id="idm140543301972608"/>As we’ve seen, the <code>type</code> keyword can be used like <code>typedef</code> in C++, to declare a new name for an existing type:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">type</code> <code class="nc">Table</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">HashMap</code><code class="o">&lt;</code><code class="nb">String</code><code class="p">,</code><code class="w"> </code><code class="nb">Vec</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;&gt;</code><code class="p">;</code><code class="w"/></pre>
+
+<p>The type <code>Table</code> that we’re declaring here is shorthand for this particular kind of <code>HashMap</code>.</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">fn</code> <code class="nf">show</code><code class="p">(</code><code class="n">table</code>: <code class="kp">&amp;</code><code class="nc">Table</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre></dd>
+
+<dt><code>impl</code> blocks</dt> 
+<dd><p><a contenteditable="false" data-primary="impl block" data-type="indexterm" id="idm140543301789552"/>Methods are attached to types using <code>impl</code> blocks:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">impl</code><code class="w"> </code><code class="n">Cell</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">distance_from_origin</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="kt">f64</code> <code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="kt">f64</code>::<code class="n">hypot</code><code class="p">(</code><code class="bp">self</code><code class="p">.</code><code class="n">x</code><code class="p">,</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">y</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>The syntax is explained in <a data-type="xref" href="ch09.html#structs">Chapter 9</a>. An <code>impl</code> block can’t be marked <code>pub</code>. Instead, individual methods are marked <code>pub</code> to make them visible outside the current module.</p>
+<p>Private methods, like private struct fields, are visible throughout the module where they’re declared.</p></dd>
+
+<dt>Constants</dt> 
+<dd><p><a contenteditable="false" data-primary="constants" data-type="indexterm" id="idm140543301863920"/>The <code>const</code> keyword introduces a constant. The syntax is just like <code>let</code> except that it may be marked <code>pub</code>, and the type is required. Also, <code>UPPERCASE_NAMES</code> are conventional for constants:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">pub</code><code class="w"> </code><code class="k">const</code><code class="w"> </code><code class="n">ROOM_TEMPERATURE</code>: <code class="kt">f64</code> <code class="o">=</code><code class="w"> </code><code class="mf">20.0</code><code class="p">;</code><code class="w">  </code><code class="c1">// degrees Celsius</code></pre>
+
+<p><a contenteditable="false" data-primary="static (value)" data-type="indexterm" id="idm140543301764640"/><a contenteditable="false" data-primary="static keyword" data-type="indexterm" id="idm140543301651808"/>The <code>static</code> keyword introduces a static item, which is nearly the same thing:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">pub</code><code class="w"> </code><code class="k">static</code><code class="w"> </code><code class="n">ROOM_TEMPERATURE</code>: <code class="kt">f64</code> <code class="o">=</code><code class="w"> </code><code class="mf">68.0</code><code class="p">;</code><code class="w">  </code><code class="c1">// degrees Fahrenheit</code></pre>
+
+<p>A constant is a bit like a C++ <code>#define</code>: the value is compiled into your code every place it’s used. A static is a variable that’s set up before your program starts running and lasts until it exits. Use constants for magic numbers and strings in your code. Use statics for larger amounts of data, or any time you’ll need to borrow a reference to the constant value.</p>
+
+<p>There are no <code>mut</code> constants. Statics can be marked <code>mut</code>, but as discussed in <a data-type="xref" href="ch05.html#references">Chapter 5</a>, <a contenteditable="false" data-primary="mut statics" data-type="indexterm" id="idm140543301758112"/>Rust has no way to enforce its rules about exclusive access on <code>mut</code> statics. They are, therefore, inherently non-thread-safe, and safe code can’t use them <span class="keep-together">at all:</span></p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">static</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">PACKETS_SERVED</code>: <code class="kt">usize</code> <code class="o">=</code><code class="w"> </code><code class="mi">0</code><code class="p">;</code><code class="w"/>
+
+<code class="n">println</code><code class="o">!</code><code class="p">(</code><code class="s">"{} served"</code><code class="p">,</code><code class="w"> </code><code class="n">PACKETS_SERVED</code><code class="p">);</code><code class="w">  </code><code class="c1">// error: use of mutable static</code></pre>
+
+<p>Rust discourages global mutable state. For a discussion of the alternatives, see <a data-type="xref" href="ch19.html#global-variables">“Global Variables”</a>.</p></dd>
+
+<dt>Modules</dt> 
+<dd><p>We’ve already talked about these quite a bit. As we’ve seen, a module can contain submodules, which can be public or private, like any other named item.</p></dd>
+
+<dt>Imports</dt> 
+<dd><p><code>use</code> and <code>extern crate</code> declarations are items too. Even though they’re just aliases, they can be public:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// in plant_structures/mod.rs</code>
+<code class="p">...</code><code class="w"/>
+<code class="k">pub</code><code class="w"> </code><code class="k">use</code><code class="w"> </code><code class="bp">self</code>::<code class="n">leaves</code>::<code class="n">Leaf</code><code class="p">;</code><code class="w"/>
+<code class="k">pub</code><code class="w"> </code><code class="k">use</code><code class="w"> </code><code class="bp">self</code>::<code class="n">roots</code>::<code class="n">Root</code><code class="p">;</code><code class="w"/></pre>
+
+<p>This means that <code>Leaf</code> and <code>Root</code> are public items of the <code>plant_structures</code> module. They’re still simple aliases for <code>plant_structures::leaves::Leaf</code> and <code>plant_structures::roots::Root</code>.</p>
+
+<p>The standard prelude is written as just such a series of <code>pub</code> imports.</p></dd>
+
+<dt><code>extern</code> blocks</dt> 
+<dd><p><a contenteditable="false" data-primary="extern blocks" data-type="indexterm" id="idm140543301578240"/>These declare a collection of functions written in some other language (typically C or C++), so that your Rust code can call them. We’ll cover <code>extern</code> blocks in <a data-type="xref" href="ch21.html#unsafe-code">Chapter 21</a>.</p></dd>
+</dl>
+
+<p>Rust warns about items that are declared, but never used:</p>
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="go">warning: function is never used: `is_square`</code>
+<code class="go">  --&gt; src/crates_unused_items.rs:23:9</code>
+<code class="go">   |</code>
+<code class="go">23 | /         pub fn is_square(root: &amp;Root) -&gt; bool {</code>
+<code class="go">24 | |             root.cross_section_shape().is_square()</code>
+<code class="go">25 | |         }</code>
+<code class="go">   | |_________^</code>
+<code class="go">   |</code></pre>
+
+<p>This warning can be puzzling, because there are two very different possible causes. Perhaps this function really is dead code at the moment. Or, maybe you meant to use it in other crates. In that case, you need to mark it <em>and all enclosing modules</em> as public<a contenteditable="false" data-primary="" data-startref="08-crates.html6" data-type="indexterm" id="idm140543301571696"/><a contenteditable="false" data-primary="" data-startref="08-crates.html5" data-type="indexterm" id="idm140543301532208"/>.<a contenteditable="false" data-primary="" data-startref="08-crates.html2" data-type="indexterm" id="idm140543301530704"/></p>
+</div></section>
+</div></section>
+
+<section data-pdf-bookmark="Turning a Program into a Library" data-type="sect1"><div class="sect1" id="turning-a-program-into-a-library">
+<h1>Turning a Program into a Library</h1>
+
+<p><a contenteditable="false" data-primary="crates" data-secondary="for libraries" data-type="indexterm" id="idm140543301527360"/><a contenteditable="false" data-primary="libraries" data-type="indexterm" id="idm140543301525984"/><a contenteditable="false" data-primary="modules" data-secondary="libraries and" data-type="indexterm" id="idm140543301524880"/>As your fern simulator starts to take off, you decide you need more than a single program. Suppose you’ve got one command-line program that runs the simulation and saves results in a file. Now, you want to write other programs for performing scientific analysis of the saved results, displaying 3D renderings of the growing plants in real time, rendering photorealistic pictures, and so on. All these programs need to share the basic fern simulation code. You need to make a library.</p>
+<p>The first step is to factor your existing project into two parts: a library crate, which contains all the shared code, and an executable, which contains the code that’s only needed for your existing command-line program.</p>
+<p>To show how you can do this, let’s use a grossly simplified example program:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">struct</code> <code class="nc">Fern</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">size</code>: <code class="kt">f64</code><code class="p">,</code><code class="w"/>
+<code class="w">    </code><code class="n">growth_rate</code>: <code class="kt">f64</code>
+<code class="p">}</code><code class="w"/>
+
+<code class="k">impl</code><code class="w"> </code><code class="n">Fern</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="sd">/// Simulate a fern growing for one day.</code>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">grow</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="bp">self</code><code class="p">.</code><code class="n">size</code><code class="w"> </code><code class="o">*=</code><code class="w"> </code><code class="mf">1.0</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">growth_rate</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="sd">/// Run a fern simulation for some number of days.</code>
+<code class="k">fn</code> <code class="nf">run_simulation</code><code class="p">(</code><code class="n">fern</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Fern</code><code class="p">,</code><code class="w"> </code><code class="n">days</code>: <code class="kt">usize</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">_</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="mi">0</code><code class="w"> </code><code class="p">..</code><code class="w"> </code><code class="n">days</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">fern</code><code class="p">.</code><code class="n">grow</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">main</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">fern</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">Fern</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">size</code>: <code class="mf">1.0</code><code class="p">,</code><code class="w"/>
+<code class="w">        </code><code class="n">growth_rate</code>: <code class="mf">0.001</code><code class="w"/>
+<code class="w">    </code><code class="p">};</code><code class="w"/>
+<code class="w">    </code><code class="n">run_simulation</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">fern</code><code class="p">,</code><code class="w"> </code><code class="mi">1000</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="n">println</code><code class="o">!</code><code class="p">(</code><code class="s">"final fern size: {}"</code><code class="p">,</code><code class="w"> </code><code class="n">fern</code><code class="p">.</code><code class="n">size</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>We’ll assume that this program has a trivial <em>Cargo.toml</em> file:</p>
+<pre class="toml" data-code-language="toml" data-type="programlisting">[package]
+name = "fern_sim"
+version = "0.1.0"
+authors = ["You &lt;you@example.com&gt;"]</pre>
+<p>Turning this program into a library is easy. Here are the steps:</p>
+
+<ol>
+<li><p>Rename the file <em>src/main.rs</em> to <em>src/lib.rs</em>.</p></li>
+<li><p>Add the <code>pub</code> keyword to items in <em>src/lib.rs</em> that will be public features of our library.</p></li>
+<li><p>Move the <code>main</code> function to a temporary file somewhere. We’ll come back to it in a minute.</p></li>
+</ol>
+
+<p>The resulting <em>src/lib.rs</em> file looks like this:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">pub</code><code class="w"> </code><code class="k">struct</code> <code class="nc">Fern</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="n">size</code>: <code class="kt">f64</code><code class="p">,</code><code class="w"/>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="n">growth_rate</code>: <code class="kt">f64</code>
+<code class="p">}</code><code class="w"/>
+
+<code class="k">impl</code><code class="w"> </code><code class="n">Fern</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="sd">/// Simulate a fern growing for one day.</code>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">grow</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="bp">self</code><code class="p">.</code><code class="n">size</code><code class="w"> </code><code class="o">*=</code><code class="w"> </code><code class="mf">1.0</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">growth_rate</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="sd">/// Run a fern simulation for some number of days.</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">run_simulation</code><code class="p">(</code><code class="n">fern</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Fern</code><code class="p">,</code><code class="w"> </code><code class="n">days</code>: <code class="kt">usize</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">_</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="mi">0</code><code class="w"> </code><code class="p">..</code><code class="w"> </code><code class="n">days</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">fern</code><code class="p">.</code><code class="n">grow</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Note that we didn’t need to change anything in <em>Cargo.toml</em>. This is because our minimal <em>Cargo.toml</em> file leaves Cargo to its default behavior. By default, <code>cargo build</code> looks at the files in our source directory and figures out what to build. When it sees the file <em>src/lib.rs</em>, it knows to build a library.</p>
+
+<p>The code in <em>src/lib.rs</em> forms the <em>root module</em> of the library. Other crates that use our library can only access the public items of this root module.</p>
+</div></section>
+
+<section data-pdf-bookmark="The src/bin Directory" data-type="sect1"><div class="sect1" id="the-srcbin-directory">
+<h1>The src/bin Directory</h1>
+
+<p><a contenteditable="false" data-primary="Cargo" data-secondary="src/bin directory" data-type="indexterm" id="idm140543301335680"/><a contenteditable="false" data-primary="crates" data-secondary="src/bin directory and" data-type="indexterm" id="idm140543301334304"/><a contenteditable="false" data-primary="directories" data-secondary="src/bin" data-type="indexterm" id="idm140543301332928"/><a contenteditable="false" data-primary="libraries" data-secondary="src/bin directory" data-type="indexterm" id="idm140543301331552"/><a contenteditable="false" data-primary="src/bin directory" data-type="indexterm" id="idm140543301330176"/>Getting the original command-line <code>fern_sim</code> program working again is also straightforward: Cargo has some built-in support for small programs that live in the same codebase as a library.</p>
+<p>In fact, Cargo itself is written this way. The bulk of the code is in a Rust library. The <code>cargo</code> command-line program that we’ve been using throughout this book is a thin wrapper program that calls out to the library for all the heavy lifting. Both the library and the command-line program <a href="https://github.com/rust-lang/cargo">live in the same source repository</a>.</p>
+
+<p>We can put our program and our library in the same codebase, too. Put this code into a file named <em>src/bin/efern.rs</em>:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">extern</code><code class="w"> </code><code class="k">crate</code><code class="w"> </code><code class="n">fern_sim</code><code class="p">;</code><code class="w"/>
+<code class="k">use</code><code class="w"> </code><code class="n">fern_sim</code>::<code class="p">{</code><code class="n">Fern</code><code class="p">,</code><code class="w"> </code><code class="n">run_simulation</code><code class="p">};</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">main</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">fern</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">Fern</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">size</code>: <code class="mf">1.0</code><code class="p">,</code><code class="w"/>
+<code class="w">        </code><code class="n">growth_rate</code>: <code class="mf">0.001</code><code class="w"/>
+<code class="w">    </code><code class="p">};</code><code class="w"/>
+<code class="w">    </code><code class="n">run_simulation</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">fern</code><code class="p">,</code><code class="w"> </code><code class="mi">1000</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="n">println</code><code class="o">!</code><code class="p">(</code><code class="s">"final fern size: {}"</code><code class="p">,</code><code class="w"> </code><code class="n">fern</code><code class="p">.</code><code class="n">size</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>The <code>main</code> function is the one we set aside earlier. We’ve added an <code>extern crate</code> declaration, since this program will use the <code>fern_sim</code> library crate, and we’re importing <code>Fern</code> and <code>run_simulation</code> from the library.</p>
+
+<p>Because we’ve put this file into <em>src/bin</em>, Cargo will compile both the <code>fern_sim</code> library and this program the next time we run <code>cargo build</code>. We can run the <code>efern</code> program using <code>cargo run --bin efern</code>. Here’s what it looks like, using <code>--verbose</code> to show the commands Cargo is running:</p>
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="gp">$</code> cargo build --verbose
+<code class="go">   Compiling fern_sim v0.1.0 (file:///.../fern_sim)</code>
+<code class="go">     Running `rustc src/lib.rs --crate-name fern_sim --crate-type lib ...`</code>
+<code class="go">     Running `rustc src/bin/efern.rs --crate-name efern --crate-type bin ...`</code>
+<code class="gp">$</code> cargo run --bin efern --verbose
+<code class="go">       Fresh fern_sim v0.1.0 (file:///.../fern_sim)</code>
+<code class="go">     Running `target/debug/efern`</code>
+<code class="go">final fern size: 2.7169239322355985</code></pre>
+
+<p>We still didn’t have to make any changes to <em>Cargo.toml</em>, because again, Cargo’s default is to look at your source files and figure things out. It automatically treats <em>.rs</em> files in <em>src/bin</em> as extra programs to build.</p>
+
+<p>Of course, now that <code>fern_sim</code> is a library, we also have another option. We could have put this program in its own isolated project, in a completely separate directory, with its own <em>Cargo.toml</em> listing <code>fern_sim</code> as a dependency:</p>
+
+<pre class="toml" data-code-language="toml" data-type="programlisting">[dependencies]
+fern_sim = { path = "../fern_sim" }</pre>
+
+<p>Perhaps that is what you’ll do for other fern-simulating programs down the road. The <em>src/bin</em> directory is just right for a simple program like <code>efern</code>.</p>
+</div></section>
+
+<section data-pdf-bookmark="Attributes" data-type="sect1"><div class="sect1" id="attributes">
+<h1>Attributes</h1>
+
+<p><a contenteditable="false" data-primary="attributes" data-type="indexterm" id="C08-crates.html7"/><a contenteditable="false" data-primary="items" data-secondary="attributes" data-type="indexterm" id="C08-crates.html8"/>Any item in a Rust program can be decorated with <em>attributes</em>. Attributes are Rust’s catch-all syntax for writing miscellaneous instructions and advice to the compiler. For example, suppose you’re getting this warning:</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="go">libgit2.rs: warning: type `git_revspec` should have a camel case name</code>
+<code class="go">    such as `GitRevspec`, #[warn(non_camel_case_types)] on by default</code></pre>
+
+<p>But you chose this name for a reason, and you wish Rust would shut up about it. You can disable the warning by adding an <code>#[allow]</code> attribute on the type:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="cp">#[allow(non_camel_case_types)]</code><code class="w"/>
+<code class="k">pub</code><code class="w"> </code><code class="k">struct</code> <code class="nc">git_revspec</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p><a contenteditable="false" data-primary="#[cfg] attribute" data-type="indexterm" id="idm140543301229296"/>Conditional compilation is another feature that’s written using an attribute, the <code>#[cfg]</code> attribute:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// Only include this module in the project if we're building for Android.</code>
+<code class="cp">#[cfg(target_os = </code><code class="s">"android"</code><code class="cp">)]</code><code class="w"/>
+<code class="k">mod</code> <code class="nn">mobile</code><code class="p">;</code><code class="w"/></pre>
+<p>The full syntax of <code>#[cfg]</code> is specified in the <a href="https://doc.rust-lang.org/reference.html#conditional-compilation">Rust Reference</a>; the most commonly used options are listed here:</p>
+
+<table class="tallrow" id="cfg-table">
+<thead>
+<tr>
+<th class="w150">
+<code>#[cfg(...)]</code> option
+</th>
+<th>
+Enabled when
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>
+<code>test</code>
+</td>
+<td>
+Tests are enabled (compiling with <code>cargo test</code> or <code>rustc --test</code>).
+</td>
+</tr>
+<tr>
+<td>
+<code>debug_assertions</code>
+</td>
+<td>
+Debug assertions are enabled (typically in nonoptimized builds).
+</td>
+</tr>
+<tr>
+<td>
+<code>unix</code>
+</td>
+<td>
+Compiling for Unix, including macOS.
+</td>
+</tr>
+<tr>
+<td>
+<code>windows</code>
+</td>
+<td>
+Compiling for Windows.
+</td>
+</tr>
+<tr>
+<td>
+<code>target_pointer_width = "64"</code>
+</td>
+<td>
+Targeting a 64-bit platform. The other possible value is <code>"32"</code>.
+</td>
+</tr>
+<tr>
+<td>
+<code>target_arch = "x86_64"</code>
+</td>
+<td>
+Targeting x86-64 in particular. Other values: <code>"x86"</code>, <code>"arm"</code>, <code>"aarch64"</code>, <span class="keep-together"><code>"powerpc"</code></span>, <code>"powerpc64"</code>, <code>"mips"</code>.
+</td>
+</tr>
+<tr>
+<td>
+<code>target_os = "macos"</code>
+</td>
+<td>
+Compiling for macOS. Other values: <code>"windows"</code>, <code>"ios"</code>, <code>"android"</code>, <code>"linux"</code>, <code>"openbsd"</code>, <code>"netbsd"</code>, <code>"dragonfly"</code>, <code>"bitrig"</code>.
+</td>
+</tr>
+<tr>
+<td>
+<code>feature = "robots"</code>
+</td>
+<td>
+The user-defined feature named <code>"robots"</code> is enabled (compiling with <code>cargo build --feature robots</code> or <code>rustc --cfg feature='"robots"'</code>). Features are declared in the <a href="http://doc.crates.io/manifest.html#the-features-section"><code>[features]</code> section of <em>Cargo.toml</em></a>.
+</td>
+</tr>
+<tr>
+<td>
+<code>not(</code><em>A</em><code>)</code>
+</td>
+<td>
+<em>A</em> is not satisfied. To provide two different implementations of a function, mark one with <code>#[cfg(X)]</code> and the other with <code>#[cfg(not(X))]</code>.
+</td>
+</tr>
+<tr>
+<td>
+<code>all(</code><em>A</em><code>,</code><em>B</em><code>)</code>
+</td>
+<td>
+Both <em>A</em> and <em>B</em> are satisfied (the equivalent of <code>&amp;&amp;</code>).
+</td>
+</tr>
+<tr>
+<td>
+<code>any(</code><em>A</em><code>,</code><em>B</em><code>)</code>
+</td>
+<td>
+Either <em>A</em> or <em>B</em> is satisfied (the equivalent of <code>||</code>).
+</td>
+</tr>
+</tbody>
+</table>
+
+<p>Occasionally, we need to micromanage the inline expansion of functions, an optimization that we’re usually happy to leave to the compiler. <a contenteditable="false" data-primary="#[inline] attribute" data-type="indexterm" id="idm140543300997120"/><a contenteditable="false" data-primary="crates" data-secondary="#[inline] attribute" data-type="indexterm" id="idm140543300996016"/>We can use the <code>#[inline]</code> attribute for that:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// Adjust levels of ions etc. in two adjacent cells</code>
+<code class="sd">/// due to osmosis between them.</code>
+<code class="cp">#[inline]</code><code class="w"/>
+<code class="k">fn</code> <code class="nf">do_osmosis</code><code class="p">(</code><code class="n">c1</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Cell</code><code class="p">,</code><code class="w"> </code><code class="n">c2</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Cell</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>There’s one situation where inlining <em>won’t</em> happen without <code>#[inline]</code>. When a function or method defined in one crate is called in another crate, Rust won’t inline it unless it’s generic (it has type parameters) or it’s explicitly marked <code>#[inline]</code>.</p>
+<p>Otherwise, the compiler treats <code>#[inline]</code> as a suggestion. Rust also supports the more insistent <code>#[inline(always)]</code>, to request that a function be expanded inline at every call site, and <code>#[inline(never)]</code>, to ask that a function never be inlined.</p>
+<p>Some attributes, like <code>#[cfg]</code> and <code>#[allow]</code>, can be attached to a whole module and apply to everything in it. Others, like <code>#[test]</code> and <code>#[inline]</code>, must be attached to individual items. As you might expect for a catch-all feature, each attribute is custom-made and has its own set of supported arguments. The Rust Reference documents <a href="https://doc.rust-lang.org/reference/attributes.html">the full set of supported attributes</a> in detail.</p>
+
+<p><a contenteditable="false" data-primary="#!" data-type="indexterm" id="idm140543300825040"/>To attach an attribute to a whole crate, add it at the top of the <em>main.rs</em> or <em>lib.rs</em> file, before any items, and write <code>#!</code> instead of <code>#</code>, like this:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// libgit2_sys/lib.rs</code>
+<code class="cp">#![allow(non_camel_case_types)]</code><code class="w"/>
+
+<code class="k">pub</code><code class="w"> </code><code class="k">struct</code> <code class="nc">git_revspec</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="k">pub</code><code class="w"> </code><code class="k">struct</code> <code class="nc">git_error</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>The <code>#!</code> tells Rust to attach an attribute to the enclosing item rather than whatever comes next: in this case, the <code>#![allow]</code> attribute attaches to the whole <code>libgit2_sys</code> crate, not just <code>struct git_revspec</code>.</p>
+<p><code>#!</code> can also be used inside functions, structs, and so on, but it’s only typically used at the beginning of a file, to attach an attribute to the whole module or crate. Some attributes always use the <code>#!</code> syntax because they can only be applied to a whole crate.</p>
+<p>For example, the <code>#![feature]</code> attribute is used to turn on <em>unstable</em> features of the Rust language and libraries, features that are experimental, and therefore might have bugs or might be changed or removed in the future. For instance, as we’re writing this, Rust has experimental support for 128-bit integer types <code>i128</code> and <code>u128</code>; but since these types are experimental, you can only use them by (1) installing the Nightly version of Rust and (2) explicitly declaring that your crate uses them:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="cp">#![feature(i128_type)]</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">main</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="c1">// Do my math homework, Rust!</code>
+<code class="w">    </code><code class="n">println</code><code class="o">!</code><code class="p">(</code><code class="s">"{}"</code><code class="p">,</code><code class="w"> </code><code class="mi">9204093811595833589_</code><code class="n">u128</code><code class="w"> </code><code class="o">*</code><code class="w"> </code><code class="mi">19973810893143440503_</code><code class="n">u128</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>Over time, the Rust team sometimes <em>stabilizes</em> an experimental feature, so that it becomes a standard part of the language. The <code>#![feature]</code> attribute then becomes superfluous, and Rust generates a warning advising you to remove it.<a contenteditable="false" data-primary="" data-startref="08-crates.html8" data-type="indexterm" id="idm140543300685856"/><a contenteditable="false" data-primary="" data-startref="08-crates.html7" data-type="indexterm" id="idm140543300684576"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Tests and Documentation" data-type="sect1"><div class="sect1" id="tests-and-documentation">
+<h1>Tests and Documentation</h1>
+
+<p><a contenteditable="false" data-primary="tests" data-type="indexterm" id="C08-crates.html9"/>As we saw in <a data-type="xref" href="ch02.html#writing-and-running-unit-tests">“Writing and Running Unit Tests”</a>, a simple unit testing framework is built into Rust. Tests are ordinary functions marked with the <code>#[test]</code> attribute.</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="cp">#[test]</code><code class="w"/>
+<code class="k">fn</code> <code class="nf">math_works</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">x</code>: <code class="kt">i32</code> <code class="o">=</code><code class="w"> </code><code class="mi">1</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="n">assert</code><code class="o">!</code><code class="p">(</code><code class="n">x</code><code class="p">.</code><code class="n">is_positive</code><code class="p">());</code><code class="w"/>
+<code class="w">    </code><code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">x</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="mi">1</code><code class="p">,</code><code class="w"> </code><code class="mi">2</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p><a contenteditable="false" data-primary="cargo test" data-type="indexterm" id="C08-crates.html10"/><code>cargo test</code> runs all the tests in your project.</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="gp">$</code> cargo <code class="nb">test</code>
+<code class="go">   Compiling math_test v0.1.0 (file:///.../math_test)</code>
+<code class="go">     Running target/release/math_test-e31ed91ae51ebf22</code>
+
+<code class="go">running 1 test</code>
+<code class="go">test math_works ... ok</code>
+
+<code class="go">test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured</code></pre>
+<p>(You’ll also see some output about “doc-tests,” which we’ll get to in a minute.)</p>
+<p>This works the same whether your crate is an executable or a library. You can run specific tests by passing arguments to Cargo: <code>cargo test math</code> runs all tests that contain <code>math</code> somewhere in their name.</p>
+<p>Tests commonly use the <code>assert!</code> and <code>assert_eq!</code> macros from the Rust standard library. <code>assert!(expr)</code> succeeds if <code>expr</code> is true. Otherwise, it panics, which causes the test to fail. <code>assert_eq!(v1, v2)</code> is just like <code>assert!(v1 == v2)</code> except that if the assertion fails, the error message shows both values.</p>
+<p>You can use these macros in ordinary code, to check invariants, but note that <code>assert!</code> and <code>assert_eq!</code> are included even in release builds. Use <code>debug_assert!</code> and <code>debug_assert_eq!</code> instead to write assertions that are checked only in debug builds.</p>
+<p>To test error cases, add the <code>#[should_panic]</code> attribute to your test:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// This test passes only if division by zero causes a panic,</code>
+<code class="sd">/// as we claimed in the previous chapter.</code>
+<code class="cp">#[test]</code><code class="w"/>
+<code class="cp">#[should_panic(expected=</code><code class="s">"divide by zero"</code><code class="cp">)]</code><code class="w"/>
+<code class="k">fn</code> <code class="nf">test_divide_by_zero_error</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="mi">1</code><code class="w"> </code><code class="o">/</code><code class="w"> </code><code class="mi">0</code><code class="p">;</code><code class="w">  </code><code class="c1">// should panic!</code>
+<code class="p">}</code><code class="w"/></pre>
+<p>Functions marked with <code>#[test]</code> are conditionally compiled. When you run <code>cargo test</code>, Cargo builds a copy of your program with your tests and the test harness enabled. A plain <code>cargo build</code> or <code>cargo build --release</code> skips the testing code. This means your unit tests can live right alongside the code they test, accessing internal implementation details if they need to, and yet there’s no runtime cost. However, it can result in some warnings. For example:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">fn</code> <code class="nf">roughly_equal</code><code class="p">(</code><code class="n">a</code>: <code class="kt">f64</code><code class="p">,</code><code class="w"> </code><code class="n">b</code>: <code class="kt">f64</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="kt">bool</code> <code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">(</code><code class="n">a</code><code class="w"> </code><code class="o">-</code><code class="w"> </code><code class="n">b</code><code class="p">).</code><code class="n">abs</code><code class="p">()</code><code class="w"> </code><code class="o">&lt;</code><code class="w"> </code><code class="mf">1e-6</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="cp">#[test]</code><code class="w"/>
+<code class="k">fn</code> <code class="nf">trig_works</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="kt">f64</code>::<code class="n">consts</code>::<code class="n">PI</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="n">assert</code><code class="o">!</code><code class="p">(</code><code class="n">roughly_equal</code><code class="p">(</code><code class="n">PI</code><code class="p">.</code><code class="n">sin</code><code class="p">(),</code><code class="w"> </code><code class="mf">0.0</code><code class="p">));</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>In a testing build, this is fine. In a nontesting build, <code>roughly_equal</code> is unused, and Rust will complain:</p>
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="gp">$</code> cargo build
+<code class="go">   Compiling math_test v0.1.0 (file:///.../math_test)</code>
+<code class="go">warning: function is never used: `roughly_equal`</code>
+<code class="go"> --&gt; src/crates_unused_testing_function.rs:7:1</code>
+<code class="go">  |</code>
+<code class="go">7 | / fn roughly_equal(a: f64, b: f64) -&gt; bool {</code>
+<code class="go">8 | |     (a - b).abs() &lt; 1e-6</code>
+<code class="go">9 | | }</code>
+<code class="go">  | |_^</code>
+<code class="go">  |</code>
+<code class="go">   = note: #[warn(dead_code)] on by default</code></pre>
+<p>So the convention, when your tests get substantial enough to require support code, is to put them in a <code>tests</code> module and declare the whole module to be testing-only using the <code>#[cfg]</code> attribute:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="cp">#[cfg(test)]</code><code class="w">   </code><code class="c1">// include this module only when testing</code>
+<code class="k">mod</code> <code class="nn">tests</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">roughly_equal</code><code class="p">(</code><code class="n">a</code>: <code class="kt">f64</code><code class="p">,</code><code class="w"> </code><code class="n">b</code>: <code class="kt">f64</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="kt">bool</code> <code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">(</code><code class="n">a</code><code class="w"> </code><code class="o">-</code><code class="w"> </code><code class="n">b</code><code class="p">).</code><code class="n">abs</code><code class="p">()</code><code class="w"> </code><code class="o">&lt;</code><code class="w"> </code><code class="mf">1e-6</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+
+<code class="w">    </code><code class="cp">#[test]</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">trig_works</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="kt">f64</code>::<code class="n">consts</code>::<code class="n">PI</code><code class="p">;</code><code class="w"/>
+<code class="w">        </code><code class="n">assert</code><code class="o">!</code><code class="p">(</code><code class="n">roughly_equal</code><code class="p">(</code><code class="n">PI</code><code class="p">.</code><code class="n">sin</code><code class="p">(),</code><code class="w"> </code><code class="mf">0.0</code><code class="p">));</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>Rust’s test harness uses multiple threads to run several tests at a time, a nice side benefit of your Rust code being thread-safe by default. (To disable this, either run a single test, <code>cargo test <var>testname</var></code>; or set the environment variable <code>RUST_TEST_THREADS</code> to <code>1</code>.) This means that, technically, the Mandelbrot program we showed in <a data-type="xref" href="ch02.html#a-tour-of-rust">Chapter 2</a> was not the second multithreaded program in that chapter, but the third! The <code>cargo test</code> run in <a data-type="xref" href="ch02.html#writing-and-running-unit-tests">“Writing and Running Unit Tests”</a> was the first.</p>
+
+<section data-pdf-bookmark="Integration Tests" data-type="sect2"><div class="sect2" id="integration-tests">
+<h2>Integration Tests</h2>
+
+<p><a contenteditable="false" data-primary="integration tests" data-type="indexterm" id="idm140543300301536"/><a contenteditable="false" data-primary="tests" data-secondary="integration tests" data-type="indexterm" id="idm140543300300432"/>Your fern simulator continues to grow. You’ve decided to put all the major functionality into a library that can be used by multiple executables. It would be nice to have some tests that link with the library the way an end user would, using <em>fern_sim.rlib</em> as an external crate. Also, you have some tests that start by loading a saved simulation from a binary file, and it is awkward having those large test files in your <em>src</em> directory. Integration tests help with these two problems.</p>
+
+<p>Integration tests are <em>.rs</em> files that live in a <em>tests</em> directory alongside your project’s <em>src</em> directory. When you run <code>cargo test</code>, Cargo compiles each integration test as a separate, standalone crate, linked with your library and the Rust test harness. Here is an example:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="c1">// tests/unfurl.rs - Fiddleheads unfurl in sunlight</code>
+
+<code class="k">extern</code><code class="w"> </code><code class="k">crate</code><code class="w"> </code><code class="n">fern_sim</code><code class="p">;</code><code class="w"/>
+<code class="k">use</code><code class="w"> </code><code class="n">fern_sim</code>::<code class="n">Terrarium</code><code class="p">;</code><code class="w"/>
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">time</code>::<code class="n">Duration</code><code class="p">;</code><code class="w"/>
+
+<code class="cp">#[test]</code><code class="w"/>
+<code class="k">fn</code> <code class="nf">test_fiddlehead_unfurling</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">world</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">Terrarium</code>::<code class="n">load</code><code class="p">(</code><code class="s">"tests/unfurl_files/fiddlehead.tm"</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="n">assert</code><code class="o">!</code><code class="p">(</code><code class="n">world</code><code class="p">.</code><code class="n">fern</code><code class="p">(</code><code class="mi">0</code><code class="p">).</code><code class="n">is_furled</code><code class="p">());</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">one_hour</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">Duration</code>::<code class="n">from_secs</code><code class="p">(</code><code class="mi">60</code><code class="w"> </code><code class="o">*</code><code class="w"> </code><code class="mi">60</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="n">world</code><code class="p">.</code><code class="n">apply_sunlight</code><code class="p">(</code><code class="n">one_hour</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="n">assert</code><code class="o">!</code><code class="p">(</code><code class="n">world</code><code class="p">.</code><code class="n">fern</code><code class="p">(</code><code class="mi">0</code><code class="p">).</code><code class="n">is_fully_unfurled</code><code class="p">());</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>Note that the integration test includes an <code>extern crate</code> declaration, since it uses <code>fern_sim</code> as a library. The point of integration tests is that they see your crate from the outside, just as a user would. They test the crate’s public API.</p>
+<p><code>cargo test</code> runs both unit tests and integration tests. To run only the integration tests in a particular file—for example, <em>tests/unfurl.rs</em>—use the command <code>cargo test --test unfurl</code>.<a contenteditable="false" data-primary="" data-startref="08-crates.html10" data-type="indexterm" id="idm140543300204432"/></p>
+
+ 
+</div></section>
+<section data-pdf-bookmark="Documentation" data-type="sect2"><div class="sect2" id="documentation">
+
+<h2>Documentation</h2>
+<p><a contenteditable="false" data-primary="Cargo" data-secondary="documentation" data-type="indexterm" id="C08-crates.html11"/><a contenteditable="false" data-primary="cargo doc" data-type="indexterm" id="C08-crates.html12"/><a contenteditable="false" data-primary="documentation" data-type="indexterm" id="C08-crates.html13"/><a contenteditable="false" data-primary="libraries" data-secondary="documentation" data-type="indexterm" id="C08-crates.html14"/>The command <code>cargo doc</code> creates HTML documentation for your library:</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="gp">$</code> cargo doc --no-deps --open
+<code class="go"> Documenting fern_sim v0.1.0 (file:///.../fern_sim)</code></pre>
+<p>The <code>--no-deps</code> option tells Cargo to generate documentation only for <code>fern_sim</code> itself, and not for all the crates it depends on.</p>
+<p>The <code>--open</code> option tells Cargo to open the documentation in your browser afterward.</p>
+
+<p>You can see the result in <a data-type="xref" href="#crates-rustdoc">Figure 8-2</a>. Cargo saves the new documentation files in <em>target/doc</em>. The starting page is <em>target/doc/fern_sim/index.html</em>.</p>
+
+<figure><div class="figure" id="crates-rustdoc">
+<img class="width_set_50" src="assets/rust_0802.png"/>
+<h6><span class="label">Figure 8-2. </span>
+Example of documentation generated by rustdoc
+</h6>
+</div></figure>
+
+<p><a contenteditable="false" data-primary="doc comments" data-type="indexterm" id="idm140543300175536"/>The documentation is generated from the <code>pub</code> features of your library, plus any <em>doc comments</em> you’ve attached to them. We’ve seen a few doc comments in this chapter already. They look like comments:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// Simulate the production of a spore by meiosis.</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">produce_spore</code><code class="p">(</code><code class="n">factory</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Sporangium</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Spore</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>But when Rust sees comments that start with three slashes, it treats them as a <code>#[doc]</code> attribute instead. Rust treats the preceding example exactly the same as this:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="cp">#[doc = </code><code class="s">"Simulate the production of a spore by meiosis."</code><code class="cp">]</code><code class="w"/>
+<code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">produce_spore</code><code class="p">(</code><code class="n">factory</code>: <code class="kp">&amp;</code><code class="nc">mut</code><code class="w"> </code><code class="n">Sporangium</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">Spore</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>When you compile or test a library, these attributes are ignored. When you generate documentation, doc comments on public features are included in the output.</p>
+
+<p>Likewise, comments starting with <code>//!</code> are treated as <code>#![doc]</code> attributes, and are attached to the enclosing feature, typically a module or crate. For example, your <em>fern_sim/src/lib.rs</em> file might begin like this:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">//! Simulate the growth of ferns, from the level of</code>
+<code class="sd">//! individual cells on up.</code></pre>
+<p>The content of a doc comment is treated as Markdown, a shorthand notation for simple HTML formatting. Asterisks are used for <code>*italics*</code> and <code>**bold type**</code>, a blank line is treated as a paragraph break, and so on. However, you can also fall back on HTML; any HTML tags in your doc comments are copied through verbatim into the documentation.</p>
+
+<p>You can use <code>`backticks`</code> to set off bits of code in the middle of running text. In the output, these snippets will be formatted in a fixed-width font. Larger code samples can be added by indenting four spaces.</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// A block of code in a doc comment:</code>
+<code class="sd">///</code>
+<code class="sd">///     if everything().works() {</code>
+<code class="sd">///         println!("ok");</code>
+<code class="sd">///     }</code></pre>
+<p>You can also use Markdown fenced code blocks. This has exactly the same effect.</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// Another snippet, the same code, but written differently:</code>
+<code class="sd">///</code>
+<code class="sd">/// ```</code>
+<code class="sd">/// if everything().works() {</code>
+<code class="sd">///     println!("ok");</code>
+<code class="sd">/// }</code>
+<code class="sd">/// ```</code></pre>
+<p>Whichever format you use, an interesting thing happens when you include a block of code in a doc comment. Rust automatically turns it into a test.<a contenteditable="false" data-primary="" data-startref="08-crates.html14" data-type="indexterm" id="idm140543300119232"/><a contenteditable="false" data-primary="" data-startref="08-crates.html13" data-type="indexterm" id="idm140543300118016"/><a contenteditable="false" data-primary="" data-startref="08-crates.html12" data-type="indexterm" id="idm140543300116640"/><a contenteditable="false" data-primary="" data-startref="08-crates.html11" data-type="indexterm" id="idm140543300115264"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Doc-Tests" data-type="sect2"><div class="sect2" id="doc-tests">
+<h2>Doc-Tests</h2>
+
+<p><a contenteditable="false" data-primary="crates" data-secondary="doc-tests" data-type="indexterm" id="C08-crates.html15"/><a contenteditable="false" data-primary="doc-tests" data-type="indexterm" id="C08-crates.html16"/><a contenteditable="false" data-primary="libraries" data-secondary="doc-tests" data-type="indexterm" id="C08-crates.html17"/><a contenteditable="false" data-primary="tests" data-secondary="doc-tests" data-type="indexterm" id="C08-crates.html18"/>When you run tests in a Rust library crate, Rust checks that all the code that appears in your documentation actually runs and works. It does this by taking each block of code that appears in a doc comment, compiling it as a separate executable crate, linking it with your library, and running it.</p>
+
+<p>Here is a standalone example of a doc-test. Create a new project by running <code>cargo new ranges</code> and put this code in <em>ranges/src/lib.rs</em>:</p>
+
+<pre data-code-language="rust" data-type="programlisting"><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">ops</code>::<code class="n">Range</code><code class="p">;</code><code class="w"/>
+
+<code class="sd">/// Return true if two ranges overlap.</code>
+<code class="sd">///</code>
+<code class="sd">///     assert_eq!(ranges::overlap(0..7, 3..10), true);</code>
+<code class="sd">///     assert_eq!(ranges::overlap(1..5, 101..105), false);</code>
+<code class="sd">///</code>
+<code class="sd">/// If either range is empty, they don't count as overlapping.</code>
+<code class="sd">///</code>
+<code class="sd">///     assert_eq!(ranges::overlap(0..0, 0..10), false);</code>
+<code class="sd">///</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">overlap</code><code class="p">(</code><code class="n">r1</code>: <code class="nc">Range</code><code class="o">&lt;</code><code class="kt">usize</code><code class="o">&gt;</code><code class="p">,</code><code class="w"> </code><code class="n">r2</code>: <code class="nc">Range</code><code class="o">&lt;</code><code class="kt">usize</code><code class="o">&gt;</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="kt">bool</code> <code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">r1</code><code class="p">.</code><code class="n">start</code><code class="w"> </code><code class="o">&lt;</code><code class="w"> </code><code class="n">r1</code><code class="p">.</code><code class="n">end</code><code class="w"> </code><code class="o">&amp;&amp;</code><code class="w"> </code><code class="n">r2</code><code class="p">.</code><code class="n">start</code><code class="w"> </code><code class="o">&lt;</code><code class="w"> </code><code class="n">r2</code><code class="p">.</code><code class="n">end</code><code class="w"> </code><code class="o">&amp;&amp;</code><code class="w"/>
+<code class="w">        </code><code class="n">r1</code><code class="p">.</code><code class="n">start</code><code class="w"> </code><code class="o">&lt;</code><code class="w"> </code><code class="n">r2</code><code class="p">.</code><code class="n">end</code><code class="w"> </code><code class="o">&amp;&amp;</code><code class="w"> </code><code class="n">r2</code><code class="p">.</code><code class="n">start</code><code class="w"> </code><code class="o">&lt;</code><code class="w"> </code><code class="n">r1</code><code class="p">.</code><code class="n">end</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>The two small blocks of code in the doc comment appear in the documentation generated by <code>cargo doc</code>, as shown in <a data-type="xref" href="#overlap-docs">Figure 8-3</a>.</p>
+
+<figure><div class="figure" id="overlap-docs">
+<img src="assets/rust_0803.png"/>
+<h6><span class="label">Figure 8-3. </span>
+Documentation showing some doc-tests
+</h6>
+</div></figure>
+
+<p>They also become two separate tests:</p>
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="gp">$</code> cargo <code class="nb">test</code>
+<code class="go">   Compiling ranges v0.1.0 (file:///.../ranges)</code>
+<code class="go">...</code>
+<code class="go">   Doc-tests ranges</code>
+
+<code class="go">running 2 tests</code>
+<code class="go">test overlap_0 ... ok</code>
+<code class="go">test overlap_1 ... ok</code>
+
+<code class="go">test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured</code></pre>
+<p>If you pass the <code>--verbose</code> flag to Cargo, you’ll see that it’s using <code>rustdoc --test</code> to run these two tests. Rustdoc stores each code sample in a separate file, adding a few lines of boilerplate code, to produce two programs. Here’s the first:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">extern</code><code class="w"> </code><code class="k">crate</code><code class="w"> </code><code class="n">ranges</code><code class="p">;</code><code class="w"/>
+<code class="k">fn</code> <code class="nf">main</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">ranges</code>::<code class="n">overlap</code><code class="p">(</code><code class="mi">0</code><code class="p">..</code><code class="mi">7</code><code class="p">,</code><code class="w"> </code><code class="mi">3</code><code class="p">..</code><code class="mi">10</code><code class="p">),</code><code class="w"> </code><code class="kc">true</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">ranges</code>::<code class="n">overlap</code><code class="p">(</code><code class="mi">1</code><code class="p">..</code><code class="mi">5</code><code class="p">,</code><code class="w"> </code><code class="mi">101</code><code class="p">..</code><code class="mi">105</code><code class="p">),</code><code class="w"> </code><code class="kc">false</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>And here’s the second:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="k">extern</code><code class="w"> </code><code class="k">crate</code><code class="w"> </code><code class="n">ranges</code><code class="p">;</code><code class="w"/>
+<code class="k">fn</code> <code class="nf">main</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">ranges</code>::<code class="n">overlap</code><code class="p">(</code><code class="mi">0</code><code class="p">..</code><code class="mi">0</code><code class="p">,</code><code class="w"> </code><code class="mi">0</code><code class="p">..</code><code class="mi">10</code><code class="p">),</code><code class="w"> </code><code class="kc">false</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>The tests pass if these programs compile and run successfully.</p>
+<p>These two code samples contain assertions, but that’s just because in this case, the assertions make decent documentation. The idea behind doc-tests is not to put all your tests into comments. Rather, you write the best possible documentation, and Rust makes sure the code samples in your documentation actually compile and run.</p>
+<p>Very often a minimal working example includes some details, such as imports or setup code, that are necessary to make the code compile, but just aren’t important enough to show in the documentation. To hide a line of a code sample, put a <code>#</code> followed by a space at the beginning of that line:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// Let the sun shine in and run the simulation for a given</code>
+<code class="sd">/// amount of time.</code>
+<code class="sd">///</code>
+<code class="sd">///     # use fern_sim::Terrarium;</code>
+<code class="sd">///     # use std::time::Duration;</code>
+<code class="sd">///     # let mut tm = Terrarium::new();</code>
+<code class="sd">///     tm.apply_sunlight(Duration::from_secs(60));</code>
+<code class="sd">///</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">apply_sunlight</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">time</code>: <code class="nc">Duration</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Sometimes it’s helpful to show a complete sample program in documentation, including a <code>main</code> function and an <code>extern crate</code> declaration. Obviously, if those pieces of code appear in your code sample, you do not also want Rustdoc to add them automatically. The result wouldn’t compile. Rustdoc therefore treats any code block containing the exact string <code>fn main</code> as a complete program, and doesn’t add anything <span class="keep-together">to it.</span></p>
+
+<p>Testing can be disabled for specific blocks of code. To tell Rust to compile your example, but stop short of actually running it, use a fenced code block with the <code>no_run</code> annotation:</p>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// Upload all local terrariums to the online gallery.</code>
+<code class="sd">///</code>
+<code class="sd">/// ```no_run</code>
+<code class="sd">/// let mut session = fern_sim::connect();</code>
+<code class="sd">/// session.upload_all();</code>
+<code class="sd">/// ```</code>
+<code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">upload_all</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+<p>If the code isn’t even expected to compile, use <code>ignore</code> instead of <code>no_run</code>. If the code block isn’t Rust code at all, use the name of the language, like <code>c++</code> or <code>sh</code>, or <code>text</code> for plain text. <code>rustdoc</code> doesn’t know the names of hundreds of programming languages; rather, it treats any annotation it doesn’t recognize as indicating that the code block isn’t Rust. This disables code highlighting as well as doc-testing<a contenteditable="false" data-primary="" data-startref="08-crates.html18" data-type="indexterm" id="idm140543299468032"/><a contenteditable="false" data-primary="" data-startref="08-crates.html17" data-type="indexterm" id="idm140543299466656"/><a contenteditable="false" data-primary="" data-startref="08-crates.html16" data-type="indexterm" id="idm140543299465280"/><a contenteditable="false" data-primary="" data-startref="08-crates.html15" data-type="indexterm" id="idm140543299463904"/>.<a contenteditable="false" data-primary="" data-startref="08-crates.html9" data-type="indexterm" id="idm140543299462400"/></p>
+</div></section>
+</div></section>
+
+<section data-pdf-bookmark="Specifying Dependencies" data-type="sect1"><div class="sect1" id="specifying-dependencies">
+<h1>Specifying Dependencies</h1>
+
+<p><a contenteditable="false" data-primary="crates" data-secondary="specifying dependencies" data-type="indexterm" id="C08-crates.html19"/><a contenteditable="false" data-primary="dependencies" data-secondary="specifying" data-type="indexterm" id="C08-crates.html20"/>We’ve seen one way of telling Cargo where to get source code for crates your project depends on: by version number.</p>
+
+<pre class="toml" data-code-language="toml" data-type="programlisting">image = "0.6.1"</pre>
+<p>There are several ways to specify dependencies, and some rather nuanced things you might want to say about which versions to use, so it’s worth spending a few pages on this.</p>
+
+<p>First of all, you may want to use dependencies that aren’t published on crates.io at all. One way to do this is by specifying a Git repository URL and revision:</p>
+<pre class="toml" data-code-language="toml" data-type="programlisting">image = { git = "https://github.com/Piston/image.git", rev = "528f19c" }</pre>
+<p>This particular crate is open source, hosted on GitHub, but you could just as easily point to a private Git repository hosted on your corporate network. As shown here, you can specify the particular <code>rev</code>, <code>tag</code>, or <code>branch</code> to use. (These are all ways of telling Git which revision of the source code to check out.)</p>
+
+<p>Another alternative is to specify a directory that contains the crate’s source code:</p>
+<pre class="toml" data-code-language="toml" data-type="programlisting">image = { path = "vendor/image" }</pre>
+<p>This is convenient when your team has a single version control repository that contains source code for several crates, or perhaps the entire dependency graph. Each crate can specify its dependencies using relative paths.</p>
+<p>Having this level of control over your dependencies is powerful. If you ever decide that any of the open source crates you use isn’t exactly to your liking, you can trivially fork it: just hit the Fork button on GitHub and change one line in your <em>Cargo.toml</em> file. Your next <code>cargo build</code> will seamlessly use your fork of the crate instead of the official version.</p>
+
+<section data-pdf-bookmark="Versions" data-type="sect2"><div class="sect2" id="versions">
+<h2>Versions</h2>
+
+<p><a contenteditable="false" data-primary="dependencies" data-secondary="versions and" data-type="indexterm" id="idm140543299415168"/><a contenteditable="false" data-primary="versions" data-type="indexterm" id="idm140543299413696"/>When you write something like <code>image = "0.6.1"</code> in your <em>Cargo.toml</em> file, Cargo interprets this rather loosely. It uses the most recent version of <code>image</code> that is considered compatible with version 0.6.1.</p>
+
+<p><a contenteditable="false" data-primary="Cargo" data-secondary="versioning" data-type="indexterm" id="idm140543299410800"/>The compatibility rules are adapted from <a href="http://semver.org/">Semantic Versioning</a>.</p>
+
+<ul>
+<li><p>A version number that starts with 0.0 is so raw that Cargo never assumes it’s compatible with any other version.</p></li>
+
+<li><p>A version number that starts with 0.<em>x</em>, where <em>x</em> is nonzero, is considered compatible with other point releases in the 0.<em>x</em> series. We specified <code>image</code> version 0.6.1, but Cargo would use 0.6.3 if available. (This is not what the Semantic Versioning standard says about 0.<em>x</em> version numbers, but the rule proved too useful to leave out.)</p></li>
+
+<li><p>Once a project reaches 1.0, only new major versions break compatibility. So if you ask for version 2.0.1, Cargo might use 2.17.99 instead, but not 3.0.</p></li>
+</ul>
+
+<p>Version numbers are flexible by default because otherwise the problem of which version to use would quickly become overconstrained. Suppose one library, <code>libA</code>, used <code>num = "0.1.31"</code> while another, <code>libB</code>, used <code>num = "0.1.29"</code>. If version numbers required exact matches, no project would be able to use those two libraries together. Allowing Cargo to use any compatible version is a much more practical default.</p>
+
+<p>Still, different projects have different needs when it comes to dependencies and versioning. You can specify an exact version or range of versions by using operators:</p>
+<table>
+<thead>
+<tr class="header">
+<th>Cargo.toml line</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>image = "=0.10.0"</code></td>
+<td>Use only the exact version 0.10.0</td>
+</tr>
+<tr class="even">
+<td><code>image = "&gt;=1.0.5"</code></td>
+<td>Use 1.0.5 or <em>any</em> higher version (even 2.9, if it’s available)</td>
+</tr>
+<tr class="odd">
+<td><code>image = "&gt;1.0.5 &lt;1.1.9"</code></td>
+<td>Use a version that’s higher than 1.0.5, but lower than 1.1.9</td>
+</tr>
+<tr class="even">
+<td><code>image = "&lt;=2.7.10"</code></td>
+<td>use any version up to 2.7.10</td>
+</tr>
+</tbody>
+</table>
+
+<p><a contenteditable="false" data-primary="* wildcard" data-type="indexterm" id="idm140543299766448"/><a contenteditable="false" data-primary="wildcards" data-type="indexterm" id="idm140543299765344"/>Another version specification you’ll occasionally see is the wildcard <code>*</code>. This tells Cargo that any version will do. Unless some other <em>Cargo.toml</em> file contains a more specific constraint, Cargo will use the latest available version. <a href="http://doc.crates.io/crates-io.html">The Cargo documentation at <em>doc.crates.io</em></a> covers version specifications in even more detail.</p>
+
+<p>Note that the compatibility rules mean that version numbers can’t be chosen purely for marketing reasons. They actually mean something. They’re a contract between a crate’s maintainers and its users. If you maintain a crate that’s at version 1.7, and you decide to remove a function or make any other change that isn’t fully backward compatible, you must bump your version number to 2.0. If you were to call it 1.8, you’d be claiming that the new version is compatible with 1.7, and your users might find themselves with broken builds.</p>
+</div></section>
+
+<section data-pdf-bookmark="Cargo.lock" data-type="sect2"><div class="sect2" id="cargo.lock">
+<h2>Cargo.lock</h2>
+
+<p><a contenteditable="false" data-primary="Cargo.lock" data-type="indexterm" id="idm140543299759280"/><a contenteditable="false" data-primary="dependencies" data-secondary="Cargo.lock" data-type="indexterm" id="idm140543299758176"/>The version numbers in <em>Cargo.toml</em> are deliberately flexible, yet we don’t want Cargo to upgrade us to the latest library versions every time we build. Imagine being in the middle of an intense debugging session when suddenly <code>cargo build</code> upgrades you to a new version of a library. This could be incredibly disruptive. Anything changing in the middle of debugging is bad. In fact, when it comes to libraries, there’s never a good time for an unexpected change.</p>
+
+<p>Cargo therefore has a built-in mechanism to prevent this. The first time you build a project, Cargo outputs a <em>Cargo.lock</em> file that records the exact version of every crate it used. Later builds will consult this file and continue to use the same versions. Cargo upgrades to newer versions only when you tell it to, either by manually bumping up the version number in your <em>Cargo.toml</em> file, or by running <code>cargo update</code>:</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="gp">$</code> cargo update
+<code class="go">    Updating registry `https://github.com/rust-lang/crates.io-index`</code>
+<code class="go">    Updating libc v0.2.7 -&gt; v0.2.11</code>
+<code class="go">    Updating png v0.4.2 -&gt; v0.4.3</code></pre>
+
+<p><code>cargo update</code> only upgrades to the latest versions that are compatible with what you’ve specified in <em>Cargo.toml</em>. If you’ve specified <code>image = "0.6.1"</code>, and you want to upgrade to version 0.10.0, you’ll have to change that in <em>Cargo.toml</em>. The next time you build, Cargo will update to the new version of the <code>image</code> library and store the new version number in <em>Cargo.lock</em>.</p>
+
+<p>The preceding example shows Cargo updating two crates that are hosted on <a class="orm:hideurl" href="https://crates.io">crates.io</a>. Something very similar happens for dependencies that are stored in Git. Suppose our <em>Cargo.toml</em> file contains this:</p>
+
+<pre class="toml" data-code-language="toml" data-type="programlisting">image = { git = "https://github.com/Piston/image.git", branch = "master" }</pre>
+
+<p><code>cargo build</code> will not pull new changes from the Git repository if it sees that we’ve got a <em>Cargo.lock</em> file. Instead, it reads <em>Cargo.lock</em> and uses the same revision as last time. But <code>cargo update</code> will pull from <code>master</code>, so that our next build uses the latest <span class="keep-together">revision.</span></p>
+
+<p><em>Cargo.lock</em> is automatically generated for you, and you normally won’t edit it by hand. Nonetheless, if your project is an executable, you should commit <em>Cargo.lock</em> to version control. That way, everyone who builds your project will consistently get the same versions. The history of your <em>Cargo.lock</em> file will record your dependency updates.</p>
+
+<p>If your project is an ordinary Rust library, don’t bother committing <em>Cargo.lock</em>. Your library’s downstream users will have <em>Cargo.lock</em> files that contain version information for their entire dependency graph; they will ignore your library’s <em>Cargo.lock</em> file. In the rare case that your project is a shared library (i.e., the output is a <em>.dll</em>, <em>.dylib</em>, or <em>.so</em> file), there is no such downstream <code>cargo</code> user, and you should therefore commit <em>Cargo.lock</em>.</p>
+
+<p><em>Cargo.toml</em>’s flexible version specifiers make it easy to use Rust libraries in your project and maximize compatibility among libraries. <em>Cargo.lock</em>’s bookkeeping supports consistent, reproducible builds across machines. Together, they go a long way toward helping you avoid dependency hell.<a contenteditable="false" data-primary="" data-startref="08-crates.html20" data-type="indexterm" id="idm140543299731968"/><a contenteditable="false" data-primary="" data-startref="08-crates.html19" data-type="indexterm" id="idm140543299730704"/></p>
+</div></section>
+</div></section>
+
+<section data-pdf-bookmark="Publishing Crates to crates.io" data-type="sect1"><div class="sect1" id="publishing-crates-to-crates.io">
+<h1>Publishing Crates to crates.io</h1>
+
+<p><a contenteditable="false" data-primary="crates" data-secondary="publishing to crates.io" data-type="indexterm" id="idm140543299727472"/><a contenteditable="false" data-primary="crates.io" data-type="indexterm" id="idm140543299390576"/>You’ve decided to publish your fern-simulating library as open source software. Congratulations! This part is easy.</p>
+
+<p>First, make sure Cargo can pack the crate for you.</p>
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="gp">$</code> cargo package
+<code class="go">warning: manifest has no description, license, license-file, documentation,</code>
+<code class="go">homepage or repository. See http://doc.crates.io/manifest.html#package-metadata</code>
+<code class="go">for more info.</code>
+<code class="go">   Packaging fern_sim v0.1.0 (file:///.../fern_sim)</code>
+<code class="go">   Verifying fern_sim v0.1.0 (file:///.../fern_sim)</code>
+<code class="go">   Compiling fern_sim v0.1.0 (file:///.../fern_sim/target/package/fern_sim-0.1.0)</code></pre>
+
+<p><a contenteditable="false" data-primary="cargo package" data-type="indexterm" id="idm140543299332176"/>The <code>cargo package</code> command creates a file (in this case, <em>target/package/fern_sim-0.1.0.crate</em>) containing all your library’s source files, including <em>Cargo.toml</em>. This is the file that you’ll upload to <a href="https://crates.io">crates.io</a> to share with the world. (You can use <code>cargo package --list</code> to see which files are included.) Cargo then double-checks its work by building your library from the <em>.crate</em> file, just as your eventual users will.</p>
+
+<p>Cargo warns that the <code>[package]</code> section of <em>Cargo.toml</em> is missing some information that will be important to downstream users, such as the license under which you’re distributing the code. The URL in the warning is an excellent resource, so we won’t explain all the fields in detail here. In short, you can fix the warning by adding a few lines to <em>Cargo.toml</em>:</p>
+
+<pre class="toml" data-code-language="toml" data-type="programlisting">[package]
+name = "fern_sim"
+version = "0.1.0"
+authors = ["You &lt;you@example.com&gt;"]
+license = "MIT"
+homepage = "https://fernsim.example.com/"
+repository = "https://gitlair.com/sporeador/fern_sim"
+documentation = "http://fernsim.example.com/docs"
+description = """
+Fern simulation, from the cellular level up.
+"""</pre>
+
+<div data-type="note" epub:type="note"><h6>Note</h6>
+<p>Once you publish this crate on crates.io, anyone who downloads your crate can see the <em>Cargo.toml</em> file. So if the <code>authors</code> field contains an email address that you’d rather keep private, now’s the time to change it.</p>
+</div>
+
+<p>Another problem that sometimes arises at this stage is that your <em>Cargo.toml</em> file might be specifying the location of other crates by <code>path</code>, as shown in <a data-type="xref" href="#specifying-dependencies">“Specifying Dependencies”</a>:</p>
+
+<pre class="toml" data-code-language="toml" data-type="programlisting">image = { path = "vendor/image" }</pre>
+
+<p>For you and your team, this might work fine. But naturally, when other people download the <code>fern_sim</code> library, they will not have the same files and directories on their computer that you have. Cargo therefore <em>ignores</em> the <code>path</code> key in automatically downloaded libraries, and this can cause build errors. The fix, however, is straightforward: if your library is going to be published on crates.io, its dependencies should be on crates.io too. Specify a version number instead of a <code>path</code>:</p>
+
+<pre class="toml" data-code-language="toml" data-type="programlisting">image = "0.6.1"</pre>
+
+<p>If you prefer, you can specify both a <code>path</code>, which takes precedence for your own local builds, and a <code>version</code> for all other users:</p>
+<pre class="toml" data-code-language="toml" data-type="programlisting">image = { path = "vendor/image", version = "0.6.1" }</pre>
+<p>Of course, in that case it’s your responsibility to make sure that the two stay in sync.</p>
+
+<p>Lastly, before publishing a crate, you’ll need to log in to crates.io and get an API key. This step is straightforward: once you have an account on crates.io, your “Account Settings” page will show a <code>cargo login</code> command, like this one:</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="gp">$</code> cargo login 5j0dV54BjlXBpUUbfIj7G9DvNl1vsWW1</pre>
+<p>Cargo saves the key in a configuration file, and the API key should be kept secret, like a password. So run this command only on a computer you control.</p>
+<p>That done, the final step is to run <code>cargo publish</code>:</p>
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="gp">$</code> cargo publish
+<code class="go">    Updating registry `https://github.com/rust-lang/crates.io-index`</code>
+<code class="go">   Uploading fern_sim v0.1.0 (file:///.../fern_sim)</code></pre>
+<p>With this, your library joins thousands of others on crates.io.</p>
+</div></section>
+
+<section data-pdf-bookmark="Workspaces" data-type="sect1"><div class="sect1" id="workspaces">
+<h1>Workspaces</h1>
+
+<p><a contenteditable="false" data-primary="crates" data-secondary="workspaces" data-type="indexterm" id="idm140543299362336"/><a contenteditable="false" data-primary="workspaces" data-type="indexterm" id="idm140543299231856"/>As your project continues to grow, you end up writing many crates. They live side by side in a single source repository:</p>
+<pre class="console" data-code-language="console" data-type="programlisting"><code class="go">fernsoft/</code>
+<code class="go">├── .git/...</code>
+<code class="go">├── fern_sim/</code>
+<code class="go">│   ├── Cargo.toml</code>
+<code class="go">│   ├── Cargo.lock</code>
+<code class="go">│   ├── src/...</code>
+<code class="go">│   └── target/...</code>
+<code class="go">├── fern_img/</code>
+<code class="go">│   ├── Cargo.toml</code>
+<code class="go">│   ├── Cargo.lock</code>
+<code class="go">│   ├── src/...</code>
+<code class="go">│   └── target/...</code>
+<code class="go">└── fern_video/</code>
+<code class="go">    ├── Cargo.toml</code>
+<code class="go">    ├── Cargo.lock</code>
+<code class="go">    ├── src/...</code>
+<code class="go">    └── target/...</code></pre>
+
+<p>The way Cargo works, each crate has its own build directory, <code>target</code>, which contains a separate build of all that crate’s dependencies. These build directories are completely independent. Even if two crates have a common dependency, they can’t share any compiled code. This is wasteful.</p>
+
+<p>You can save compilation time and disk space by using a Cargo <em>workspace</em>, a collection of crates that share a common build directory and <em>Cargo.lock</em> file.</p>
+
+<p>All you need to do is create a <em>Cargo.toml</em> file in your repository’s root directory and put these lines in it:</p>
+
+<pre class="toml" data-code-language="toml" data-type="programlisting">[workspace]
+members = ["fern_sim", "fern_img", "fern_video"]</pre>
+
+<p>where <code>fern_sim</code> etc. are the names of the subdirectories containing your crates. Delete any leftover <em>Cargo.lock</em> files and <em>target</em> directories that exist in those subdirectories.</p>
+
+<p>Once you’ve done this, <code>cargo build</code> in any crate will automatically create and use a shared build directory under the root directory (in this case, <em>fernsoft/target</em>). The command <code>cargo build --all</code> builds all crates in the current workspace. <code>cargo test</code> and <code>cargo doc</code> accept the <code>--all</code> option as well.</p>
+</div></section>
+
+<section data-pdf-bookmark="More Nice Things" data-type="sect1"><div class="sect1" id="more-nice-things">
+<h1>More Nice Things</h1>
+
+<p><a contenteditable="false" data-primary="community, Rust" data-type="indexterm" id="idm140543299274752"/><a contenteditable="false" data-primary="Rust (generally)" data-secondary="community" data-type="indexterm" id="idm140543299273648"/>In case you’re not delighted yet, the Rust community has a few more odds and ends for you:</p>
+
+<ul>
+<li><p>When you publish an open source crate on <a class="orm:hideurl" href="https://crates.io">crates.io</a>, your documentation is automatically rendered and hosted on <em>docs.rs</em> thanks to Onur Aslan.</p></li>
+
+<li><p><a contenteditable="false" data-primary="Travis CI" data-type="indexterm" id="idm140543299269216"/>If your project is on GitHub, Travis CI can build and test your code on every push. It’s surprisingly easy to set up; see <a class="orm:hideurl" href="https://travis-ci.org">travis-ci.org</a> for details. If you’re already familiar with Travis, this <em>.travis.yml</em> file will get you started:</p>
+<pre class="yaml" data-code-language="yaml" data-type="programlisting"><code class="l-Scalar-Plain">language</code><code class="p-Indicator">:</code> <code class="l-Scalar-Plain">rust</code>
+<code class="l-Scalar-Plain">rust</code><code class="p-Indicator">:</code>
+  <code class="p-Indicator">-</code> <code class="l-Scalar-Plain">stable</code></pre></li>
+
+<li><p>You can generate a <em>README.md</em> file from your crate’s top-level doc-comment. This feature is offered as a third-party Cargo plugin by Livio Ribeiro. Run <code>cargo install readme</code> to install the plugin, then <code>cargo readme --help</code> to learn how to use it.</p></li>
+</ul>
+
+<p>We could go on.</p>
+<p>Rust is new, but it’s designed to support large, ambitious projects. It has great tools and an active community. System programmers <em>can</em> have nice things.</p>
+</div></section>
+</div></section></body></html>

@@ -1,0 +1,1363 @@
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Concurrency</title><link href="epub.css" rel="stylesheet" type="text/css"/>
+<meta content="urn:uuid:3c2eb6f3-32dc-4c19-acd0-9e911067a895" name="Adept.expected.resource"/></head><body data-type="book"><section data-pdf-bookmark="Chapter 19. Concurrency" data-type="chapter" epub:type="chapter"><div class="chapter" id="concurrency">
+<h1><span class="label">Chapter 19. </span>Concurrency</h1>
+
+<blockquote data-type="epigraph" epub:type="epigraph">
+<p>In the long run it is not advisable to write large concurrent programs in machine-oriented languages that permit unrestricted use of store locations and their addresses. There is just no way we will be able to make such programs reliable (even with the help of complicated hardware mechanisms).</p>
+
+<p data-type="attribution">Per Brinch Hansen (1977)</p>
+</blockquote>
+
+<blockquote data-type="epigraph" epub:type="epigraph">
+<p>Patterns for communication are patterns for parallelism.</p>
+
+<p data-type="attribution">Whit Morriss</p>
+</blockquote>
+
+<p><a contenteditable="false" data-primary="concurrency/concurrent programming" data-type="indexterm" id="C19-concurrency.html0"/>If your attitude toward concurrency has changed over the course of your career, you’re not alone. It’s a common story.</p>
+
+<p>At first, writing concurrent code is easy and fun. The tools—threads, locks, queues, and so on—are a snap to pick up and use. There are a lot of pitfalls, it’s true, but fortunately you know what they all are, and you are careful not to make mistakes.</p>
+
+<p>At some point, you have to debug someone else’s multithreaded code, and you’re forced to conclude that <em>some</em> people really should not be using these tools.</p>
+
+<p>Then at some point you have to debug your own multithreaded code.</p>
+
+<p>Experience inculcates a healthy skepticism, if not outright cynicism, toward all multithreaded code. This is helped along by the occasional article explaining in mind-numbing detail why some obviously correct multithreading idiom does not work at all. (It has to do with “the memory model.”) But you eventually find one approach to concurrency that you think you can realistically use without constantly making mistakes. You can shoehorn pretty much everything into that idiom, and (if you’re <em>really</em> good) you learn to say “no” to added complexity.</p>
+
+<p class="pagebreak-before">Of course, there are rather a lot of idioms. Approaches that systems programmers commonly use include the following:</p>
+
+<ul>
+	<li>
+	<p>A <em>background thread</em> that has a single job and periodically wakes up to do it.</p>
+	</li>
+	<li>
+	<p>General-purpose <em>worker pools</em> that communicate with clients via <em>task queues</em>.</p>
+	</li>
+	<li>
+	<p><em>Pipelines</em> where data flows from one thread to the next, with each thread doing a little of the work.</p>
+	</li>
+	<li>
+	<p><em>Data parallelism</em>, where it is assumed (rightly or wrongly) that the whole computer will mainly just be doing one large computation, which is therefore split into <em>n</em> pieces and run on <em>n</em> threads in the hopes of putting all <em>n</em> of the machine’s cores to work at once.</p>
+	</li>
+	<li>
+	<p><em>A sea of synchronized objects</em>, where multiple threads have access to the same data, and races are avoided using ad hoc <em>locking</em> schemes based on low-level primitives like mutexes. (Java includes built-in support for this model, which was quite popular during the 1990s and 2000s.)</p>
+	</li>
+	<li>
+	<p><em>Atomic integer operations</em> allow multiple cores to communicate by passing information through fields the size of one machine word. (This is even harder to get right than all the others, unless the data being exchanged is literally just integer values. In practice, it’s usually pointers.)</p>
+	</li>
+</ul>
+
+<p>In time, you may come to be able to use several of these approaches and combine them safely. You are a master of the art. And things would be great, if only nobody else were ever allowed to modify the system in any way. Programs that use threads well are full of unwritten rules.</p>
+
+<p>Rust offers a better way to use concurrency, not by forcing all programs to adopt a single style (which for systems programmers would be no solution at all), but by supporting multiple styles safely. The unwritten rules are written down—in code—and enforced by the compiler.</p>
+
+<p>You’ve heard that Rust lets you write safe, fast, concurrent programs. This is the chapter where we show you how it’s done. We’ll cover three ways to use Rust threads:</p>
+
+<ul>
+	<li>
+	<p>Fork-join parallelism</p>
+	</li>
+	<li>
+	<p>Channels</p>
+	</li>
+	<li>
+	<p>Shared mutable state</p>
+	</li>
+</ul>
+
+<p class="pagebreak-before">Along the way, you’re going to use everything you’ve learned so far about the Rust language. The care Rust takes with references, mutability, and lifetimes is valuable enough in single-threaded programs, but it is in concurrent programming that the true significance of those rules becomes apparent. They make it possible to expand your toolbox, to hack multiple styles of multithreaded code quickly and correctly—without skepticism, without cynicism, without fear.</p>
+
+<section data-pdf-bookmark="Fork-Join Parallelism" data-type="sect1"><div class="sect1" id="fork-join-parallelism">
+<h1>Fork-Join Parallelism</h1>
+
+<p><a contenteditable="false" data-primary="concurrency/concurrent programming" data-secondary="fork-join parallelism" data-type="indexterm" id="C19-concurrency.html1"/><a contenteditable="false" data-primary="fork-join parallelism" data-type="indexterm" id="C19-concurrency.html2"/>The simplest use cases for threads arise when we have several completely independent tasks that we’d like to do at once.</p>
+
+<p>For example, suppose we’re doing natural language processing on a large corpus of documents. We could write a loop:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">fn</code> <code class="nf">process_files</code><code class="p">(</code><code class="n">filenames</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">document</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">filenames</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="kd">let</code><code class="w"> </code><code class="n">text</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">load</code><code class="p">(</code><code class="o">&amp;</code><code class="n">document</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w">  </code><code class="c1">// read source file</code>
+<code class="w">        </code><code class="kd">let</code><code class="w"> </code><code class="n">results</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">process</code><code class="p">(</code><code class="n">text</code><code class="p">);</code><code class="w">  </code><code class="c1">// compute statistics</code>
+<code class="w">        </code><code class="n">save</code><code class="p">(</code><code class="o">&amp;</code><code class="n">document</code><code class="p">,</code><code class="w"> </code><code class="n">results</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w">    </code><code class="c1">// write output file</code>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="nb">Ok</code><code class="p">(())</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>The program would run as shown in <a data-type="xref" href="#process-files-single-thread-execution">Figure 19-1</a>.</p>
+
+<figure><div class="figure" id="process-files-single-thread-execution"><img alt="(Single-threaded execution of a function: a timeline)" src="assets/rust_1901.png"/>
+<h6><span class="label">Figure 19-1. </span>Single-threaded execution of process_files() </h6>
+</div></figure>
+
+<p>Since each document is processed separately, it’s relatively easy to speed this task up by splitting the corpus into chunks and processing each chunk on a separate thread, as shown in <a data-type="xref" href="#process-files-fork-join-execution">Figure 19-2</a>.</p>
+
+<p>This pattern is called <em>fork-join parallelism.</em> To <em>fork</em> is to start a new thread, and to <em>join</em> a thread is to wait for it to finish. We’ve already seen this technique: we used it to speed up the Mandelbrot program in <a data-type="xref" href="ch02.html#a-tour-of-rust">Chapter 2</a>.</p>
+
+<figure><div class="figure" id="process-files-fork-join-execution"><img alt="(Four threads running tasks in parallel, not in lock step,          with a ragged right-hand side.)" src="assets/rust_1902.png"/>
+<h6><span class="label">Figure 19-2. </span>Multithreaded file processing using a fork-join approach</h6>
+</div></figure>
+
+<p><a contenteditable="false" data-primary="fork-join parallelism" data-secondary="advantages of" data-type="indexterm" id="idm140543245990592"/>Fork-join parallelism is attractive for a few reasons:</p>
+
+<ul>
+	<li>
+	<p>It’s dead simple. Fork-join is easy to implement, and Rust makes it easy to get right.</p>
+	</li>
+	<li>
+	<p>It avoids bottlenecks. There’s no locking of shared resources in fork-join. The only time any thread has to wait for another is at the end. In the meantime, each thread can run freely. This helps keep task-switching overhead low.</p>
+	</li>
+	<li>
+	<p>The performance math is straightforward. In the best case, by starting four threads, we can finish our work in a quarter of the time. <a data-type="xref" href="#process-files-fork-join-execution">Figure 19-2</a> shows one reason we shouldn’t expect this ideal speed-up: we might not be able to distribute the work evenly across all threads. Another reason for caution is that sometimes fork-join programs must spend some time after the threads join, <em>combining</em> the results computed by the threads. That is, isolating the tasks completely may make some extra work. Still, apart from those two things, any CPU-bound program with isolated units of work can expect a significant boost.</p>
+	</li>
+	<li>
+	<p>It’s easy to reason about program correctness. A fork-join program is <em>deterministic</em> as long as the threads are really isolated, like the compute threads in the Mandelbrot program. The program always produces the same result, regardless of variations in thread speed. It’s a concurrency model without race conditions.</p>
+	</li>
+</ul>
+
+<p>The main disadvantage of fork-join is that it requires isolated units of work. Later in this chapter, we’ll consider some problems that don’t split up so cleanly.</p>
+
+<p>For now, let’s stick with the natural language processing example. We’ll show a few ways of applying the fork-join pattern to the <code>process_files</code> function.</p>
+
+<section data-pdf-bookmark="spawn and join" data-type="sect2"><div class="sect2" id="spawn-and-join">
+<h2>spawn and join</h2>
+
+<p><a contenteditable="false" data-primary="fork-join parallelism" data-secondary="spawn and join" data-type="indexterm" id="C19-concurrency.html3"/><a contenteditable="false" data-primary="join function" data-type="indexterm" id="C19-concurrency.html4"/><a contenteditable="false" data-primary="spawn function" data-type="indexterm" id="C19-concurrency.html5"/>The function <code>std::thread::spawn</code> starts a new thread.</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="n">spawn</code><code class="p">(</code><code class="o">||</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">println</code><code class="o">!</code><code class="p">(</code><code class="s">"hello from a child thread"</code><code class="p">);</code><code class="w"/>
+<code class="p">})</code><code class="w"/></pre>
+
+<p>It takes one argument, a <code>FnOnce</code> closure or function. Rust starts a new thread to run the code of that closure or function. The new thread is a real operating system thread with its own stack, just like threads in C++, C#, and Java.</p>
+
+<p>Here’s a more substantial example, using <code>spawn</code> to implement a parallel version of the <code>process_files</code> function from before:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">thread</code>::<code class="n">spawn</code><code class="p">;</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">process_files_in_parallel</code><code class="p">(</code><code class="n">filenames</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="c1">// Divide the work into several chunks.</code>
+<code class="w">    </code><code class="k">const</code><code class="w"> </code><code class="n">NTHREADS</code>: <code class="kt">usize</code> <code class="o">=</code><code class="w"> </code><code class="mi">8</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">worklists</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">split_vec_into_chunks</code><code class="p">(</code><code class="n">filenames</code><code class="p">,</code><code class="w"> </code><code class="n">NTHREADS</code><code class="p">);</code><code class="w"/>
+
+<code class="w">    </code><code class="c1">// Fork: Spawn a thread to handle each chunk.</code>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">thread_handles</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[];</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">worklist</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">worklists</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">thread_handles</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="w"/>
+<code class="w">            </code><code class="n">spawn</code><code class="p">(</code><code class="k">move</code><code class="w"> </code><code class="o">||</code><code class="w"> </code><code class="n">process_files</code><code class="p">(</code><code class="n">worklist</code><code class="p">))</code><code class="w"/>
+<code class="w">        </code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+
+<code class="w">    </code><code class="c1">// Join: Wait for all threads to finish.</code>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">handle</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">thread_handles</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">handle</code><code class="p">.</code><code class="n">join</code><code class="p">().</code><code class="n">unwrap</code><code class="p">()</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+
+<code class="w">    </code><code class="nb">Ok</code><code class="p">(())</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Let’s take this function line by line.</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">fn</code> <code class="nf">process_files_in_parallel</code><code class="p">(</code><code class="n">filenames</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/></pre>
+
+<p>Our new function has the same type signature as the original <code>process_files</code>, making it a handy drop-in replacement.</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="w">    </code><code class="c1">// Divide the work into several chunks.</code>
+<code class="w">    </code><code class="k">const</code><code class="w"> </code><code class="n">NTHREADS</code>: <code class="kt">usize</code> <code class="o">=</code><code class="w"> </code><code class="mi">8</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">worklists</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">split_vec_into_chunks</code><code class="p">(</code><code class="n">filenames</code><code class="p">,</code><code class="w"> </code><code class="n">NTHREADS</code><code class="p">);</code><code class="w"/></pre>
+
+<p>We use a utility function <code>split_vec_into_chunks</code>, not shown here, to divide up the work. The result, <code>worklists</code>, is a vector of vectors. It contains eight evenly sized slices of the original vector <code>filenames</code>.</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="w">    </code><code class="c1">// Fork: Spawn a thread to handle each chunk.</code>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">thread_handles</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[];</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">worklist</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">worklists</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">thread_handles</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="w"/>
+<code class="w">            </code><code class="n">spawn</code><code class="p">(</code><code class="k">move</code><code class="w"> </code><code class="o">||</code><code class="w"> </code><code class="n">process_files</code><code class="p">(</code><code class="n">worklist</code><code class="p">))</code><code class="w"/>
+<code class="w">        </code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/></pre>
+
+<p>We spawn a thread for each <code>worklist</code>. <code>spawn()</code> returns a value called a <code>JoinHandle</code>, which we’ll use later. For now, we put all the <code>JoinHandle</code>s into a vector.</p>
+
+<p>Note how we get the list of filenames into the worker thread:</p>
+
+<ul>
+	<li>
+	<p><code>worklist</code> is defined and populated by the <code>for</code> loop, in the parent thread.</p>
+	</li>
+	<li>
+	<p>As soon as the <code>move</code> closure is created, <code>worklist</code> is moved into the closure.</p>
+	</li>
+	<li>
+	<p><code>spawn</code> then moves the closure (including the <code>worklist</code> vector) over to the new child thread.</p>
+	</li>
+</ul>
+
+<p>These moves are cheap. Like the <code>Vec&lt;String&gt;</code> moves we discussed in <a data-type="xref" href="ch04.html#ownership">Chapter 4</a>, the <code>String</code>s are not cloned. In fact, nothing is allocated or freed. The only data moved is the <code>Vec</code> itself: three machine words.</p>
+
+<p>Most every thread you create needs both code and data to get started. Rust closures, conveniently, contain whatever code you want and whatever data you want.</p>
+
+<p>Moving on:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="w">    </code><code class="c1">// Join: Wait for all threads to finish.</code>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">handle</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">thread_handles</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">handle</code><code class="p">.</code><code class="n">join</code><code class="p">().</code><code class="n">unwrap</code><code class="p">()</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/></pre>
+
+<p><a contenteditable="false" data-primary="join() method" data-type="indexterm" id="idm140543245772592"/>We use the <code>.join()</code> method of the <code>JoinHandle</code>s we collected earlier to wait for all eight threads to finish. Joining threads is often necessary for correctness, because a Rust program exits as soon as <code>main</code> returns, even if other threads are still running. Destructors are not called; the extra threads are just killed. If this isn’t what you want, be sure to join any threads you care about before returning from <code>main</code>.</p>
+
+<p>If we manage to get through this loop, it means all eight child threads finished successfully. Our function therefore ends by returning <code>Ok(())</code>:<a contenteditable="false" data-primary="" data-startref="19-concurrency.html5" data-type="indexterm" id="idm140543245763584"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html4" data-type="indexterm" id="idm140543245762176"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html3" data-type="indexterm" id="idm140543245760800"/></p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="w">    </code><code class="nb">Ok</code><code class="p">(())</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+</div></section>
+
+<section data-pdf-bookmark="Error Handling Across Threads" data-type="sect2"><div class="sect2" id="error-handling-across-threads">
+<h2>Error Handling Across Threads</h2>
+
+<p><a contenteditable="false" data-primary="error handling" data-secondary="across threads" data-type="indexterm" id="idm140543245544464"/><a contenteditable="false" data-primary="fork-join parallelism" data-secondary="error handling across threads" data-type="indexterm" id="idm140543245753952"/>The code we used to join the child threads in our example is trickier than it looks, because of error handling. Let’s revisit that line of code:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="n">handle</code><code class="p">.</code><code class="n">join</code><code class="p">().</code><code class="n">unwrap</code><code class="p">()</code><code class="o">?</code><code class="p">;</code><code class="w"/></pre>
+
+<p>The <code>.join()</code> method does two neat things for us.</p>
+
+<p>First, <code>handle.join()</code> returns a <code>std::thread::Result</code> that’s an error <em>if the child thread panicked.</em> This makes threading in Rust dramatically more robust than in C++. In C++, an out-of-bounds array access is undefined behavior, and there’s no protecting the rest of the system from the consequences. In Rust, panic is safe and per thread. The boundaries between threads serve as a firewall for panic; panic doesn’t automatically spread from one thread to the threads that depend on it. Instead, a panic in one thread is reported as an error <code>Result</code> in other threads. The program as a whole can easily recover.</p>
+
+<p>In our program, though, we don’t attempt any fancy panic handling. Instead, we immediately use <code>.unwrap()</code> on this <code>Result</code>, asserting that it is an <code>Ok</code> result and not an <code>Err</code> result. If a child thread <em>did</em> panic, then this assertion would fail, so the parent thread would panic too. We’re explicitly propagating panic from the child threads to the parent thread.</p>
+
+<p>Second, <code>handle.join()</code> passes the return value from the child thread back to the parent thread. The closure we passed to <code>spawn</code> has a return type of <code>io::Result&lt;()&gt;</code>. because that’s what <code>process_files</code> returns. This return value isn’t discarded. When the child thread is finished, its return value is saved, and <code>JoinHandle::join()</code> transfers that value back to the parent thread.</p>
+
+<p>The full type returned by <code>handle.join()</code> in this program is <code>std::thread::Result&lt;std::io::Result&lt;()&gt;&gt;</code>. The <code>thread::Result</code> is part of the <code>spawn</code>/<code>join</code> API; the <code>io::Result</code> is part of our app.</p>
+
+<p>In our case, after unwrapping the <code>thread::Result</code>, we use the <code>?</code> operator on the <code>io::Result</code>, explicitly propagating I/O errors from the child threads to the parent thread.</p>
+
+<p>All of this may seem rather intricate. But consider that it’s just one line of code, and then compare this with other languages. The default behavior in Java and C# is for exceptions in child threads to be dumped to the terminal and then forgotten. In C++, the default is to abort the process. In Rust, errors are <code>Result</code> values (data) instead of exceptions (control flow). They’re delivered across threads just like any other value. Any time you use low-level threading APIs, you end up having to write careful error-handling code, but <em>given that you have to write it,</em> <code>Result</code> is very nice to have around.</p>
+</div></section>
+
+<section data-pdf-bookmark="Sharing Immutable Data Across Threads" data-type="sect2"><div class="sect2" id="sharing-immutable-data-across-threads">
+<h2>Sharing Immutable Data Across Threads</h2>
+
+<p><a contenteditable="false" data-primary="fork-join parallelism" data-secondary="sharing immutable data across threads" data-type="indexterm" id="C19-concurrency.html6"/>Suppose the analysis we’re doing requires a large database of English words and phrases:</p>
+
+<pre data-code-language="rust" data-testing-pragma="oneliners" data-type="programlisting">
+<code class="c1">// before</code>
+<code class="k">fn</code> <code class="nf">process_files</code><code class="p">(</code><code class="n">filenames</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="p">)</code><code class="w"/>
+
+<code class="c1">// after</code>
+<code class="k">fn</code> <code class="nf">process_files</code><code class="p">(</code><code class="n">filenames</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="p">,</code><code class="w"> </code><code class="n">glossary</code>: <code class="kp">&amp;</code><code class="nc">GigabyteMap</code><code class="p">)</code><code class="w"/></pre>
+
+<p>This <code>glossary</code> is going to be big, so we’re passing it in by reference. How can we update <code>process_files_in_parallel</code> to pass the glossary through to the worker threads?</p>
+
+<p>The obvious change does not work:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">fn</code> <code class="nf">process_files_in_parallel</code><code class="p">(</code><code class="n">filenames</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="p">,</code><code class="w"/>
+<code class="w">                             </code><code class="n">glossary</code>: <code class="kp">&amp;</code><code class="nc">GigabyteMap</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code>-&gt; <code class="nc">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">worklist</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">worklists</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">thread_handles</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="w"/>
+<code class="w">            </code><code class="n">spawn</code><code class="p">(</code><code class="k">move</code><code class="w"> </code><code class="o">||</code><code class="w"> </code><code class="n">process_files</code><code class="p">(</code><code class="n">worklist</code><code class="p">,</code><code class="w"> </code><code class="n">glossary</code><code class="p">))</code><code class="w">  </code><code class="c1">// error</code>
+<code class="w">        </code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>We’ve simply added a <code>glossary</code> argument to our function and passed it along to <code>process_files</code>. Rust complains:</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting">
+<code class="go">error[E0477]: the type `[closure@...]` does not fulfill the required lifetime</code>
+<code class="go">  --&gt; concurrency_spawn_lifetimes.rs:35:13</code>
+<code class="go">   |</code>
+<code class="go">35 |             spawn(move || process_files(worklist, glossary))  // error</code>
+<code class="go">   |             ^^^^^</code>
+<code class="go">   |</code>
+<code class="go">   = note: type must satisfy the static lifetime</code></pre>
+
+<p>Rust is complaining about the lifetime of the closure we’re passing to <code>spawn</code>.</p>
+
+<p><a contenteditable="false" data-primary="spawn function" data-type="indexterm" id="idm140543245391424"/><code>spawn</code> launches independent threads. Rust has no way of knowing how long the child thread will run, so it assumes the worst: it assumes the child thread may keep running even after the parent thread has finished and all values in the parent thread are gone. Obviously, if the child thread is going to last that long, the closure it’s running needs to last that long too. But this closure has a bounded lifetime: it depends on the reference <code>glossary</code>, and references don’t last forever.</p>
+
+<p>Note that Rust is right to reject this code! The way we’ve written this function, it <em>is</em> possible for one thread to hit an I/O error, causing <code>process_files_in_parallel</code> to bail out before the other threads are finished. Child threads could end up trying to use the glossary after the main thread has freed it. It would be a race—with undefined behavior as the prize, if the main thread should win. Rust can’t allow this.</p>
+
+<p>It seems <code>spawn</code> is too open-ended to support sharing references across threads. Indeed, we already saw a case like this, in <a data-type="xref" href="ch14.html#closures-that-steal">“Closures That Steal”</a>. There, our solution was to transfer ownership of the data to the new thread, using a <code>move</code> closure. That won’t work here, since we have many threads that all need to use the same data. One safe alternative is to <code>clone</code> the whole glossary for each thread, but since it’s large, we want to avoid that. Fortunately, the standard library provides another way: atomic reference counting.</p>
+
+<p>We described <code>Arc</code> in <a data-type="xref" href="ch04.html#rc">“Rc and Arc: Shared Ownership”</a>. It’s time to put it to use:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">sync</code>::<code class="n">Arc</code><code class="p">;</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">process_files_in_parallel</code><code class="p">(</code><code class="n">filenames</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="p">,</code><code class="w"/>
+<code class="w">                             </code><code class="n">glossary</code>: <code class="nc">Arc</code><code class="o">&lt;</code><code class="n">GigabyteMap</code><code class="o">&gt;</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code>-&gt; <code class="nc">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">worklist</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">worklists</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="c1">// This call to .clone() only clones the Arc and bumps the</code>
+<code class="w">        </code><code class="c1">// reference count. It does not clone the GigabyteMap.</code>
+<code class="w">        </code><code class="kd">let</code><code class="w"> </code><code class="n">glossary_for_child</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">glossary</code><code class="p">.</code><code class="n">clone</code><code class="p">();</code><code class="w"/>
+<code class="w">        </code><code class="n">thread_handles</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="w"/>
+<code class="w">            </code><code class="n">spawn</code><code class="p">(</code><code class="k">move</code><code class="w"> </code><code class="o">||</code><code class="w"> </code><code class="n">process_files</code><code class="p">(</code><code class="n">worklist</code><code class="p">,</code><code class="w"> </code><code class="o">&amp;</code><code class="n">glossary_for_child</code><code class="p">))</code><code class="w"/>
+<code class="w">        </code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>We have changed the type of <code>glossary</code>: to run the analysis in parallel, the caller must pass in an <code>Arc&lt;GigabyteMap&gt;</code>, a smart pointer to a <code>GigabyteMap</code> that’s been moved into the heap, by doing <code>Arc::new(giga_map)</code>.</p>
+
+<p>When we call <code>glossary.clone()</code>, we are making a copy of the <code>Arc</code> smart pointer, not the whole <code>GigabyteMap</code>. This amounts to incrementing a reference count.</p>
+
+<p>With this change, the program compiles and runs, because it no longer depends on reference lifetimes. As long as <em>any</em> thread owns an <code>Arc&lt;GigabyteMap&gt;</code>, it will keep the map alive, even if the parent thread bails out early. There won’t be any data races, because data in an <code>Arc</code> is immutable.<a contenteditable="false" data-primary="" data-startref="19-concurrency.html6" data-type="indexterm" id="idm140543245216448"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Rayon" data-type="sect2"><div class="sect2" id="rayon">
+<h2>Rayon</h2>
+
+<p><a contenteditable="false" data-primary="fork-join parallelism" data-secondary="Rayon library" data-type="indexterm" id="C19-concurrency.html7"/><a contenteditable="false" data-primary="Rayon library" data-type="indexterm" id="C19-concurrency.html8"/>The standard library’s <code>spawn</code> function is an important primitive, but it’s not designed specifically for fork-join parallelism. Better fork-join APIs have been built on top of it. For example, in <a data-type="xref" href="ch02.html#a-tour-of-rust">Chapter 2</a> we used the Crossbeam library to split some work across eight threads. Crossbeam’s <em>scoped threads</em> support fork-join parallelism quite naturally.</p>
+
+<p><a contenteditable="false" data-primary="Matsakis, Niko" data-type="indexterm" id="idm140543245207760"/>The Rayon library, by Niko Matsakis, is another example. It provides two ways of running tasks concurrently:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">extern</code><code class="w"> </code><code class="k">crate</code><code class="w"> </code><code class="n">rayon</code><code class="p">;</code><code class="w"/>
+<code class="k">use</code><code class="w"> </code><code class="n">rayon</code>::<code class="n">prelude</code>::<code class="o">*</code><code class="p">;</code><code class="w"/>
+
+<code class="c1">// "do 2 things in parallel"</code>
+<code class="kd">let</code><code class="w"> </code><code class="p">(</code><code class="n">v1</code><code class="p">,</code><code class="w"> </code><code class="n">v2</code><code class="p">)</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">rayon</code>::<code class="n">join</code><code class="p">(</code><code class="n">fn1</code><code class="p">,</code><code class="w"> </code><code class="n">fn2</code><code class="p">);</code><code class="w"/>
+
+<code class="c1">// "do N things in parallel"</code>
+<code class="n">giant_vector</code><code class="p">.</code><code class="n">par_iter</code><code class="p">().</code><code class="n">for_each</code><code class="p">(</code><code class="o">|</code><code class="n">value</code><code class="o">|</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">do_thing_with_value</code><code class="p">(</code><code class="n">value</code><code class="p">);</code><code class="w"/>
+<code class="p">});</code><code class="w"/></pre>
+
+<p><code>rayon::join(fn1, fn2)</code> simply calls both functions and returns both results. The <code>.par_iter()</code> method creates a <code>ParallelIterator</code>, a value with <code>map</code>, <code>filter</code>, and other methods, much like a Rust <code>Iterator</code>. In both cases, Rayon uses its own pool of worker threads to spread out the work when possible. You simply tell Rayon what tasks <em>can</em> be done in parallel; Rayon manages threads and distributes the work as best it can.</p>
+
+<p>The diagrams in <a data-type="xref" href="#figure-rayon">Figure 19-3</a> illustrate two ways of thinking about the call <code>giant_vector.par_iter().for_each(...)</code>. (a) Rayon acts as though it spawns one thread per element in the vector. (b) Behind the scenes, Rayon has one worker thread per CPU core, which is more efficient. This pool of worker threads is shared by all your program’s threads. When thousands of tasks come in at once, Rayon divides the work.</p>
+
+<figure><div class="figure" id="figure-rayon"><img alt="" src="assets/rust_1903.png"/>
+<h6><span class="label">Figure 19-3. </span>Rayon in theory and practice</h6>
+</div></figure>
+
+<p>Here’s a version of <code>process_files_in_parallel</code> using Rayon:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">extern</code><code class="w"> </code><code class="k">crate</code><code class="w"> </code><code class="n">rayon</code><code class="p">;</code><code class="w"/>
+
+<code class="k">use</code><code class="w"> </code><code class="n">rayon</code>::<code class="n">prelude</code>::<code class="o">*</code><code class="p">;</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">process_files_in_parallel</code><code class="p">(</code><code class="n">filenames</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="p">,</code><code class="w"> </code><code class="n">glossary</code>: <code class="kp">&amp;</code><code class="nc">GigabyteMap</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code>-&gt; <code class="nc">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">filenames</code><code class="p">.</code><code class="n">par_iter</code><code class="p">()</code><code class="w"/>
+<code class="w">        </code><code class="p">.</code><code class="n">map</code><code class="p">(</code><code class="o">|</code><code class="n">filename</code><code class="o">|</code><code class="w"> </code><code class="n">process_file</code><code class="p">(</code><code class="n">filename</code><code class="p">,</code><code class="w"> </code><code class="n">glossary</code><code class="p">))</code><code class="w"/>
+<code class="w">        </code><code class="p">.</code><code class="n">reduce_with</code><code class="p">(</code><code class="o">|</code><code class="n">r1</code><code class="p">,</code><code class="w"> </code><code class="n">r2</code><code class="o">|</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">            </code><code class="k">if</code><code class="w"> </code><code class="n">r1</code><code class="p">.</code><code class="n">is_err</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">r1</code><code class="w"> </code><code class="p">}</code><code class="w"> </code><code class="k">else</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">r2</code><code class="w"> </code><code class="p">}</code><code class="w"/>
+<code class="w">        </code><code class="p">})</code><code class="w"/>
+<code class="w">        </code><code class="p">.</code><code class="n">unwrap_or</code><code class="p">(</code><code class="nb">Ok</code><code class="p">(()))</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>This code is shorter and less tricky than the version using <code>std::thread::spawn</code>. Let’s look at it line by line:</p>
+
+<ul>
+	<li>
+	<p>First, we use <code>filenames.par_iter()</code> to create a parallel iterator.</p>
+	</li>
+	<li>
+	<p>We use <code>.map()</code> to call <code>process_file</code> on each filename. This produces a <code>ParallelIterator</code> over a sequence of <code>io::Result&lt;()&gt;</code> values.</p>
+	</li>
+	<li>
+	<p>We use <code>.reduce_with()</code> to combine the results. Here we’re keeping the first error, if any, and discarding the rest. If we wanted to accumulate all the errors, or print them, we could do that here.</p>
+
+	<p>The <code>.reduce_with()</code> method is also handy when you pass a <code>.map()</code> closure that returns a useful value on success. Then you can pass <code>.reduce_with()</code> a closure that knows how to combine two success results.</p>
+	</li>
+	<li>
+	<p><code>reduce_with</code> returns an <code>Option</code> that is <code>None</code> only if <code>filenames</code> was empty. We use the <code>Option</code>’s <code>.unwrap_or()</code> method to make the result <code>Ok(())</code> in that case.</p>
+	</li>
+</ul>
+
+<p><a contenteditable="false" data-primary="work-stealing" data-type="indexterm" id="idm140543244984320"/>Behind the scenes, Rayon balances workloads across threads dynamically, using a technique called <em>work-stealing.</em> It will typically do a better job keeping all the CPUs busy than we can do by manually dividing the work in advance, as in <a data-type="xref" href="#spawn-and-join">“spawn and join”</a>.</p>
+
+<p>As a bonus, Rayon supports sharing references across threads. Any parallel processing that happens behind the scenes is guaranteed to be finished by the time <code>reduce_with</code> returns. This explains why we were able to pass <code>glossary</code> to <code>process_file</code> even though that closure will be called on multiple threads.</p>
+
+<p>(Incidentally, it’s no coincidence that we’ve used a <code>map</code> method and a <code>reduce</code> method. The MapReduce programming model, popularized by Google and by Apache Hadoop, has a lot in common with fork-join. It can be seen as a fork-join approach to querying distributed data.)<a contenteditable="false" data-primary="" data-startref="19-concurrency.html8" data-type="indexterm" id="idm140543244978000"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html7" data-type="indexterm" id="idm140543244976624"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Revisiting the Mandelbrot Set" data-type="sect2"><div class="sect2" id="revisiting-the-mandelbrot-set">
+<h2>Revisiting the Mandelbrot Set</h2>
+
+<p><a contenteditable="false" data-primary="fork-join parallelism" data-secondary="Mandelbrot set rendering" data-type="indexterm" id="C19-concurrency.html9"/><a contenteditable="false" data-primary="Mandelbrot set" data-secondary="rendering with fork-join parallelism" data-type="indexterm" id="C19-concurrency.html10"/>Back in <a data-type="xref" href="ch02.html#a-tour-of-rust">Chapter 2</a>, we used fork-join concurrency to render the Mandelbrot set. This made rendering four times as fast—impressive, but not as impressive as it could be, considering that we had the program spawn eight worker threads and ran it on an eight-core machine!</p>
+
+<p>The problem is that we didn’t distribute the workload evenly. Computing one pixel of the image amounts to running a loop (see <a data-type="xref" href="ch02.html#what-the-mandelbrot-set-actually-is">“What the Mandelbrot Set Actually Is”</a>). It turns out that the pale gray parts of the image, where the loop quickly exits, are much faster to render than the black parts, where the loop runs the full 255 iterations. So although we split the area into equal-sized horizontal bands, we were creating unequal workloads, as <a data-type="xref" href="#mandelbrot-uneven-work-figure">Figure 19-4</a> shows.</p>
+
+<figure><div class="figure" id="mandelbrot-uneven-work-figure"><img alt="(The Mandelbrot set is shown, divided into 8 horizontal bands of equal area.          The time it took to render each band is shown.          The numbers range from 115 msec to 1429 msec.)" src="assets/rust_1904.png"/>
+<h6><span class="label">Figure 19-4. </span>Uneven work distribution in the Mandelbrot program</h6>
+</div></figure>
+
+<p><a contenteditable="false" data-primary="Rayon library" data-startref="19-concurrency.html8" data-type="indexterm" id="idm140543244963440"/>This is easy to fix using Rayon. We can just fire off a parallel task for each row of pixels in the output. This creates several hundred tasks that Rayon can distribute across its threads. Thanks to work-stealing, it won’t matter that the tasks vary in size. Rayon will balance the work as it goes.</p>
+
+<p>Here is the code. The first line and the last line are part of the <code>main</code> function we showed back in <a data-type="xref" href="ch02.html#a-concurrent-mandelbrot-program">“A Concurrent Mandelbrot Program”</a>, but we’ve changed the rendering code, which is everything in between.</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">pixels</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[</code><code class="mi">0</code><code class="p">;</code><code class="w"> </code><code class="n">bounds</code><code class="p">.</code><code class="mi">0</code><code class="w"> </code><code class="o">*</code><code class="w"> </code><code class="n">bounds</code><code class="p">.</code><code class="mi">1</code><code class="p">];</code><code class="w"/>
+
+<code class="c1">// Scope of slicing up `pixels` into horizontal bands.</code>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">bands</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="p">(</code><code class="kt">usize</code><code class="p">,</code><code class="w"> </code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="p">[</code><code class="kt">u8</code><code class="p">])</code><code class="o">&gt;</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">pixels</code><code class="w"/>
+<code class="w">        </code><code class="p">.</code><code class="n">chunks_mut</code><code class="p">(</code><code class="n">bounds</code><code class="p">.</code><code class="mi">0</code><code class="p">)</code><code class="w"/>
+<code class="w">        </code><code class="p">.</code><code class="n">enumerate</code><code class="p">()</code><code class="w"/>
+<code class="w">        </code><code class="p">.</code><code class="n">collect</code><code class="p">();</code><code class="w"/>
+
+<code class="w">    </code><code class="n">bands</code><code class="p">.</code><code class="n">into_par_iter</code><code class="p">()</code><code class="w"/>
+<code class="w">        </code><code class="p">.</code><code class="n">weight_max</code><code class="p">()</code><code class="w"/>
+<code class="w">        </code><code class="p">.</code><code class="n">for_each</code><code class="p">(</code><code class="o">|</code><code class="p">(</code><code class="n">i</code><code class="p">,</code><code class="w"> </code><code class="n">band</code><code class="p">)</code><code class="o">|</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">            </code><code class="kd">let</code><code class="w"> </code><code class="n">top</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">i</code><code class="p">;</code><code class="w"/>
+<code class="w">            </code><code class="kd">let</code><code class="w"> </code><code class="n">band_bounds</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="p">(</code><code class="n">bounds</code><code class="p">.</code><code class="mi">0</code><code class="p">,</code><code class="w"> </code><code class="mi">1</code><code class="p">);</code><code class="w"/>
+<code class="w">            </code><code class="kd">let</code><code class="w"> </code><code class="n">band_upper_left</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">pixel_to_point</code><code class="p">(</code><code class="n">bounds</code><code class="p">,</code><code class="w"> </code><code class="p">(</code><code class="mi">0</code><code class="p">,</code><code class="w"> </code><code class="n">top</code><code class="p">),</code><code class="w"/>
+<code class="w">                                                 </code><code class="n">upper_left</code><code class="p">,</code><code class="w"> </code><code class="n">lower_right</code><code class="p">);</code><code class="w"/>
+<code class="w">            </code><code class="kd">let</code><code class="w"> </code><code class="n">band_lower_right</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">pixel_to_point</code><code class="p">(</code><code class="n">bounds</code><code class="p">,</code><code class="w"> </code><code class="p">(</code><code class="n">bounds</code><code class="p">.</code><code class="mi">0</code><code class="p">,</code><code class="w"> </code><code class="n">top</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="mi">1</code><code class="p">),</code><code class="w"/>
+<code class="w">                                                  </code><code class="n">upper_left</code><code class="p">,</code><code class="w"> </code><code class="n">lower_right</code><code class="p">);</code><code class="w"/>
+<code class="w">            </code><code class="n">render</code><code class="p">(</code><code class="n">band</code><code class="p">,</code><code class="w"> </code><code class="n">band_bounds</code><code class="p">,</code><code class="w"> </code><code class="n">band_upper_left</code><code class="p">,</code><code class="w"> </code><code class="n">band_lower_right</code><code class="p">);</code><code class="w"/>
+<code class="w">        </code><code class="p">});</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="n">write_bitmap</code><code class="p">(</code><code class="o">&amp;</code><code class="n">args</code><code class="p">[</code><code class="mi">1</code><code class="p">],</code><code class="w"> </code><code class="o">&amp;</code><code class="n">pixels</code><code class="p">,</code><code class="w"> </code><code class="n">bounds</code><code class="p">).</code><code class="n">expect</code><code class="p">(</code><code class="s">"error writing PNG file"</code><code class="p">);</code><code class="w"/></pre>
+
+<p>First, we create <code>bands</code>, the collection of tasks that we will be passing to Rayon. Each task is just a tuple of type <code>(usize, &amp;mut [u8])</code>: the row number, since the computation requires that; and the slice of <code>pixels</code> to fill in. We use the <code>chunks_mut</code> method to break the image buffer into rows, <code>enumerate</code> to attach a row number to each row, and <code>collect</code> to slurp all the number-slice pairs into a vector. (We need a vector because Rayon creates parallel iterators only out of arrays and vectors.)</p>
+
+<p>Next, we turn <code>bands</code> into a parallel iterator, call <code>.weight_max()</code> as a hint to Rayon that these tasks are very CPU-intensive, and then use the <code>.for_each()</code> method to tell Rayon what work we want done.</p>
+
+<p>Since we’re using Rayon, we must add these lines to <em>main.rs</em>:</p>
+
+<pre data-code-language="rust" data-testing-pragma="oneliners" data-type="programlisting">
+<code class="k">extern</code><code class="w"> </code><code class="k">crate</code><code class="w"> </code><code class="n">rayon</code><code class="p">;</code><code class="w"/>
+<code class="k">use</code><code class="w"> </code><code class="n">rayon</code>::<code class="n">prelude</code>::<code class="o">*</code><code class="p">;</code><code class="w"/></pre>
+
+<p>and to <em>Cargo.toml</em>:</p>
+
+<pre class="toml" data-code-language="toml" data-type="programlisting">
+[dependencies]
+rayon = "0.4"</pre>
+
+<p>With these changes, the program now uses about 7.75 cores on an 8-core machine. It’s 75% faster than before, when we were dividing the work manually. And the code is a little shorter, reflecting the benefits of letting a crate do a job (work distribution) rather than doing it ourselves<a contenteditable="false" data-primary="" data-startref="19-concurrency.html10" data-type="indexterm" id="idm140543244736400"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html9" data-type="indexterm" id="idm140543244735088"/>.<a contenteditable="false" data-primary="" data-startref="19-concurrency.html2" data-type="indexterm" id="idm140543244733584"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html1" data-type="indexterm" id="idm140543244732176"/></p>
+</div></section>
+</div></section>
+
+<section data-pdf-bookmark="Channels" data-type="sect1"><div class="sect1" id="channels">
+<h1>Channels</h1>
+
+<p><a contenteditable="false" data-primary="channels" data-type="indexterm" id="C19-concurrency.html11"/><a contenteditable="false" data-primary="concurrency/concurrent programming" data-secondary="channels" data-type="indexterm" id="C19-concurrency.html12"/><a contenteditable="false" data-primary="threads" data-secondary="and channels" data-type="indexterm" id="C19-concurrency.html13"/>A <em>channel</em> is a one-way conduit for sending values from one thread to another. In other words, it’s a thread-safe queue.</p>
+
+<p><a data-type="xref" href="#channel-figure">Figure 19-5</a> illustrates how channels are used. <a contenteditable="false" data-primary="Unix" data-secondary="pipes" data-type="indexterm" id="C19-concurrency.html14"/>They’re something like Unix pipes: one end is for sending data, and the other is for receiving. The two ends are typically owned by two different threads. But whereas Unix pipes are for sending bytes, channels are for sending Rust values. <code>sender.send(item)</code> puts a single value into the channel; <code>receiver.recv()</code> removes one. Ownership is transferred from the sending thread to the receiving thread. If the channel is empty, <code>receiver.recv()</code> blocks until a value is sent.</p>
+
+<figure><div class="figure" id="channel-figure"><img alt="(Two threads are shown.          The first thread has a box labeled &quot;sender&quot;.          The second thread has a box labeled &quot;receiver&quot;.          The two boxes are connected by a line representing the channel.          The first thread calls sender.send(msg) to send a message;          the second thread calls receiver.recv() to receive it.)" src="assets/rust_1905.png"/>
+<h6><span class="label">Figure 19-5. </span>A channel for Strings. Ownership of the string msg is transferred from thread 1 to thread 2.</h6>
+</div></figure>
+
+<p>With channels, threads can communicate by passing values to one another. It’s a very simple way for threads to work together without using locking or shared memory.</p>
+
+<p>This is not a new technique. Erlang has had isolated processes and message passing for 30 years now. Unix pipes have been around for almost 50 years. We tend to think of pipes as providing flexibility and composability, not concurrency, but in fact, they do all of the above. An example of a Unix pipeline is shown in <a data-type="xref" href="#unix-pipeline-execution-figure">Figure 19-6</a>. It is certainly possible for all three programs to be working at the same time.</p>
+
+<figure><div class="figure" id="unix-pipeline-execution-figure"><img alt="(An illustration of a Unix pipeline, showing the three separate processes that make up the pipeline. The processes overlap in time. The first process writes data to the second, and the second to the third, repeatedly throughout its execution.)" src="assets/rust_1906.png"/>
+<h6><span class="label">Figure 19-6. </span>Execution of a Unix pipeline</h6>
+</div></figure>
+
+<p>Rust channels are faster than Unix pipes. Sending a value moves it rather than copying it, and moves are fast even when you’re moving data structures that contain many megabytes of data.<a contenteditable="false" data-primary="" data-startref="19-concurrency.html14" data-type="indexterm" id="idm140543244704960"/></p>
+
+<section data-pdf-bookmark="Sending Values" data-type="sect2"><div class="sect2" id="sending-values">
+<h2>Sending Values</h2>
+
+<p><a contenteditable="false" data-primary="channels" data-secondary="sending values" data-type="indexterm" id="C19-concurrency.html15"/><a contenteditable="false" data-primary="inverted index" data-type="indexterm" id="C19-concurrency.html16"/><a contenteditable="false" data-primary="values" data-secondary="sending via channels" data-type="indexterm" id="C19-concurrency.html17"/>Over the next few sections, we’ll use channels to build a concurrent program that creates an <em>inverted index,</em> one of the key ingredients of a search engine. Every search engine works on a particular collection of documents. The inverted index is the database that tells which words appear where.</p>
+
+<p>We’ll show the parts of the code that have to do with threads and channels. The complete program can be found at <a href="https://github.com/ProgrammingRust/fingertips"><em>https://github.com/ProgrammingRust/fingertips</em></a>. It’s short, about a thousand lines of code all told.</p>
+
+<p>Our program is structured as a pipeline, as shown in <a data-type="xref" href="#index-builder-pipeline-figure">Figure 19-7</a>. Pipelines are only one of the many ways to use channels—we’ll discuss a few other uses later—but they’re a straightforward way to introduce concurrency into an existing single-threaded program.</p>
+
+<figure><div class="figure" id="index-builder-pipeline-figure"><img alt="(The pipeline has five stages, connected by channels.)" src="assets/rust_1907.png"/>
+<h6><span class="label">Figure 19-7. </span>The index builder pipeline. The arrows represent values sent via a channel from one thread to another. Disk I/O is not shown.</h6>
+</div></figure>
+
+<p>We’ll use a total of five threads, each doing a distinct task. Each thread produces output continually over the lifetime of the program. The first thread, for example, simply reads the source documents from disk into memory, one by one. (We want a thread to do this because we’ll be writing the simplest possible code here, using <code>File::open</code> and <code>read_to_string</code>, which are blocking APIs. We don’t want the CPU to sit idle whenever the disk is working.) The output of this stage is one long <code>String</code> per document, so this thread is connected to the next thread by a channel of <code>String</code>s.</p>
+
+<p>Our program will begin by spawning the thread that reads files. Suppose <code>documents</code> is a <code>Vec&lt;PathBuf&gt;</code>, a vector of filenames. The code to start our file-reading thread looks like this:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">fs</code>::<code class="n">File</code><code class="p">;</code><code class="w"/>
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">io</code>::<code class="n">prelude</code>::<code class="o">*</code><code class="p">;</code><code class="w">  </code><code class="c1">// for `Read::read_to_string`</code>
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">thread</code>::<code class="n">spawn</code><code class="p">;</code><code class="w"/>
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">sync</code>::<code class="n">mpsc</code>::<code class="n">channel</code><code class="p">;</code><code class="w"/>
+
+<code class="kd">let</code><code class="w"> </code><code class="p">(</code><code class="n">sender</code><code class="p">,</code><code class="w"> </code><code class="n">receiver</code><code class="p">)</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">channel</code><code class="p">();</code><code class="w"/>
+
+<code class="kd">let</code><code class="w"> </code><code class="n">handle</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">spawn</code><code class="p">(</code><code class="k">move</code><code class="w"> </code><code class="o">||</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">filename</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">documents</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">f</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">File</code>::<code class="n">open</code><code class="p">(</code><code class="n">filename</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+<code class="w">        </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">text</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="nb">String</code>::<code class="n">new</code><code class="p">();</code><code class="w"/>
+<code class="w">        </code><code class="n">f</code><code class="p">.</code><code class="n">read_to_string</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">text</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+
+<code class="w">        </code><code class="k">if</code><code class="w"> </code><code class="n">sender</code><code class="p">.</code><code class="n">send</code><code class="p">(</code><code class="n">text</code><code class="p">).</code><code class="n">is_err</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">            </code><code class="k">break</code><code class="p">;</code><code class="w"/>
+<code class="w">        </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="nb">Ok</code><code class="p">(())</code><code class="w"/>
+<code class="p">});</code><code class="w"/></pre>
+
+<p>Channels are part of the <code>std::sync::mpsc</code> module. We’ll explain what this name means later; first, let’s look at how this code works. We start by creating a channel:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="p">(</code><code class="n">sender</code><code class="p">,</code><code class="w"> </code><code class="n">receiver</code><code class="p">)</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">channel</code><code class="p">();</code><code class="w"/></pre>
+
+<p>The <code>channel</code> function returns a pair of values: a sender and a receiver. The underlying queue data structure is an implementation detail that the standard library does not expose.</p>
+
+<p>Channels are typed. We’re going to use this channel to send the text of each file, so we have a <code>sender</code> of type <code>Sender&lt;String&gt;</code> and a <code>receiver</code> of type <code>Receiver&lt;String&gt;</code>. We could have explicitly asked for a channel of strings, by writing <code>channel::&lt;String&gt;()</code>. Instead, we let Rust’s type inference figure it out.</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="n">handle</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">spawn</code><code class="p">(</code><code class="k">move</code><code class="w"> </code><code class="o">||</code><code class="w"> </code><code class="p">{</code><code class="w"/></pre>
+
+<p>As before, we’re using <code>std::thread::spawn</code> to start a thread. Ownership of <code>sender</code> (but not <code>receiver</code>) is transferred to the new thread via this <code>move</code> closure.</p>
+
+<p>The next few lines of code simply read files from disk:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">filename</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">documents</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">f</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">File</code>::<code class="n">open</code><code class="p">(</code><code class="n">filename</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+<code class="w">        </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">text</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="nb">String</code>::<code class="n">new</code><code class="p">();</code><code class="w"/>
+<code class="w">        </code><code class="n">f</code><code class="p">.</code><code class="n">read_to_string</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">text</code><code class="p">)</code><code class="o">?</code><code class="p">;</code><code class="w"/></pre>
+
+<p>After successfully reading a file, we send its text into the channel:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="w">        </code><code class="k">if</code><code class="w"> </code><code class="n">sender</code><code class="p">.</code><code class="n">send</code><code class="p">(</code><code class="n">text</code><code class="p">).</code><code class="n">is_err</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">            </code><code class="k">break</code><code class="p">;</code><code class="w"/>
+<code class="w">        </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/></pre>
+
+<p><code>sender.send(text)</code> moves the value <code>text</code> into the channel. Ultimately, it will be moved again to whoever receives the value. Whether <code>text</code> contains 10 lines of text or 10 megabytes, this operation copies three machine words (the size of a <code>String</code>), and the corresponding <code>receiver.recv()</code> call will also copy three machine words.</p>
+
+<p>The <code>send</code> and <code>recv</code> methods both return <code>Result</code>s, but these methods fail only if the other end of the channel has been dropped. A <code>send</code> call fails if the <code>Receiver</code> has been dropped, because otherwise the value would sit in the channel forever: without a <code>Receiver</code>, there’s no way for any thread to receive it. Likewise, a <code>recv</code> call fails if there are no values waiting in the channel and the <code>Sender</code> has been dropped, because otherwise <code>recv</code> would wait forever: without a <code>Sender</code>, there’s no way for any thread to send the next value. Dropping your end of a channel is the normal way of “hanging up,” closing the connection when you’re done with it.</p>
+
+<p>In our code, <code>sender.send(text)</code> will fail only if the receiver’s thread has exited early. This is typical for code that uses channels. Whether that happened deliberately or due to an error, it’s OK for our reader thread to quietly shut itself down.</p>
+
+<p>When that happens, or the thread finishes reading all the documents, it returns <code>Ok(())</code>:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="w">    </code><code class="nb">Ok</code><code class="p">(())</code><code class="w"/>
+<code class="p">});</code><code class="w"/></pre>
+
+<p>Note that this closure returns a <code>Result</code>. If the thread encounters an I/O error, it exits immediately, and the error is stored in the thread’s <code>JoinHandle</code>.</p>
+
+<p><a contenteditable="false" data-primary="error handling" data-secondary="channels and" data-type="indexterm" id="idm140543244283200"/>Of course, just like any other programming language, Rust admits many other possibilities when it comes to error handling. When an error happens, we could just print it out using <code>println!</code> and move on to the next file. We could pass errors along via the same channel that we’re using for data, making it a channel of <code>Result</code>s—or create a second channel just for errors. The approach we’ve chosen here is both lightweight and responsible: we get to use the <code>?</code> operator, so there’s not a bunch of boilerplate code, or even an explicit <code>try/catch</code> as you might see in Java; and yet errors won’t pass silently.</p>
+
+<p>For convenience, our program wraps all of this code in a function that returns both the <code>receiver</code> (which we haven’t used yet) and the new thread’s <code>JoinHandle</code>:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">fn</code> <code class="nf">start_file_reader_thread</code><code class="p">(</code><code class="n">documents</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="n">PathBuf</code><code class="o">&gt;</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code>-&gt; <code class="p">(</code><code class="n">Receiver</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="p">,</code><code class="w"> </code><code class="n">JoinHandle</code><code class="o">&lt;</code><code class="n">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;&gt;</code><code class="p">)</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="p">(</code><code class="n">sender</code><code class="p">,</code><code class="w"> </code><code class="n">receiver</code><code class="p">)</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">channel</code><code class="p">();</code><code class="w"/>
+
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">handle</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">spawn</code><code class="p">(</code><code class="k">move</code><code class="w"> </code><code class="o">||</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="p">});</code><code class="w"/>
+
+<code class="w">    </code><code class="p">(</code><code class="n">receiver</code><code class="p">,</code><code class="w"> </code><code class="n">handle</code><code class="p">)</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Note that this function launches the new thread and immediately returns. We’ll write a function like this for each stage of our pipeline.<a contenteditable="false" data-primary="" data-startref="19-concurrency.html17" data-type="indexterm" id="idm140543244073552"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html16" data-type="indexterm" id="idm140543244144272"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html15" data-type="indexterm" id="idm140543244142896"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Receiving Values" data-type="sect2"><div class="sect2" id="receiving-values">
+<h2>Receiving Values</h2>
+
+<p><a contenteditable="false" data-primary="channels" data-secondary="receiving values" data-type="indexterm" id="idm140543244140016"/><a contenteditable="false" data-primary="values" data-secondary="receiving via channels" data-type="indexterm" id="idm140543244138640"/>Now we have a thread running a loop that sends values. We can spawn a second thread running a loop that calls <code>receiver.recv()</code>:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">while</code><code class="w"> </code><code class="kd">let</code><code class="w"> </code><code class="nb">Ok</code><code class="p">(</code><code class="n">text</code><code class="p">)</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">receiver</code><code class="p">.</code><code class="n">recv</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">do_something_with</code><code class="p">(</code><code class="n">text</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>But <code>Receiver</code>s are iterable, so there’s a nicer way to write this:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">for</code><code class="w"> </code><code class="n">text</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">receiver</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">do_something_with</code><code class="p">(</code><code class="n">text</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>These two loops are equivalent. Either way we write it, if the channel happens to be empty when control reaches the top of the loop, the receiving thread will block until some other thread sends a value. The loop will exit normally when the channel is empty and the <code>Sender</code> has been dropped. In our program, that happens naturally when the reader thread exits. That thread is running a closure that owns the variable <code>sender</code>; when the closure exits, <code>sender</code> is dropped.</p>
+
+<p>Now we can write code for the second stage of the pipeline:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">fn</code> <code class="nf">start_file_indexing_thread</code><code class="p">(</code><code class="n">texts</code>: <code class="nc">Receiver</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code>-&gt; <code class="p">(</code><code class="n">Receiver</code><code class="o">&lt;</code><code class="n">InMemoryIndex</code><code class="o">&gt;</code><code class="p">,</code><code class="w"> </code><code class="n">JoinHandle</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="p">)</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="p">(</code><code class="n">sender</code><code class="p">,</code><code class="w"> </code><code class="n">receiver</code><code class="p">)</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">channel</code><code class="p">();</code><code class="w"/>
+
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">handle</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">spawn</code><code class="p">(</code><code class="k">move</code><code class="w"> </code><code class="o">||</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="k">for</code><code class="w"> </code><code class="p">(</code><code class="n">doc_id</code><code class="p">,</code><code class="w"> </code><code class="n">text</code><code class="p">)</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">texts</code><code class="p">.</code><code class="n">into_iter</code><code class="p">().</code><code class="n">enumerate</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">            </code><code class="kd">let</code><code class="w"> </code><code class="n">index</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">InMemoryIndex</code>::<code class="n">from_single_document</code><code class="p">(</code><code class="n">doc_id</code><code class="p">,</code><code class="w"> </code><code class="n">text</code><code class="p">);</code><code class="w"/>
+<code class="w">            </code><code class="k">if</code><code class="w"> </code><code class="n">sender</code><code class="p">.</code><code class="n">send</code><code class="p">(</code><code class="n">index</code><code class="p">).</code><code class="n">is_err</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">                </code><code class="k">break</code><code class="p">;</code><code class="w"/>
+<code class="w">            </code><code class="p">}</code><code class="w"/>
+<code class="w">        </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="p">});</code><code class="w"/>
+
+<code class="w">    </code><code class="p">(</code><code class="n">receiver</code><code class="p">,</code><code class="w"> </code><code class="n">handle</code><code class="p">)</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>This function spawns a thread that receives <code>String</code> values from one channel (<code>texts</code>) and sends <code>InMemoryIndex</code> values to another channel (<code>sender</code>/<code>receiver</code>). This thread’s job is to take each of the files loaded in the first stage and turn each document into a little one-file, in-memory inverted index.</p>
+
+<p>The main loop of this thread is straightforward. All the work of indexing a document is done by the function <code>make_single_file_index</code>. We won’t show its source code here, but it’s a simple matter of splitting the input string along word boundaries, and then producing a map from words to lists of positions.</p>
+
+<p>This stage doesn’t perform I/O, so it doesn’t have to deal with <code>io::Error</code>s. Instead of an <code>io::Result&lt;()&gt;</code>, it returns <code>()</code>.</p>
+</div></section>
+
+<section data-pdf-bookmark="Running the Pipeline" data-type="sect2"><div class="sect2" id="running-the-pipeline">
+<h2>Running the Pipeline</h2>
+
+<p><a contenteditable="false" data-primary="channels" data-secondary="running pipeline" data-type="indexterm" id="idm140543243780048"/><a contenteditable="false" data-primary="pipeline" data-secondary="running" data-type="indexterm" id="idm140543243778672"/>The remaining three stages are similar in design. Each one consumes a <code>Receiver</code> created by the previous stage. Our goal for the rest of the pipeline is to merge all the small indexes into a single large index file on disk. The fastest way we found to do this is in three stages. We won’t show the code here, just the type signatures of these three functions. The full source is online.</p>
+
+<p>First, we merge indexes in memory until they get unwieldy (stage 3):</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">fn</code> <code class="nf">start_in_memory_merge_thread</code><code class="p">(</code><code class="n">file_indexes</code>: <code class="nc">Receiver</code><code class="o">&lt;</code><code class="n">InMemoryIndex</code><code class="o">&gt;</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code>-&gt; <code class="p">(</code><code class="n">Receiver</code><code class="o">&lt;</code><code class="n">InMemoryIndex</code><code class="o">&gt;</code><code class="p">,</code><code class="w"> </code><code class="n">JoinHandle</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="p">)</code><code class="w"/></pre>
+
+<p>We write these large indexes to disk (stage 4):</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">fn</code> <code class="nf">start_index_writer_thread</code><code class="p">(</code><code class="n">big_indexes</code>: <code class="nc">Receiver</code><code class="o">&lt;</code><code class="n">InMemoryIndex</code><code class="o">&gt;</code><code class="p">,</code><code class="w"/>
+<code class="w">                             </code><code class="n">output_dir</code>: <code class="kp">&amp;</code><code class="nc">Path</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code>-&gt; <code class="p">(</code><code class="n">Receiver</code><code class="o">&lt;</code><code class="n">PathBuf</code><code class="o">&gt;</code><code class="p">,</code><code class="w"> </code><code class="n">JoinHandle</code><code class="o">&lt;</code><code class="n">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;&gt;</code><code class="p">)</code><code class="w"/></pre>
+
+<p>Finally, if we have multiple large files, we merge them using a file-based merging algorithm (stage 5):</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">fn</code> <code class="nf">merge_index_files</code><code class="p">(</code><code class="n">files</code>: <code class="nc">Receiver</code><code class="o">&lt;</code><code class="n">PathBuf</code><code class="o">&gt;</code><code class="p">,</code><code class="w"> </code><code class="n">output_dir</code>: <code class="kp">&amp;</code><code class="nc">Path</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code>-&gt; <code class="nc">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"/></pre>
+
+<p>This last stage does not return a <code>Receiver</code>, because it’s the end of the line. It produces a single output file on disk. It doesn’t return a <code>JoinHandle</code>, because we don’t bother spawning a thread for this stage. The work is done on the caller’s thread.</p>
+
+<p>Now we come to the code that launches the threads and checks for errors:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">fn</code> <code class="nf">run_pipeline</code><code class="p">(</code><code class="n">documents</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="n">PathBuf</code><code class="o">&gt;</code><code class="p">,</code><code class="w"> </code><code class="n">output_dir</code>: <code class="nc">PathBuf</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code>-&gt; <code class="nc">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="c1">// Launch all five stages of the pipeline.</code>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="p">(</code><code class="n">texts</code><code class="p">,</code><code class="w">   </code><code class="n">h1</code><code class="p">)</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">start_file_reader_thread</code><code class="p">(</code><code class="n">documents</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="p">(</code><code class="n">pints</code><code class="p">,</code><code class="w">   </code><code class="n">h2</code><code class="p">)</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">start_file_indexing_thread</code><code class="p">(</code><code class="n">texts</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="p">(</code><code class="n">gallons</code><code class="p">,</code><code class="w"> </code><code class="n">h3</code><code class="p">)</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">start_in_memory_merge_thread</code><code class="p">(</code><code class="n">pints</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="p">(</code><code class="n">files</code><code class="p">,</code><code class="w">   </code><code class="n">h4</code><code class="p">)</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">start_index_writer_thread</code><code class="p">(</code><code class="n">gallons</code><code class="p">,</code><code class="w"> </code><code class="o">&amp;</code><code class="n">output_dir</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">result</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">merge_index_files</code><code class="p">(</code><code class="n">files</code><code class="p">,</code><code class="w"> </code><code class="o">&amp;</code><code class="n">output_dir</code><code class="p">);</code><code class="w"/>
+
+<code class="w">    </code><code class="c1">// Wait for threads to finish, holding on to any errors that they encounter.</code>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">r1</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">h1</code><code class="p">.</code><code class="n">join</code><code class="p">().</code><code class="n">unwrap</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="n">h2</code><code class="p">.</code><code class="n">join</code><code class="p">().</code><code class="n">unwrap</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="n">h3</code><code class="p">.</code><code class="n">join</code><code class="p">().</code><code class="n">unwrap</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">r4</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">h4</code><code class="p">.</code><code class="n">join</code><code class="p">().</code><code class="n">unwrap</code><code class="p">();</code><code class="w"/>
+
+<code class="w">    </code><code class="c1">// Return the first error encountered, if any.</code>
+<code class="w">    </code><code class="c1">// (As it happens, h2 and h3 can't fail: those threads</code>
+<code class="w">    </code><code class="c1">// are pure in-memory data processing.)</code>
+<code class="w">    </code><code class="n">r1</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="n">r4</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="n">result</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>As before, we use <code>.join().unwrap()</code> to explicitly propagate panics from child threads to the main thread. The only other unusual thing here is that instead of using <code>?</code> right away, we set aside the <code>io::Result</code> values until we’ve joined all four threads.</p>
+
+<p>This pipeline is 40% faster than the single-threaded equivalent. That’s not bad for an afternoon’s work, but paltry-looking next to the 675% boost we got for the Mandelbrot program. We clearly haven’t saturated either the system’s I/O capacity or all the CPU cores. What’s going on?</p>
+
+<p><a contenteditable="false" data-primary="pipeline" data-secondary="limitations" data-type="indexterm" id="idm140543243440128"/>Pipelines are like assembly lines in a manufacturing plant: performance is limited by the throughput of the slowest stage. A brand-new, untuned assembly line may be as slow as unit production, but assembly lines reward targeted tuning. In our case, measurement shows that the second stage is the bottleneck. Our indexing thread uses <code>.to_lowercase()</code> and <code>.is_alphanumeric()</code>, so it spends a lot of time poking around in Unicode tables. The other stages downstream from indexing spend most of their time asleep in <code>Receiver::recv</code>, waiting for input.</p>
+
+<p>This means we should be able to go faster. As we address the bottlenecks, the degree of parallelism will rise. Now that you know how to use channels and our program is made of isolated pieces of code, it’s easy to see ways to address this first bottleneck. We could hand-optimize the code for the second stage, just like any other code; break up the work into two or more stages; or run multiple file-indexing threads at once.</p>
+</div></section>
+
+<section data-pdf-bookmark="Channel Features and Performance" data-type="sect2"><div class="sect2" id="channel-features-and-performance">
+<h2>Channel Features and Performance</h2>
+
+<p><a contenteditable="false" data-primary="channels" data-secondary="features and performance" data-type="indexterm" id="C19-concurrency.html18"/>The <a contenteditable="false" data-primary="mpsc (multi-producer, single-consumer) communication" data-type="indexterm" id="idm140543243432496"/><code>mpsc</code> part of <code>std::sync::mpsc</code> stands for <em>multi-producer, single-consumer,</em> a terse description of the kind of communication Rust’s channels provide.</p>
+
+<p>The channels in our sample program carry values from a single sender to a single receiver. This is a fairly common case. But Rust channels also support multiple senders, in case you need, say, a single thread that handles requests from many client threads, as shown in <a data-type="xref" href="#multi-producer-channel-figure">Figure 19-8</a>.</p>
+
+<figure><div class="figure" id="multi-producer-channel-figure"><img alt="Several threads are shown: there's the astronavigation thread,          the reactor control thread, the interplanetary communications thread,          and the lowly logging thread.          Many arrows, representing individual logging requests,          point from each of the other three threads to the logging thread." src="assets/rust_1908.png"/>
+<h6><span class="label">Figure 19-8. </span>A single channel receiving requests from many senders</h6>
+</div></figure>
+
+<p><code>Sender&lt;T&gt;</code> implements the <code>Clone</code> trait. To get a channel with multiple senders, simply create a regular channel and clone the sender as many times as you like. You can move each <code>Sender</code> value to a different thread.</p>
+
+<p>A <code>Receiver&lt;T&gt;</code> can’t be cloned, so if you need to have multiple threads receiving values from the same channel, you need a <code>Mutex</code>. We’ll show how to do it later in this chapter.</p>
+
+<p><a contenteditable="false" data-primary="channels" data-secondary="optimization" data-type="indexterm" id="idm140543243422736"/>Rust channels are carefully optimized. When a channel is first created, Rust uses a special “one-shot” queue implementation. If you only ever send one object through the channel, the overhead is minimal. If you send a second value, Rust switches to a different queue implementation. It’s settling in for the long haul, really, preparing the channel to transfer many values while minimizing allocation overhead. And if you clone the <code>Sender</code>, Rust must fall back on yet another implementation, one that is safe when multiple threads are trying to send values at once. But even the slowest of these three implementations is a lock-free queue, so sending or receiving a value is at most a few atomic operations and a heap allocation, plus the move itself. System calls are needed only when the queue is empty and the receiving thread therefore needs to put itself to sleep. In this case, of course, traffic through your channel is not maxed out anyway.</p>
+
+<p>Despite all that optimization work, there is one mistake that’s very easy for applications to make around channel performance: sending values faster than they can be received and processed. This causes an ever-growing backlog of values to accumulate in the channel. For example, in our program, we found that the file reader thread (stage 1) could load files much faster than the file indexing thread (stage 2) could index them. The result is that hundreds of megabytes of raw data would be read from disk and stuffed in the queue at once.</p>
+
+<p>This kind of misbehavior costs memory and hurts locality. Even worse, the sending thread keeps running, using up CPU and other system resources to send ever more values just when those resources are most needed on the receiving end.</p>
+
+<p><a contenteditable="false" data-primary="backpressure" data-type="indexterm" id="idm140543243417904"/><a contenteditable="false" data-primary="Unix" data-secondary="backpressure" data-type="indexterm" id="idm140543243416800"/>Here Rust again takes a page from Unix pipes. Unix uses an elegant trick to provide some <em>backpressure</em>, so that fast senders are forced to slow down: each pipe on a Unix system has a fixed size, and if a process tries to write to a pipe that’s momentarily full, the system simply blocks that process until there’s room in the pipe. <a contenteditable="false" data-primary="synchronous channel" data-type="indexterm" id="idm140543243414512"/>The Rust equivalent is called a <em>synchronous channel</em>.</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">sync</code>::<code class="n">mpsc</code>::<code class="n">sync_channel</code><code class="p">;</code><code class="w"/>
+
+<code class="kd">let</code><code class="w"> </code><code class="p">(</code><code class="n">sender</code><code class="p">,</code><code class="w"> </code><code class="n">receiver</code><code class="p">)</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">sync_channel</code><code class="p">(</code><code class="mi">1000</code><code class="p">);</code><code class="w"/></pre>
+
+<p>A synchronous channel is exactly like a regular channel except that when you create it, you specify how many values it can hold. For a synchronous channel, <code>sender.send(value)</code> is potentially a blocking operation. After all, the idea is that blocking is not always bad. In our example program, changing the <code>channel</code> in <code>start_file_reader_thread</code> to a <code>sync_channel</code> with room for 32 values cut memory usage by two-thirds on our benchmark data set, without decreasing throughput.<a contenteditable="false" data-primary="" data-startref="19-concurrency.html18" data-type="indexterm" id="idm140543243400512"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Thread Safety: Send and Sync" data-type="sect2"><div class="sect2" id="thread-safety-send-and-sync">
+<h2>Thread Safety: Send and Sync</h2>
+
+<p><a contenteditable="false" data-primary="channels" data-secondary="thread safety with Send and Sync" data-type="indexterm" id="C19-concurrency.html19"/><a contenteditable="false" data-primary="Send type" data-type="indexterm" id="C19-concurrency.html20"/><a contenteditable="false" data-primary="Sync type" data-type="indexterm" id="C19-concurrency.html21"/><a contenteditable="false" data-primary="threads" data-secondary="thread safety with Send and Sync" data-type="indexterm" id="C19-concurrency.html22"/>So far we’ve been acting as though all values can be freely moved and shared across threads. This is mostly true, but Rust’s full thread-safety story hinges on two built-in traits, <code>std::marker::Send</code> and <code>std::marker::Sync</code>.</p>
+
+<ul>
+	<li>
+	<p>Types that implement <code>Send</code> are safe to pass by value to another thread. They can be moved across threads.</p>
+	</li>
+	<li>
+	<p>Types that implement <code>Sync</code> are safe to pass by non-<code>mut</code> reference to another thread. They can be shared across threads.</p>
+	</li>
+</ul>
+
+<p>By <em>safe</em> here, we mean the same thing we always mean: free from data races and other undefined behavior.</p>
+
+<p>For example, in the <code>process_files_in_parallel</code> example <a data-type="xref" data-xrefstyle="select:labelnumber" href="#spawn-and-join"/>, we used a closure to pass a <code>Vec&lt;String&gt;</code> from the parent thread to each child thread. We didn’t point it out at the time, but this means the vector and its strings are allocated in the parent thread, but freed in the child thread. The fact that <code>Vec&lt;String&gt;</code> implements <code>Send</code> is an API promise that this is OK: the allocator used internally by <code>Vec</code> and <code>String</code> is thread-safe.</p>
+
+<p>(If you were to write your own <code>Vec</code> and <code>String</code> types with fast but non-thread-safe allocators, you’d have to implement them using types that are not <code>Send</code>, such as unsafe pointers. Rust would then infer that your <code>NonThreadSafeVec</code> and <code>NonThreadSafeString</code> types are not <code>Send</code> and restrict them to single-threaded use. But that’s a rare case.)</p>
+
+<p>As <a data-type="xref" href="#send-sync-venn-diagram">Figure 19-9</a> illustrates, most types are both <code>Send</code> and <code>Sync</code>. You don’t even have to use <code>#[derive]</code> to get these traits on structs and enums in your program. Rust does it for you. A struct or enum is <code>Send</code> if its fields are <code>Send</code>, and <code>Sync</code> if its fields are <code>Sync</code>.</p>
+
+<figure><div class="figure" id="send-sync-venn-diagram"><img alt="(A Venn diagram showing a huge circle for Send and a slightly smaller one for Sync. The diagram shows that i32, bool, &amp;str, String, TcpStream, and HashMap&lt;String, usize&gt; are both Send and Sync; Cell&lt;usize&gt; and Receiver&lt;u8&gt; are Send but not Sync; and Rc&lt;String&gt; and *mut u8 are neither Send nor Sync.)" src="assets/rust_1909.png"/>
+<h6><span class="label">Figure 19-9. </span>Send and Sync types</h6>
+</div></figure>
+
+<p>The few types that are not <code>Send</code> and <code>Sync</code> are mostly those that use mutability in a way that isn’t thread-safe. For example, consider <code>std::rc::Rc&lt;T&gt;</code>, the type of reference-counting smart pointers.</p>
+
+<p>What would happen if you could share an <code>Rc&lt;String&gt;</code> across threads? If both threads happen to try to clone the <code>Rc</code> at the same time, as shown in <a data-type="xref" href="#rc-string-collision-figure">Figure 19-10</a>, we have a data race as both threads increment the shared reference count. The reference count could become inaccurate, leading to a use-after-free or double free later—undefined behavior.</p>
+
+<figure><div class="figure" id="rc-string-collision-figure"><img alt="Two threads have Rc&lt;String&gt; values that point to a shared, heap-allocated struct consisting of a reference count and the String &quot;ouch&quot;. Thread 1 is saying &quot;rc1.clone()&quot;, which causes an attempt to increment the reference count; thread 2 is saying &quot;rc2.clone()&quot; at the same time." src="assets/rust_1910.png"/>
+<h6><span class="label">Figure 19-10. </span>Why Rc&lt;String&gt; is neither Sync nor Send</h6>
+</div></figure>
+
+<p>Of course, Rust prevents this. Here’s the code to set up this data race:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">thread</code>::<code class="n">spawn</code><code class="p">;</code><code class="w"/>
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">rc</code>::<code class="n">Rc</code><code class="p">;</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">main</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">rc1</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">Rc</code>::<code class="n">new</code><code class="p">(</code><code class="s">"hello threads"</code><code class="p">.</code><code class="n">to_string</code><code class="p">());</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">rc2</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">rc1</code><code class="p">.</code><code class="n">clone</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="n">spawn</code><code class="p">(</code><code class="k">move</code><code class="w"> </code><code class="o">||</code><code class="w"> </code><code class="p">{</code><code class="w">  </code><code class="c1">// error</code>
+<code class="w">        </code><code class="n">rc2</code><code class="p">.</code><code class="n">clone</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="p">});</code><code class="w"/>
+<code class="w">    </code><code class="n">rc1</code><code class="p">.</code><code class="n">clone</code><code class="p">();</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Rust refuses to compile it, giving a detailed error message:</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting">
+<code class="go">error[E0277]: the trait bound `Rc&lt;String&gt;: std::marker::Send` is not satisfied</code>
+<code class="go">              in `[closure@...]`</code>
+<code class="go">  --&gt; concurrency_send_rc.rs:10:5</code>
+<code class="go">   |</code>
+<code class="go">10 |     spawn(move || {  // error</code>
+<code class="go">   |     ^^^^^ within `[closure@...]`, the trait `std::marker::Send` is not</code>
+<code class="go">   |           implemented for `Rc&lt;String&gt;`</code>
+<code class="go">   |</code>
+<code class="go">   = note: `Rc&lt;String&gt;` cannot be sent between threads safely</code>
+<code class="go">   = note: required because it appears within the type `[closure@...]`</code>
+<code class="go">   = note: required by `std::thread::spawn`</code></pre>
+
+<p>Now you can see how <code>Send</code> and <code>Sync</code> help Rust enforce thread safety. They appear as bounds in the type signature of functions like <code>spawn</code> that transfer data across thread boundaries. When you <code>spawn</code> a thread, the closure you pass must be <code>Send</code>, which means all the values it contains must be <code>Send</code>. Similarly, if you try to want to send values through a channel to another thread, the values must be <code>Send</code>.<a contenteditable="false" data-primary="" data-startref="19-concurrency.html22" data-type="indexterm" id="idm140543243110816"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html21" data-type="indexterm" id="idm140543243109408"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html20" data-type="indexterm" id="idm140543243108032"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html19" data-type="indexterm" id="idm140543243106656"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Piping Almost Any Iterator to a Channel" data-type="sect2"><div class="sect2" id="piping-almost-any-iterator-to-a-channel">
+<h2>Piping Almost Any Iterator to a Channel</h2>
+
+<p><a contenteditable="false" data-primary="channels" data-secondary="piping iterator to" data-type="indexterm" id="idm140543243103632"/>Our inverted index builder is built as a pipeline. The code is clear enough, but it has us manually setting up channels and launching threads. By contrast, the iterator pipelines we built in <a data-type="xref" href="ch15.html#iterators">Chapter 15</a> seemed to pack a lot more work into just a few lines of code. Can we build something like that for thread pipelines?</p>
+
+<p>In fact, it would be nice if we could unify iterator pipelines and thread pipelines. Then our index builder could be written as an iterator pipeline. It might start like this:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="n">documents</code><code class="p">.</code><code class="n">into_iter</code><code class="p">()</code><code class="w"/>
+<code class="w">    </code><code class="p">.</code><code class="n">map</code><code class="p">(</code><code class="n">read_whole_file</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code><code class="p">.</code><code class="n">errors_to</code><code class="p">(</code><code class="n">error_sender</code><code class="p">)</code><code class="w">   </code><code class="c1">// filter out error results</code>
+<code class="w">    </code><code class="p">.</code><code class="n">off_thread</code><code class="p">()</code><code class="w">              </code><code class="c1">// spawn a thread for the above work</code>
+<code class="w">    </code><code class="p">.</code><code class="n">map</code><code class="p">(</code><code class="n">make_single_file_index</code><code class="p">)</code><code class="w"/>
+<code class="w">    </code><code class="p">.</code><code class="n">off_thread</code><code class="p">()</code><code class="w">              </code><code class="c1">// spawn another thread for stage 2</code>
+<code class="w">    </code><code class="p">...</code><code class="w"/></pre>
+
+<p>Traits allow us to add methods to standard library types, so we can actually do this. We start by writing a trait that declares the method we want:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">sync</code>::<code class="n">mpsc</code><code class="p">;</code><code class="w"/>
+
+<code class="k">pub</code><code class="w"> </code><code class="k">trait</code><code class="w"> </code><code class="n">OffThreadExt</code>: <code class="nb">Iterator</code> <code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="sd">/// Transform this iterator into an off-thread iterator: the</code>
+<code class="w">    </code><code class="sd">/// `next()` calls happen on a separate worker thread, so the</code>
+<code class="w">    </code><code class="sd">/// iterator and the body of your loop run concurrently.</code>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">off_thread</code><code class="p">(</code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">mpsc</code>::<code class="n">IntoIter</code><code class="o">&lt;</code><code class="n">Self</code>::<code class="n">Item</code><code class="o">&gt;</code><code class="p">;</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Then we implement this trait for iterator types. It helps that <code>mpsc::Receiver</code> is already iterable.</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">thread</code>::<code class="n">spawn</code><code class="p">;</code><code class="w"/>
+
+<code class="k">impl</code><code class="o">&lt;</code><code class="n">T</code><code class="o">&gt;</code><code class="w"> </code><code class="n">OffThreadExt</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">T</code><code class="w"/>
+<code class="w">    </code><code class="k">where</code><code class="w"> </code><code class="n">T</code>: <code class="nb">Iterator</code> <code class="o">+</code><code class="w"> </code><code class="nb">Send</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="nb">'static</code><code class="p">,</code><code class="w"/>
+<code class="w">          </code><code class="n">T</code>::<code class="n">Item</code>: <code class="nb">Send</code> <code class="o">+</code><code class="w"> </code><code class="nb">'static</code><code class="w"/>
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">off_thread</code><code class="p">(</code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">mpsc</code>::<code class="n">IntoIter</code><code class="o">&lt;</code><code class="n">Self</code>::<code class="n">Item</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="c1">// Create a channel to transfer items from the worker thread.</code>
+<code class="w">        </code><code class="kd">let</code><code class="w"> </code><code class="p">(</code><code class="n">sender</code><code class="p">,</code><code class="w"> </code><code class="n">receiver</code><code class="p">)</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">mpsc</code>::<code class="n">sync_channel</code><code class="p">(</code><code class="mi">1024</code><code class="p">);</code><code class="w"/>
+
+<code class="w">        </code><code class="c1">// Move this iterator to a new worker thread and run it there.</code>
+<code class="w">        </code><code class="n">spawn</code><code class="p">(</code><code class="k">move</code><code class="w"> </code><code class="o">||</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">            </code><code class="k">for</code><code class="w"> </code><code class="n">item</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="bp">self</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">                </code><code class="k">if</code><code class="w"> </code><code class="n">sender</code><code class="p">.</code><code class="n">send</code><code class="p">(</code><code class="n">item</code><code class="p">).</code><code class="n">is_err</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">                    </code><code class="k">break</code><code class="p">;</code><code class="w"/>
+<code class="w">                </code><code class="p">}</code><code class="w"/>
+<code class="w">            </code><code class="p">}</code><code class="w"/>
+<code class="w">        </code><code class="p">});</code><code class="w"/>
+
+<code class="w">        </code><code class="c1">// Return an iterator that pulls values from the channel.</code>
+<code class="w">        </code><code class="n">receiver</code><code class="p">.</code><code class="n">into_iter</code><code class="p">()</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>The <code>where</code> clause in this code was determined via a process much like the one described in <a data-type="xref" href="ch11.html#reverse-engineering-bounds">“Reverse-Engineering Bounds”</a>. At first, we just had this:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">impl</code><code class="o">&lt;</code><code class="n">T</code>: <code class="nb">Iterator</code><code class="o">&gt;</code><code class="w"> </code><code class="n">OffThreadExt</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">T</code><code class="w"/></pre>
+
+<p>That is, we wanted the implementation to work for all iterators. Rust was having none of it. Because we’re using <code>spawn</code> to move an iterator of type <code>T</code> to a new thread, we must specify <code>T: Iterator + Send + 'static</code>. Because we’re sending the items back over a channel, we must specify <code>T::Item: Send + 'static</code>. With these changes, Rust was satisfied.</p>
+
+<p>This is Rust’s character in a nutshell: we’re free to add a concurrency power tool to almost every iterator in the language—but not without first understanding and documenting the restrictions that make it safe to use.</p>
+</div></section>
+
+<section data-pdf-bookmark="Beyond Pipelines" data-type="sect2"><div class="sect2" id="beyond-pipelines">
+<h2>Beyond Pipelines</h2>
+
+<p><a contenteditable="false" data-primary="channels" data-secondary="non-pipeline uses" data-type="indexterm" id="idm140543242685168"/>In this section, we used pipelines as our examples because pipelines are a nice, obvious way to use channels. Everyone understands them. They’re concrete, practical, and deterministic. Channels are useful for more than just pipelines, though. They’re also a quick, easy way to offer any asynchronous service to other threads in the same <span class="keep-together">process.</span></p>
+
+<p><a contenteditable="false" data-primary="logging" data-secondary="channels for" data-type="indexterm" id="idm140543242682464"/>For example, suppose you’d like to do logging on its own thread, as in <a data-type="xref" href="#multi-producer-channel-figure">Figure 19-8</a>. Other threads could send log messages to the logging thread over a channel; since you can clone the channel’s <code>Sender</code>, many client threads can have senders that ship log messages to the same logging thread.</p>
+
+<p>Running a service like logging on its own thread has advantages. The logging thread can rotate log files whenever it needs to. It doesn’t have to do any fancy coordination with the other threads. Those threads won’t be blocked. Messages will accumulate harmlessly in the channel for a moment until the logging thread gets back to work.</p>
+
+<p>Channels can also be used for cases where one thread sends a request to another thread and needs to get some sort of response back. The first thread’s request can be a struct or tuple that includes a <code>Sender</code>, a sort of self-addressed envelope that the second thread uses to send its reply. This doesn’t mean the interaction must be synchronous. The first thread gets to decide whether to block and wait for the response or use the <code>.try_recv()</code> method to poll for it.</p>
+
+<p>The tools we’ve presented so far—fork-join for highly parallel computation, channels for loosely connecting components—are sufficient for a wide range of applications. But we’re not done.<a contenteditable="false" data-primary="" data-startref="19-concurrency.html13" data-type="indexterm" id="idm140543242676272"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html12" data-type="indexterm" id="idm140543242674896"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html11" data-type="indexterm" id="idm140543242673520"/></p>
+</div></section>
+</div></section>
+
+<section data-pdf-bookmark="Shared Mutable State" data-type="sect1"><div class="sect1" id="shared-mutable-state">
+<h1>Shared Mutable State</h1>
+
+<p><a contenteditable="false" data-primary="concurrency/concurrent programming" data-secondary="shared mutable state" data-type="indexterm" id="C19-concurrency.html23"/><a contenteditable="false" data-primary="shared mutable state" data-type="indexterm" id="C19-concurrency.html24"/>In the months since you published the <code>fern_sim</code> crate in <a data-type="xref" href="ch08.html#crates-and-modules">Chapter 8</a>, your fern simulation software has really taken off. Now you’re creating a multiplayer real-time strategy game in which eight players compete to grow mostly authentic period ferns in a simulated Jurassic landscape. The server for this game is a massively parallel app, with requests pouring in on many threads. How can these threads coordinate to start a game as soon as eight players are available?</p>
+
+<p>The problem to be solved here is that many threads need access to a shared list of players who are waiting to join a game. This data is necessarily both mutable and shared across all threads. If Rust doesn’t have shared mutable state, where does that leave us?</p>
+
+<p>You could solve this by creating a new thread whose whole job is to manage this list. Other threads would communicate with it via channels. Of course, this costs a thread, which has some operating system overhead.</p>
+
+<p>Another option is to use the tools Rust provides for safely sharing mutable data. Such things do exist. They’re low-level primitives that will be familiar to any system programmer who’s worked with threads. In this section, we’ll cover mutexes, read/write locks, condition variables, and atomic integers. Lastly, we’ll show how to implement global mutable variables in Rust.</p>
+
+<section data-pdf-bookmark="What Is a Mutex?" data-type="sect2"><div class="sect2" id="what-is-a-mutex">
+<h2>What Is a Mutex?</h2>
+
+<p><a contenteditable="false" data-primary="mutexes" data-secondary="basics" data-type="indexterm" id="C19-concurrency.html25"/><a contenteditable="false" data-primary="shared mutable state" data-secondary="mutex basics" data-type="indexterm" id="C19-concurrency.html26"/>A <em>mutex</em> (or <em>lock</em>) is used to force multiple threads to take turns when accessing certain data. We’ll introduce Rust’s mutexes in the next section. First, it makes sense to recall what mutexes are like in other languages. A simple use of a mutex in C++ might look like this:</p>
+
+<pre class="cpp" data-code-language="cpp" data-type="programlisting">
+<code class="c1">// C++ code, not Rust</code>
+<code class="kt">void</code> <code class="n">FernEngine</code><code class="o">::</code><code class="n">JoinWaitingList</code><code class="p">(</code><code class="n">PlayerId</code> <code class="n">player</code><code class="p">)</code> <code class="p">{</code>
+    <code class="n">mutex</code><code class="p">.</code><code class="n">Acquire</code><code class="p">();</code>
+
+    <code class="n">waitingList</code><code class="p">.</code><code class="n">push_back</code><code class="p">(</code><code class="n">player</code><code class="p">);</code>
+
+    <code class="c1">// Start a game if we have enough players waiting.</code>
+    <code class="k">if</code> <code class="p">(</code><code class="n">waitingList</code><code class="p">.</code><code class="n">length</code><code class="p">()</code> <code class="o">&gt;=</code> <code class="n">GAME_SIZE</code><code class="p">)</code> <code class="p">{</code>
+        <code class="n">vector</code><code class="o">&lt;</code><code class="n">PlayerId</code><code class="o">&gt;</code> <code class="n">players</code><code class="p">;</code>
+        <code class="n">waitingList</code><code class="p">.</code><code class="n">swap</code><code class="p">(</code><code class="n">players</code><code class="p">);</code>
+        <code class="n">StartGame</code><code class="p">(</code><code class="n">players</code><code class="p">);</code>
+    <code class="p">}</code>
+
+    <code class="n">mutex</code><code class="p">.</code><code class="n">Release</code><code class="p">();</code>
+<code class="p">}</code></pre>
+
+<p><a contenteditable="false" data-primary="critical section" data-type="indexterm" id="idm140543242634656"/>The calls <code>mutex.Acquire()</code> and <code>mutex.Release()</code> mark the beginning and end of a <em>critical section</em> in this code. For each <code>mutex</code> in a program, only one thread can be running inside a critical section at a time. If one thread is in a critical section, all other threads that call <code>mutex.Acquire()</code> will block until the first thread reaches <code>mutex.Release()</code>.</p>
+
+<p>We say that the mutex <em>protects</em> the data: in this case, <code>mutex</code> protects <code>waitingList</code>. It is the programmer’s responsibility, though, to make sure every thread always acquires the mutex before accessing the data, and releases it afterward.</p>
+
+<p>Mutexes are helpful for several reasons:</p>
+
+<ul>
+	<li>
+	<p><a contenteditable="false" data-primary="data races" data-secondary="mutexes and" data-type="indexterm" id="idm140543242519840"/>They prevent <em>data races,</em> situations where racing threads concurrently read and write the same memory. Data races are undefined behavior in C++ and Go. Managed languages like Java and C# promise not to crash, but the results of data races are still (to summarize) nonsense.</p>
+	</li>
+	<li>
+	<p>Even if data races didn’t exist, even if all reads and writes happened one by one in program order, without a mutex the actions of different threads could interleave in arbitrary ways. Imagine trying to write code that works even if other threads modify its data while it’s running. Imagine trying to debug it. It would be like your program was haunted.</p>
+	</li>
+	<li>
+	<p><a contenteditable="false" data-primary="invariants" data-type="indexterm" id="idm140543242515648"/>Mutexes support programming with <em>invariants,</em> rules about the protected data that are true by construction when you set it up and maintained by every critical section.</p>
+	</li>
+</ul>
+
+<p>Of course, all of these are really the same reason: uncontrolled race conditions make programming intractable. Mutexes bring some order to the chaos (though not as much order as channels or fork-join).</p>
+
+<p>However, in most languages, mutexes are very easy to mess up. <a contenteditable="false" data-primary="C++" data-secondary="mutexes" data-type="indexterm" id="idm140543242512544"/>In C++, as in most languages, the data and the lock are separate objects. Ideally, comments explain that every thread must acquire the mutex before touching the data:</p>
+
+<pre class="cpp" data-code-language="cpp" data-type="programlisting">
+<code class="k">class</code> <code class="nc">FernEmpireApp</code> <code class="p">{</code>
+    <code class="p">...</code>
+
+<code class="k">private</code><code class="o">:</code>
+    <code class="c1">// List of players waiting to join a game. Protected by `mutex`.</code>
+    <code class="n">vector</code><code class="o">&lt;</code><code class="n">PlayerId</code><code class="o">&gt;</code> <code class="n">waitingList</code><code class="p">;</code>
+
+    <code class="c1">// Lock to acquire before reading or writing `waitingList`.</code>
+    <code class="n">Mutex</code> <code class="n">mutex</code><code class="p">;</code>
+    <code class="p">...</code>
+<code class="p">};</code></pre>
+
+<p>But even with such nice comments, the compiler can’t enforce safe access here. When a piece of code neglects to acquire the mutex, we get undefined behavior. In practice, this means bugs that are extremely hard to reproduce and fix.</p>
+
+<p><a contenteditable="false" data-primary="Java, object-mutex relationship in" data-type="indexterm" id="idm140543242467152"/>Even in Java, where there is some notional association between objects and mutexes, the relationship does not run very deep. The compiler makes no attempt to enforce it, and in practice, the data protected by a lock is rarely exactly the associated object’s fields. It often includes data in several objects. Locking schemes are still tricky. Comments are still the main tool for enforcing them.<a contenteditable="false" data-primary="" data-startref="19-concurrency.html26" data-type="indexterm" id="idm140543242465632"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html25" data-type="indexterm" id="idm140543242464288"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Mutex&lt;T&gt;" data-type="sect2"><div class="sect2" id="mutex-in-rust">
+<h2>Mutex&lt;T&gt;</h2>
+
+<p><a contenteditable="false" data-primary="mutexes" data-secondary="in Rust" data-type="indexterm" id="idm140543242460752"/><a contenteditable="false" data-primary="shared mutable state" data-secondary="mutex in Rust" data-type="indexterm" id="idm140543242459376"/>Now we’ll show an implementation of the waiting list in Rust. In our Fern Empire game server, each player has a unique ID:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">type</code> <code class="nc">PlayerId</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="kt">u32</code><code class="p">;</code><code class="w"/></pre>
+
+<p>The waiting list is just a collection of players:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">const</code><code class="w"> </code><code class="n">GAME_SIZE</code>: <code class="kt">usize</code> <code class="o">=</code><code class="w"> </code><code class="mi">8</code><code class="p">;</code><code class="w"/>
+
+<code class="sd">/// A waiting list never grows to more than GAME_SIZE players.</code>
+<code class="k">type</code> <code class="nc">WaitingList</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="nb">Vec</code><code class="o">&lt;</code><code class="n">PlayerId</code><code class="o">&gt;</code><code class="p">;</code><code class="w"/></pre>
+
+<p>The waiting list is stored as a field of the <code>FernEmpireApp</code>, a singleton that’s set up in an <code>Arc</code> during server startup. Each thread has an <code>Arc</code> pointing to it. It contains all the shared configuration and other flotsam our program needs. Most of that is read-only. Since the waiting list is both shared and mutable, it must be protected by a <code>Mutex</code>:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">sync</code>::<code class="n">Mutex</code><code class="p">;</code><code class="w"/>
+
+<code class="sd">/// All threads have shared access to this big context struct.</code>
+<code class="k">struct</code> <code class="nc">FernEmpireApp</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="n">waiting_list</code>: <code class="nc">Mutex</code><code class="o">&lt;</code><code class="n">WaitingList</code><code class="o">&gt;</code><code class="p">,</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Unlike C++, in Rust the protected data is stored <em>inside</em> the <code>Mutex</code>. Setting up the <code>Mutex</code> looks like this:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="n">app</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">Arc</code>::<code class="n">new</code><code class="p">(</code><code class="n">FernEmpireApp</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="n">waiting_list</code>: <code class="nc">Mutex</code>::<code class="n">new</code><code class="p">(</code><code class="n">vec</code><code class="o">!</code><code class="p">[]),</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">});</code><code class="w"/></pre>
+
+<p><a contenteditable="false" data-primary="mutexes" data-secondary="creating" data-type="indexterm" id="idm140543242328064"/>Creating a new <code>Mutex</code> looks like creating a new <code>Box</code> or <code>Arc</code>, but while <code>Box</code> and <code>Arc</code> signify heap allocation, <code>Mutex</code> is solely about locking. If you want your <code>Mutex</code> to be allocated in the heap, you have to say so, as we’ve done here by using <code>Arc::new</code> for the whole app and <code>Mutex::new</code> just for the protected data. These types are commonly used together: <code>Arc</code> is handy for sharing things across threads, and <code>Mutex</code> is handy for mutable data that’s shared across threads.</p>
+
+<p>Now we can implement the <code>join_waiting_list</code> method that uses the mutex:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">impl</code><code class="w"> </code><code class="n">FernEmpireApp</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="sd">/// Add a player to the waiting list for the next game.</code>
+<code class="w">    </code><code class="sd">/// Start a new game immediately if enough players are waiting.</code>
+<code class="w">    </code><code class="k">fn</code> <code class="nf">join_waiting_list</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">player</code>: <code class="nc">PlayerId</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="c1">// Lock the mutex and gain access to the data inside.</code>
+<code class="w">        </code><code class="c1">// The scope of `guard` is a critical section.</code>
+<code class="w">        </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">guard</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">waiting_list</code><code class="p">.</code><code class="n">lock</code><code class="p">().</code><code class="n">unwrap</code><code class="p">();</code><code class="w"/>
+
+<code class="w">        </code><code class="c1">// Now do the game logic.</code>
+<code class="w">        </code><code class="n">guard</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="n">player</code><code class="p">);</code><code class="w"/>
+<code class="w">        </code><code class="k">if</code><code class="w"> </code><code class="n">guard</code><code class="p">.</code><code class="n">len</code><code class="p">()</code><code class="w"> </code><code class="o">==</code><code class="w"> </code><code class="n">GAME_SIZE</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">            </code><code class="kd">let</code><code class="w"> </code><code class="n">players</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">guard</code><code class="p">.</code><code class="n">split_off</code><code class="p">(</code><code class="mi">0</code><code class="p">);</code><code class="w"/>
+<code class="w">            </code><code class="bp">self</code><code class="p">.</code><code class="n">start_game</code><code class="p">(</code><code class="n">players</code><code class="p">);</code><code class="w"/>
+<code class="w">        </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>The only way to get at the data is to call the <code>.lock()</code> method:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">guard</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">waiting_list</code><code class="p">.</code><code class="n">lock</code><code class="p">().</code><code class="n">unwrap</code><code class="p">();</code><code class="w"/></pre>
+
+<p><code>self.waiting_list.lock()</code> blocks until the mutex can be obtained. The <code>MutexGuard&lt;WaitingList&gt;</code> value returned by this method call is a thin wrapper around a <code>&amp;mut WaitingList</code>. Thanks to deref coercions, discussed <a data-type="xref" data-xrefstyle="select:labelnumber" href="ch13.html#deref-and-derefmut"/>, we can call <code>WaitingList</code> methods directly on the guard:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="n">guard</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="n">player</code><code class="p">);</code><code class="w"/></pre>
+
+<p>The guard even lets us borrow direct references to the underlying data. Rust’s lifetime system ensures those references can’t outlive the guard itself. There is no way to access the data in a <code>Mutex</code> without holding the lock.</p>
+
+<p>When <code>guard</code> is dropped, the lock is released. Ordinarily that happens at the end of the block, but you can also drop it manually:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">if</code><code class="w"> </code><code class="n">guard</code><code class="p">.</code><code class="n">len</code><code class="p">()</code><code class="w"> </code><code class="o">==</code><code class="w"> </code><code class="n">GAME_SIZE</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">players</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">guard</code><code class="p">.</code><code class="n">split_off</code><code class="p">(</code><code class="mi">0</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="n">drop</code><code class="p">(</code><code class="n">guard</code><code class="p">);</code><code class="w">  </code><code class="c1">// don't keep the list locked while starting a game</code>
+<code class="w">    </code><code class="bp">self</code><code class="p">.</code><code class="n">start_game</code><code class="p">(</code><code class="n">players</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+</div></section>
+
+<section data-pdf-bookmark="mut and Mutex" data-type="sect2"><div class="sect2" id="mut-and-mutex">
+<h2>mut and Mutex</h2>
+
+<p><a contenteditable="false" data-primary="mut (exclusive access)" data-type="indexterm" id="idm140543242155904"/><a contenteditable="false" data-primary="mutexes" data-secondary="mut and" data-type="indexterm" id="idm140543242154800"/><a contenteditable="false" data-primary="shared mutable state" data-secondary="mut and mutex" data-type="indexterm" id="idm140543242153424"/>It may seem odd—certainly it seemed odd to us at first—that our <code>join_waiting_list</code> method doesn’t take <code>self</code> by <code>mut</code> reference. Its type signature is:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">fn</code> <code class="nf">join_waiting_list</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">player</code>: <code class="nc">PlayerId</code><code class="p">)</code><code class="w"/></pre>
+
+<p>The underlying collection, <code>Vec&lt;PlayerId&gt;</code>, <em>does</em> require a <code>mut</code> reference when you call its <code>push</code> method. Its type signature is:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">push</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">,</code><code class="w"> </code><code class="n">item</code>: <code class="nc">T</code><code class="p">)</code><code class="w"/></pre>
+
+<p>And yet this code compiles and runs fine. What’s going on here?</p>
+
+<p>In Rust, <code>mut</code> means <em>exclusive access</em>. Non-<code>mut</code> means <em>shared access</em>.</p>
+
+<p>We’re used to types passing <code>mut</code> access along from the parent to the child, from the container to the contents. You only expect to be able to call <code>mut</code> methods on <code>starships[id].engine</code> if you have a <code>mut</code> reference to <code>starships</code> to begin with (or you own <code>starships</code>, in which case congratulations on being Elon Musk). That’s the default, because if you don’t have exclusive access to the parent, Rust generally has no way of ensuring that you have exclusive access to the child.</p>
+
+<p>But <code>Mutex</code> does have a way: the lock. In fact, a mutex is little more than a way to do exactly this, to provide <em>exclusive</em> (<code>mut</code>) access to the data inside, even though many threads may have <em>shared</em> (non-<code>mut</code>) access to the <code>Mutex</code> itself.</p>
+
+<p>Rust’s type system is telling us what <code>Mutex</code> does. It dynamically enforces exclusive access, something that’s usually done statically, at compile time, by the Rust compiler.</p>
+
+<p>(You may recall that <code>std::cell::RefCell</code> does the same, except without trying to support multiple threads. <code>Mutex</code> and <code>RefCell</code> are both flavors of interior mutability, which we covered <a data-type="xref" data-xrefstyle="select:labelnumber" href="ch09.html#interior-mutability"/>.)</p>
+</div></section>
+
+<section data-pdf-bookmark="Why Mutexes Are Not Always a Good Idea" data-type="sect2"><div class="sect2" id="why-mutexes-are-not-always-a-good-idea">
+<h2>Why Mutexes Are Not Always a Good Idea</h2>
+
+<p><a contenteditable="false" data-primary="mutexes" data-secondary="limitations" data-type="indexterm" id="idm140543241911520"/><a contenteditable="false" data-primary="shared mutable state" data-secondary="mutex limitations" data-type="indexterm" id="idm140543241910144"/>Before we started on mutexes, we presented some approaches to concurrency that might have seemed weirdly easy to use correctly if you’re coming from C++. This is no coincidence: these approaches are designed to provide strong guarantees against the most confusing aspects of concurrent programming. Programs that exclusively use fork-join parallelism are deterministic and can’t deadlock. Programs that use channels are almost as well-behaved. Those that use channels exclusively for pipelining, like our index builder, are deterministic: the timing of message delivery can vary, but it won’t affect the output. And so on. Guarantees about multithreaded programs are nice!</p>
+
+<p>The design of Rust’s <code>Mutex</code> will almost certainly have you using mutexes more systematically and more sensibly than you ever have before. But it’s worth pausing and thinking about what Rust’s safety guarantees can and can’t help with.</p>
+
+<p>Safe Rust code cannot trigger a <em>data race</em>, a specific kind of bug where multiple threads read and write the same memory concurrently, producing meaningless results. This is great: data races are always bugs, and they are not rare in real multithreaded programs.</p>
+
+<p>However, threads that use mutexes are subject to some other problems that Rust doesn’t fix for you:</p>
+
+<ul>
+	<li>
+	<p><a contenteditable="false" data-primary="race conditions" data-type="indexterm" id="idm140543241904336"/>Valid Rust programs can’t have data races, but they can still have other <em>race conditions</em>—situations where a program’s behavior depends on timing among threads and may therefore vary from run to run. Some race conditions are benign. Some manifest as general flakiness and incredibly hard-to-fix bugs. Using mutexes in an unstructured way invites race conditions. It’s up to you to make sure they’re benign.</p>
+	</li>
+	<li>
+	<p>Shared mutable state also affects program design. Where channels serve as an abstraction boundary in your code, making it easy to separate isolated components for testing, mutexes encourage a “just-add-a-method” way of working that can lead to a monolithic blob of interrelated code.</p>
+	</li>
+	<li>
+	<p>Lastly, mutexes are just not as simple as they seem at first, as the next two sections will show.</p>
+	</li>
+</ul>
+
+<p>All of these problems are inherent in the tools. Use a more structured approach when you can; use a <code>Mutex</code> when you must.</p>
+</div></section>
+
+<section data-pdf-bookmark="Deadlock" data-type="sect2"><div class="sect2" id="deadlock">
+<h2>Deadlock</h2>
+
+<p><a contenteditable="false" data-primary="deadlock" data-type="indexterm" id="idm140543241897296"/><a contenteditable="false" data-primary="mutexes" data-secondary="deadlocks and" data-type="indexterm" id="idm140543241896192"/><a contenteditable="false" data-primary="shared mutable state" data-secondary="deadlock" data-type="indexterm" id="idm140543241894816"/><a contenteditable="false" data-primary="threads" data-secondary="deadlock" data-type="indexterm" id="idm140543241893440"/>A thread can deadlock itself by trying to acquire a lock that it’s already holding:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">guard1</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">waiting_list</code><code class="p">.</code><code class="n">lock</code><code class="p">().</code><code class="n">unwrap</code><code class="p">();</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">guard2</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">waiting_list</code><code class="p">.</code><code class="n">lock</code><code class="p">().</code><code class="n">unwrap</code><code class="p">();</code><code class="w">  </code><code class="c1">// deadlock</code></pre>
+
+<p>Suppose the first call to <code>self.waiting_list.lock()</code> succeeds, taking the lock. The second call sees that the lock is held, so it blocks, waiting for it to be released. It will be waiting forever. The waiting thread is the one that’s holding the lock.</p>
+
+<p>To put it another way, the lock in a <code>Mutex</code> is not a recursive lock.</p>
+
+<p>Here the bug is obvious. In a real program, the two <code>lock()</code> calls might be in two different methods, one of which calls the other. The code for each method, taken separately, would look fine. There are other ways to get deadlock, too, involving multiple threads that each acquire multiple mutexes at once. Rust’s borrow system can’t protect you from deadlock. The best protection is to keep critical sections small: get in, do your work, and get out.</p>
+
+<p>It’s also possible to get deadlock with channels. For example, two threads might block, each one waiting to receive a message from the other. However, again, good program design can give you high confidence that this won’t happen in practice. In a pipeline, like our inverted index builder, data flow is acyclic. Deadlock is as unlikely in such a program as in a Unix shell pipeline.</p>
+</div></section>
+
+<section data-pdf-bookmark="Poisoned Mutexes" data-type="sect2"><div class="sect2" id="poisoned-mutexes">
+<h2>Poisoned Mutexes</h2>
+
+<p><a contenteditable="false" data-primary="mutexes" data-secondary="poisoned" data-type="indexterm" id="idm140543241972720"/><a contenteditable="false" data-primary="panic" data-secondary="poisoned mutexes" data-type="indexterm" id="idm140543241971120"/><a contenteditable="false" data-primary="shared mutable state" data-secondary="poisoned mutexes" data-type="indexterm" id="idm140543241876480"/><code>Mutex::lock()</code> returns a <code>Result</code>, for the same reason that <code>JoinHandle::join()</code> does: to fail gracefully if another thread has panicked. When we write <code>handle.join().unwrap()</code>, we’re telling Rust to propagate panic from one thread to another. The idiom <code>mutex.lock().unwrap()</code> is similar.</p>
+
+<p>If a thread panics while holding a <code>Mutex</code>, Rust marks the <code>Mutex</code> as <em>poisoned.</em> Any subsequent attempt to <code>lock</code> the poisoned <code>Mutex</code> will get an error result. Our <code>.unwrap()</code> call tells Rust to panic if that happens, propagating panic from the other thread to this one.</p>
+
+<p>How bad is it to have a poisoned mutex? Poison sounds deadly, but this scenario is not necessarily fatal. As we said in <a data-type="xref" href="ch07.html#error-handling">Chapter 7</a>, panic is safe. One panicking thread leaves the rest of the program in a safe state.</p>
+
+<p>The reason mutexes are poisoned on panic, then, is not for fear of undefined behavior. Rather, the concern is that you’ve probably been programming with invariants. Since your program panicked and bailed out of a critical section without finishing what it was doing, perhaps having updated some fields of the protected data but not others, it’s possible that the invariants are now broken. Rust poisons the mutex to prevent other threads from blundering unwittingly into this broken situation and making it worse. You <em>can</em> still lock a poisoned mutex and access the data inside, with mutual exclusion fully enforced; see the documentation for <code>PoisonError::into_inner()</code>. But you won’t do it by accident.</p>
+</div></section>
+
+<section data-pdf-bookmark="Multi-producer Channels Using Mutexes" data-type="sect2"><div class="sect2" id="multi-producer-channels-using-mutex">
+<h2>Multi-producer Channels Using Mutexes</h2>
+
+<p><a contenteditable="false" data-primary="channels" data-secondary="multi-producer channels using mutex" data-type="indexterm" id="idm140543241864672"/><a contenteditable="false" data-primary="mutexes" data-secondary="multi-producer channels using" data-type="indexterm" id="idm140543241863232"/><a contenteditable="false" data-primary="shared mutable state" data-secondary="multi-producer channels using mutex" data-type="indexterm" id="idm140543241861840"/>We mentioned earlier that Rust’s channels are multiple-producer, single-consumer. Or to put it more concretely, a channel only has one <code>Receiver</code>. We can’t have a thread pool where many threads use a single <code>mpsc</code> channel as a shared worklist.</p>
+
+<p>However, it turns out there is a very simple workaround, using only standard library pieces. We can add a <code>Mutex</code> around the <code>Receiver</code> and share it anyway. Here is a module that does so:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">pub</code><code class="w"> </code><code class="k">mod</code> <code class="nn">shared_channel</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">sync</code>::<code class="p">{</code><code class="n">Arc</code><code class="p">,</code><code class="w"> </code><code class="n">Mutex</code><code class="p">};</code><code class="w"/>
+<code class="w">    </code><code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">sync</code>::<code class="n">mpsc</code>::<code class="p">{</code><code class="n">channel</code><code class="p">,</code><code class="w"> </code><code class="n">Sender</code><code class="p">,</code><code class="w"> </code><code class="n">Receiver</code><code class="p">};</code><code class="w"/>
+
+<code class="w">    </code><code class="sd">/// A thread-safe wrapper around a `Receiver`.</code>
+<code class="w">    </code><code class="cp">#[derive(Clone)]</code><code class="w"/>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="k">struct</code> <code class="nc">SharedReceiver</code><code class="o">&lt;</code><code class="n">T</code><code class="o">&gt;</code><code class="p">(</code><code class="n">Arc</code><code class="o">&lt;</code><code class="n">Mutex</code><code class="o">&lt;</code><code class="n">Receiver</code><code class="o">&lt;</code><code class="n">T</code><code class="o">&gt;&gt;&gt;</code><code class="p">);</code><code class="w"/>
+
+<code class="w">    </code><code class="k">impl</code><code class="o">&lt;</code><code class="n">T</code><code class="o">&gt;</code><code class="w"> </code><code class="nb">Iterator</code><code class="w"> </code><code class="k">for</code><code class="w"> </code><code class="n">SharedReceiver</code><code class="o">&lt;</code><code class="n">T</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="k">type</code> <code class="nc">Item</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">T</code><code class="p">;</code><code class="w"/>
+
+<code class="w">        </code><code class="sd">/// Get the next item from the wrapped receiver.</code>
+<code class="w">        </code><code class="k">fn</code> <code class="nf">next</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nb">Option</code><code class="o">&lt;</code><code class="n">T</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">            </code><code class="kd">let</code><code class="w"> </code><code class="n">guard</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="mf">0.</code><code class="n">lock</code><code class="p">().</code><code class="n">unwrap</code><code class="p">();</code><code class="w"/>
+<code class="w">            </code><code class="n">guard</code><code class="p">.</code><code class="n">recv</code><code class="p">().</code><code class="n">ok</code><code class="p">()</code><code class="w"/>
+<code class="w">        </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+
+<code class="w">    </code><code class="sd">/// Create a new channel whose receiver can be shared across threads.</code>
+<code class="w">    </code><code class="sd">/// This returns a sender and a receiver, just like the stdlib's</code>
+<code class="w">    </code><code class="sd">/// `channel()`, and sometimes works as a drop-in replacement.</code>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="k">fn</code> <code class="nf">shared_channel</code><code class="o">&lt;</code><code class="n">T</code><code class="o">&gt;</code><code class="p">()</code><code class="w"> </code>-&gt; <code class="p">(</code><code class="n">Sender</code><code class="o">&lt;</code><code class="n">T</code><code class="o">&gt;</code><code class="p">,</code><code class="w"> </code><code class="n">SharedReceiver</code><code class="o">&lt;</code><code class="n">T</code><code class="o">&gt;</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="kd">let</code><code class="w"> </code><code class="p">(</code><code class="n">sender</code><code class="p">,</code><code class="w"> </code><code class="n">receiver</code><code class="p">)</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">channel</code><code class="p">();</code><code class="w"/>
+<code class="w">        </code><code class="p">(</code><code class="n">sender</code><code class="p">,</code><code class="w"> </code><code class="n">SharedReceiver</code><code class="p">(</code><code class="n">Arc</code>::<code class="n">new</code><code class="p">(</code><code class="n">Mutex</code>::<code class="n">new</code><code class="p">(</code><code class="n">receiver</code><code class="p">))))</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>We’re using an <code>Arc&lt;Mutex&lt;Receiver&lt;T&gt;&gt;&gt;</code>. The generics have really piled up. This happens more often in Rust than in C++. It might seem this would get confusing, but often, as in this case, just reading off the names gives the meaning in plain English:</p>
+
+<figure><div class="figure"><img alt="an &quot;Arc&lt;Mutex&lt;Receiver&lt;FernEvent&gt;&gt;&gt;&quot; is a (1) heap-allocated, atomically reference-counted,      (2) mutex-protected (3) thing that receives (4) exciting updates about ferns." src="assets/rust_19in01.png"/>
+<h6><span class="label">Figure 19-11. </span> </h6>
+</div></figure>
+</div></section>
+
+<section data-pdf-bookmark="Read/Write Locks (RwLock&lt;T&gt;)" data-type="sect2"><div class="sect2" id="read-write-locks-rwlock">
+<h2>Read/Write Locks (RwLock&lt;T&gt;)</h2>
+
+<p><a contenteditable="false" data-primary="read/write locks (RwLock)" data-type="indexterm" id="idm140543241721488"/><a contenteditable="false" data-primary="RwLock method" data-type="indexterm" id="idm140543241720416"/><a contenteditable="false" data-primary="shared mutable state" data-secondary="read/write locks (RwLock)" data-type="indexterm" id="idm140543241719312"/>Now let’s move on from mutexes to the other thread synchronization tools provided in Rust’s standard library toolkit, <code>std::sync</code>. We’ll move quickly, since a complete discussion of these tools is beyond the scope of this book.</p>
+
+<p>Server programs often have configuration information that is loaded once and rarely ever changes. Most threads only query the configuration, but since the configuration <em>can</em> change—it may be possible to ask the server to reload its configuration from disk, for example—it must be protected by a lock anyway. In cases like this, a mutex can work, but it’s an unnecessary bottleneck. Threads shouldn’t have to take turns querying the configuration if it’s not changing. This is a case for a <em>read/write lock</em>, or <code>RwLock</code>.</p>
+
+<p>Whereas a mutex has a single <code>lock</code> method, a read/write lock has two locking methods, <code>read</code> and <code>write</code>. The <code>RwLock::write</code> method is like <code>Mutex::lock</code>. It waits for exclusive, <code>mut</code> access to the protected data. The <code>RwLock::read</code> method provides non-<code>mut</code> access, with the advantage that it is less likely to have to wait, because many threads can safely read at once. With a mutex, at any given moment, the protected data has only one reader or writer (or none). With a read/write lock, it can have either one writer or many readers, much like Rust references generally.</p>
+
+<p><code>FernEmpireApp</code> might have a struct for configuration, protected by a <code>RwLock</code>:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">sync</code>::<code class="n">RwLock</code><code class="p">;</code><code class="w"/>
+
+<code class="k">struct</code> <code class="nc">FernEmpireApp</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="w">    </code><code class="n">config</code>: <code class="nc">RwLock</code><code class="o">&lt;</code><code class="n">AppConfig</code><code class="o">&gt;</code><code class="p">,</code><code class="w"/>
+<code class="w">    </code><code class="p">...</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Methods that read the configuration would use <code>RwLock::read()</code>:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="sd">/// True if experimental fungus code should be used.</code>
+<code class="k">fn</code> <code class="nf">mushrooms_enabled</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="kt">bool</code> <code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">config_guard</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">config</code><code class="p">.</code><code class="n">read</code><code class="p">().</code><code class="n">unwrap</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="n">config_guard</code><code class="p">.</code><code class="n">mushrooms_enabled</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>The method to reload the configuration would use <code>RwLock::write()</code>:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">fn</code> <code class="nf">reload_config</code><code class="p">(</code><code class="o">&amp;</code><code class="bp">self</code><code class="p">)</code><code class="w"> </code>-&gt; <code class="nc">io</code>::<code class="nb">Result</code><code class="o">&lt;</code><code class="p">()</code><code class="o">&gt;</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">new_config</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">AppConfig</code>::<code class="n">load</code><code class="p">()</code><code class="o">?</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">config_guard</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">config</code><code class="p">.</code><code class="n">write</code><code class="p">().</code><code class="n">unwrap</code><code class="p">();</code><code class="w"/>
+<code class="w">    </code><code class="o">*</code><code class="n">config_guard</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">new_config</code><code class="p">;</code><code class="w"/>
+<code class="w">    </code><code class="nb">Ok</code><code class="p">(())</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Rust, of course, is uniquely well suited to enforce the safety rules on <code>RwLock</code> data. The single-writer-or-multiple-reader concept is the core of Rust’s borrow system. <code>self.config.read()</code> returns a guard that provides non-<code>mut</code> (shared) access to the <code>AppConfig</code>; <code>self.config.write()</code> returns a different type of guard that provides <code>mut</code> (exclusive) access.</p>
+</div></section>
+
+<section class="pagebreak-before" data-pdf-bookmark="Condition Variables (Condvar)" data-type="sect2"><div class="sect2" id="condition-variables-condvar">
+<h2>Condition Variables (Condvar)</h2>
+
+<p><a contenteditable="false" data-primary="conditional variables (Condvar)" data-type="indexterm" id="idm140543241644240"/><a contenteditable="false" data-primary="shared mutable state" data-secondary="conditional variables (Condvar)" data-type="indexterm" id="idm140543241643168"/>Often a thread needs to wait until a certain condition becomes true:</p>
+
+<ul>
+	<li>
+	<p>During server shutdown, the main thread may need to wait until all other threads are finished exiting.</p>
+	</li>
+	<li>
+	<p>When a worker thread has nothing to do, it needs to wait until there is some data to process.</p>
+	</li>
+	<li>
+	<p>A thread implementing a distributed consensus protocol may need to wait until a quorum of peers have responded.</p>
+	</li>
+</ul>
+
+<p>Sometimes, there’s a convenient blocking API for the exact condition we want to wait on, like <code>JoinHandle::join</code> for the server shutdown example. In other cases, there is no built-in blocking API. Programs can use <em>condition variables</em> to build their own. In Rust, the <code>std::sync::Condvar</code> type implements condition variables. A <code>Condvar</code> has methods <code>.wait()</code> and <code>.notify_all()</code>; <code>.wait()</code> blocks until some other thread calls <code>.notify_all()</code>.</p>
+
+<p>There’s a bit more to it than that, since a condition variable is always about a particular true-or-false condition about some data protected by a particular <code>Mutex</code>. This <code>Mutex</code> and the <code>Condvar</code> are therefore related. A full explanation is more than we have room for here, but for the benefit of programmers who have used condition variables before, we’ll show the two key bits of code.</p>
+
+<p>When the desired condition becomes true, we call <code>Condvar::notify_all</code> (or <code>notify_one</code>) to wake up any waiting threads:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="bp">self</code><code class="p">.</code><code class="n">has_data_condvar</code><code class="p">.</code><code class="n">notify_all</code><code class="p">();</code><code class="w"/></pre>
+
+<p>To go to sleep and wait for a condition to become true, we use <code>Condvar::wait()</code>:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">while</code><code class="w"> </code><code class="o">!</code><code class="n">guard</code><code class="p">.</code><code class="n">has_data</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">guard</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="bp">self</code><code class="p">.</code><code class="n">has_data_condvar</code><code class="p">.</code><code class="n">wait</code><code class="p">(</code><code class="n">guard</code><code class="p">).</code><code class="n">unwrap</code><code class="p">();</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>This <code>while</code> loop is a standard idiom for condition variables. However, the signature of <code>Condvar::wait</code> is unusual. It takes a <code>MutexGuard</code> object by value, consumes it, and returns a new <code>MutexGuard</code> on success. This captures the intuition that the <code>wait</code> method releases the mutex, then reacquires it before returning. Passing the <code>MutexGuard</code> by value is a way of saying, “I bestow upon you, <code>.wait()</code> method, my exclusive authority to release the mutex.”</p>
+</div></section>
+
+<section class="pagebreak-before" data-pdf-bookmark="Atomics" data-type="sect2"><div class="sect2" id="atomics">
+<h2>Atomics</h2>
+
+<p><a contenteditable="false" data-primary="atomic types" data-type="indexterm" id="idm140543241230080"/><a contenteditable="false" data-primary="shared mutable state" data-secondary="atomics" data-type="indexterm" id="idm140543241228976"/>The <code>std::sync::atomic</code> module contains atomic types for lock-free concurrent programming. These types are basically the same as Standard C++ atomics:</p>
+
+<ul>
+	<li>
+	<p><code>AtomicIsize</code> and <code>AtomicUsize</code> are shared integer types corresponding to the single-threaded <code>isize</code> and <code>usize</code> types.</p>
+	</li>
+	<li>
+	<p>An <code>AtomicBool</code> is a shared <code>bool</code> value.</p>
+	</li>
+	<li>
+	<p>An <code>AtomicPtr&lt;T&gt;</code> is a shared value of the unsafe pointer type <code>*mut T</code>.</p>
+	</li>
+</ul>
+
+<p>The proper use of atomic data is beyond the scope of this book. Suffice it to say that multiple threads can read and write an atomic value at once without causing data races.</p>
+
+<p>Instead of the usual arithmetic and logical operators, atomic types expose methods that perform <em>atomic operations,</em> individual loads, stores, exchanges, and arithmetic operations that happen safely, as a unit, even if other threads are also performing atomic operations that touch the same memory location. Incrementing an <code>AtomicIsize</code> named <code>atom</code> looks like this:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">sync</code>::<code class="n">atomic</code>::<code class="n">Ordering</code><code class="p">;</code><code class="w"/>
+
+<code class="n">atom</code><code class="p">.</code><code class="n">fetch_add</code><code class="p">(</code><code class="mi">1</code><code class="p">,</code><code class="w"> </code><code class="n">Ordering</code>::<code class="n">SeqCst</code><code class="p">);</code><code class="w"/></pre>
+
+<p>These methods may compile to specialized machine language instructions. On the x86-64 architecture, this <code>.fetch_add()</code> call compiles to a <code>lock incq</code> instruction, where an ordinary <code>n += 1</code> might compile to a plain <code>incq</code> instruction or any number of variations on that theme. The Rust compiler also has to forgo some optimizations around the atomic operation, since—unlike a normal load or store—it’s legitimately observable by other threads right away.</p>
+
+<p><a contenteditable="false" data-primary="memory ordering" data-type="indexterm" id="idm140543241196048"/>The argument <code>Ordering::SeqCst</code> is a <em>memory ordering.</em> Memory orderings are something like transaction isolation levels in a database. They tell the system how much you care about such philosophical notions as causes preceding effects and time not having loops, as opposed to performance. Memory orderings are crucial to program correctness, and they are tricky to understand and reason about. Happily, the performance penalty for choosing sequential consistency, the strictest memory ordering, is often quite low—unlike the performance penalty for putting a SQL database into <code>SERIALIZABLE</code> mode. So when in doubt, use <code>Ordering::SeqCst</code>. Rust inherits several other memory orderings from Standard C++ atomics, with various weaker guarantees about being and time. We won’t discuss them here.</p>
+
+<p><a contenteditable="false" data-primary="cancellation, atomics and" data-type="indexterm" id="idm140543241192080"/>One simple use of atomics is for cancellation. Suppose we have a thread that’s doing some long-running computation, such as rendering a video, and we would like to be able to cancel it asynchronously. The problem is to communicate to the thread that we want it to shut down. We can do this via a shared <code>AtomicBool</code>:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">sync</code>::<code class="n">atomic</code>::<code class="p">{</code><code class="n">AtomicBool</code><code class="p">,</code><code class="w"> </code><code class="n">Ordering</code><code class="p">};</code><code class="w"/>
+
+<code class="kd">let</code><code class="w"> </code><code class="n">cancel_flag</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">Arc</code>::<code class="n">new</code><code class="p">(</code><code class="n">AtomicBool</code>::<code class="n">new</code><code class="p">(</code><code class="kc">false</code><code class="p">));</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">worker_cancel_flag</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">cancel_flag</code><code class="p">.</code><code class="n">clone</code><code class="p">();</code><code class="w"/></pre>
+
+<p>This code creates two <code>Arc&lt;AtomicBool&gt;</code> smart pointers that point to the same heap-allocated <code>AtomicBool</code>, whose initial value is <code>false</code>. The first, named <code>cancel_flag</code>, will stay in the main thread. The second, <code>worker_cancel_flag</code>, will be moved to the worker thread.</p>
+
+<p>Here is the code for the worker:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="n">worker_handle</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">spawn</code><code class="p">(</code><code class="k">move</code><code class="w"> </code><code class="o">||</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">pixel</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">animation</code><code class="p">.</code><code class="n">pixels_mut</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="n">render</code><code class="p">(</code><code class="n">pixel</code><code class="p">);</code><code class="w"> </code><code class="c1">// ray-tracing - this takes a few microseconds</code>
+<code class="w">        </code><code class="k">if</code><code class="w"> </code><code class="n">worker_cancel_flag</code><code class="p">.</code><code class="n">load</code><code class="p">(</code><code class="n">Ordering</code>::<code class="n">SeqCst</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">            </code><code class="k">return</code><code class="w"> </code><code class="nb">None</code><code class="p">;</code><code class="w"/>
+<code class="w">        </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="nb">Some</code><code class="p">(</code><code class="n">animation</code><code class="p">)</code><code class="w"/>
+<code class="p">});</code><code class="w"/></pre>
+
+<p>After rendering each pixel, the thread checks the value of the flag by calling its <code>.load()</code> method:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="n">worker_cancel_flag</code><code class="p">.</code><code class="n">load</code><code class="p">(</code><code class="n">Ordering</code>::<code class="n">SeqCst</code><code class="p">)</code><code class="w"/></pre>
+
+<p>If in the main thread we decide to cancel the worker thread, we store <code>true</code> in the <code>AtomicBool</code>, then wait for the thread to exit:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="c1">// Cancel rendering.</code>
+<code class="n">cancel_flag</code><code class="p">.</code><code class="n">store</code><code class="p">(</code><code class="kc">true</code><code class="p">,</code><code class="w"> </code><code class="n">Ordering</code>::<code class="n">SeqCst</code><code class="p">);</code><code class="w"/>
+
+<code class="c1">// Discard the result, which is probably `None`.</code>
+<code class="n">worker_handle</code><code class="p">.</code><code class="n">join</code><code class="p">().</code><code class="n">unwrap</code><code class="p">();</code><code class="w"/></pre>
+
+<p>Of course, there are other ways to implement this. The <code>AtomicBool</code> here could be replaced with a <code>Mutex&lt;bool&gt;</code> or a channel. The main difference is that atomics have minimal overhead. Atomic operations never use system calls. A load or store often compiles to a single CPU instruction.</p>
+
+<p>Atomics are a form of interior mutability, like <code>Mutex</code> or <code>RwLock</code>, so their methods take <code>self</code> by shared (non-<code>mut</code>) reference. This makes them useful as simple global <span class="keep-together">variables.</span></p>
+</div></section>
+
+<section data-pdf-bookmark="Global Variables" data-type="sect2"><div class="sect2" id="global-variables">
+<h2>Global Variables</h2>
+
+<p><a contenteditable="false" data-primary="global variables" data-type="indexterm" id="idm140543240910176"/><a contenteditable="false" data-primary="shared mutable state" data-secondary="global variables" data-type="indexterm" id="idm140543240909072"/><a contenteditable="false" data-primary="variables" data-secondary="global" data-type="indexterm" id="idm140543240907696"/>Suppose we are writing networking code. We would like to have a global variable,
+a counter that we increment every time we serve a packet:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="sd">/// Number of packets the server has successfully handled.</code>
+<code class="k">static</code><code class="w"> </code><code class="n">PACKETS_SERVED</code>: <code class="kt">usize</code> <code class="o">=</code><code class="w"> </code><code class="mi">0</code><code class="p">;</code><code class="w"/></pre>
+
+<p>This compiles fine. There’s just one problem. <code>PACKETS_SERVED</code> is not mutable, so we can never change it.</p>
+
+<p>Rust does everything it reasonably can to discourage global mutable state. Constants declared with <code>const</code> are, of course, immutable. Static variables are also immutable by default, so there is no way to get a <code>mut</code> reference to one. <a contenteditable="false" data-primary="static (value)" data-type="indexterm" id="idm140543240898784"/>A <code>static</code> can be declared <code>mut</code>, but then accessing it is unsafe. Rust’s insistence on thread safety is a major reason for all of these rules.</p>
+
+<p>Global mutable state also has unfortunate software engineering consequences: it tends to make the various parts of a program more tightly coupled, harder to test, and harder to change later. Still, in some cases there’s just no reasonable alternative, so we had better find a safe way to declare mutable static variables.</p>
+
+<p>The simplest way to support incrementing <code>PACKETS_SERVED</code>, while keeping it thread-safe, is to make it an atomic integer:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">sync</code>::<code class="n">atomic</code>::<code class="p">{</code><code class="n">AtomicUsize</code><code class="p">,</code><code class="w"> </code><code class="n">ATOMIC_USIZE_INIT</code><code class="p">};</code><code class="w"/>
+
+<code class="k">static</code><code class="w"> </code><code class="n">PACKETS_SERVED</code>: <code class="nc">AtomicUsize</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">ATOMIC_USIZE_INIT</code><code class="p">;</code><code class="w"/>
+</pre>
+
+<p>The constant <code>ATOMIC_USIZE_INIT</code> is an <code>AtomicUsize</code> with the value <code>0</code>. We use this constant instead of the expression <code>AtomicUsize::new(0)</code> because the initial value of a static must be a constant; as of Rust 1.17, method calls are not allowed. Similarly, <code>ATOMIC_ISIZE_INIT</code> is an <code>AtomicIsize</code> zero, and <code>ATOMIC_BOOL_INIT</code> is an <code>AtomicBool</code> with the value <code>false</code>.</p>
+
+<p>Once this static is declared, incrementing the packet count is straightforward:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="n">PACKETS_SERVED</code><code class="p">.</code><code class="n">fetch_add</code><code class="p">(</code><code class="mi">1</code><code class="p">,</code><code class="w"> </code><code class="n">Ordering</code>::<code class="n">SeqCst</code><code class="p">);</code><code class="w"/></pre>
+
+<p>Atomic globals are limited to simple integers and booleans. Still, creating a global variable of any other type amounts to solving the same two problems, both easy:</p>
+
+<ul>
+<li><p>The variable must be made thread-safe somehow, because otherwise it can’t be global: for safety, static variables must be both <code>Sync</code> and non-<code>mut</code>.</p>
+
+<p>Fortunately, we’ve already seen the solution for this problem. Rust has types for safely sharing values that change: <code>Mutex</code>, <code>RwLock</code>, and the atomic types. These types can be modified even when declared as non-<code>mut</code>. It’s what they do. (See <a data-type="xref" href="#mut-and-mutex">“mut and Mutex”</a>.)</p></li>
+
+<li><p>As mentioned above, static initializers can’t call functions. This means that the obvious way to declare a static <code>Mutex</code> doesn’t work:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">static</code><code class="w"> </code><code class="n">HOSTNAME</code>: <code class="nc">Mutex</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="w"> </code><code class="o">=</code><code class="w"/>
+<code class="w">    </code><code class="n">Mutex</code>::<code class="n">new</code><code class="p">(</code><code class="nb">String</code>::<code class="n">new</code><code class="p">());</code><code class="w">  </code><code class="c1">// error: function call in static</code></pre>
+
+<p>We can use the <code>lazy_static</code> crate to get around this problem.</p></li>
+</ul>
+
+<p>We introduced the <code>lazy_static</code> crate in <a data-type="xref" href="ch17.html#building-regex-values-lazily">“Building Regex Values Lazily”</a>. Defining a variable with the <code>lazy_static!</code> macro lets you use any expression you like to initialize it; it runs the first time the variable is dereferenced, and the value is saved for all subsequent uses.</p>
+
+<p>We can declare a global <code>Mutex</code> with <code>lazy_static</code> like this:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="cp">#[macro_use]</code><code class="w"> </code><code class="k">extern</code><code class="w"> </code><code class="k">crate</code><code class="w"> </code><code class="n">lazy_static</code><code class="p">;</code><code class="w"/>
+
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">sync</code>::<code class="n">Mutex</code><code class="p">;</code><code class="w"/>
+
+<code class="n">lazy_static</code><code class="o">!</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="k">static</code><code class="w"> </code><code class="k">ref</code><code class="w"> </code><code class="n">HOSTNAME</code>: <code class="nc">Mutex</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">Mutex</code>::<code class="n">new</code><code class="p">(</code><code class="nb">String</code>::<code class="n">new</code><code class="p">());</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>The same technique works for <code>RwLock</code> and <code>AtomicPtr</code> variables.</p>
+
+<p>Using <code>lazy_static!</code> imposes a tiny performance cost on each access to the static data. The implementation uses <code>std::sync::Once</code>, a low-level synchronization primitive designed for one-time initialization. Behind the scenes, each time a lazy static is accessed, the program executes an atomic load instruction to check that initialization has already occurred. (<code>Once</code> is rather special-purpose, so we will not cover it in detail here. It is usually more convenient to use <code>lazy_static!</code> instead. However, it is handy for initializing non-Rust libraries; for an example, see <a data-type="xref" href="ch21.html#a-safe-interface-to-libgit2">“A Safe Interface to libgit2”</a>.)<a contenteditable="false" data-primary="" data-startref="19-concurrency.html24" data-type="indexterm" id="idm140543240723728"/><a contenteditable="false" data-primary="" data-startref="19-concurrency.html23" data-type="indexterm" id="idm140543240722352"/></p>
+</div></section>
+</div></section>
+
+<section data-pdf-bookmark="What Hacking Concurrent Code in Rust Is Like" data-type="sect1"><div class="sect1" id="what-hacking-concurrent-code-in-rust-is-like">
+<h1>What Hacking Concurrent Code in Rust Is Like</h1>
+
+<p>We’ve shown three techniques for using threads in Rust: fork-join parallelism, channels, and shared mutable state with locks. Our aim has been to provide a good introduction to the pieces Rust provides, with a focus on how they can fit together into real programs.</p>
+
+<p>Rust insists on safety, so from the moment you decide to write a multithreaded program, the focus is on building safe, structured communication. Keeping threads mostly isolated is a good way to convince Rust that what you’re doing is safe. It happens that isolation is also a good way to make sure what you’re doing is correct and maintainable. Again, Rust guides you toward good programs.</p>
+
+<p>More important, Rust lets you combine techniques and experiment. You can iterate fast: arguing with the compiler gets you up and running correctly a lot faster than debugging data races.<a contenteditable="false" data-primary="" data-startref="19-concurrency.html0" data-type="indexterm" id="idm140543240717728"/></p>
+</div></section>
+</div></section></body></html>

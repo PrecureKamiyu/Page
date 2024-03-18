@@ -1,0 +1,575 @@
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>Ownership</title><link href="epub.css" rel="stylesheet" type="text/css"/>
+<meta content="urn:uuid:3c2eb6f3-32dc-4c19-acd0-9e911067a895" name="Adept.expected.resource"/></head><body data-type="book"><section data-pdf-bookmark="Chapter 4. Ownership" data-type="chapter" epub:type="chapter"><div class="chapter" id="ownership">
+<h1><span class="label">Chapter 4. </span>Ownership</h1>
+
+<blockquote data-type="epigraph" epub:type="epigraph">
+<p>I’ve found that Rust has forced me to learn many of the things that I was slowly learning as ‘good practice’ in C/C++ before I could even compile my code. ...I want to stress that Rust isn’t the kind of language you can learn in a couple days and just deal with the hard/technical/good-practice stuff later. You will be forced to learn strict safety immediately and it will probably feel uncomfortable at first. However in my own experience, this has led me towards feeling like compiling my code actually means something to me again.</p>
+
+<p data-type="attribution"><a href="https://www.quora.com/What-do-C-C++-systems-programmers-think-of-Rust/answer/Mitchell-Nordine">Mitchell Nordine</a></p>
+</blockquote>
+
+<p><a contenteditable="false" data-primary="ownership" data-type="indexterm" id="C04-ownership.html0"/>Rust makes the following pair of promises, both essential to a safe systems programming language:</p>
+
+<ul>
+	<li>
+	<p>You decide the lifetime of each value in your program. Rust frees memory and other resources belonging to a value promptly, at a point under your control.</p>
+	</li>
+	<li>
+	<p><a contenteditable="false" data-primary="dangling pointer" data-type="indexterm" id="idm140543317106976"/>Even so, your program will never use a pointer to an object after it has been freed. Using a <em>dangling pointer</em> is a common mistake in C and C++: if you’re lucky, your program crashes. If you’re unlucky, your program has a security hole. Rust catches these mistakes at compile time.</p>
+	</li>
+</ul>
+
+<p>C and C++ keep the first promise: you can call <code>free</code> or <code>delete</code> on any object in the dynamically allocated heap you like, whenever you like. But in exchange, the second promise is set aside: it is entirely your responsibility to ensure that no pointer to the value you freed is ever used. There’s ample empirical evidence that this is a difficult responsibility to meet: pointer misuse has been a common culprit in public databases of reported security problems for as long as that data has been collected.</p>
+
+<p><a contenteditable="false" data-primary="garbage collection" data-secondary="pointers and" data-type="indexterm" id="idm140543317102672"/>Plenty of languages fulfill the second promise using garbage collection, automatically freeing objects only when all reachable pointers to them are gone. But in exchange, you relinquish control to the collector over exactly when objects get freed. In general, garbage collectors are surprising beasts, and understanding why memory wasn’t freed when you expected can be a challenge. And if you’re working with objects that represent files, network connections, or other operating system resources, not being able to trust that they’ll be freed at the time you intended, and their underlying resources cleaned up along with them, is a disappointment.</p>
+
+<p>None of these compromises are acceptable for Rust: the programmer should have control over values’ lifetimes, <em>and</em> the language should be safe. But this is a pretty well-explored area of language design. You can’t make major improvements without some fundamental changes.</p>
+
+<p><a contenteditable="false" data-primary="pointers, Rust's restrictions on" data-type="indexterm" id="idm140543317099072"/>Rust breaks the deadlock in a surprising way: by restricting how your programs can use pointers. This chapter and the next are devoted to explaining exactly what these restrictions are and why they work. For now, suffice it to say that some common structures you are accustomed to using may not fit within the rules, and you’ll need to look for alternatives. But the net effect of these restrictions is to bring just enough order to the chaos to allow Rust’s compile-time checks to verify that your program is free of memory safety errors: dangling pointers, double frees, using uninitialized memory, and so on. At runtime, your pointers are simple addresses in memory, just as they would be in C and C++. The difference is that your code has been proven to use them safely.</p>
+
+<p><a contenteditable="false" data-primary="concurrency/concurrent programming" data-secondary="Rust's support for" data-type="indexterm" id="idm140543317096784"/>These same rules also form the basis of Rust’s support for safe concurrent programming. Using Rust’s carefully designed threading primitives, the rules that ensure your code uses memory correctly also serve to prove that it is free of data races. A bug in a Rust program cannot cause one thread to corrupt another’s data, introducing hard-to-reproduce failures in unrelated parts of the system. The nondeterministic behavior inherent in multithreaded code is isolated to those features designed to handle it—mutexes, message channels, atomic values, and so on—rather than appearing in ordinary memory references. Multithreaded code in C and C++ has earned its ugly reputation, but Rust rehabilitates it quite nicely.</p>
+
+<p>Rust’s radical wager, the claim on which it stakes its success, and that forms the root of the language, is that even with these restrictions in place, you’ll find the language more than flexible enough for almost every task, and that the benefits—the elimination of broad classes of memory management and concurrency bugs—will justify the adaptations you’ll need to make to your style. The authors of this book are bullish on Rust exactly because of our extensive experience with C and C++. For us, Rust’s deal is a no-brainer.</p>
+
+<p>Rust’s rules are probably unlike what you’ve seen in other programming languages. Learning how to work with them and turn them to your advantage is, in our opinion, the central challenge of learning Rust. In this chapter, we’ll first motivate Rust’s rules by showing how the same underlying issues play out in other languages. Then, we’ll explain Rust’s rules in detail. Finally, we’ll talk about some exceptions and almost-exceptions.</p>
+
+<section data-pdf-bookmark="Ownership" data-type="sect1"><div class="sect1" id="ownership-1">
+<h1>Ownership</h1>
+
+<p><a contenteditable="false" data-primary="ownership" data-secondary="basics" data-type="indexterm" id="C04-ownership.html1"/>If you’ve read much C or C++ code, you’ve probably come across a comment saying that an instance of some class <em>owns</em> some other object that it points to. This generally means that the owning object gets to decide when to free the owned object: when the owner is destroyed, it destroys its possessions along with it.</p>
+
+<p>For example, suppose you write the following C++ code:</p>
+
+<pre class="cpp" data-code-language="cpp" data-type="programlisting">
+<code class="n">std</code><code class="o">::</code><code class="n">string</code> <code class="n">s</code> <code class="o">=</code> <code class="s">"frayed knot"</code><code class="p">;</code></pre>
+
+<p>The string <code>s</code> is usually represented in memory as shown in <a data-type="xref" href="#fig0401">Figure 4-1</a>.</p>
+
+<figure><div class="figure" id="fig0401"><img alt="a std::string's representation in memory" src="assets/rust_04in01.png"/>
+<h6><span class="label">Figure 4-1. </span>A C++ std::string value on the stack, pointing to its heap-allocated buffer</h6>
+</div></figure>
+
+<p>Here, the actual <code>std::string</code> object itself is always exactly three words long, comprising a pointer to a heap-allocated buffer, the buffer’s overall capacity (that is, how large the text can grow before the string must allocate a larger buffer to hold it), and the length of the text it holds now. These are fields private to the <code>std::string</code> class, not accessible to the string’s users.</p>
+
+<p>A <code>std::string</code> owns its buffer: when the program destroys the string, the string’s destructor frees the buffer. In the past, some C++ libraries shared a single buffer among several <code>std::string</code> values, using a reference count to decide when the buffer should be freed. Newer versions of the C++ specification effectively preclude that representation; all modern C++ libraries use the approach shown here. In these situations it’s generally understood that, although it’s fine for other code to create temporary pointers to the owned memory, it is that code’s responsibility to make sure its pointers are gone before the owner decides to destroy the owned object. You can create a pointer to a character living in a <code>std::string</code>’s buffer, but when the string is destroyed, your pointer becomes invalid, and it’s up to you to make sure you don’t use it anymore. The owner determines the lifetime of the owned, and everyone else must respect its decisions.</p>
+
+<p>Rust takes this principle out of the comments and makes it explicit in the language. In Rust, every value has a single owner that determines its lifetime. <a contenteditable="false" data-primary="dropping values" data-secondary="and ownership" data-type="indexterm" id="idm140543317069760"/>When the owner is freed—<em>dropped</em>, in Rust terminology—the owned value is dropped too. These rules are meant to make it easy for you to find any given value’s lifetime simply by inspecting the code, giving you the control over its lifetime that a systems language should provide.</p>
+
+<p>A variable owns its value. When control leaves the block in which the variable is declared, the variable is dropped, so its value is dropped along with it. For example:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">fn</code> <code class="nf">print_padovan</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">padovan</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[</code><code class="mi">1</code><code class="p">,</code><code class="mi">1</code><code class="p">,</code><code class="mi">1</code><code class="p">];</code><code class="w">  </code><code class="c1">// allocated here</code>
+<code class="w">    </code><code class="k">for</code><code class="w"> </code><code class="n">i</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="mi">3</code><code class="p">..</code><code class="mi">10</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">        </code><code class="kd">let</code><code class="w"> </code><code class="n">next</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">padovan</code><code class="p">[</code><code class="n">i</code><code class="o">-</code><code class="mi">3</code><code class="p">]</code><code class="w"> </code><code class="o">+</code><code class="w"> </code><code class="n">padovan</code><code class="p">[</code><code class="n">i</code><code class="o">-</code><code class="mi">2</code><code class="p">];</code><code class="w"/>
+<code class="w">        </code><code class="n">padovan</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="n">next</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="p">}</code><code class="w"/>
+<code class="w">    </code><code class="n">println</code><code class="o">!</code><code class="p">(</code><code class="s">"P(1..10) = {:?}"</code><code class="p">,</code><code class="w"> </code><code class="n">padovan</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w">                                   </code><code class="c1">// dropped here</code></pre>
+
+<p>The type of the variable <code>padovan</code> is <code>std::vec::Vec&lt;i32&gt;</code>, a vector of 32-bit integers. In memory, the final value of <code>padovan</code> will look something like <a data-type="xref" href="#fig0402">Figure 4-2</a>.</p>
+
+<figure><div class="figure" id="fig0402"><img alt="a Vec&lt;i32&gt;'s representation in memory" src="assets/rust_04in02.png"/>
+<h6><span class="label">Figure 4-2. </span>A Vec 32 on the stack, pointing to its buffer in the heap</h6>
+</div></figure>
+
+<p>This is very similar to the C++ <code>std::string</code> we showed earlier, except that the elements in the buffer are 32-bit values, not characters. Note that the words holding <code>padovan</code>’s pointer, capacity, and length live directly in the stack frame of the <code>print_padovan</code> function; only the vector’s buffer is allocated on the heap.</p>
+
+<p>As with the string <code>s</code> earlier, the vector owns the buffer holding its elements. When the variable <code>padovan</code> goes out of scope at the end of the function, the program drops the vector. And since the vector owns its buffer, the buffer goes with it.</p>
+
+<p><a contenteditable="false" data-primary="Box&lt;T&gt;" data-type="indexterm" id="idm140543316936320"/>Rust’s <code>Box</code> type serves as another example of ownership. A <code>Box&lt;T&gt;</code> is a pointer to a value of type <code>T</code> stored on the heap. Calling <code>Box::new(v)</code> allocates some heap space, moves the value <code>v</code> into it, and returns a <code>Box</code> pointing to the heap space. Since a <code>Box</code> owns the space it points to, when the <code>Box</code> is dropped, it frees the space too.</p>
+
+<p>For example, you can allocate a tuple in the heap like so:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">point</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="nb">Box</code>::<code class="n">new</code><code class="p">((</code><code class="mf">0.625</code><code class="p">,</code><code class="w"> </code><code class="mf">0.5</code><code class="p">));</code><code class="w">  </code><code class="c1">// point allocated here</code>
+<code class="w">    </code><code class="kd">let</code><code class="w"> </code><code class="n">label</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">format</code><code class="o">!</code><code class="p">(</code><code class="s">"{:?}"</code><code class="p">,</code><code class="w"> </code><code class="n">point</code><code class="p">);</code><code class="w">  </code><code class="c1">// label allocated here</code>
+<code class="w">    </code><code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">label</code><code class="p">,</code><code class="w"> </code><code class="s">"(0.625, 0.5)"</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w">                                        </code><code class="c1">// both dropped here</code></pre>
+
+<p>When the program calls <code>Box::new</code>, it allocates space for a tuple of two <code>f64</code> values on the heap, moves its argument <code>(0.625, 0.5)</code> into that space, and returns a pointer to it. By the time control reaches the call to <code>assert_eq!</code>, the stack frame looks like <a data-type="xref" href="#fig0403">Figure 4-3</a>.</p>
+
+<figure><div class="figure" id="fig0403"><img alt="a point and a string in memory" src="assets/rust_04in03.png"/>
+<h6><span class="label">Figure 4-3. </span>Two local variables, each owning memory in the heap</h6>
+</div></figure>
+
+<p>The stack frame itself holds the variables <code>point</code> and <code>label</code>, each of which refers to a heap allocation that it owns. When they are dropped, the allocations they own are freed along with them.</p>
+
+<p>Just as variables own their values, structs own their fields; and tuples, arrays, and vectors own their elements:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">struct</code> <code class="nc">Person</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">name</code>: <code class="nb">String</code><code class="p">,</code><code class="w"> </code><code class="n">birth</code>: <code class="kt">i32</code> <code class="p">}</code><code class="w"/>
+
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">composers</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="nb">Vec</code>::<code class="n">new</code><code class="p">();</code><code class="w"/>
+<code class="n">composers</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="n">Person</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">name</code>: <code class="s">"Palestrina"</code><code class="p">.</code><code class="n">to_string</code><code class="p">(),</code><code class="w"/>
+<code class="w">                        </code><code class="n">birth</code>: <code class="mi">1525</code><code class="w"> </code><code class="p">});</code><code class="w"/>
+<code class="n">composers</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="n">Person</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">name</code>: <code class="s">"Dowland"</code><code class="p">.</code><code class="n">to_string</code><code class="p">(),</code><code class="w"/>
+<code class="w">                        </code><code class="n">birth</code>: <code class="mi">1563</code><code class="w"> </code><code class="p">});</code><code class="w"/>
+<code class="n">composers</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="n">Person</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">name</code>: <code class="s">"Lully"</code><code class="p">.</code><code class="n">to_string</code><code class="p">(),</code><code class="w"/>
+<code class="w">                        </code><code class="n">birth</code>: <code class="mi">1632</code><code class="w"> </code><code class="p">});</code><code class="w"/>
+<code class="k">for</code><code class="w"> </code><code class="n">composer</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="o">&amp;</code><code class="n">composers</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">println</code><code class="o">!</code><code class="p">(</code><code class="s">"{}, born {}"</code><code class="p">,</code><code class="w"> </code><code class="n">composer</code><code class="p">.</code><code class="n">name</code><code class="p">,</code><code class="w"> </code><code class="n">composer</code><code class="p">.</code><code class="n">birth</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>Here, <code>composers</code> is a <code>Vec&lt;Person&gt;</code>, a vector of structs, each of which holds a string and a number. In memory, the final value of <code>composers</code> looks like <a data-type="xref" href="#fig0404">Figure 4-4</a>.</p>
+
+<figure><div class="figure" id="fig0404"><img alt="a complex structure in memory" src="assets/rust_04in04.png"/>
+<h6><span class="label">Figure 4-4. </span>A more complex tree of ownership</h6>
+</div></figure>
+
+<p>There are many ownership relationships here, but each one is pretty straightforward: <code>composers</code> owns a vector; the vector owns its elements, each of which is a <code>Person</code> structure; each structure owns its fields; and the string field owns its text. When control leaves the scope in which <code>composers</code> is declared, the program drops its value, and takes the entire arrangement with it. If there were other sorts of collections in the picture—a <code>HashMap</code>, perhaps, or a <code>BTreeSet</code>—the story would be the same.</p>
+
+<p>At this point, take a step back and consider the consequences of the ownership relations we’ve presented so far. Every value has a single owner, making it easy to decide when to drop it. But a single value may own many other values: for example, the vector <code>composers</code> owns all of its elements. And those values may own other values in turn: each element of <code>composers</code> owns a string, which owns its text.</p>
+
+<p><a contenteditable="false" data-primary="trees" data-type="indexterm" id="idm140543316698128"/>It follows that the owners and their owned values form <em>trees</em>: your owner is your parent, and the values you own are your children. And at the ultimate root of each tree is a variable; when that variable goes out of scope, the entire tree goes with it. We can see such an ownership tree in the diagram for <code>composers</code>: it’s not a “tree” in the sense of a search tree data structure, or an HTML document made from DOM elements. Rather, we have a tree built from a mixture of types, with Rust’s single-owner rule forbidding any rejoining of structure that could make the arrangement more complex than a tree. Every value in a Rust program is a member of some tree, rooted in some variable.</p>
+
+<p><a contenteditable="false" data-primary="dropping values" data-secondary="in Rust" data-type="indexterm" id="idm140543316695056"/>Rust programs don’t usually explicitly drop values at all, in the way C and C++ programs would use <code>free</code> and <code>delete</code>. The way to drop a value in Rust is to remove it from the ownership tree somehow: by leaving the scope of a variable, or deleting an element from a vector, or something of that sort. At that point, Rust ensures the value is properly dropped, along with everything it owns.</p>
+
+<p>In a certain sense, Rust is less powerful than other languages: every other practical programming language lets you build arbitrary graphs of objects that point to each other in whatever way you see fit. But it is exactly because Rust is less powerful that the analyses the language can carry out on your programs can be more powerful. Rust’s safety guarantees are possible exactly because the relationships it may encounter in your code are more tractable. This is part of Rust’s “radical wager” we mentioned earlier: in practice, Rust claims, there is usually more than enough flexibility in how one goes about solving a problem to ensure that at least a few perfectly fine solutions fall within the restrictions the language imposes.</p>
+
+<p>That said, the story we’ve told so far is still much too rigid to be usable. Rust extends this picture in several ways:</p>
+
+<ul>
+	<li>
+	<p>You can move values from one owner to another. This allows you to build, rearrange, and tear down the tree.</p>
+	</li>
+	<li>
+	<p>The standard library provides the reference-counted pointer types <code>Rc</code> and <code>Arc</code>, which allow values to have multiple owners, under some restrictions.</p>
+	</li>
+	<li>
+	<p>You can “borrow a reference” to a value; references are nonowning pointers, with limited lifetimes.</p>
+	</li>
+</ul>
+
+<p>Each of these strategies contributes flexibility to the ownership model, while still upholding Rust’s promises. We’ll explain each one in turn, with references covered in the next chapter.<a contenteditable="false" data-primary="" data-startref="04-ownership.html1" data-type="indexterm" id="idm140543316685776"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Moves" data-type="sect1"><div class="sect1" id="moves">
+<h1>Moves</h1>
+
+<p><a contenteditable="false" data-primary="moves" data-type="indexterm" id="C04-ownership.html2"/><a contenteditable="false" data-primary="ownership" data-secondary="moves" data-type="indexterm" id="C04-ownership.html3"/>In Rust, for most types, operations like assigning a value to a variable, passing it to a function, or returning it from a function don’t copy the value: they <em>move</em> it. The source relinquishes ownership of the value to the destination, and becomes uninitialized; the destination now controls the value’s lifetime. Rust programs build up and tear down complex structures one value at a time, one move at a time.</p>
+
+<p>You may be surprised that Rust would change the meaning of such fundamental operations; surely assignment is something that should be pretty well nailed down at this point in history. <a contenteditable="false" data-primary="assignment" data-secondary="in Python" data-type="indexterm" id="C04-ownership.html4"/>However, if you look closely at how different languages have chosen to handle assignment, you’ll see that there’s actually significant variation from one school to another. The comparison also makes the meaning and consequences of Rust’s choice easier to see.</p>
+
+<p>Consider the following Python code:</p>
+
+<pre class="python" data-code-language="python" data-type="programlisting">
+<code class="n">s</code> <code class="o">=</code> <code class="p">[</code><code class="s1">'udon'</code><code class="p">,</code> <code class="s1">'ramen'</code><code class="p">,</code> <code class="s1">'soba'</code><code class="p">]</code>
+<code class="n">t</code> <code class="o">=</code> <code class="n">s</code>
+<code class="n">u</code> <code class="o">=</code> <code class="n">s</code></pre>
+
+<p>Each Python object carries a reference count, tracking the number of values that are currently referring to it. So after the assignment to <code>s</code>, the state of the program looks like <a data-type="xref" href="#fig0405">Figure 4-5</a> (note that some fields are left out).</p>
+
+<figure><div class="figure" id="fig0405"><img alt="Python list, with a single reference" src="assets/rust_04in05.png"/>
+<h6><span class="label">Figure 4-5. </span>How Python represents a list of strings in memory</h6>
+</div></figure>
+
+<p>Since only <code>s</code> is pointing to the list, the list’s reference count is 1; and since the list is the only object pointing to the strings, each of their reference counts is also 1.</p>
+
+<p class="pagebreak-before">What happens when the program executes the assignments to <code>t</code> and <code>u</code>? Python implements assignment simply by making the destination point to the same object as the source, and incrementing the object’s reference count. So the final state of the program is something like <a data-type="xref" href="#fig0406">Figure 4-6</a>.</p>
+
+<figure><div class="figure" id="fig0406"><img alt="cartoon of Python list" src="assets/rust_04in06.png"/>
+<h6><span class="label">Figure 4-6. </span>The result of assigning s to both t and u in Python</h6>
+</div></figure>
+
+<p>Python has copied the pointer from <code>s</code> into <code>t</code> and <code>u</code>, and updated the list’s reference count to 3. Assignment in Python is cheap, but because it creates a new reference to the object, we must maintain reference counts to know when we can free the value.</p>
+
+<p><a contenteditable="false" data-primary="C++" data-secondary="assignment in" data-type="indexterm" id="C04-ownership.html5"/>Now consider the analogous C++ code:</p>
+
+<pre class="cpp" data-code-language="cpp" data-type="programlisting">
+<code class="k">using</code> <code class="k">namespace</code> <code class="n">std</code><code class="p">;</code>
+<code class="n">vector</code><code class="o">&lt;</code><code class="n">string</code><code class="o">&gt;</code> <code class="n">s</code> <code class="o">=</code> <code class="p">{</code> <code class="s">"udon"</code><code class="p">,</code> <code class="s">"ramen"</code><code class="p">,</code> <code class="s">"soba"</code> <code class="p">};</code>
+<code class="n">vector</code><code class="o">&lt;</code><code class="n">string</code><code class="o">&gt;</code> <code class="n">t</code> <code class="o">=</code> <code class="n">s</code><code class="p">;</code>
+<code class="n">vector</code><code class="o">&lt;</code><code class="n">string</code><code class="o">&gt;</code> <code class="n">u</code> <code class="o">=</code> <code class="n">s</code><code class="p">;</code></pre>
+
+<p>The original value of <code>s</code> looks like <a data-type="xref" href="#fig0407">Figure 4-7</a> in memory.</p>
+
+<figure><div class="figure" id="fig0407"><img alt="C++ vector s in memory" src="assets/rust_04in07.png"/>
+<h6><span class="label">Figure 4-7. </span>How C++ represents a vector of strings in memory</h6>
+</div></figure>
+
+<p>What happens when the program assigns <code>s</code> to <code>t</code> and <code>u</code>? Assigning a <code>std::vector</code> produces a copy of the vector in C++; <code>std::string</code> behaves similarly. So by the time the program reaches the end of this code, it has actually allocated three vectors and nine strings (<a data-type="xref" href="#fig0408">Figure 4-8</a>).</p>
+
+<figure><div class="figure" id="fig0408"><img alt="C++ vectors s, t, and u in memory" src="assets/rust_04in08.png"/>
+<h6><span class="label">Figure 4-8. </span>The result of assigning s to both t and u in C++</h6>
+</div></figure>
+
+<p>Depending on the values involved, assignment in C++ can consume unbounded amounts of memory and processor time. The advantage, however, is that it’s easy for the program to decide when to free all this memory: when the variables go out of scope, everything allocated here gets cleaned up automatically.</p>
+
+<p>In a sense, C++ and Python have chosen opposite trade-offs: Python makes assignment cheap, at the expense of requiring reference counting (and in the general case, garbage collection). C++ keeps the ownership of all the memory clear, at the expense of making assignment carry out a deep copy of the object. C++ programmers are often less than enthusiastic about this choice: deep copies can be expensive, and there are usually more practical alternatives.</p>
+
+<p><a contenteditable="false" data-primary="assignment" data-secondary="in Rust" data-type="indexterm" id="C04-ownership.html6"/>So what would the analogous program do in Rust? Here’s the code:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="n">s</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[</code><code class="s">"udon"</code><code class="p">.</code><code class="n">to_string</code><code class="p">(),</code><code class="w"> </code><code class="s">"ramen"</code><code class="p">.</code><code class="n">to_string</code><code class="p">(),</code><code class="w"> </code><code class="s">"soba"</code><code class="p">.</code><code class="n">to_string</code><code class="p">()];</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">t</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">s</code><code class="p">;</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">u</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">s</code><code class="p">;</code><code class="w"/></pre>
+
+<p>Like C and C++, Rust puts plain string literals like <code>"udon"</code> in read-only memory, so for a clearer comparison with the C++ and Python examples, we call <code>to_string</code> here to get heap-allocated <code>String</code> values.</p>
+
+<p>After carrying out the initialization of <code>s</code>, since Rust and C++ use similar representations for vectors and strings, the situation looks just as it did in C++ (<a data-type="xref" href="#fig0409">Figure 4-9</a>).</p>
+
+<figure><div class="figure" id="fig0409"><img alt="Rust vector s in memory" src="assets/rust_04in09.png"/>
+<h6><span class="label">Figure 4-9. </span>How Rust represents a vector of strings in memory</h6>
+</div></figure>
+
+<p>But recall that, in Rust, assignments of most types <em>move</em> the value from the source to the destination, leaving the source uninitialized. So after initializing <code>t</code>, the program’s memory looks like <a data-type="xref" href="#fig0410">Figure 4-10</a>.</p>
+
+<figure><div class="figure" id="fig0410"><img alt="Rust vector in memory, moved to t" src="assets/rust_04in10.png"/>
+<h6><span class="label">Figure 4-10. </span>The result of assigning s to t in Rust</h6>
+</div></figure>
+
+<p>What has happened here? The initialization <code>let t = s;</code> moved the vector’s three header fields from <code>s</code> to <code>t</code>; now <code>t</code> owns the vector. The vector’s elements stayed just where they were, and nothing happened to the strings either. Every value still has a single owner, although one has changed hands. There were no reference counts to be adjusted. And the compiler now considers <code>s</code> uninitialized.</p>
+
+<p>So what happens when we reach the initialization <code>let u = s;</code>? This would assign the uninitialized value <code>s</code> to <code>u</code>. Rust prudently prohibits using uninitialized values, so the compiler rejects this code with the following error:</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting">
+<code class="go">error[E0382]: use of moved value: `s`</code>
+<code class="go"> --&gt; ownership_double_move.rs:9:9</code>
+<code class="go">  |</code>
+<code class="go">8 |     let t = s;</code>
+<code class="go">  |         - value moved here</code>
+<code class="go">9 |     let u = s;</code>
+<code class="go">  |         ^ value used here after move</code>
+<code class="go">  |</code></pre>
+
+<p>Consider the consequences of Rust’s use of a move here. Like Python, the assignment is cheap: the program simply moves the three-word header of the vector from one spot to another. But like C++, ownership is always clear: the program doesn’t need reference counting or garbage collection to know when to free the vector elements and string contents.</p>
+
+<p>The price you pay is that you must explicitly ask for copies when you want them. If you want to end up in the same state as the C++ program, with each variable holding an independent copy of the structure, you must call the vector’s <code>clone</code> method, which performs a deep copy of the vector and its elements:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="n">s</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[</code><code class="s">"udon"</code><code class="p">.</code><code class="n">to_string</code><code class="p">(),</code><code class="w"> </code><code class="s">"ramen"</code><code class="p">.</code><code class="n">to_string</code><code class="p">(),</code><code class="w"> </code><code class="s">"soba"</code><code class="p">.</code><code class="n">to_string</code><code class="p">()];</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">t</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">s</code><code class="p">.</code><code class="n">clone</code><code class="p">();</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">u</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">s</code><code class="p">.</code><code class="n">clone</code><code class="p">();</code><code class="w"/></pre>
+
+<p>You could also re-create Python’s behavior by using Rust’s reference-counted pointer types;<a contenteditable="false" data-primary="" data-startref="04-ownership.html6" data-type="indexterm" id="idm140543316350720"/> we’ll discuss those shortly in <a data-type="xref" href="#rc">“Rc and Arc: Shared Ownership”</a><a contenteditable="false" data-primary="" data-startref="04-ownership.html5" data-type="indexterm" id="idm140543316323504"/>.<a contenteditable="false" data-primary="" data-startref="04-ownership.html4" data-type="indexterm" id="idm140543316322000"/></p>
+
+<section data-pdf-bookmark="More Operations That Move" data-type="sect2"><div class="sect2" id="more-operations-that-move">
+<h2>More Operations That Move</h2>
+
+<p><a contenteditable="false" data-primary="assignment" data-secondary="to a variable" data-type="indexterm" id="idm140543316318656"/><a contenteditable="false" data-primary="moves" data-secondary="assigning to a variable" data-type="indexterm" id="idm140543316317280"/><a contenteditable="false" data-primary="variables" data-secondary="assigning to" data-type="indexterm" id="idm140543316315904"/>In the examples thus far, we’ve shown initializations, providing values for variables as they come into scope in a <code>let</code> statement. Assigning to a variable is slightly different, in that if you move a value into a variable that was already initialized, Rust drops the variable’s prior value. For example:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">s</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="s">"Govinda"</code><code class="p">.</code><code class="n">to_string</code><code class="p">();</code><code class="w"/>
+<code class="n">s</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="s">"Siddhartha"</code><code class="p">.</code><code class="n">to_string</code><code class="p">();</code><code class="w"> </code><code class="c1">// value "Govinda" dropped here</code></pre>
+
+<p>In this code, when the program assigns the string <code>"Siddhartha"</code> to <code>s</code>, its prior value <code>"Govinda"</code> gets dropped first. But consider the following:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">s</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="s">"Govinda"</code><code class="p">.</code><code class="n">to_string</code><code class="p">();</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">t</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">s</code><code class="p">;</code><code class="w"/>
+<code class="n">s</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="s">"Siddhartha"</code><code class="p">.</code><code class="n">to_string</code><code class="p">();</code><code class="w"> </code><code class="c1">// nothing is dropped here</code></pre>
+
+<p>This time, <code>t</code> has taken ownership of the original string from <code>s</code>, so that by the time we assign to <code>s</code>, it is uninitialized. In this scenario, no string is dropped.</p>
+
+<p>We’ve used initializations and assignments in the examples here because they’re simple, but Rust applies move semantics to almost any use of a value. Passing arguments to functions moves ownership to the function’s parameters; returning a value from a function moves ownership to the caller. Building a tuple moves the values into the tuple. And so on.</p>
+
+<p>You may now have a better insight into what’s really going on in the examples we offered in the previous section. For example, when we were constructing our vector of composers, we wrote:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">struct</code> <code class="nc">Person</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">name</code>: <code class="nb">String</code><code class="p">,</code><code class="w"> </code><code class="n">birth</code>: <code class="kt">i32</code> <code class="p">}</code><code class="w"/>
+
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">composers</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="nb">Vec</code>::<code class="n">new</code><code class="p">();</code><code class="w"/>
+<code class="n">composers</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="n">Person</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">name</code>: <code class="s">"Palestrina"</code><code class="p">.</code><code class="n">to_string</code><code class="p">(),</code><code class="w"/>
+<code class="w">                        </code><code class="n">birth</code>: <code class="mi">1525</code><code class="w"> </code><code class="p">});</code><code class="w"/></pre>
+
+<p>This code shows several places at which moves occur, beyond initialization and assignment:</p>
+
+<dl>
+	<dt><em>Returning values from a function</em></dt>
+	<dd><p><a contenteditable="false" data-primary="moves" data-secondary="returning values to a function" data-type="indexterm" id="idm140543316033248"/>The call <code>Vec::new()</code> constructs a new vector, and returns, not a pointer to the vector, but the vector itself: its ownership moves from <code>Vec::new</code> to the variable <code>composers</code>. Similarly, the <code>to_string</code> call returns a fresh <code>String</code> instance.</p></dd>
+	<dt><em>Constructing new values</em></dt>
+	<dd><p><a contenteditable="false" data-primary="moves" data-secondary="constructing new values" data-type="indexterm" id="idm140543316028320"/>The <code>name</code> field of the new <code>Person</code> structure is initialized with the return value of <code>to_string</code>. The structure takes ownership of the string.</p></dd>
+	<dt><em>Passing values to a function</em></dt>
+	<dd><p><a contenteditable="false" data-primary="moves" data-secondary="passing values to a function" data-type="indexterm" id="idm140543316024480"/>The entire <code>Person</code> structure, not just a pointer, is passed to the vector’s <code>push</code> method, which moves it onto the end of the structure. The vector takes ownership of the <code>Person</code>, and thus becomes the indirect owner of the name <code>String</code> as well.</p></dd>
+</dl>
+
+<p>Moving values around like this may sound inefficient, but there are two things to keep in mind. First, the moves always apply to the value proper, not the heap storage they own. For vectors and strings, the <em>value proper</em> is the three-word header alone; the potentially large element arrays and text buffers sit where they are in the heap. Second, the Rust compiler’s code generation is good at “seeing through” all these moves; in practice, the machine code often stores the value directly where it belongs.</p>
+</div></section>
+
+<section data-pdf-bookmark="Moves and Control Flow" data-type="sect2"><div class="sect2" id="moves-and-control-flow">
+<h2>Moves and Control Flow</h2>
+
+<p><a contenteditable="false" data-primary="moves" data-secondary="and control flow" data-type="indexterm" id="idm140543316018096"/>The previous examples all have very simple control flow; how do moves interact with more complicated code? The general principle is that, if it’s possible for a variable to have had its value moved away, and it hasn’t definitely been given a new value since, it’s considered uninitialized. For example, if a variable still has a value after evaluating an <code>if</code> expression’s condition, then we can use it in both branches:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="n">x</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[</code><code class="mi">10</code><code class="p">,</code><code class="w"> </code><code class="mi">20</code><code class="p">,</code><code class="w"> </code><code class="mi">30</code><code class="p">];</code><code class="w"/>
+<code class="k">if</code><code class="w"> </code><code class="n">c</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">f</code><code class="p">(</code><code class="n">x</code><code class="p">);</code><code class="w"> </code><code class="c1">// ... ok to move from x here</code>
+<code class="p">}</code><code class="w"> </code><code class="k">else</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">g</code><code class="p">(</code><code class="n">x</code><code class="p">);</code><code class="w"> </code><code class="c1">// ... and ok to also move from x here</code>
+<code class="p">}</code><code class="w"/>
+<code class="n">h</code><code class="p">(</code><code class="n">x</code><code class="p">)</code><code class="w"> </code><code class="c1">// bad: x is uninitialized here if either path uses it</code></pre>
+
+<p>For similar reasons, moving from a variable in a loop is forbidden:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="n">x</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[</code><code class="mi">10</code><code class="p">,</code><code class="w"> </code><code class="mi">20</code><code class="p">,</code><code class="w"> </code><code class="mi">30</code><code class="p">];</code><code class="w"/>
+<code class="k">while</code><code class="w"> </code><code class="n">f</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">g</code><code class="p">(</code><code class="n">x</code><code class="p">);</code><code class="w"> </code><code class="c1">// bad: x would be moved in first iteration,</code>
+<code class="w">          </code><code class="c1">// uninitialized in second</code>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>That is, unless we’ve definitely given it a new value by the next iteration:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">x</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[</code><code class="mi">10</code><code class="p">,</code><code class="w"> </code><code class="mi">20</code><code class="p">,</code><code class="w"> </code><code class="mi">30</code><code class="p">];</code><code class="w"/>
+<code class="k">while</code><code class="w"> </code><code class="n">f</code><code class="p">()</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">g</code><code class="p">(</code><code class="n">x</code><code class="p">);</code><code class="w">           </code><code class="c1">// move from x</code>
+<code class="w">    </code><code class="n">x</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">h</code><code class="p">();</code><code class="w">        </code><code class="c1">// give x a fresh value</code>
+<code class="p">}</code><code class="w"/>
+<code class="n">e</code><code class="p">(</code><code class="n">x</code><code class="p">);</code><code class="w"/></pre>
+</div></section>
+
+<section data-pdf-bookmark="Moves and Indexed Content" data-type="sect2"><div class="sect2" id="moves-and-indexed-content">
+<h2>Moves and Indexed Content</h2>
+
+<p><a contenteditable="false" data-primary="indexed content" data-type="indexterm" id="C04-ownership.html7"/><a contenteditable="false" data-primary="moves" data-secondary="and indexed content" data-type="indexterm" id="C04-ownership.html8"/>We’ve mentioned that a move leaves its source uninitialized, as the destination takes ownership of the value. But not every kind of value owner is prepared to become uninitialized. For example, consider the following code:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="c1">// Build a vector of the strings "101", "102", ... "105"</code>
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">v</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="nb">Vec</code>::<code class="n">new</code><code class="p">();</code><code class="w"/>
+<code class="k">for</code><code class="w"> </code><code class="n">i</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="mi">101</code><code class="w"> </code><code class="p">..</code><code class="w"> </code><code class="mi">106</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">v</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="n">i</code><code class="p">.</code><code class="n">to_string</code><code class="p">());</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="c1">// Pull out random elements from the vector.</code>
+<code class="kd">let</code><code class="w"> </code><code class="n">third</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">v</code><code class="p">[</code><code class="mi">2</code><code class="p">];</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">fifth</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">v</code><code class="p">[</code><code class="mi">4</code><code class="p">];</code><code class="w"/></pre>
+
+<p>For this to work, Rust would somehow need to remember that the third and fifth elements of the vector have become uninitialized, and track that information until the vector is dropped. In the most general case, vectors would need to carry around extra information with them to indicate which elements are live and which have become uninitialized. That is clearly not the right behavior for a systems programming language; a vector should be nothing but a vector. In fact, Rust rejects the preceding code with the following error:</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting">
+<code class="go">error[E0507]: cannot move out of indexed content</code>
+<code class="go">  --&gt; ownership_move_out_of_vector.rs:14:17</code>
+<code class="go">   |</code>
+<code class="go">14 |     let third = v[2];</code>
+<code class="go">   |                 ^^^^</code>
+<code class="go">   |                 |</code>
+<code class="go">   |                 help: consider using a reference instead `&amp;v[2]`</code>
+<code class="go">   |                 cannot move out of indexed content</code></pre>
+
+<p>It also makes a similar complaint about the move to <code>fifth</code>. In the error message, Rust suggests using a reference, in case you want to access the element without moving it. This is often what you want. But what if you really do want to move an element out of a vector? You need to find a method that does so in a way that respects the limitations of the type. Here are three possibilities:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="c1">// Build a vector of the strings "101", "102", ... "105"</code>
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">v</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="nb">Vec</code>::<code class="n">new</code><code class="p">();</code><code class="w"/>
+<code class="k">for</code><code class="w"> </code><code class="n">i</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="mi">101</code><code class="w"> </code><code class="p">..</code><code class="w"> </code><code class="mi">106</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">v</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="n">i</code><code class="p">.</code><code class="n">to_string</code><code class="p">());</code><code class="w"/>
+<code class="p">}</code><code class="w"/>
+
+<code class="c1">// 1. Pop a value off the end of the vector:</code>
+<code class="kd">let</code><code class="w"> </code><code class="n">fifth</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">v</code><code class="p">.</code><code class="n">pop</code><code class="p">().</code><code class="n">unwrap</code><code class="p">();</code><code class="w"/>
+<code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">fifth</code><code class="p">,</code><code class="w"> </code><code class="s">"105"</code><code class="p">);</code><code class="w"/>
+
+<code class="c1">// 2. Move a value out of the middle of the vector, and move the last</code>
+<code class="c1">// element into its spot:</code>
+<code class="kd">let</code><code class="w"> </code><code class="n">second</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">v</code><code class="p">.</code><code class="n">swap_remove</code><code class="p">(</code><code class="mi">1</code><code class="p">);</code><code class="w"/>
+<code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">second</code><code class="p">,</code><code class="w"> </code><code class="s">"102"</code><code class="p">);</code><code class="w"/>
+
+<code class="c1">// 3. Swap in another value for the one we're taking out:</code>
+<code class="kd">let</code><code class="w"> </code><code class="n">third</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">std</code>::<code class="n">mem</code>::<code class="n">replace</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">v</code><code class="p">[</code><code class="mi">2</code><code class="p">],</code><code class="w"> </code><code class="s">"substitute"</code><code class="p">.</code><code class="n">to_string</code><code class="p">());</code><code class="w"/>
+<code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">third</code><code class="p">,</code><code class="w"> </code><code class="s">"103"</code><code class="p">);</code><code class="w"/>
+
+<code class="c1">// Let's see what's left of our vector.</code>
+<code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">v</code><code class="p">,</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[</code><code class="s">"101"</code><code class="p">,</code><code class="w"> </code><code class="s">"104"</code><code class="p">,</code><code class="w"> </code><code class="s">"substitute"</code><code class="p">]);</code><code class="w"/></pre>
+
+<p>Each one of these methods moves an element out of the vector, but does so in a way that leaves the vector in a state that is fully populated, if perhaps smaller.</p>
+
+<p>Collection types like <code>Vec</code> also generally offer methods to consume all their elements in a loop:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="n">v</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">vec</code><code class="o">!</code><code class="p">[</code><code class="s">"liberté"</code><code class="p">.</code><code class="n">to_string</code><code class="p">(),</code><code class="w"/>
+<code class="w">             </code><code class="s">"égalité"</code><code class="p">.</code><code class="n">to_string</code><code class="p">(),</code><code class="w"/>
+<code class="w">             </code><code class="s">"fraternité"</code><code class="p">.</code><code class="n">to_string</code><code class="p">()];</code><code class="w"/>
+
+<code class="k">for</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">s</code><code class="w"> </code><code class="k">in</code><code class="w"> </code><code class="n">v</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+<code class="w">    </code><code class="n">s</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="sc">'!'</code><code class="p">);</code><code class="w"/>
+<code class="w">    </code><code class="n">println</code><code class="o">!</code><code class="p">(</code><code class="s">"{}"</code><code class="p">,</code><code class="w"> </code><code class="n">s</code><code class="p">);</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+
+<p>When we pass the vector to the loop directly, as in <code>for ... in v</code>, this <em>moves</em> the vector out of <code>v</code>, leaving <code>v</code> uninitialized. The <code>for</code> loop’s internal machinery takes ownership of the vector, and dissects it into its elements. At each iteration, the loop moves another element to the variable <code>s</code>. Since <code>s</code> now owns the string, we’re able to modify it in the loop body before printing it. And since the vector itself is no longer visible to the code, nothing can observe it mid-loop in some partially emptied state.</p>
+
+<p>If you do find yourself needing to move a value out of an owner that the compiler can’t track, you might consider changing the owner’s type to something that can dynamically track whether it has a value or not. For example, here’s a variant on the earlier example:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">struct</code> <code class="nc">Person</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">name</code>: <code class="nb">Option</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="p">,</code><code class="w"> </code><code class="n">birth</code>: <code class="kt">i32</code> <code class="p">}</code><code class="w"/>
+
+<code class="kd">let</code><code class="w"> </code><code class="k">mut</code><code class="w"> </code><code class="n">composers</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="nb">Vec</code>::<code class="n">new</code><code class="p">();</code><code class="w"/>
+<code class="n">composers</code><code class="p">.</code><code class="n">push</code><code class="p">(</code><code class="n">Person</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">name</code>: <code class="nb">Some</code><code class="p">(</code><code class="s">"Palestrina"</code><code class="p">.</code><code class="n">to_string</code><code class="p">()),</code><code class="w"/>
+<code class="w">                        </code><code class="n">birth</code>: <code class="mi">1525</code><code class="w"> </code><code class="p">});</code><code class="w"/></pre>
+
+<p>You can’t do this:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="n">first_name</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">composers</code><code class="p">[</code><code class="mi">0</code><code class="p">].</code><code class="n">name</code><code class="p">;</code><code class="w"/></pre>
+
+<p>That will just elicit the same “cannot move out of indexed content” error shown earlier. But because you’ve changed the type of the <code>name</code> field from <code>String</code> to <code>Option&lt;String&gt;</code>, that means that <code>None</code> is a legitimate value for the field to hold, so this works:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="n">first_name</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">std</code>::<code class="n">mem</code>::<code class="n">replace</code><code class="p">(</code><code class="o">&amp;</code><code class="k">mut</code><code class="w"> </code><code class="n">composers</code><code class="p">[</code><code class="mi">0</code><code class="p">].</code><code class="n">name</code><code class="p">,</code><code class="w"> </code><code class="nb">None</code><code class="p">);</code><code class="w"/>
+<code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">first_name</code><code class="p">,</code><code class="w"> </code><code class="nb">Some</code><code class="p">(</code><code class="s">"Palestrina"</code><code class="p">.</code><code class="n">to_string</code><code class="p">()));</code><code class="w"/>
+<code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">composers</code><code class="p">[</code><code class="mi">0</code><code class="p">].</code><code class="n">name</code><code class="p">,</code><code class="w"> </code><code class="nb">None</code><code class="p">);</code><code class="w"/></pre>
+
+<p>The <code>replace</code> call moves out the value of <code>composers[0].name</code>, leaving <code>None</code> in its place, and passes ownership of the original value to its caller. In fact, using <code>Option</code> this way is common enough that the type provides a <code>take</code> method for this very purpose. You could write the preceding manipulation more legibly as follows:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="n">first_name</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">composers</code><code class="p">[</code><code class="mi">0</code><code class="p">].</code><code class="n">name</code><code class="p">.</code><code class="n">take</code><code class="p">();</code><code class="w"/></pre>
+
+<p>This call to <code>take</code> has the same effect as the earlier call to <code>replace</code><a contenteditable="false" data-primary="" data-startref="04-ownership.html8" data-type="indexterm" id="idm140543315226320"/><a contenteditable="false" data-primary="" data-startref="04-ownership.html7" data-type="indexterm" id="idm140543315217680"/>.<a contenteditable="false" data-primary="" data-startref="04-ownership.html3" data-type="indexterm" id="idm140543315216176"/><a contenteditable="false" data-primary="" data-startref="04-ownership.html2" data-type="indexterm" id="idm140543315214768"/></p>
+</div></section>
+</div></section>
+
+<section data-pdf-bookmark="Copy Types: The Exception to Moves" data-type="sect1"><div class="sect1" id="copy-types-the-exception-to-moves">
+<h1>Copy Types: The Exception to Moves</h1>
+
+<p><a contenteditable="false" data-primary="Copy types" data-type="indexterm" id="C04-ownership.html9"/><a contenteditable="false" data-primary="moves" data-secondary="Copy types as exception to" data-type="indexterm" id="C04-ownership.html10"/><a contenteditable="false" data-primary="types" data-secondary="Copy types" data-type="indexterm" id="C04-ownership.html11"/>The examples we’ve shown so far of values being moved involve vectors, strings, and other types that could potentially use a lot of memory and be expensive to copy. Moves keep ownership of such types clear and assignment cheap. But for simpler types like integers or characters, this sort of careful handling really isn’t necessary.</p>
+
+<p>Compare what happens in memory when we assign a <code>String</code> with what happens when we assign an <code>i32</code> value:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="kd">let</code><code class="w"> </code><code class="n">str1</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="s">"somnambulance"</code><code class="p">.</code><code class="n">to_string</code><code class="p">();</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">str2</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">str1</code><code class="p">;</code><code class="w"/>
+
+<code class="kd">let</code><code class="w"> </code><code class="n">num1</code>: <code class="kt">i32</code> <code class="o">=</code><code class="w"> </code><code class="mi">36</code><code class="p">;</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">num2</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">num1</code><code class="p">;</code><code class="w"/></pre>
+
+<p>After running this code, memory looks like <a data-type="xref" href="#fig0411">Figure 4-11</a>.</p>
+
+<figure><div class="figure" id="fig0411"><img alt="Memory after assigning a string and an i32" src="assets/rust_04in11.png"/>
+<h6><span class="label">Figure 4-11. </span>Assigning a string moves the value, whereas assigning an i32 copies it</h6>
+</div></figure>
+
+<p>As with the vectors earlier, assignment <em>moves</em> <code>str1</code> to <code>str2</code>, so that we don’t end up with two strings responsible for freeing the same buffer. However, the situation with <code>num1</code> and <code>num2</code> is different. An <code>i32</code> is simply a pattern of bits in memory; it doesn’t own any heap resources, or really depend on anything other than the bytes it comprises. By the time we’ve moved its bits to <code>num2</code>, we’ve made a completely independent copy of <code>num1</code>.</p>
+
+<p>Moving a value leaves the source of the move uninitialized. But whereas it serves an essential purpose to treat <code>str1</code> as valueless, treating <code>num1</code> that way is pointless; no harm could result from continuing to use it. The advantages of a move don’t apply here, and it’s inconvenient.</p>
+
+<p>Earlier we were careful to say that <em>most</em> types are moved; now we’ve come to the exceptions, the types Rust designates as <em><code>Copy</code> types</em>. Assigning a value of a <code>Copy</code> type copies the value, rather than moving it. The source of the assignment remains initialized and usable, with the same value it had before. Passing <code>Copy</code> types to functions and constructors behaves similarly.</p>
+
+<p>The standard <code>Copy</code> types include all the machine integer and floating-point numeric types, the <code>char</code> and <code>bool</code> types, and a few others. A tuple or fixed-size array of <code>Copy</code> types is itself a <code>Copy</code> type.</p>
+
+<p>Only types for which a simple bit-for-bit copy suffices can be <code>Copy</code>. As we’ve already explained, <code>String</code> is not a <code>Copy</code> type, because it owns a heap-allocated buffer. For similar reasons, <code>Box&lt;T&gt;</code> is not <code>Copy</code>; it owns its heap-allocated referent. The <code>File</code> type, representing an operating system file handle, is not <code>Copy</code>; duplicating such a value would entail asking the operating system for another file handle. Similarly, the <code>MutexGuard</code> type, representing a locked mutex, isn’t <code>Copy</code>: this type isn’t meaningful to copy at all, as only one thread may hold a mutex at a time.</p>
+
+<p>As a rule of thumb, any type that needs to do something special when a value is dropped cannot be <code>Copy</code>. A <code>Vec</code> needs to free its elements; a <code>File</code> needs to close its file handle; a <code>MutexGuard</code> needs to unlock its mutex. Bit-for-bit duplication of such types would leave it unclear which value was now responsible for the original’s resources.</p>
+
+<p>What about types you define yourself? By default, <code>struct</code> and <code>enum</code> types are not <code>Copy</code>:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">struct</code> <code class="nc">Label</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">number</code>: <code class="kt">u32</code> <code class="p">}</code><code class="w"/>
+
+<code class="k">fn</code> <code class="nf">print</code><code class="p">(</code><code class="n">l</code>: <code class="nc">Label</code><code class="p">)</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">println</code><code class="o">!</code><code class="p">(</code><code class="s">"STAMP: {}"</code><code class="p">,</code><code class="w"> </code><code class="n">l</code><code class="p">.</code><code class="n">number</code><code class="p">);</code><code class="w"> </code><code class="p">}</code><code class="w"/>
+
+<code class="kd">let</code><code class="w"> </code><code class="n">l</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">Label</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">number</code>: <code class="mi">3</code><code class="w"> </code><code class="p">};</code><code class="w"/>
+<code class="n">print</code><code class="p">(</code><code class="n">l</code><code class="p">);</code><code class="w"/>
+<code class="n">println</code><code class="o">!</code><code class="p">(</code><code class="s">"My label number is: {}"</code><code class="p">,</code><code class="w"> </code><code class="n">l</code><code class="p">.</code><code class="n">number</code><code class="p">);</code><code class="w"/></pre>
+
+<p>This won’t compile; Rust complains:</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting">
+<code class="go">error[E0382]: use of moved value: `l.number`</code>
+<code class="go">  --&gt; ownership_struct.rs:12:40</code>
+<code class="go">   |</code>
+<code class="go">11 |     print(l);</code>
+<code class="go">   |           - value moved here</code>
+<code class="go">12 |     println!("My label number is: {}", l.number);</code>
+<code class="go">   |                                        ^^^^^^^^ value used here after move</code>
+<code class="go">   |</code>
+<code class="go">   = note: move occurs because `l` has type `main::Label`, which does not</code>
+<code class="go">           implement the `Copy` trait</code></pre>
+
+<p>Since <code>Label</code> is not <code>Copy</code>, passing it to <code>print</code> moved ownership of the value to the <code>print</code> function, which then dropped it before returning. But this is silly; a <code>Label</code> is nothing but an <code>i32</code> with pretensions. There’s no reason passing <code>l</code> to <code>print</code> should move the value.</p>
+
+<p>But user-defined types being non-<code>Copy</code> is only the default. If all the fields of your struct are themselves <code>Copy</code>, then you can make the type <code>Copy</code> as well by placing the attribute <code>#[derive(Copy, Clone)]</code> above the definition, like so:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="cp">#[derive(Copy, Clone)]</code><code class="w"/>
+<code class="k">struct</code> <code class="nc">Label</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">number</code>: <code class="kt">u32</code> <code class="p">}</code><code class="w"/></pre>
+
+<p>With this change, the preceding code compiles without complaint. However, if we try this on a type whose fields are not all <code>Copy</code>, it doesn’t work. Compiling the following code:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="cp">#[derive(Copy, Clone)]</code><code class="w"/>
+<code class="k">struct</code> <code class="nc">StringLabel</code><code class="w"> </code><code class="p">{</code><code class="w"> </code><code class="n">name</code>: <code class="nb">String</code> <code class="p">}</code><code class="w"/></pre>
+
+<p>elicits this error:</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting">
+<code class="go">error[E0204]: the trait `Copy` may not be implemented for this type</code>
+<code class="go"> --&gt; ownership_string_label.rs:7:10</code>
+<code class="go">  |</code>
+<code class="go">7 | #[derive(Copy, Clone)]</code>
+<code class="go">  |          ^^^^</code>
+<code class="go">8 | struct StringLabel { name: String }</code>
+<code class="go">  |                      ------------ this field does not implement `Copy`</code></pre>
+
+<p>Why aren’t user-defined types automatically <code>Copy</code>, assuming they’re eligible? Whether a type is <code>Copy</code> or not has a big effect on how code is allowed to use it: <code>Copy</code> types are more flexible, since assignment and related operations don’t leave the original uninitialized. But for a type’s implementer, the opposite is true: <code>Copy</code> types are very limited in which types they can contain, whereas non-<code>Copy</code> types can use heap allocation and own other sorts of resources. So making a type <code>Copy</code> represents a serious commitment on the part of the implementer: if it’s necessary to change it to non-<code>Copy</code> later, much of the code that uses it will probably need to be adapted.</p>
+
+<p>While C++ lets you overload assignment operators and define specialized copy and move constructors, Rust doesn’t permit this sort of customization. In Rust, every move is a byte-for-byte, shallow copy that leaves the source uninitialized. Copies are the same, except that the source remains initialized. This does mean that C++ classes can provide convenient interfaces that Rust types cannot, where ordinary-looking code implicitly adjusts reference counts, puts off expensive copies for later, or uses other sophisticated implementation tricks.</p>
+
+<p>But the effect of this flexibility on C++ as a language is to make basic operations like assignment, passing parameters, and returning values from functions less predictable. For example, earlier in this chapter we showed how assigning one variable to another in C++ can require arbitrary amounts of memory and processor time. One of Rust’s principles is that costs should be apparent to the programmer. Basic operations must remain simple. Potentially expensive operations should be explicit, like the calls to <code>clone</code> in the earlier example that make deep copies of vectors and the strings they contain.</p>
+
+<p>In this section, we’ve talked about <code>Copy</code> and <code>Clone</code> in vague terms as characteristics a type might have. They are actually examples of <em>traits</em>, Rust’s open-ended facility for categorizing types based on what you can do with them. We describe traits in general in <a data-type="xref" href="ch11.html#traits-and-generics">Chapter 11</a>, and <code>Copy</code> and <code>Clone</code> in particular in <a data-type="xref" href="ch13.html#utility-traits">Chapter 13</a>.<a contenteditable="false" data-primary="" data-startref="04-ownership.html11" data-type="indexterm" id="idm140543314870352"/><a contenteditable="false" data-primary="" data-startref="04-ownership.html10" data-type="indexterm" id="idm140543314869056"/><a contenteditable="false" data-primary="" data-startref="04-ownership.html9" data-type="indexterm" id="idm140543314867680"/></p>
+</div></section>
+
+<section data-pdf-bookmark="Rc and Arc: Shared Ownership" data-type="sect1"><div class="sect1" id="rc">
+<h1>Rc and Arc: Shared Ownership</h1>
+
+<p><a contenteditable="false" data-primary="Arc pointer type" data-type="indexterm" id="C04-ownership.html12"/><a contenteditable="false" data-primary="ownership" data-secondary="Arc" data-type="indexterm" id="C04-ownership.html13"/><a contenteditable="false" data-primary="ownership" data-secondary="Rc" data-type="indexterm" id="C04-ownership.html14"/><a contenteditable="false" data-primary="ownership" data-secondary="shared" data-type="indexterm" id="C04-ownership.html15"/><a contenteditable="false" data-primary="Rc pointer type" data-type="indexterm" id="C04-ownership.html16"/><a contenteditable="false" data-primary="reference-counted pointer type" data-type="indexterm" id="C04-ownership.html17"/>Although most values have unique owners in typical Rust code, in some cases it’s difficult to find every value a single owner that has the lifetime you need; you’d like the value to simply live until everyone’s done using it. For these cases, Rust provides the reference-counted pointer types <code>Rc</code> and <code>Arc</code>. As you would expect from Rust, these are entirely safe to use: you cannot forget to adjust the reference count, or create other pointers to the referent that Rust doesn’t notice, or stumble over any of the other sorts of problems that accompany reference-counted pointer types in C++.</p>
+
+<p>The <code>Rc</code> and <code>Arc</code> types are very similar; the only difference between them is that an <code>Arc</code> is safe to share between threads directly—the name <code>Arc</code> is short for <em>atomic reference count</em>—whereas a plain <code>Rc</code> uses faster non-thread-safe code to update its reference count. If you don’t need to share the pointers between threads, there’s no reason to pay the performance penalty of an <code>Arc</code>, so you should use <code>Rc</code>; Rust will prevent you from accidentally passing one across a thread boundary. The two types are otherwise equivalent, so for the rest of this section, we’ll only talk about <code>Rc</code>.</p>
+
+<p>Earlier in the chapter we showed how Python uses reference counts to manage its values’ lifetimes. You can use <code>Rc</code> to get a similar effect in Rust. Consider the following code:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="k">use</code><code class="w"> </code><code class="n">std</code>::<code class="n">rc</code>::<code class="n">Rc</code><code class="p">;</code><code class="w"/>
+
+<code class="c1">// Rust can infer all these types; written out for clarity</code>
+<code class="kd">let</code><code class="w"> </code><code class="n">s</code>: <code class="nc">Rc</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">Rc</code>::<code class="n">new</code><code class="p">(</code><code class="s">"shirataki"</code><code class="p">.</code><code class="n">to_string</code><code class="p">());</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">t</code>: <code class="nc">Rc</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">s</code><code class="p">.</code><code class="n">clone</code><code class="p">();</code><code class="w"/>
+<code class="kd">let</code><code class="w"> </code><code class="n">u</code>: <code class="nc">Rc</code><code class="o">&lt;</code><code class="nb">String</code><code class="o">&gt;</code><code class="w"> </code><code class="o">=</code><code class="w"> </code><code class="n">s</code><code class="p">.</code><code class="n">clone</code><code class="p">();</code><code class="w"/></pre>
+
+<p>For any type <code>T</code>, an <code>Rc&lt;T&gt;</code> value is a pointer to a heap-allocated <code>T</code> that has had a reference count affixed to it. Cloning an <code>Rc&lt;T&gt;</code> value does not copy the <code>T</code>; instead, it simply creates another pointer to it, and increments the reference count. So the preceding code produces the situation illustrated in <a data-type="xref" href="#fig0412">Figure 4-12</a> in memory.</p>
+
+<p>Each of the three <code>Rc&lt;String&gt;</code> pointers is referring to the same block of memory, which holds a reference count and space for the <code>String</code>. The usual ownership rules apply to the <code>Rc</code> pointers themselves, and when the last extant <code>Rc</code> is dropped, Rust drops the <code>String</code> as well.</p>
+
+<figure><div class="figure" id="fig0412"><img alt="a Rc&lt;String&gt; with three references" src="assets/rust_04in12.png"/>
+<h6><span class="label">Figure 4-12. </span>A reference-counted string, with three references</h6>
+</div></figure>
+
+<p>You can use any of <code>String</code>’s usual methods directly on an <code>Rc&lt;String&gt;</code>:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="n">assert</code><code class="o">!</code><code class="p">(</code><code class="n">s</code><code class="p">.</code><code class="n">contains</code><code class="p">(</code><code class="s">"shira"</code><code class="p">));</code><code class="w"/>
+<code class="n">assert_eq</code><code class="o">!</code><code class="p">(</code><code class="n">t</code><code class="p">.</code><code class="n">find</code><code class="p">(</code><code class="s">"taki"</code><code class="p">),</code><code class="w"> </code><code class="nb">Some</code><code class="p">(</code><code class="mi">5</code><code class="p">));</code><code class="w"/>
+<code class="n">println</code><code class="o">!</code><code class="p">(</code><code class="s">"{} are quite chewy, almost bouncy, but lack flavor"</code><code class="p">,</code><code class="w"> </code><code class="n">u</code><code class="p">);</code><code class="w"/></pre>
+
+<p>A value owned by an <code>Rc</code> pointer is immutable. If you try to add some text to the end of the string:</p>
+
+<pre data-code-language="rust" data-type="programlisting">
+<code class="n">s</code><code class="p">.</code><code class="n">push_str</code><code class="p">(</code><code class="s">" noodles"</code><code class="p">);</code><code class="w"/></pre>
+
+<p>Rust will decline:</p>
+
+<pre class="console" data-code-language="console" data-type="programlisting">
+<code class="go">error: cannot borrow immutable borrowed content as mutable</code>
+<code class="go">  --&gt; ownership_rc_mutability.rs:12:5</code>
+<code class="go">   |</code>
+<code class="go">12 |     s.push_str(" noodles");</code>
+<code class="go">   |     ^ cannot borrow as mutable</code></pre>
+
+<p>Rust’s memory and thread-safety guarantees depend on ensuring that no value is ever simultaneously shared and mutable. Rust assumes the referent of an <code>Rc</code> pointer might in general be shared, so it must not be mutable. We explain why this restriction is important in <a data-type="xref" href="ch05.html#references">Chapter 5</a>.</p>
+
+<p>One well-known problem with using reference counts to manage memory is that, if there are ever two reference-counted values that point to each other, each will hold the other’s reference count above zero, so the values will never be freed (<a data-type="xref" href="#fig0413">Figure 4-13</a>).</p>
+
+<figure><div class="figure" id="fig0413"><img alt="Two Rc values pointing at each other" src="assets/rust_04in13.png"/>
+<h6><span class="label">Figure 4-13. </span>A reference-counting loop; these objects will not be freed</h6>
+</div></figure>
+
+<p>It is possible to leak values in Rust this way, but such situations are rare. You cannot create a cycle without, at some point, making an older value point to a newer value. This obviously requires the older value to be mutable. Since <code>Rc</code> pointers hold their referents immutable, it’s not normally possible to create a cycle. <a contenteditable="false" data-primary="interior mutability" data-secondary="defined" data-type="indexterm" id="idm140543314584208"/>However, Rust does provide ways to create mutable portions of otherwise immutable values; this is called <em>interior mutability</em>, and we cover it in <a data-type="xref" href="ch09.html#interior-mutability">“Interior Mutability”</a>. If you combine those techniques with <code>Rc</code> pointers, you can create a cycle and leak memory.</p>
+
+<p><a contenteditable="false" data-primary="weak pointers" data-type="indexterm" id="idm140543314673216"/>You can sometimes avoid creating cycles of <code>Rc</code> pointers by using <em>weak pointers</em>, <code>std::rc::Weak</code>, for some of the links instead. However, we won’t cover those in this book; see the standard library’s documentation for details.<a contenteditable="false" data-primary="" data-startref="04-ownership.html17" data-type="indexterm" id="idm140543314670304"/><a contenteditable="false" data-primary="" data-startref="04-ownership.html16" data-type="indexterm" id="idm140543314668928"/><a contenteditable="false" data-primary="" data-startref="04-ownership.html15" data-type="indexterm" id="idm140543314667552"/><a contenteditable="false" data-primary="" data-startref="04-ownership.html14" data-type="indexterm" id="idm140543314685952"/><a contenteditable="false" data-primary="" data-startref="04-ownership.html13" data-type="indexterm" id="idm140543314684576"/><a contenteditable="false" data-primary="" data-startref="04-ownership.html12" data-type="indexterm" id="idm140543314683200"/></p>
+
+<p>Moves and reference-counted pointers are two ways to relax the rigidity of the ownership tree. In the next chapter, we’ll look at a third way: borrowing references to values. Once you have become comfortable with both ownership and borrowing, you will have climbed the steepest part of Rust’s learning curve, and you’ll be ready to take advantage of Rust’s unique strengths.<a contenteditable="false" data-primary="" data-startref="04-ownership.html0" data-type="indexterm" id="idm140543314681136"/></p>
+</div></section>
+</div></section></body></html>

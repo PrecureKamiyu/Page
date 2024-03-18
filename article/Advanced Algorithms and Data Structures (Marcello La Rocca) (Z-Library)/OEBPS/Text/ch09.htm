@@ -1,0 +1,1212 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <title>9</title>
+    
+  <link href="../../stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="../../page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+  <div class="tocheadb">
+    <h1 class="tochead" id="heading_id_2"><a id="pgfId-998673"></a><a id="pgfId-998685"></a>9 <a id="id_Hlk807222"></a>K-d trees: Multidimensional data indexing</h1>
+  </div>
+
+  <p class="co-summary-head"><a id="pgfId-1014967"></a>This chapter covers</p>
+
+  <ul class="calibre19">
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1015006"></a>Indexing a 2-D (and in general k-D) dataset efficiently</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1015007"></a>Implementing nearest neighbor search with k-d trees</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1014988"></a>Discussing k-d trees’ strengths and flaws</li>
+  </ul>
+
+  <p class="body"><a id="pgfId-998756"></a>This chapter will be structured slightly differently from our book’s standard, simply because we will continue here a discussion started in chapter 8. We introduced a problem: searching multidimensional data for the nearest neighbor(s) of a generic point (possibly not in the dataset itself).</p>
+
+  <p class="body"><a id="pgfId-1022513"></a>In this chapter, we follow up on those topics, so we won’t introduce a new problem, but pick up the “closest hub” example from chapter 8 and show a different option to solve it, using k-d trees.</p>
+
+  <h2 class="fm-head" id="heading_id_3"><a id="pgfId-998780"></a>9.1 Right where we left off</h2>
+
+  <p class="body"><a id="pgfId-998799"></a>Let’s recap where we left off in previous chapters. We are designing software for an e-commerce company, an application to find the closest warehouse selling a given product for any point on a very large map. See figure 9.1 to visualize. To have a ballpark idea of the kind of scale we need, we want to serve millions of clients per day across the country, taking products from thousands of warehouses, also spread across the map.</p>
+
+  <p class="body"><a id="pgfId-998818"></a>In section 8.2, we established that a brute-force solution where we skim through the whole list of points to compare differences can’t work for a live solution.</p>
+
+  <p class="body"><a id="pgfId-998827"></a>We have also seen how the multidimensional structure of the data prevents us from using the basic solutions we saw in the first part of the book, from heaps to hash maps.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F1.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034381"></a>Figure 9.1 Our example map, showing cities (real and imaginary) and warehouses (all imaginary!) on the east coast. In a typical application for k-d trees, given a point on the map, we would like to find the closest warehouse or the closest city to that point. Map source: ArcGIS.</p>
+
+  <p class="body"><a id="pgfId-998863"></a>Viable solutions, however, do exist. In this chapter we will first explain the issues we face in moving to multidimensional spaces; then, in this and the next chapter, we will delve into a few alternatives to efficiently tackle those challenges.</p>
+
+  <h2 class="fm-head" id="heading_id_4"><a id="pgfId-998878"></a>9.2 Moving to k-D spaces: Cycle through dimensions</h2>
+
+  <p class="body"><a id="pgfId-998896"></a>You <a id="marker-1007263"></a><a id="marker-1007267"></a><a id="marker-1007271"></a>might have the impression that we’ve hit a dead end, and even in the scientific community it certainly seemed so for a long time.</p>
+
+  <p class="body"><a id="pgfId-998909"></a>The answer came in the form of a heuristic, by the hand (and brain) of <a id="id_Hlk56246552"></a>Jon Louis Bentley.<a href="#pgfId-1008506"><sup class="footnotenumber">1</sup></a></p>
+
+  <p class="body"><a id="pgfId-998922"></a>The idea is as brilliant as it is simple and stems from the considerations that led us this far in chapter 8. If we restrict to 2-D spaces, instead of splitting each region into four sub-regions for each point, we can perform a 2-way split, but alternating splits along vertical lines to split along horizontal lines.</p>
+
+  <p class="body"><a id="pgfId-998937"></a>For each split, we partition the points in a region into two groups. Then, at the next split, when we choose the next pivot in each of the two sub-regions, we will use a perpendicular direction to do the next partitioning.</p>
+
+  <p class="body"><a id="pgfId-998948"></a>Figure 9.2 shows a few steps of this algorithm. You can see how for the first pivot chosen we draw a vertical line passing through the point, then for the second one we draw a horizontal semi-line (we are splitting a semi-plane now, not the whole plane again!), and then a vertical (semi)line again.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F2.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034430"></a>Figure 9.2 Partitioning points in the 2-D Cartesian space by cycling through the directions along which we split. For the first split (left) we choose point <code class="fm-code-in-text">R</code> and draw a vertical line (parallel to <code class="fm-code-in-text">y</code> axis, <code class="fm-code-in-text">x</code> coordinate is constant) passing through it. We have thus created two half-spaces, a lighter-shaded one on the left and a darker-shaded one on the right of this line, grouping points <code class="fm-code-in-text">W</code>, <code class="fm-code-in-text">P</code>, <code class="fm-code-in-text">O</code>, <code class="fm-code-in-text">Q</code>, <code class="fm-code-in-text">U</code> on one side, and <code class="fm-code-in-text">S</code>, <code class="fm-code-in-text">T</code> on the other. Point <code class="fm-code-in-text">R</code> is the pivot of this partitioning. Next, we choose point <code class="fm-code-in-text">W</code> in the lighter shade partition. This time, we draw a horizontal line (parallel to <code class="fm-code-in-text">x</code> axis, <code class="fm-code-in-text">y</code> coordinate is constant). It splits the lighter shade partition into two new partitions, one in the top-left area of the plane, containing <code class="fm-code-in-text">P</code>, <code class="fm-code-in-text">O</code> and <code class="fm-code-in-text">U</code>, and one in the bottom-left area, with just <code class="fm-code-in-text">Q</code>. If we further split the top-left area at point <code class="fm-code-in-text">P</code>, we again need to use a vertical line, as shown in the right-most part of the figure.</p>
+
+  <p class="body"><a id="pgfId-999046"></a>Notice that in the Cartesian plane, a vertical line through a point <code class="fm-code-in-text">P=(P<sub class="subscript1">x</sub>,P<sub class="subscript1">y</sub>)</code> has a peculiar characteristic: it is parallel to the <code class="fm-code-in-text">y</code> axis, and all points on the line have the same value for their <code class="fm-code-in-text">x</code> coordinate, <code class="fm-code-in-text">P<sub class="subscript1">x</sub></code>. Likewise, a horizontal line passing through <code class="fm-code-in-text">P</code> is made of all the points in the plane for which <code class="fm-code-in-text">y=P<sub class="subscript1">y</sub></code>.</p>
+
+  <p class="body"><a id="pgfId-999074"></a>So, when we split the plane along a vertical line through <code class="fm-code-in-text">P=(P<sub class="subscript1">x</sub>,P<sub class="subscript1">y</sub>)</code>, what we really mean is that we create two partitions, one for the points <code class="fm-code-in-text">L</code> in the plane for which <code class="fm-code-in-text">L<sub class="subscript1">x</sub>&lt;P<sub class="subscript1">x</sub></code>, and one for those points <code class="fm-code-in-text">R</code> for which <code class="fm-code-in-text">R<sub class="subscript1">x</sub>&gt;P<sub class="subscript1">x</sub></code>. And similarly, for horizontal lines, using the <code class="fm-code-in-text">y</code> coordinates of the points.</p>
+
+  <p class="body"><a id="pgfId-999106"></a>This binary partitioning allows us to use binary trees to index our points. Each node in the tree is the pivot we chose to partition the remaining region of space, and its left and right subtrees gather all points in the two partitions, and represent the two sub-regions resulting from the split we perform along the pivot (check out figures 9.2 and 9.5).</p>
+
+  <p class="body"><a id="pgfId-999123"></a>Can this algorithm be generalized to higher dimensions? Yes, it naturally allows a generalization to higher dimensions, because we split on a single coordinate for each point, but we can do a round-robin through all the coordinates of a <code class="fm-code-in-text">k</code>-dimensional space, and the <code class="fm-code-in-text">i</code>-th level of the binary tree we build will correspond to a split along the <code class="fm-code-in-text">(i mod k)-</code>th dimension.</p>
+
+  <p class="body"><a id="pgfId-999140"></a>This means that in a 2-D space, the root will split the plane along the <code class="fm-code-in-text">x</code> axis, its children will split each of the two semi-planes along the <code class="fm-code-in-text">y</code> axis, and then their children will split again along the <code class="fm-code-in-text">x</code> axis and so on. In a <code class="fm-code-in-text">k</code>-dimensional space, with <code class="fm-code-in-text">k &gt; 2</code>, we start with the first coordinate at level <code class="fm-code-in-text">0</code> (the root), and then move to the second at height <code class="fm-code-in-text">1</code>, the third at height <code class="fm-code-in-text">2,</code> and so on.</p>
+
+  <p class="body"><a id="pgfId-999171"></a>This way, we partition the plane into rectangular areas. With respect to our initial idea of splitting points with vertical lines only, we have fewer areas extending to infinity (while if we always used the same coordinate all areas would be infinite!) and avoid keeping distant points in the same partition.</p>
+
+  <p class="body"><a id="pgfId-999180"></a>At the same time, each node has just two children, and we can maintain all the advantages and guarantees of binary partitioning and binary search.</p>
+
+  <h3 class="fm-head2" id="heading_id_5"><a id="pgfId-999191"></a>9.2.1 Constructing the BST</h3>
+
+  <p class="body"><a id="pgfId-999203"></a>So <a id="marker-1007275"></a><a id="marker-1007279"></a><a id="marker-1007283"></a><a id="marker-1007287"></a>far, we have just hinted at the construction of a binary search tree, implying that there is a direct translation of the partitions, or rather the pivots we choose, into a BST.</p>
+
+  <p class="body"><a id="pgfId-999219"></a>We have also implied that the BST we are going to construct is an important part of the k-d tree. Let’s give a more formal definition to clarify the relation between these two data structures.</p>
+
+  <p class="fm-callout"><a id="pgfId-999228"></a><span class="fm-callout-head">definition</span> A k-d tree is a binary search tree whose elements are points taken from a k-dimensional space, that is, tuples with k elements, whose coordinates can be compared. (To simplify, let’s assume that each coordinate’s values can be translated into real numbers.) In addition to that, in a k-d tree, at each level i, we only compare the i-th (modulo <code class="fm-code-in-text2">k</code>) coordinate of points to decide which branch of the tree will be traversed.</p>
+
+  <p class="body"><a id="pgfId-999260"></a>In fewer words, a k-d tree can be described in terms of a binary search tree<a id="marker-1007291"></a> with a fancy comparison method on its keys. The added value is given by the algorithms for search that can be performed on this kind of tree much more efficiently than on other simpler data structures.</p>
+
+  <p class="body"><a id="pgfId-999273"></a>Figure 9.3 shows the construction of an example tree for the unidimensional case. This is an edge case, because singletons (tuples with dimension 1) will result in always using the <code class="fm-code-in-text">x</code> coordinate in points (that is, the whole singleton).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F3.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034472"></a>Figure 9.3 Constructing a BST from the pivots of a 1-D dataset. (Left) We add the first pivot, which is going to be the root of the tree. The pivot creates an implicit divide along the <code class="fm-code-in-text">x</code> axis, partitioning the remaining points into left and right subsets. The region covered by a node is the union of the partitions its pivot creates, so the root covers the whole subset. (Center) Each of the two sub-regions implied by the root is further partitioned by selecting a point in each region as a pivot. As shown by the highlighting above the horizontal axis, each of these nodes at level 1 now covers half of the space (while the root still covers the whole space). (Right) Level 2 nodes are added, further partitioning the space. Notice how some regions are still only covered by nodes at level 1 because these intermediate nodes only have one child.</p>
+
+  <p class="body"><a id="pgfId-999311"></a>Notice how each node of the tree “covers” a region of the dataset in a hierarchical way: the root covers the whole dataset, level 1 nodes cover the left and right partitions created using the root as a pivot, and level 2 nodes cover the even smaller partitions created using level 1 nodes as pivots.</p>
+
+  <p class="body"><a id="pgfId-999320"></a>Here, when we use the term “cover,” we mean that given an entry <code class="fm-code-in-text">X</code> in the search space (in 1-D, given a real number <code class="fm-code-in-text">X</code>), and if we query the tree (as a binary search tree) for <code class="fm-code-in-text">X</code>, then all nodes we traverse during the search for <code class="fm-code-in-text">X</code> (which form a path from the root to a node <code class="fm-code-in-text">N</code>) cover <code class="fm-code-in-text">X</code>. In particular, the node on which the search stops is the one covering the smallest region for <code class="fm-code-in-text">X</code>.</p>
+
+  <p class="body"><a id="pgfId-999345"></a>In other words, each node in the tree is associated to a range of values for which it will be traversed when searching the tree; that range is the region covered by the node.</p>
+
+  <p class="body"><a id="pgfId-999356"></a>Make sure to go through the example in figure 9.3 and understand every step; maybe even try to run an example yourself (for instance, by just changing the pivots or their order and checking how the tree changes). It is important to understand the unidimensional case because it will make it simpler to understand the 2-d tree construction.</p>
+
+  <p class="body"><a id="pgfId-999365"></a>In order to better show the steps of the construction of a 2-d tree and highlight the advantages of cycling through the dimensions used to partition, we add a few cities to figure 9.1 in order to have a more uniform 2-D spatial distribution. In figure 9.4 we have also added a coordinate system: both the origin and the scale are arbitrary, and completely marginal for the results of the algorithm. We can always apply any translation and scale operation, since they preserve the Euclidean distances.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F4.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034514"></a>Figure 9.4 A richer version of the map in figure 9.1, with a coordinate system. Map source: ArcGIS.</p>
+
+  <p class="body"><a id="pgfId-999405"></a>Figure 9.5 shows the results of the first couple of steps of the algorithm that builds the tree. In this figure you can see a different scale than in the previous picture. While the other one was more realistic, with distances between points closer to the real distances in miles between cities, it could also generate some unnecessary confusion in the drawings; moreover, as we mentioned, the coordinate system is not really important for the algorithm, as long as it’s consistent.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F5.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034556"></a>Figure 9.5 The first two steps of constructing a k-d tree for our map of DC cities. (Left) First we split vertically with pivot “Opal City,” which becomes the root of the k-d tree. (Right) The right partition (created by the root) is further split along a horizontal line passing through our second pivot, “Civic City,” so in the BST we add a right child to the root. This node corresponds to another split into a top and bottom sub-region.</p>
+
+  <p class="body"><a id="pgfId-999447"></a>The first point we choose as pivot is “Opal City.”<a href="#pgfId-1008520"><sup class="footnotenumber">2</sup></a> Since we first split using <code class="fm-code-in-text">x</code> coordinates, all cities on its left will go into one partition, and all cities on its right will go to the other partition. Then, as a second step, let’s focus on the right partition. We choose, for instance, “Civic City” as a pivot, and this time we have to use <code class="fm-code-in-text">y</code> coordinates to split, so all points in the top-right region will go in a sub-partition of the right one, and all points in the bottom-right region will go into the other. We now have three partitions, and we can further split any of them.</p>
+
+  <p class="body"><a id="pgfId-999471"></a>In figure 9.6, we show the resulting tree after inserting all the cities (without the warehouses). The edges have the same vertical or horizontal split on each level, and both vertical and horizontal edges are alternated in any path.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F6.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034598"></a>Figure 9.6 The k-d tree resulting after adding all cities in figure 9.4. (We haven’t added warehouses to the tree, both for the sake of clarity and because it makes more sense to create a tree with just one kind of entries, either cities or warehouses, and search the other kind on it.)</p>
+
+  <p class="body"><a id="pgfId-999485"></a>Splits now define 10 clearly separated regions, and if you look at how warehouses are distributed, you can get an idea of what city they might be close to with just a glance at the region they are in.</p>
+
+  <p class="body"><a id="pgfId-999517"></a>There is not, however, a direct match, and looking at regions is not enough to determine the closest point. For instance, if you look at <code class="fm-code-in-text">B-8</code> in the picture, it’s not clear if Buffalo, Pittsburgh, or Harrisburg is the closest city, and <code class="fm-code-in-text">C-6</code> looks closer to Syracuse than Harrisburg, despite being “covered” by the latter and not the former.</p>
+
+  <p class="body"><a id="pgfId-999536"></a>Determining the closest point(s) requires a few more steps than in regular binary search trees (the unidimensional case), and we will defer the description of the full algorithm to the next section.</p>
+
+  <p class="body"><a id="pgfId-999545"></a>As mentioned, this construction method for k-d trees naturally generalizes to higher dimensions, although it becomes more difficult to visualize the trees and the spaces itself.</p>
+
+  <p class="body"><a id="pgfId-999554"></a>For <code class="fm-code-in-text">k=3</code>, we can still imagine <span class="cambria">ℝ</span><sup class="superscript">3</sup> divided in parallelepipeds, as shown in figure 9.7, but for 4-D and further, we lack an immediate geometric interpretation. That said, as long as we treat k-D points as tuples, it is possible to follow the same steps we have seen for a 2d-tree without any <a id="marker-1007295"></a><a id="marker-1007299"></a><a id="marker-1007303"></a><a id="marker-1007307"></a>change.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F7.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034650"></a>Figure 9.7 An example of a 3-D tree (aka k-d tree with dimension 3). For the sake of clarity, regions are not highlighted, and nodes are filled with the same color of their split planes.</p>
+
+  <h3 class="fm-head2" id="heading_id_6"><a id="pgfId-999599"></a>9.2.2 Invariants</h3>
+
+  <p class="body"><a id="pgfId-999611"></a>We <a id="marker-1007311"></a><a id="marker-1007315"></a>could sum up the definition of k-d trees in a few invariants. A k-d tree is defined as a binary search tree, whose elements are <code class="fm-code-in-text">k</code>-dimensional points, and that abides by the following <a id="marker-1007319"></a><a id="marker-1007323"></a>invariants:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-999637"></a>All points in the tree have dimension <code class="fm-code-in-text">k</code>.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-999651"></a>Each level has a <i class="calibre15">split coordinate</i><a class="calibre14" id="marker-1007327"></a> index <code class="fm-code-in-text">j</code>, such that <code class="fm-code-in-text">0</code> <span class="cambria">≤</span> <code class="fm-code-in-text">j &lt; k</code>.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-999671"></a>If a node <code class="fm-code-in-text">N</code>’s split coordinate index is <code class="fm-code-in-text">j</code>, then <code class="fm-code-in-text">N</code>’s children have a split coordinate equal to <code class="fm-code-in-text">(j+1) mod k</code>.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-999691"></a>For each node <code class="fm-code-in-text">N</code>, with split coordinate index <code class="fm-code-in-text">j</code>, all nodes <code class="fm-code-in-text">L</code> in its left subtree have a smaller value for <code class="fm-code-in-text">N</code>’s split coordinate, <code class="fm-code-in-text">L[j] &lt; N[j]</code>, and all nodes <code class="fm-code-in-text">R</code> on <code class="fm-code-in-text">N</code>’s right subtree have a larger or equal value for <code class="fm-code-in-text">N</code>’s split coordinate, <code class="fm-code-in-text">R[j]</code> ≥ <code class="fm-code-in-text">N[j]</code>.</p>
+    </li>
+  </ul>
+
+  <h3 class="fm-head2" id="heading_id_7"><a id="pgfId-999722"></a>9.2.2 The importance of being balanced</h3>
+
+  <p class="body"><a id="pgfId-999740"></a>So <a id="marker-1007331"></a><a id="marker-1007335"></a>far in this section we’ve consciously ignored a detail, a special characteristic we look for when it comes to binary search trees: whether the tree is balanced or not. As for the regular <code class="fm-code-in-text">BST</code>, you might have already figured out that the order in which we insert elements in our k-d tree determines the shape of the tree. Even having finite areas is not a synonym of having small areas, or good partitioning. If you look at the example in figure 9.6, we have carefully chosen points “by hand” in order to create a balanced tree, but it is easy to provide an example of a terrible insertion sequence that would create an imbalanced tree (just insert points starting from the top-left going in order toward the bottom-right corner, for instance).</p>
+
+  <p class="body"><a id="pgfId-999758"></a>Here we also consider a binary partitioning “good” only if it manages to split the whole set being partitioned into two subsets approximately of the same size.</p>
+
+  <p class="body"><a id="pgfId-999771"></a>If we manage to obtain a good partitioning at each step, we will have a balanced tree with logarithmic height. Given a sequence of points, it is possible, however, to choose an order of insertion for the points that will produce a skewed tree with linear height.</p>
+
+  <p class="body"><a id="pgfId-999784"></a>We’ll see in a few pages how we can prevent this from happening under certain conditions. Rebalancing on insertion is not, unfortunately, as viable an option for k-d trees as it was for binary search trees.</p>
+
+  <p class="body"><a id="pgfId-999797"></a>Before worrying about balancing trees, let’s see in detail the way methods such as <code class="fm-code-in-text">insert</code><a id="marker-1007339"></a>, <code class="fm-code-in-text">remove</code><a id="marker-1007343"></a>, and all the queries work for <a id="marker-1007347"></a><a id="marker-1007351"></a>k-d <a id="marker-1007355"></a><a id="marker-1007359"></a><a id="marker-1007363"></a>trees.</p>
+
+  <h2 class="fm-head" id="heading_id_8"><a id="pgfId-999822"></a>9.3 Methods</h2>
+
+  <p class="body"><a id="pgfId-999834"></a>We <a id="marker-1007367"></a><a id="marker-1007371"></a><a id="marker-1007375"></a>have now seen a few examples of k-d trees and how we can construct them. By now, it should be clear what a k-d tree looks like, the main ideas behind this data structure, and how we can leverage it.</p>
+
+  <p class="body"><a id="pgfId-999851"></a>It’s time to delve into the main methods for k-d trees and see how they work and how they can be implemented. In this section we will present pseudo-code for these methods, and you can find an actual implementation on our <span class="fm-hyperlink">repo</span> on GitHub.<a href="#pgfId-1008532"><sup class="footnotenumber">3</sup></a></p>
+
+  <p class="body"><a id="pgfId-999870"></a>Figure 9.8 shows a pre-constructed k-d tree that we are going to use as a starting point for this section. In order to focus on the details of the algorithm, we are going to use a simplified view, showing points on a Cartesian plane where axes are omitted. Points are denoted with capital letters (we are leaving out city names for now) to abstract out the context and focus on the algorithms. Vertical and horizontal splits are still shown, but we won’t highlight the regions as we did in figures 9.6; as a consequence, we can fill tree nodes (instead of edges) with shading to show that vertical or horizontal splits will be used at a certain level.</p>
+
+  <p class="body"><a id="pgfId-999898"></a>While in figure 9.8 coordinates are shown next to both nodes and points, we might sometimes omit them for the sake of neatness, as shown in figure 9.8.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F8.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034692"></a>Figure 9.8 An example k-d tree for a 2-D dataset. On the left, the tree representation. On the right, a visualization of (a portion of) the 2-D Cartesian plane, where the origin is at the center of the square. The vertical lines pass through nodes A, D, and E and correspond to splits along the <code class="fm-code-in-text">x</code> coordinate. The horizontal lines are drawn through nodes B, C, and F, and correspond to splits along the <code class="fm-code-in-text">y</code> coordinate.</p>
+
+  <p class="body"><a id="pgfId-999941"></a>We will start with the “easy” methods first: <code class="fm-code-in-text">search</code> and <code class="fm-code-in-text">insert</code> work almost exactly as in basic <i class="calibre17">BST</i><a id="marker-1007379"></a>s; we will still describe them and provide their pseudo-code, but if you are already familiar with binary search trees, feel free to skim through the next few sub-sections.</p>
+
+  <p class="body"><a id="pgfId-999957"></a>But before that, we need to define a model for the k-d tree and its nodes; see listing 9.1.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015121"></a>Listing 9.1 The <code class="fm-code-in-text">KdTree</code> class</p>
+  <pre class="programlisting">class KdNode
+  <b class="calibre21">#type</b> tuple(k)
+  point
+  <b class="calibre21">#type</b> KdNode
+  left
+  <b class="calibre21">#type</b> KdNode
+  right
+  <b class="calibre21">#type</b> integer
+  level
+  <b class="calibre21">function</b> KdNode(point, left, right, level)
+   
+<b class="calibre21">class</b> KdTree
+  <b class="calibre21">#type</b> KdNode
+  root
+  <b class="calibre21">#type</b> integer 
+  k
+  <b class="calibre21">function</b> KdTree(points=[])</pre>
+
+  <p class="body"><a id="pgfId-1000137"></a>A <code class="fm-code-in-text">KdTree</code><a id="marker-1007383"></a> just contains a root node and a constructor method, taking an optional array of points as input. We’ll take a look at how a k-d tree can be constructed later, after we introduce the insertion method. For now, suffice it to say that it will set the root to either a void entry (be it <code class="fm-code-in-text">null</code>, a special instance of <code class="fm-code-in-text">KdNode</code><a id="marker-1007387"></a>, or whatever is more appropriate for the language used).</p>
+
+  <p class="body"><a id="pgfId-1000154"></a>For the sake of convenience, let’s assume a tree also stores the value <code class="fm-code-in-text">k</code>, the dimension of the space on which the tree is defined.</p>
+
+  <p class="body"><a id="pgfId-1000165"></a>The root is, as said, an instance of <code class="fm-code-in-text">KdNode</code>. This data structure models a node of a <i class="calibre17">BST</i><a id="marker-1007391"></a>, with its left and right children, and its value, a point in the <code class="fm-code-in-text">k</code>-dimensional space. We will use the special value <code class="fm-code-in-text">null</code> to model an empty node (and thus an empty tree).</p>
+
+  <h3 class="fm-head2" id="heading_id_9"><a id="pgfId-1000186"></a>9.3.1 Search</h3>
+
+  <p class="body"><a id="pgfId-1000198"></a>In <a id="marker-1007395"></a><a id="marker-1007399"></a><a id="marker-1007403"></a>section 9.2 we have implicitly described how search works on k-d trees. There is nothing fancy in this algorithm; it’s just a regular search on binary search trees storing tuples, with the caveat that instead of comparing the whole tuple at each step, we only use one coordinate. At level <code class="fm-code-in-text">i</code>, we compare the <code class="fm-code-in-text">i</code>-th coordinate (or <code class="fm-code-in-text">i mod k, if i</code> ≥ <code class="fm-code-in-text">k</code>).</p>
+
+  <p class="body"><a id="pgfId-1000225"></a>Listing 9.2 shows a few helper functions that will help us keeping our code clean. We encapsulate in these functions the logic of cycling through split coordinates while traversing the tree, instead of duplicating it across all the methods. This way the other methods will be more readable, and if we ever have to change the way this comparison is done (for instance, because we find a bug or we want to implement a fancier algorithm), we just need to touch one single place in the code base.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015151"></a>Listing 9.2 Helper functions</p>
+  <pre class="programlisting"><b class="calibre21">function</b> getNodeKey(node)                                        <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">return</b> getPointKey(node.point, node.level)                     <span class="fm-combinumeral">❷</span>
+ 
+<b class="calibre21">function</b> getPointKey(point, level)                               <span class="fm-combinumeral">❸</span>
+  j ← level % k                                                 <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">return</b> point[j]                                                <span class="fm-combinumeral">❺</span>
+ 
+<b class="calibre21">function</b> compare(point, node)                                    <span class="fm-combinumeral">❻</span>
+  <b class="calibre21">return</b> sign(getPointKey(point, node.level) - getNodeKey(node)) <span class="fm-combinumeral">❼</span>
+ 
+<b class="calibre21">function</b> splitDistance(point, node)                              <span class="fm-combinumeral">❽</span>
+  <b class="calibre21">return</b> abs(getPointKey(point, node.level) - getNodeKey(node))  <span class="fm-combinumeral">❾</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032767"></a><span class="fm-combinumeral">❶</span> Given a tree node, returns the value of the coordinate that needs to be used, given the level at which the node is stored</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032788"></a><span class="fm-combinumeral">❷</span> In turn, it calls the function extracting this value from the node point.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032805"></a><span class="fm-combinumeral">❸</span> Given a point (a tuple with <code class="fm-code-in-text2">k</code> values) and an index for the level, returns the tuple entry that should be used in comparisons for nodes at that level</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032825"></a><span class="fm-combinumeral">❹</span> We assume the method has access to <code class="fm-code-in-text2">k</code>, the dimension of the tree. At level <code class="fm-code-in-text2">i</code>, we need to extract the tuple value at index <code class="fm-code-in-text2">i mod k</code> (0-based indexing).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032842"></a><span class="fm-combinumeral">❺</span> Just returns the correct tuple entry</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032859"></a><span class="fm-combinumeral">❻</span> Compares a point to a node, returning 0 if the node’s point matches the first argument, a value lower than 0 if the point is on the “left” of the node, greater than 0 otherwise</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032876"></a><span class="fm-combinumeral">❼</span> The <code class="fm-code-in-text2">sign</code> function<a id="marker-1032880"></a> returns the sign of a numeric value: -1 for negative values, +1 for positive ones, or 0.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032894"></a><span class="fm-combinumeral">❽</span> Computes the distance between a point and its projection on the split line passing through a node</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032911"></a><span class="fm-combinumeral">❾</span> This distance is nothing other than the absolute value of the difference between the <code class="fm-code-in-text2">j</code>-th coordinates of the two points, where <code class="fm-code-in-text2">j = node.level mod k</code>.</p>
+
+  <p class="body"><a id="pgfId-1000521"></a>Listing 9.3 shows the pseudo-code for the search method. The pseudo-code for all these methods will assume that we are providing an internal version that takes a <code class="fm-code-in-text">KdNode</code><a id="marker-1007411"></a> as argument. The public API for <code class="fm-code-in-text">KdTree</code><a id="marker-1007415"></a> will provide adapter methods that will call the internal ones; for instance <code class="fm-code-in-text">KdTree::search(target</code><a id="marker-1007419"></a><code class="fm-code-in-text">)</code> will call <code class="fm-code-in-text">search(root, target)</code>.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015179"></a>Listing 9.3 The <code class="fm-code-in-text">search</code> method</p>
+  <pre class="programlisting"><b class="calibre21">function</b> search(node, target)              <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> node == <b class="calibre21">null then</b>                     <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return null</b>
+  <b class="calibre21">elsif</b> node.point == target <b class="calibre21">then</b>          <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return</b> node
+  <b class="calibre21">elsif</b> compare(target, node) &lt; 0 <b class="calibre21">then</b>     <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">return</b> search(node.left, target)
+  <b class="calibre21">else</b>                                     <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">return</b> search(node.right, target)</pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032524"></a><span class="fm-combinumeral">❶</span> Search returns the tree node that contains a target point, if the point is stored in the tree; it returns <code class="fm-code-in-text2">null</code> otherwise. We explicitly pass the root of the (sub)tree we want to search so we can reuse this function for subtrees.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032548"></a><span class="fm-combinumeral">❷</span> If the <code class="fm-code-in-text2">node</code><a id="marker-1032552"></a> is already <code class="fm-code-in-text2">null</code>, we are traversing an empty tree, and by definition it does not contain any point.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032566"></a><span class="fm-combinumeral">❸</span> If the target point matches this node’s point, then we have found what we are looking for.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032583"></a><span class="fm-combinumeral">❹</span> Otherwise, we need to compare the appropriate coordinates of target and node’s point. We use the helper method previously defined, and check if it is lower than 0, which would mean that we have to take a left turn during tree traversal, and therefore we run the method recursively on the left or right branch.</p>
+
+  <p class="body"><a id="pgfId-1000731"></a>This way we have more flexibility in reusing these methods (for instance, we can run search on just a subtree, not the whole tree).</p>
+
+  <p class="body"><a id="pgfId-1000742"></a>Notice that this recursive implementation is eligible for tail-recursion optimization on those languages and compilers supporting it (check appendix E for an explanation of tail-recursion).</p>
+
+  <p class="body"><a id="pgfId-1000751"></a>Let’s follow the example in figure 9.9 step by step.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F9.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034734"></a>Figure 9.9 An example of an unsuccessful search on a k-d tree (2-D). The searched point, <code class="fm-code-in-text">P</code>, would ideally lie in the region highlighted on the bottom left, which corresponds to the left subtree of node <code class="fm-code-in-text">D</code>.</p>
+
+  <p class="body"><a id="pgfId-1000785"></a>We start by calling <code class="fm-code-in-text">search(A, (-1.5, -2))</code>, where node <code class="fm-code-in-text">A</code> is the root of the k-d tree, as shown in the figure. Since <code class="fm-code-in-text">A</code> is not <code class="fm-code-in-text">null</code>, at line #2 the condition fails, and we can compare <code class="fm-code-in-text">A.point</code>, which is the tuple <code class="fm-code-in-text">(0, 5)</code>, to our target at line #4. They obviously don’t match, so we move on to line #6 and use the <code class="fm-code-in-text">compare</code> helper function to check which direction we should take. <code class="fm-code-in-text">A.level</code> will evaluate to <code class="fm-code-in-text">0</code>, so we compare the first value in each of the tuples: <code class="fm-code-in-text">-1.5 &lt; 0</code>, so we traverse the left subtree and call <code class="fm-code-in-text">search(C, (-1.5, -2))</code>.</p>
+
+  <p class="body"><a id="pgfId-1000815"></a>For this call, we repeat more or less the same steps, except this time <code class="fm-code-in-text">C.level</code> is equal to 1, so we compare the second value in each tuple. <code class="fm-code-in-text">-2 &lt; 6</code> so we still go left, calling <code class="fm-code-in-text">search(D, (-1.5, -2))</code>.</p>
+
+  <p class="body"><a id="pgfId-1000831"></a>Once again, we go through lines #2, #4, and #6, and we take a left turn; only this time, <code class="fm-code-in-text">D.left == null</code>, so we call <code class="fm-code-in-text">search(null, (-1.5, -2))</code>, which will return <code class="fm-code-in-text">null</code> at line #2. The execution backtracks through the call stack, and our original call will also return <code class="fm-code-in-text">null</code>, stating that the target point was not found on the k-d tree.</p>
+
+  <p class="body"><a id="pgfId-1000849"></a>Figure 9.10 shows another example, calling <code class="fm-code-in-text">search(A, (2, -5))</code>. On the first call, conditions at lines #2 and #4 are false, as well as the condition at line #6, since <code class="fm-code-in-text">2 &gt; 0</code>. This time, therefore, we take a right turn at node <code class="fm-code-in-text">A</code>, and recursively call <code class="fm-code-in-text">search(B, (2, -5))</code>, then in turn <code class="fm-code-in-text">search(E, (2, -5))</code>, for which the condition at line #4 is true (<code class="fm-code-in-text">E.point</code> matches target), and thus we finally return node <code class="fm-code-in-text">E</code> as the result of the original call.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F10.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034779"></a>Figure 9.10 An example of a successful search on a k-d tree (2-D). Here points <code class="fm-code-in-text">P</code> and <code class="fm-code-in-text">E</code> are coincident, and the highlighted region corresponds to the subtree rooted at node <code class="fm-code-in-text">E</code>.</p>
+
+  <p class="body"><a id="pgfId-1000875"></a>How fast is <code class="fm-code-in-text">search</code> on a k-d tree? Like for regular <i class="calibre17">BST</i><a id="marker-1007431"></a>s, its running time is proportional to the height of the tree. If we keep the tree balanced, therefore, the running time will be <code class="fm-code-in-text">O(log(n))</code> for a tree holding <code class="fm-code-in-text">n</code> <a id="marker-1007435"></a><a id="marker-1007439"></a><a id="marker-1007443"></a>points.</p>
+
+  <h3 class="fm-head2" id="heading_id_10"><a id="pgfId-1000929"></a>9.3.2 Insert</h3>
+
+  <p class="body"><a id="pgfId-1000941"></a>As <a id="marker-1007447"></a><a id="marker-1007451"></a><a id="marker-1007455"></a>we have seen on BST<a id="marker-1007459"></a>s, insertion can be implemented in two steps. The first step is running a search for the point to add, which will either find that the point is already in the tree, or stop at its parent-to-be, the node to which the new point should be added as a child. If the point is already in the tree, then what we do next depends on the policy we adopt on duplicates. If duplicates are not allowed, we might ignore the new point or fail; otherwise we have a wide range of solutions, from using a counter on nodes to keep track of how many times a point was added, up to consistently adding duplicates to either branch of a node—for instance, always in the left sub-branch, although as we have seen in appendix C, this leads to slightly unbalanced trees on average.</p>
+
+  <p class="body"><a id="pgfId-1000975"></a>If, instead, the point was not on the tree, search will fail on the node that should have the new point as its child, and the second step will consist of creating a new node for the point and adding it in the correct branch of its parent.</p>
+
+  <p class="body"><a id="pgfId-1000984"></a>Listing 9.4 shows an approach that doesn’t reuse the <code class="fm-code-in-text">search</code> method. This approach, while not DRY,<a href="#pgfId-1008548"><sup class="footnotenumber">4</sup></a> allows us to simplify both methods. To be reusable in <code class="fm-code-in-text">insert</code><a id="marker-1007463"></a>, <code class="fm-code-in-text">search</code><a id="marker-1007467"></a> should also return the parent of the node found (and even more importantly, the last node traversed, when the target is not found), which is not of any particular use for <code class="fm-code-in-text">search</code>, whose implementation would thus become unnecessarily complicated. Moreover, this way we can write insert in a more elegant way, using a pattern that naturally supports immutability.<a href="#pgfId-1008568"><sup class="footnotenumber">5</sup></a></p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015207"></a>Listing 9.4 The <code class="fm-code-in-text">insert</code> method</p>
+  <pre class="programlisting"><b class="calibre21">function</b> insert(node, newPoint, level=0)                       <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> node == <b class="calibre21">null then</b>                                         <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return new</b> KdNode(newPoint, null, null, level)
+  <b class="calibre21">elsif</b> node.point == newPoint <b class="calibre21">then</b>                            <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return</b> node
+  <b class="calibre21">elsif</b> compare(newPoint, node) &lt; 0 <b class="calibre21">then</b>                       <span class="fm-combinumeral">❹</span>
+    node.left ← insert(node.left, newPoint, node.level + 1)    <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">return</b> node                                                <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">else</b>                                                         <span class="fm-combinumeral">❹</span>
+    node.right ← insert(node.right, newPoint, node.level + 1)  <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">return</b> node</pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032142"></a><span class="fm-combinumeral">❶</span> Inserts a point on the tree. The method will return a pointer to the root of the (sub)tree containing the new point. The level to which the node is added is set to 0 by default.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032166"></a><span class="fm-combinumeral">❷</span> If <code class="fm-code-in-text2">node</code><a id="marker-1032170"></a> is <code class="fm-code-in-text2">null</code>, we are traversing an empty tree, so we have performed an unsuccessful search. We can therefore create a new node and return it, so the caller can store a reference to it. Notice how this also works when the tree is empty, creating and returning a new root.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032184"></a><span class="fm-combinumeral">❸</span> If the new point matches this node’s point, we ran a successful search and we have a duplicate. Here, we will just ignore duplicates, but you can handle it by changing these lines.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032201"></a><span class="fm-combinumeral">❹</span> Otherwise, we need to compare the coordinates of <code class="fm-code-in-text2">target</code> and <code class="fm-code-in-text2">node</code>’s point: we use the helper method previously defined, and check if it is lower than 0, which would mean we have to take a left turn during tree traversal, and therefore we run the method recursively on the left branch, setting the result as the new left (or right) child of the current node.</p>
+
+  <p class="body"><a id="pgfId-1001233"></a>Figures 9.11 and 9.12 show two examples of insertion of new points on the k-d tree in figure 9.10.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F11.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034835"></a>Figure 9.11 Inserting a new point on a k-d tree (2-D). To the k-d tree in figure 9.10 we add a new point <code class="fm-code-in-text">G</code>. Insertion, like for BSTs, consists of a (unsuccessful) search, after which we can identify the node that will be the parent of the node to add. If the new point already exists on the tree, your conflict resolution policy might lead you to ignore the duplicate or handle it properly.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F12.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034882"></a>Figure 9.12 Another example of inserting a new point on a k-d tree (2-D). The starting point is the k-d tree resulting after the insertion in figure 9.11.</p>
+
+  <p class="body"><a id="pgfId-1001242"></a>Let’s follow the first example step by step. It starts with a call to <code class="fm-code-in-text">insert(A, (-1.5, 2))</code>, where we don’t pass any value for <code class="fm-code-in-text">level</code>, thus defaulting it to the right value for root (as defined in the function signature, this value is <code class="fm-code-in-text">0</code>).</p>
+
+  <p class="body"><a id="pgfId-1001262"></a><code class="fm-code-in-text">A &lt;&gt; null</code>, so the condition at line #2 won’t match; <code class="fm-code-in-text">A.point &lt;&gt; (-1.5, 2)</code>, and also at line #4 the condition is <code class="fm-code-in-text">false</code>. When we get to line #6, <code class="fm-code-in-text">-1.5 &lt; 0</code>, so <code class="fm-code-in-text">compare</code> will return <code class="fm-code-in-text">-1,</code> and we traverse the left subtree and call <code class="fm-code-in-text">insert(C, (-1.5, -2), 1)</code>.</p>
+
+  <p class="body"><a id="pgfId-1001286"></a>The next few calls will proceed similarly (like we have seen for <code class="fm-code-in-text">search</code><a id="marker-1007475"></a>), and in turn we call <code class="fm-code-in-text">insert(D, (-1.5, -2), 2), insert(null, (-1.5, -2), 3)</code>. For the latter, the condition at line #2 will be true, so we create a new node, <code class="fm-code-in-text">KdNode((-1.5, -2), null, null, 3)</code>, and return it to the previous call in the stack trace. There, at line #7, we set <code class="fm-code-in-text">.left</code> to this new <code class="fm-code-in-text">KdNode</code><a id="marker-1007479"></a> we created, and then return <code class="fm-code-in-text">D</code>.</p>
+
+  <p class="body"><a id="pgfId-1001341"></a>Notice how at line #6 we are breaking ties by partitioning coordinates with the same value as the current node on its right. This decision might seem of little importance, but we will see that it’s a big deal when it comes to deleting nodes.</p>
+
+  <p class="body"><a id="pgfId-1001354"></a>If we take a look at the stack trace for the example in figure 9.12, we can see how it is entirely similar to the one for the previous <a id="marker-1007483"></a><a id="marker-1007487"></a><a id="marker-1007491"></a>case:</p>
+  <pre class="programlisting">insert(A, (2.5, -3))
+  insert(B, (-1.5, 2), 1)
+    insert(E, (-1.5, 2), 2)
+     insert(null, (-1.5, 2), 3)
+     return new KdNode((-1.5, 2), null, null, 3)
+    return E
+  return B
+return A</pre>
+
+  <h3 class="fm-head2" id="heading_id_11"><a id="pgfId-1001481"></a>9.3.3 Balanced tree</h3>
+
+  <p class="body"><a id="pgfId-1001495"></a>Before <a id="marker-1007495"></a><a id="marker-1007499"></a>moving on to the most advanced methods designed for k-d trees, let’s take a step back. In section 9.2.3 we have already described one key point of k-d trees. We need our tree to be balanced. In the previous sections we saw how search and insertion have running time <code class="fm-code-in-text">O(h)</code> proportional to the height of the tree, and thus having a balanced tree will mean that <code class="fm-code-in-text">h = log(n),</code> and in turn that all these methods will run in logarithmic time.</p>
+
+  <p class="body"><a id="pgfId-1001518"></a>Unfortunately, a k-d tree is not a self-balancing tree, like RB-trees or 2-3-trees, for example. This means that if we perform a large number of insertions and deletions on a tree, on average the tree will be tendentially balanced, but we have no guarantee of that. Moreover, if we resolve ties on coordinate comparison by always going to the same side, then it is proven that we will break the balance over many operations.</p>
+
+  <p class="body"><a id="pgfId-1001531"></a>To solve this problem, we can slightly change the <code class="fm-code-in-text">compare</code> method that we defined in listing 9.2 so that it will never return 0. Whenever we have a match, half of the time it will return -1, and half of the time +1, thereby achieving a better balance for the tree. The choice needs to be consistent, so we can’t use randomness and have a perfect balance; instead, a possible solution to implement this correction, as shown in listing 9.5, is to return -1 when the node’s level is even, and +1 when it’s odd (or vice versa; it doesn’t really matter, as long as it’s consistent).</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015259"></a>Listing 9.5 Revised <code class="fm-code-in-text">compare</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> compare(point, node)                                     <span class="fm-combinumeral">❶</span>
+  s ← sign(getPointKey(point, node.level) - getNodeKey(node))     <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">if</b> s == 0 <b class="calibre21">then</b>                                                  <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return</b> node.level % 2 == 0 ? -1 : +1
+  <b class="calibre21">else</b>
+    <b class="calibre21">return</b> s</pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031918"></a><span class="fm-combinumeral">❶</span> The signature of the method remains unchanged.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031939"></a><span class="fm-combinumeral">❷</span> We store the value of the sign of the difference between the components, that is, what was computed by the old method.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031959"></a><span class="fm-combinumeral">❸</span> If this value is 0, meaning that the value of the coordinate compared is the same, then we go left half of the time, and right the other half. Otherwise, we just return the sign that will be either 1 or -1.</p>
+
+  <p class="body"><a id="pgfId-1001671"></a>This helps us to achieve a better-balanced tree on average, but still doesn’t provide any guarantee. To date, there is not a solution to easily keep a k-d tree balanced while maintaining <code class="fm-code-in-text">O(h)</code> running time for insertion.</p>
+
+  <p class="body"><a id="pgfId-1001692"></a>Nevertheless, if we know the set of points to insert in advance (when we create the k-d tree), then we can find an optimal order of insertion that allows us to construct a balanced tree. If the tree is not changed after construction, or if the number of elements inserted/deleted is negligible in comparison to the size of the tree, then we can have a worst-case balanced k-d tree, and <code class="fm-code-in-text">insert</code><a id="marker-1007503"></a> and <code class="fm-code-in-text">search</code><a id="marker-1007507"></a> will run in worst-case logarithmic time.</p>
+
+  <p class="body"><a id="pgfId-1001709"></a>Listing 9.6 shows the algorithm to create a balanced k-d tree from a set of points.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015287"></a>Listing 9.6 Balanced construction</p>
+  <pre class="programlisting"><b class="calibre21">function</b> constructKdTree(points, level=0)                    <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> size(points) == 0 <b class="calibre21">then</b>                                  <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return null</b>
+  <b class="calibre21">elsif</b> size(points) == 1 <b class="calibre21">then</b>                               <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return new</b> KdNode(points[0], null, null, level)
+  <b class="calibre21">else</b>
+    (median, left, right) ← partition(points, level)         <span class="fm-combinumeral">❹</span>
+    leftTree ← constructKdTree(left, level + 1)              <span class="fm-combinumeral">❺</span>
+    rightTree ← constructKdTree(right, level + 1)            <span class="fm-combinumeral">❺</span>
+    <b class="calibre21">return new</b> KdNode(median, leftTree, rightTree, level)    <span class="fm-combinumeral">❻</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031491"></a><span class="fm-combinumeral">❶</span> Constructs a k-d tree from a set of <code class="fm-code-in-text2">points</code>. We also pass the level, so we can recursively call this method for subtrees.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031515"></a><span class="fm-combinumeral">❷</span> If <code class="fm-code-in-text2">points</code> is empty, we need to create an empty node, so we just return <code class="fm-code-in-text2">null</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031532"></a><span class="fm-combinumeral">❸</span> If <code class="fm-code-in-text2">points</code> has just one element, we can create a leaf, a node without children, so recursion stops here.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031549"></a><span class="fm-combinumeral">❹</span> Otherwise, we first find the median of the set of points and its left and right partitions. We use a method, not shown here for the sake of space, similar to quicksort’s partition—just operating on one of the coordinates at a time (the coordinate whose index is given by level).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031573"></a><span class="fm-combinumeral">❺</span> Recursively constructs k-d trees for the left and right partitions</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031590"></a><span class="fm-combinumeral">❻</span> Finally, the root of this tree is created, assigning the left and right subtrees previously created.</p>
+
+  <p class="body"><a id="pgfId-1001926"></a>The principle is simple: the tree has to hold all the points in the set and, ideally, we would like left and right subtrees of the root to have the same number of elements. To achieve that, we can find the median in the set of points with respect to the first coordinate of the points, and use it as a pivot for the root, having half of the remaining points that will end up on the root’s left branch, and half on its right branch. But each of the branches of the root is a k-d tree itself, so it is possible to repeat the same step for the root’s left and right subtrees, with the caveat that we need to find the medians comparing the second coordinates for each point, instead. And so on for each level of the tree; we just need to keep track of the depth of the recursion, which tells us in what level of the tree we currently are.</p>
+
+  <p class="body"><a id="pgfId-1001937"></a>The key point in listing 9.6 is the call to the <code class="fm-code-in-text">partition</code> method<a id="marker-1007511"></a> at line #7. We need to pass <code class="fm-code-in-text">level</code> as an argument because it will tell us which coordinate we need to use to compare points. The result of this call will be a tuple with the median of the <code class="fm-code-in-text">points</code> array<a id="marker-1007515"></a> and two new arrays with <code class="fm-code-in-text">(n-1)/2</code> elements each, if <code class="fm-code-in-text">size(points) == n</code>.</p>
+
+  <p class="body"><a id="pgfId-1001967"></a>Each point in <code class="fm-code-in-text">left</code> will be “smaller” (with respect to the coordinate at index <code class="fm-code-in-text">level % k</code>) than <code class="fm-code-in-text">median</code>, and each point in <code class="fm-code-in-text">right</code> will be “larger” than <code class="fm-code-in-text">median</code>; therefore, we can recursively construct both (balanced) subtrees using these two sets.</p>
+
+  <p class="body"><a id="pgfId-1001991"></a>Notice that we can’t just sort the array once and chunk it up into halves recursively, because at each level the sorting criteria change!</p>
+
+  <p class="body"><a id="pgfId-1002000"></a>To understand how this works, let’s consider a call to <code class="fm-code-in-text">constructKdTree([(0,5),(1,-1),(-1,6),(-0.5,0),(2,5),(2.5,3),(-1, 1),(-1.5,-2)])</code>.</p>
+
+  <p class="body"><a id="pgfId-1002012"></a>The median for this set (with regard to the first coordinate, the median of all the first values of the tuples) is either <code class="fm-code-in-text">-0.5</code> or <code class="fm-code-in-text">0</code>: there is an even number of elements, so there are technically two medians. You can double-check the values by sorting the array.</p>
+
+  <p class="body"><a id="pgfId-1002035"></a>Say we choose <code class="fm-code-in-text">-0.5</code> as the median; then we have</p>
+  <pre class="programlisting">(median, left, right) ← (-0.5,0), [(-1, 1),(-1.5,-2),(-1,6)], [(1,-1),
+<span class="fm-code-continuation-arrow">➥</span> (2.5,3),(2,5)(0,5)]</pre>
+
+  <p class="body"><a id="pgfId-1002060"></a>So, at line #8 we call <code class="fm-code-in-text">constructKdTree([(-1, 1),(-1.5,-2),(-1,6)], 1)</code> to create the root’s left subtree. This in turn will partition the sub-array, but comparing the second coordinates of each tuple, the median of <code class="fm-code-in-text">y</code> coordinates is 1, so we have</p>
+  <pre class="programlisting">(median, left, right) ← (-1, 1), [(-1.5,-2)], [(-1,6)]</pre>
+
+  <p class="body"><a id="pgfId-1002088"></a>And so on; the method would similarly run on the other partitions created on the initial array.</p>
+
+  <p class="body"><a id="pgfId-1002097"></a>What’s the running time of method <code class="fm-code-in-text">constructKdTree</code><a id="marker-1007519"></a>? We will use <code class="fm-code-in-text">T<sub class="subscript1">k</sub>(n)</code> to denote the running time for a k-d tree of dimension <code class="fm-code-in-text">k</code>, on an array with <code class="fm-code-in-text">n</code> elements. Let’s check the method step by step: lines #2–5 only require a constant amount of time, as does line #10, which is just creating a new node. Lines #8 and #9 are recursive calls, and they will be called on sets of points with at most <code class="fm-code-in-text">n/2</code> elements, so we know they will take <code class="fm-code-in-text">T<sub class="subscript1">k</sub>(n/2)</code> steps each.</p>
+
+  <p class="body"><a id="pgfId-1002129"></a>Finally, line #7, where we call <code class="fm-code-in-text">partition</code><a id="marker-1007523"></a>: it’s possible to find a median in linear time, and we can also partition an array of <code class="fm-code-in-text">n</code> elements around a pivot with <code class="fm-code-in-text">O(n)</code> swaps (or create two new arrays, also with <code class="fm-code-in-text">O(n)</code> total assignments).</p>
+
+  <p class="body"><a id="pgfId-1002149"></a>So, summing up, we have this formula for the running time:</p>
+  <pre class="programlisting">T<sub class="calibre25">k</sub>(n) = 2 * T<sub class="calibre25">k</sub>(n/2) + O(n)</pre>
+
+  <p class="body"><a id="pgfId-1002171"></a>There are a few ways to solve this equation—for example, the substitution method or telescoping—but the easiest is probably using master theorem.<a href="#pgfId-1008584"><sup class="footnotenumber">6</sup></a> All of these methods are beyond the scope for this book, so we will just provide you with the solution, leaving it to the curious reader to work out the details:</p>
+  <pre class="programlisting">T<sub class="calibre25">k</sub>(n) = O(n * log(n))</pre>
+
+  <p class="body"><a id="pgfId-1002195"></a>In other words, the balanced construction method takes <i class="calibre17">linearithmic</i><a id="marker-1007527"></a><a href="#pgfId-1008600"><sup class="footnotenumber">7</sup></a> time.</p>
+
+  <p class="body"><a id="pgfId-1002211"></a>To complete our analysis, if we look at the extra memory needed by this method, it will require <code class="fm-code-in-text">O(n)</code> memory for the tree. However, there is more. If we don’t partition the array in place and create a copy for each left and right sub-array, then each call to a partition will use <code class="fm-code-in-text">O(n)</code> extra memory. Deriving a similar formula to the one for the running time, we could find out that also <code class="fm-code-in-text">M(n) = O(n * log(n))</code>.</p>
+
+  <p class="body"><a id="pgfId-1002242"></a>Conversely, by partitioning the array in place, we can obtain the best possible result:</p>
+  <pre class="programlisting">M<sub class="calibre25">k</sub>(n) = O(n)</pre>
+
+  <p class="body"><a id="pgfId-1002262"></a>That’s because we only need a constant amount of memory for the internals of the function, plus the <code class="fm-code-in-text">O(n)</code> memory needed for the <a id="marker-1007531"></a><a id="marker-1007535"></a>tree.</p>
+
+  <h3 class="fm-head2" id="heading_id_12"><a id="pgfId-1002278"></a>9.3.4 Remove</h3>
+
+  <p class="body"><a id="pgfId-1002290"></a>After <a id="marker-1007539"></a><a id="marker-1007543"></a><a id="marker-1007547"></a><code class="fm-code-in-text">search</code><a id="marker-1007551"></a> and <code class="fm-code-in-text">insert</code><a id="marker-1007555"></a>, we can continue with the third basic operation on a container: <code class="fm-code-in-text">remove</code>. This is despite the fact that on a k-d tree, delete is not such a common operation, and some implementations don’t even offer this method. As we discussed in the previous section, k-d trees are not self-balancing, so they perform best when they are created with a static set of points, avoiding frequent insertion and removal.</p>
+
+  <p class="body"><a id="pgfId-1002318"></a>Nevertheless, in any real-world application you’ll likely need to be able to update your dataset, so we are going to describe how to remove elements. Figures 9.13 and 9.14 show the <code class="fm-code-in-text">remove</code> method in action on our example k-d tree, and the result of removing point <code class="fm-code-in-text">D</code> from it.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F13.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034926"></a>Figure 9.13 Deleting point <code class="fm-code-in-text">D</code> from our example k-d tree. Method <code class="fm-code-in-text">remove</code>, like for BSTs, consists of a (successful) search to find the node to remove, followed, if the node to remove is an internal node with at least one subtree, by a traversal to find an element with which it can be replaced. In this example, an internal node is removed.</p>
+
+  <p class="body"><a id="pgfId-1002362"></a>Similarly to <code class="fm-code-in-text">insert</code> and <code class="fm-code-in-text">search</code>, this method is based on binary search tree removal. There are, however, two issues that make k-d tree’s version sensibly more complicated, and they are both connected to how we find a replacement in the tree for the node we are going to remove.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F14.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1034968"></a>Figure 9.14 The k-d tree resulting after deleting point <code class="fm-code-in-text">D</code></p>
+
+  <p class="body"><a id="pgfId-1002399"></a>To see what these issues are, we need to take a step back. In binary search trees, when we delete a node, we can face one of three situations (see figure 9.15).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F15.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1035023"></a>Figure 9.15 Possible cases when deleting a node from a binary search tree. (A) Deleting a leaf. (B) Deleting a node with a single child. (Works symmetrically if the child is in the right branch). (C) Deleting a node with both children.</p>
+
+  <ol class="calibre18">
+    <li class="fm-list-numbered">
+      <p class="list"><a class="calibre14" id="pgfId-1002432"></a>The node we need to remove is a leaf. In this situation, we can just safely remove the node from the tree, and we are done.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1002448"></a>The node <code class="fm-code-in-text">N</code> to-be-removed has only one child. Here simply removing the node would disconnect the tree, but we can instead bypass it by connecting <code class="fm-code-in-text">N</code>’s parent to its children (independently of it being in the left or right subtree of <code class="fm-code-in-text">N</code>). This won’t violate any invariant for the <i class="calibre15">BST</i><a class="calibre14" id="marker-1007559"></a>. For instance, in the case shown in figure 9.15B, <code class="fm-code-in-text">N</code> is a left child of its parent <code class="fm-code-in-text">P</code>, so it’s smaller than or equal to <code class="fm-code-in-text">P</code>, but likewise, all elements in the subtree rooted at <code class="fm-code-in-text">N</code> will be smaller than or equal to <code class="fm-code-in-text">P</code>, including <code class="fm-code-in-text">N</code>’s child <code class="fm-code-in-text">L</code>.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1002486"></a>If the node <code class="fm-code-in-text">N</code> that we need to remove has both children, we can’t just replace it with one of its children (for instance, if we were to replace the root in figure 9.15C with its right child <code class="fm-code-in-text">R</code>, then we would have to merge <code class="fm-code-in-text">R</code>’s left child with <code class="fm-code-in-text">N</code>’s, and that would require worst-case linear time (and also be a waste).</p>
+
+      <p class="fm-list-body"><a class="calibre14" id="pgfId-1002507"></a>Instead, we can find the successor<a class="calibre14" href="#pgfId-1008622"><sup class="footnotenumber">8</sup></a> of <code class="fm-code-in-text">N</code>. By construction, it will be the minimum node in its right subtree, let’s call it <code class="fm-code-in-text">M</code>, which in turn means the leftmost node of its right subtree. Once we have found it, we can delete <code class="fm-code-in-text">M</code> and replace <code class="fm-code-in-text">N</code>’s value with <code class="fm-code-in-text">M</code>’s value. No invariant will be violated, because <code class="fm-code-in-text">M</code> was no smaller than <code class="fm-code-in-text">N</code>, and <code class="fm-code-in-text">N</code> in turn was no smaller than any node in its left subtree.</p>
+
+      <p class="fm-list-body"><a class="calibre14" id="pgfId-1002540"></a>Moreover, <code class="fm-code-in-text">M</code> will certainly configure as either case (A) or case (B), because being the left-most node, it won’t have a left child. This means that deleting <code class="fm-code-in-text">M</code> will be easy and recursion stops at <code class="fm-code-in-text">M</code>.</p>
+    </li>
+  </ol>
+
+  <p class="body"><a id="pgfId-1002555"></a>When we move from regular <i class="calibre17">BST</i>s to k-d trees, the first difference is caused by the fact that at each level we only use a single coordinate to partition points in the two branches. If we have to replace a node <code class="fm-code-in-text">N</code> at level <code class="fm-code-in-text">i</code>, at that level we are using coordinate <code class="fm-code-in-text">j = i mod k</code>, so we know its successor (for coordinate <code class="fm-code-in-text">j</code>) will be in <code class="fm-code-in-text">N</code>’s right subtree. However, when we move to <code class="fm-code-in-text">N</code>’s child, that node will use another coordinate, <code class="fm-code-in-text">j1 = (i+1) mod k</code>, to partition its children. As you can see in figure 9.16, that means that the successor of <code class="fm-code-in-text">N</code> doesn’t have to be in <code class="fm-code-in-text">R</code>’s left subtree.</p>
+
+  <p class="body"><a id="pgfId-1002591"></a>That’s bad news, because it means that while for <i class="calibre17">BST</i>s we could quickly traverse <code class="fm-code-in-text">N</code>’s right subtree to its leftmost node in order to find <code class="fm-code-in-text">N</code>’s successor, now we can only do that for level <code class="fm-code-in-text">l</code> where <code class="fm-code-in-text">l mod k == i mod k</code>. In all the other levels, we will have to traverse both subtrees to look for the minimum.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F16.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1035073"></a>Figure 9.16 An example of how the successor of a node, or more generally the minimum of a subtree with respect to a certain coordinate, can lie anywhere in the subtree. The results of a few calls to <code class="fm-code-in-text">findMin</code> on the whole tree and on node <code class="fm-code-in-text">B</code> are explicitly shown.</p>
+
+  <p class="body"><a id="pgfId-1002638"></a>Listing 9.7 shows the pseudo-code for the <code class="fm-code-in-text">findMin</code> method<a id="marker-1007563"></a>. The first difference you can see with respect to <i class="calibre17">BST</i>’s version is that we need to pass the index of the coordinate for which we look for the minimum. For instance, we could call <code class="fm-code-in-text">findMin(root, 2)</code> to search the node in the whole tree with the minimum value for the third coordinate—assuming <code class="fm-code-in-text">k&gt;=3</code>.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015365"></a>Listing 9.7 The <code class="fm-code-in-text">findMin</code> method</p>
+  <pre class="programlisting"><b class="calibre21">function</b> findMin(node, coordinateIndex)               <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> node == <b class="calibre21">null then</b>                                <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return null</b>
+  <b class="calibre21">elsif</b> node.level == coordinateIndex <b class="calibre21">then</b>            <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">if</b> node.left == <b class="calibre21">null then</b>                         <span class="fm-combinumeral">❹</span>
+      <b class="calibre21">return</b> node
+    <b class="calibre21">else</b>                                              <span class="fm-combinumeral">❺</span>
+      <b class="calibre21">return</b> findMin(node.left, coordinateIndex)
+  <b class="calibre21">else</b>
+    leftMin ← findMin(node.left, coordinateIndex)     <span class="fm-combinumeral">❻</span>
+    rightMin ← findMin(node.right, coordinateIndex)   <span class="fm-combinumeral">❻</span>
+    <b class="calibre21">return</b> min(node, leftMin, rightMin)               <span class="fm-combinumeral">❼</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031032"></a><span class="fm-combinumeral">❶</span> Finds the node in the tree with the minimum value for the coordinate at a given index</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031056"></a><span class="fm-combinumeral">❷</span> If <code class="fm-code-in-text2">node</code> is <code class="fm-code-in-text2">null</code>, we are traversing an empty tree, so there is no min.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031073"></a><span class="fm-combinumeral">❸</span> Lucky case: the coordinate to use for comparison is the same one for which we are looking for the minimum value, so the minimum will either be . . .</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031090"></a><span class="fm-combinumeral">❹</span> . . . this very node, if its left subtree is empty . . .</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031107"></a><span class="fm-combinumeral">❺</span> . . . or in its left subtree, if it’s not empty.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031124"></a><span class="fm-combinumeral">❻</span> If we are at a level for which the partitioning is computed on a different coordinate, then we have no way of saying where the minimum lies. We have to recurse on both branches and find the minimum of each branch.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1031141"></a><span class="fm-combinumeral">❼</span> That, however, is not enough. The minimum could be the current node as well, so we have to compare these three values. We assume that function <code class="fm-code-in-text2">min</code><a id="marker-1031146"></a> here is an overload that takes nodes as input and handles <code class="fm-code-in-text2">null</code> by considering it to be larger than any non-null node.</p>
+
+  <p class="body"><a id="pgfId-1002948"></a>This greater complexity in the <code class="fm-code-in-text">findMin</code> method<a id="marker-1007575"></a> unfortunately reflects on its running time. It can’t be logarithmic as with <i class="calibre17">BST</i>s<a id="marker-1007579"></a> because we are traversing all branches for all levels except the ones matching <code class="fm-code-in-text">coordinateIndex</code><a id="marker-1007583"></a>, so in <code class="fm-code-in-text">(k-1)/k</code> cases.</p>
+
+  <p class="body"><a id="pgfId-1002978"></a>And, in fact, it turns out that the running time for <code class="fm-code-in-text">findMin</code> is <code class="fm-code-in-text">O(n<sup class="superscript1">(k-1)/k</sup>)</code>. If <code class="fm-code-in-text">k==2</code>, this means <code class="fm-code-in-text">O(n<sup class="superscript1">1/2</sup>) = O(√<i class="calibre15">n</i>)</code>, which is not as good as logarithmic, but still sensibly better than a full scan. As <code class="fm-code-in-text">k</code> grows, though, this value gets closer and closer to <code class="fm-code-in-text">O(n)</code>.</p>
+
+  <p class="body"><a id="pgfId-1003015"></a>The enhanced version of <code class="fm-code-in-text">findMin</code><a id="marker-1007587"></a> solves the issue with the coordinates. Now you might hope that plugging it into the regular <i class="calibre17">BST</i>’s <code class="fm-code-in-text">remove</code> is enough, but that’s unfortunately not the case. There is another issue that complicates things a bit further.</p>
+
+  <p class="body"><a id="pgfId-1003040"></a>If you go back to figure 9.15 (B), for <i class="calibre17">BST</i>s there were two lucky cases for which deleting a node was easy: deleting a leaf and deleting a node with only one child.</p>
+
+  <p class="body"><a id="pgfId-1003054"></a>For k-d trees, only leaves can be deleted easily. Unfortunately, even if the node <code class="fm-code-in-text">N</code> to be deleted has only one child <code class="fm-code-in-text">C</code>, we can’t just replace <code class="fm-code-in-text">N</code> with its child, because this would change the direction of the splits for <code class="fm-code-in-text">C</code> and its entire subtree, as shown in figure 9.17.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F17.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1035122"></a>Figure 9.17 An example of a k-d tree deletion for which replacing the deleted node with its only child wouldn’t work. (A) The initial tree, from which we remove node <code class="fm-code-in-text">B</code>. This node has only one child, so in a BST it would just be replaced by its child. (B) However, in a k-d tree this might cause violation of the k-d tree invariants, because moving a node one level up changes the coordinate on which the split is performed, when using it as a pivot.</p>
+
+  <p class="body"><a id="pgfId-1003104"></a>In that example, we attempt to remove node <code class="fm-code-in-text">B</code>, which only has one child and no right branch (it works similarly in the symmetric case). If we tried to simply replace <code class="fm-code-in-text">B</code> with its children <code class="fm-code-in-text">E</code>, this node would appear one level up in the tree, and likewise all its children.</p>
+
+  <p class="body"><a id="pgfId-1003122"></a>So, before node <code class="fm-code-in-text">E</code> was using <code class="fm-code-in-text">x</code> coordinates to partition nodes in its subtree, so that node <code class="fm-code-in-text">H</code> was on the right of <code class="fm-code-in-text">E</code> because <code class="fm-code-in-text">H</code>’s <code class="fm-code-in-text">x</code> coordinate <code class="fm-code-in-text">(2.5)</code> is larger than <code class="fm-code-in-text">E</code>’s (<code class="fm-code-in-text">2</code>).</p>
+
+  <p class="body"><a id="pgfId-1003149"></a>After we move <code class="fm-code-in-text">E</code> and its subtree up, we would need to use <code class="fm-code-in-text">y</code> coordinates to partition nodes in <code class="fm-code-in-text">E</code>’s subtree. But <code class="fm-code-in-text">H</code>’s <code class="fm-code-in-text">y</code> coordinate <code class="fm-code-in-text">(-8)</code> is larger than <code class="fm-code-in-text">E</code>’s <code class="fm-code-in-text">(-5),</code> so node <code class="fm-code-in-text">H</code> doesn’t belong to <code class="fm-code-in-text">E</code>’s right branch anymore, and the k-d tree invariants are violated.</p>
+
+  <p class="body"><a id="pgfId-1003182"></a>In this case it might look like something easy to fix, but we would need to reevaluate every single node in <code class="fm-code-in-text">E</code>’s subtree and rebuild it.</p>
+
+  <p class="body"><a id="pgfId-1003193"></a>This would certainly require <code class="fm-code-in-text">O(n)</code> time, where <code class="fm-code-in-text">n</code> is the number of nodes in the subtree rooted at the node we remove.</p>
+
+  <p class="body"><a id="pgfId-1003206"></a>A better solution would be to replace the node <code class="fm-code-in-text">N</code> that we want to remove with its successor or its predecessor. If <code class="fm-code-in-text">N</code> only has a right child, we can just find its successor using <code class="fm-code-in-text">findMin</code><a id="marker-1007591"></a>, as we described in the example in figure 9.16.</p>
+
+  <p class="body"><a id="pgfId-1003222"></a>When node <code class="fm-code-in-text">N</code> only has a left child, can we replace it with its predecessor? As much as you might be tempted to think so, in this situation another issue comes up.</p>
+
+  <p class="body"><a id="pgfId-1003233"></a>We mentioned when we described the <code class="fm-code-in-text">insert</code> method that the way we break ties on <code class="fm-code-in-text">insert</code> has an influence on the <code class="fm-code-in-text">remove</code> method as well.</p>
+
+  <p class="body"><a id="pgfId-1003248"></a>And indeed, figure 9.18 shows an example where this becomes relevant. The problem is that when we break ties on <code class="fm-code-in-text">insert</code><a id="marker-1007595"></a> and <code class="fm-code-in-text">search</code><a id="marker-1007599"></a> by going right, we implicitly assume an invariant:<a href="#pgfId-1008638"><sup class="footnotenumber">9</sup></a> that for any internal node <code class="fm-code-in-text">N</code>, no node in its left branch will have the same value for the coordinate used to partition <code class="fm-code-in-text">N</code>’s subtree. In figure 9.18, this means that no node in the left branch of node <code class="fm-code-in-text">B</code> has a <code class="fm-code-in-text">y</code> coordinate equal to <code class="fm-code-in-text">N</code>’s.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F18.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1035171"></a>Figure 9.18 An example showing why, when we delete a node with only a left child, we can’t replace the current node with the minimum of the left branch. On the right, we can see how <code class="fm-code-in-text">H</code> causes the fourth invariant of k-d trees to be violated, because it is on the left branch of node <code class="fm-code-in-text">I</code>, but has the same value for <code class="fm-code-in-text">I</code>’s split coordinate.</p>
+
+  <p class="body"><a id="pgfId-1003303"></a>If we replace <code class="fm-code-in-text">N</code> with the max of its left branch, however, it is possible that in <code class="fm-code-in-text">N</code>’s old left branch there was another node with the same <code class="fm-code-in-text">y</code> coordinate. In our example, that would be the case since there are two nodes with the same maximal value for <code class="fm-code-in-text">y</code>, node <code class="fm-code-in-text">I</code> and node <code class="fm-code-in-text">H</code>.</p>
+
+  <p class="body"><a id="pgfId-1003330"></a>By moving node <code class="fm-code-in-text">I</code> to replace <code class="fm-code-in-text">B</code>, we would therefore break search, because node <code class="fm-code-in-text">H</code> would never be found by the <code class="fm-code-in-text">search</code> method in listing 9.3.</p>
+
+  <p class="body"><a id="pgfId-1003351"></a>Luckily the solution is not too complicated. We can instead run <code class="fm-code-in-text">findMin</code><a id="marker-1007603"></a> on the left branch, replace <code class="fm-code-in-text">N</code>’s point with the node <code class="fm-code-in-text">M</code> found by <code class="fm-code-in-text">findMin</code>, and set <code class="fm-code-in-text">N</code>’s old left branch as the right branch of this new node we are creating, as shown in figure 9.19.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F19.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1035213"></a>Figure 9.19 Correct steps for deleting a node <code class="fm-code-in-text">N</code> with only a left child. In figure 9.18, we saw that finding the max of the left branch won’t work. Instead, we need to find the min <code class="fm-code-in-text">M</code>, use it to replace the deleted node, and then set <code class="fm-code-in-text">N</code>’s old left branch as the new node’s right branch. Then we only need to remove <code class="fm-code-in-text">M</code> from the left branch, which requires a new call to remove. (As you can see, unfortunately we can make no assumptions on this call; it might cascade and require more recursive calls to remove.)</p>
+
+  <p class="body"><a id="pgfId-1003405"></a>Then we just need to remove the old node <code class="fm-code-in-text">M</code> from that right branch. Notice that unlike what happened with binary search trees, we can make no assumptions on <code class="fm-code-in-text">M</code> here, so we might need to repeat these steps in the recursive call deleting <code class="fm-code-in-text">M</code>.</p>
+
+  <p class="body"><a id="pgfId-1003424"></a>Listing 9.8 sums up all these considerations into a pseudo-code implementation for method <code class="fm-code-in-text">remove</code>.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015393"></a>Listing 9.8 The <code class="fm-code-in-text">remove</code> method</p>
+  <pre class="programlisting"><b class="calibre21">function</b> remove(node, point)                                            <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> node == <b class="calibre21">null then</b>                                                  <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return null</b>
+  <b class="calibre21">elsif</b> node.point == point <b class="calibre21">then</b>                                        <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">if</b> node.right != <b class="calibre21">null then</b>                                          <span class="fm-combinumeral">❹</span>
+      minNode ← findMin(node.right, node.level)                         <span class="fm-combinumeral">❺</span>
+      newRight ← remove(node.right, minNode.point)                      <span class="fm-combinumeral">❻</span>
+      <b class="calibre21">return new</b> KdNode(minNode.point, node.left, newRight, node.level) <span class="fm-combinumeral">❼</span>
+    <b class="calibre21">elsif</b> node.left != <b class="calibre21">null then</b>                                        <span class="fm-combinumeral">❽</span>
+      minNode ← findMin(node.left, node.level)                          <span class="fm-combinumeral">❾</span>
+      newRight ← remove(node.left, minNode.point)                       <span class="fm-combinumeral">❿</span>
+      <b class="calibre21">return new</b> KdNode(minNode.point, null, newRight, node.level)      <span class="fm-combinumeral">⓫</span>
+    <b class="calibre21">else</b>
+      <b class="calibre21">return null</b>                                                       <span class="fm-combinumeral">⓬</span>
+  <b class="calibre21">elsif</b> compare(point, node) &lt; 0 <b class="calibre21">then</b>                                   <span class="fm-combinumeral">⓭</span>
+    node.left ← remove(node.left, point)
+    <b class="calibre21">return</b> node
+  <b class="calibre21">else</b>                                                                  <span class="fm-combinumeral">⓭</span>
+    node.right ← remove(node.right, point)
+    <b class="calibre21">return</b> node</pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1030031"></a><span class="fm-combinumeral">❶</span> Removes a point from the tree rooted at <code class="fm-code-in-text2">node</code>. The method will return the root of the tree after completing the operation.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1030052"></a><span class="fm-combinumeral">❷</span> If <code class="fm-code-in-text2">node</code> is <code class="fm-code-in-text2">null</code>, we are traversing an empty tree, so we can conclude the target point is not on the tree.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1030072"></a><span class="fm-combinumeral">❸</span> If the node matches the point to remove, we can stop traversing the tree, and we need to remove the current node.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1030089"></a><span class="fm-combinumeral">❹</span> In case the current node has a right child, we are in the most generic situation.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1030106"></a><span class="fm-combinumeral">❺</span> Finds the minimum <code class="fm-code-in-text2">MR</code>, in the right branch, for current node’s split coordinate</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1030123"></a><span class="fm-combinumeral">❻</span> Removes <code class="fm-code-in-text2">MR</code> above from the right subtree</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1030140"></a><span class="fm-combinumeral">❼</span> Creates a new node, to replace current, with <code class="fm-code-in-text2">MR</code> as point, and the old branches</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1030157"></a><span class="fm-combinumeral">❽</span> If, instead, there is no right child, but there is a left branch, we are in the first special case.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1030174"></a><span class="fm-combinumeral">❾</span> Finds the minimum <code class="fm-code-in-text2">ML</code>, in the left branch, for current node’s split coordinate</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1030191"></a><span class="fm-combinumeral">❿</span> Removes <code class="fm-code-in-text2">ML</code> found above from the left branch</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1030208"></a><span class="fm-combinumeral">⓫</span> Creates a new node, to replace current, using <code class="fm-code-in-text2">ML</code> as point, and setting left child to <code class="fm-code-in-text2">null</code>, and right child to the former left branch.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1030225"></a><span class="fm-combinumeral">⓬</span> If both left and right branches are <code class="fm-code-in-text2">null</code>, we are at a leaf, so we can just remove it.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1030242"></a><span class="fm-combinumeral">⓭</span> Otherwise, if the current node doesn’t match the point to delete, checks if we need to go left or right, and recursively calls remove</p>
+
+  <p class="body"><a id="pgfId-1003888"></a>If we look at the running time for <code class="fm-code-in-text">remove</code>, the cost of the calls to <code class="fm-code-in-text">findMin</code><a id="marker-1007607"></a> drives up the total cost, which thus can’t be logarithmic anymore (as it was for BSTs). To perform a more rigorous analysis, let’s again denote as <code class="fm-code-in-text">T<sub class="subscript1">k</sub>(n)</code> the running time for this method, where <code class="fm-code-in-text">k</code> is the dimensionality of the points’ space and <code class="fm-code-in-text">n</code> is the number of nodes in the tree. When we look more closely at each conditional fork, if we assume that we are working on a balanced tree, then</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1003920"></a>Each branch of the conditional at line #15 would trigger a recursive call on approximately half the nodes, and so require time <code class="fm-code-in-text">T<sub class="subscript1">k</sub>(n/2)</code>.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003936"></a>If we enter the code blocks after conditionals at lines #2 or #13, those only require constant time.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1003948"></a>Conditionals at lines #5 and #9 both will run code blocks that requires creating a new node, <code class="fm-code-in-text">O(1)</code>, running <code class="fm-code-in-text">findMin, O(n<sup class="superscript1">1-1/k</sup>)</code>, and recursively calls <code class="fm-code-in-text">remove</code>.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1003970"></a>The worst case here is the latter: we don’t know where the minimum node will be in its branch. It could be far down the tree or just the root of the branch; thus, if we end up in a case similar to figure 9.17 (either with a missing left or right branch, indifferently), we might have to call <code class="fm-code-in-text">remove</code> recursively on <code class="fm-code-in-text">n-1</code> nodes, in the absolute worst case.</p>
+
+  <p class="body"><a id="pgfId-1003989"></a>However, we assumed that our k-d tree is balanced. Under this assumption, left and right branches should have more or less the same number of nodes, and therefore if the right branch of a node is empty, the probability that the left branch has one node is still high, that it has two nodes is less likely, and it goes down with three nodes, and so on. For a certain constant, for example 5, we can say that in a situation like the one in figure 9.17, where a node has a single branch, then it is highly unlikely that branch has more than a constant number of nodes (say five). And we can thus assume that in a balanced tree, such an imbalanced case can happen at most a constant number of times during a call to <code class="fm-code-in-text">remove</code>. Or, more precisely, on a large number of removals, we can assume that the amortized cost of running the code blocks starting at lines #5 and #9 would be <code class="fm-code-in-text">T<sub class="subscript1">k</sub>(n/2)</code>.</p>
+
+  <p class="body"><a id="pgfId-1004010"></a>Our recurrence would therefore become</p>
+  <pre class="programlisting">T<sub class="calibre25">k</sub>(n) = T<sub class="calibre25">k</sub>(n/2) + O(n<sup class="superscript2">1-1/k</sup>)</pre>
+
+  <p class="body"><a id="pgfId-1004034"></a>Using the master theorem’s third case, since <code class="fm-code-in-text">1-1/k &gt; log<sub class="subscript1">2</sub>(1)=0</code>, and <code class="fm-code-in-text">(n/2)<sup class="superscript1">1-1/k</sup></code> <span class="cambria">≤</span> <code class="fm-code-in-text">n1-1/k</code>, we can then conclude that the amortized time required by <code class="fm-code-in-text">remove</code> on a balanced k-d tree is</p>
+  <pre class="programlisting">T<sub class="calibre25">k</sub>(n) = O(n<sup class="superscript2">1-1/k</sup>)</pre>
+
+  <p class="body"><a id="pgfId-1004071"></a>In other words, <code class="fm-code-in-text">remove’s</code> running time is dominated by <code class="fm-code-in-text">findMin</code><a id="marker-1007611"></a>; this also means that in a 2-D space, the amortized running time for <code class="fm-code-in-text">remove</code> would be <a id="marker-1007615"></a><a id="marker-1007619"></a><a id="marker-1007623"></a><code class="fm-code-in-text">O(√<i class="calibre15">n</i>)</code>.</p>
+
+  <h3 class="fm-head2" id="heading_id_13"><a id="pgfId-1004094"></a>9.3.5 Nearest neighbor</h3>
+
+  <p class="body"><a id="pgfId-1004108"></a>We <a id="marker-1007627"></a><a id="marker-1007631"></a><a id="marker-1007635"></a>are now ready to study the most interesting operation provided by k-d trees, the nearest neighbor (NN) search. First, we are going to restrict to the case where we search for the single closest point in the dataset with respect to a target point (which, in general, doesn’t have to be contained in the same dataset). Later we will generalize this operation to return an arbitrary number <code class="fm-code-in-text">m<a class="calibre14" href="#pgfId-1008657"><sup class="footnotenumber4">10</sup></a></code> of points such that no other point in the dataset is closer to the target.</p>
+
+  <p class="body"><a id="pgfId-1004132"></a>In a brute-force scenario, we would have to compare each point in the dataset to our target, compute their relative distances, and keep track of the smallest one, exactly the way we search for an element in an unsorted array.</p>
+
+  <p class="body"><a id="pgfId-1004142"></a>However, a k-d tree, much like a sorted array, has structural information about the relative distance and position of its elements, and we can leverage that information to perform our search more efficiently.</p>
+
+  <p class="body"><a id="pgfId-1004151"></a>Listing 9.9 shows the pseudo-code implementing nearest neighbor search. To understand this code, however, we first need to ask, how does nearest neighbor search work?</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015436"></a>Listing 9.9 The <code class="fm-code-in-text">nearestNeighbor</code> method</p>
+  <pre class="programlisting"><b class="calibre21">function</b> nearestNeighbor(node, target, (nnDist, nn)=(inf, null))       <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> node == <b class="calibre21">null then</b>                                                 <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return</b> (nnDist, nn)
+  <b class="calibre21">else</b>                                                                 <span class="fm-combinumeral">❸</span>
+    dist ← distance(node.point, target)                                <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">if</b> dist &lt; nnDist <b class="calibre21">then</b>                                              <span class="fm-combinumeral">❺</span>
+      (nnDist, nn) ← (dist, node.point)
+    <b class="calibre21">if</b> compare(target, node) &lt; 0 <b class="calibre21">then</b>                                  <span class="fm-combinumeral">❻</span>
+      closeBranch ← node.left
+      farBranch ← node.right
+    <b class="calibre21">else</b>                                                               <span class="fm-combinumeral">❻</span>
+      closeBranch ← node.right
+      farBranch ← node.left
+    (nnDist, nn) ← nearestNeighbor(closeBranch, target, (nnDist, nn))  <span class="fm-combinumeral">❼</span>
+    <b class="calibre21">if</b> splitDistance(target, node) &lt; nnDist <b class="calibre21">then</b>                       <span class="fm-combinumeral">❽</span>
+      (nnDist, nn) ← nearestNeighbor(farBranch, target, (nnDist, nn))  <span class="fm-combinumeral">❾</span>
+    <b class="calibre21">return</b> (nnDist, nn)                                                <span class="fm-combinumeral">❿</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1029244"></a><span class="fm-combinumeral">❶</span> Finds the closest point to a given target. We also pass the best values found so far for nearest neighbor (NN) and its distance to help pruning. These values default to <code class="fm-code-in-text2">null</code>, <code class="fm-code-in-text2">infinity</code> for a call on the tree root.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1029268"></a><span class="fm-combinumeral">❷</span> If the <code class="fm-code-in-text2">node</code><a id="marker-1029272"></a> is <code class="fm-code-in-text2">null</code>, we are traversing an empty tree, so the nearest neighbor can’t change with respect to what we have already found.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1029286"></a><span class="fm-combinumeral">❸</span> Otherwise, we have three tasks: check if the current node is closer than previously found NN, traverse the branch on the same side of the split with respect to the target point, and check if we can prune the other branch (or traverse it as well).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1029303"></a><span class="fm-combinumeral">❹</span> We compute the distance between the current node’s point and <code class="fm-code-in-text2">target</code><a id="marker-1029308"></a>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1029321"></a><span class="fm-combinumeral">❺</span> If that distance is less than the current NN’s distance, we have to update the values stored for the NN and its distance.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1029338"></a><span class="fm-combinumeral">❻</span> Checks if the target point is on the left branch of the split. If it is, the left branch is the closest to the target point, otherwise it is the furthest.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1029355"></a><span class="fm-combinumeral">❼</span> We certainly need to traverse the closest branch in search of the nearest neighbor. It is important to do so first and update the mementos for NN’s distance, to improve pruning.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1029372"></a><span class="fm-combinumeral">❽</span> Using one of the helper functions defined in listing 9.2, we compute the distance between the split line passing through the current node and the target point. If this distance is closer than the distance to current nearest neighbor, then the furthest branch might contain points closer than the current nearest neighbor (see figure 9.21).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1029406"></a><span class="fm-combinumeral">❾</span> Traverses the furthest branch and updates the current values for NN and its distance</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1029423"></a><span class="fm-combinumeral">❿</span> Returns the closest point found so far</p>
+
+  <p class="body"><a id="pgfId-1004541"></a>We start from the consideration that each tree node covers one of the rectangular regions in which the space was partitioned, as we have shown in figures 9.5 and 9.6. So first we want to find which region contains our target point <code class="fm-code-in-text">P</code>. That’s a good starting point for our search, because it’s likely that the point stored in the leaf covering that region, <code class="fm-code-in-text">G</code> in this example, will be among the closest points to <code class="fm-code-in-text">P</code>.</p>
+
+  <p class="body"><a id="pgfId-1004559"></a>Can we be sure that <code class="fm-code-in-text">G</code> will be the closest point to <code class="fm-code-in-text">P</code>, though? That would have been ideal, but unfortunately that’s not the case. Figure 9.20 shows this first step in the algorithm, traversing a path in the tree from the root to a leaf, to find the smallest region containing <code class="fm-code-in-text">P</code>.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F20.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1035255"></a>Figure 9.20 The first few steps of nearest neighbor search. The first phase of nearest neighbor search consists of a search on the tree, during which we keep track of the distance of each node (aka point) we traverse: more precisely, if we need to find <code class="fm-code-in-text">N</code> nearest neighbors for <code class="fm-code-in-text">P</code>, we need to keep track of the <code class="fm-code-in-text">N</code> smallest distances we find. In this case we are showing the query for <code class="fm-code-in-text">N=1</code>. Thus, if the search is successful, then we definitely have the nearest neighbor, at distance 0. Otherwise, when search ends, we are not yet sure we have found the actual nearest neighbor. In this example, the point at the minimum distance we have found during traversal is <code class="fm-code-in-text">D</code> but, as you can see from the figure, we can’t be sure that another branch of the tree doesn’t have a point within the radius given by <code class="fm-code-in-text">dist(D)</code>.</p>
+
+  <p class="body"><a id="pgfId-1004607"></a>As you can see, we check the distance of every intermediate point along the path, because any of them can be closer than the leaf. Even if intermediate points cover larger regions than leaves, inside each region we don’t have any indication of where dataset points might lie. If we refer to figure 9.20, if point <code class="fm-code-in-text">A</code> had been at <code class="fm-code-in-text">(0,0)</code>, the tree would have had the same shape, but <code class="fm-code-in-text">P</code> would have been closer to <code class="fm-code-in-text">A</code> (the root) than <code class="fm-code-in-text">G</code> (a leaf).</p>
+
+  <p class="body"><a id="pgfId-1004636"></a>But even that is not enough. After finding the region containing <code class="fm-code-in-text">P</code>, we can’t be sure that in neighboring regions there aren’t one or more points even closer than the closest point we found during this first traversal.</p>
+
+  <p class="body"><a id="pgfId-1004651"></a>Figure 9.21 exemplifies this situation perfectly. So far, we have found that <code class="fm-code-in-text">D</code> is the closest point (among those visited) to <code class="fm-code-in-text">P</code>, so the real nearest neighbor can’t be at a distance larger than the one between <code class="fm-code-in-text">D</code> and <code class="fm-code-in-text">P</code>. We can thus trace a circle (a hyper-sphere, in higher dimensions) centered at <code class="fm-code-in-text">P</code> and with a radius equal to <code class="fm-code-in-text">dist(D, P)</code>. If this circle intersects other partitions, then those regions might contain a point closer than <code class="fm-code-in-text">D</code>, and we need to get to them.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F21.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1035297"></a>Figure 9.21 The second step, after an unsuccessful search, is to backtrack to check other branches of the tree for closer points. It is possible to have such points because when we traverse the tree, we cycle through the coordinates that we compare at each level, so we don’t always go in the direction of the closest point, but we are forced to go on one side of the pivot, depending only on a single coordinate. This means it is possible that the nearest neighbor is on the wrong side of the pivot with respect to our target point <code class="fm-code-in-text">P</code>. In this example, when we reached <code class="fm-code-in-text">D</code>, since it creates a vertical split, we needed to move to the left, as shown in figure 9.20. Unfortunately, the target point <code class="fm-code-in-text">P</code> and its nearest neighbor lie on opposite sides of the split line for <code class="fm-code-in-text">D</code>. So, once we reach the end of the path, we need to backtrack to check other branches.</p>
+
+  <p class="body"><a id="pgfId-1004716"></a>How do we know if a region intersects our current nearest neighbor’s hyper-sphere? That’s simple: each region stems by the partitioning created by split lines. When traversing a path, we go on one side of the split (the one on the same side as <code class="fm-code-in-text">P</code>), but if the distance between a split line and <code class="fm-code-in-text">P</code> is less than the distance to our current nearest neighbor, then the hyper-sphere intersects the other partition as well.</p>
+
+  <p class="body"><a id="pgfId-1004733"></a>To make sure we visit all partitions still intersecting the NN hyper-sphere, we need to backtrack our traversal of the tree. In our example, we go back to node <code class="fm-code-in-text">D</code>, then check the distance between <code class="fm-code-in-text">P</code> and the vertical split line passing through <code class="fm-code-in-text">D</code> (which, in turn, is just the difference of the <code class="fm-code-in-text">x</code> coordinates of the two points). Since this is smaller than the distance to <code class="fm-code-in-text">D</code>, our current NN, then we need to visit the other branch of <code class="fm-code-in-text">D</code> as well. When we say visit, we mean traversing the tree in a path from <code class="fm-code-in-text">D</code> to the closest leaf to <code class="fm-code-in-text">P</code>. While we do so, we visit node <code class="fm-code-in-text">F</code> and discover that it’s closer than <code class="fm-code-in-text">D</code>, so we update our current NN (and its distance: you can see that we shrink the radius of our nearest neighbor perimeter, the circle marking the region where possible nearest neighbors can be found).</p>
+
+  <p class="body"><a id="pgfId-1004770"></a>Are we done now? Not yet; we need to keep backtracking to the root. We go back to node <code class="fm-code-in-text">C</code>, but its split line is further away than our NN perimeter (and it doesn’t have a right branch, anyway), so we go back to node <code class="fm-code-in-text">A</code>, as shown in figure 9.22.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F22.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1035342"></a>Figure 9.22 We need to backtrack toward the root. If we had to check every possible branch of the tree, however, this would be no better than scanning the whole list of points. Instead, we can use all the information we have to prune the search. In the geometric representation on the right, we show a visual hint of why it would be useless to check <code class="fm-code-in-text">A</code>’s right sub-branch. If you look back at figure 9.21, you can see that we knew that we couldn’t rule out <code class="fm-code-in-text">D</code>’s right sub-branch without traversing it.</p>
+
+  <p class="body"><a id="pgfId-1004816"></a>At node <code class="fm-code-in-text">A</code> we took the left branch during search, meaning <code class="fm-code-in-text">P</code> is on the left semi-plane. If we were to traverse the right subtree of <code class="fm-code-in-text">A</code>, all the points in that subtree would have their <code class="fm-code-in-text">x</code> coordinate greater than or equal to <code class="fm-code-in-text">A</code>’s. Therefore, the minimum distance between <code class="fm-code-in-text">P</code> and any point in the right sub-tree of <code class="fm-code-in-text">A</code> is at least the distance between <code class="fm-code-in-text">P</code> and its projection on the vertical line passing through <code class="fm-code-in-text">A</code> (i.e., <code class="fm-code-in-text">A</code>’s split line). In other words, the minimum distance for any point right of <code class="fm-code-in-text">A</code> will at least be the absolute value of the difference between <code class="fm-code-in-text">P</code>’s and <code class="fm-code-in-text">A</code>’s <code class="fm-code-in-text">x</code> coordinates.</p>
+
+  <p class="body"><a id="pgfId-1004862"></a>We can therefore prune search on <code class="fm-code-in-text">A</code>’s right branch, and since it was the root, we are finally done. Notice how the more we climb back on the tree, the larger are the branches (and the regions) that we can prune—and the larger the saving.</p>
+
+  <p class="body"><a id="pgfId-1004875"></a>We can generalize this method to find an arbitrary large set of the closest points in the dataset, also known as the n-nearest-neighbor<a href="#pgfId-1008677"><sup class="footnotenumber">11</sup></a> search method.</p>
+
+  <p class="body"><a id="pgfId-1004886"></a>The only differences are</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1004895"></a>Instead of the distance of a single point, we need to keep track of the <code class="fm-code-in-text">m</code> shortest distances if we want the <code class="fm-code-in-text">m</code> closest points.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1004912"></a>At each step, we use the distance of the <code class="fm-code-in-text">m</code>-th closest point to draw our NN perimeter and prune search.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1004927"></a>To keep track of these <code class="fm-code-in-text">m</code> distances, we can use a bounded priority queue. We described something similar in chapter 2, section 2.7.3, when we described a method to find the <code class="fm-code-in-text">m</code> largest values in a stream of numbers.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1004943"></a>Listing 9.10 details the pseudo-code for the <code class="fm-code-in-text">nNearestNeighbor</code> method<a id="marker-1007647"></a>.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015464"></a>Listing 9.10 The <code class="fm-code-in-text">nNearestNeighbor</code> method</p>
+  <pre class="programlisting"><b class="calibre21">function</b> nNearestNeighbor(node, target, n)                <span class="fm-combinumeral">❶</span>
+  pq ← new BoundedPriorityQueue(n)                        <span class="fm-combinumeral">❷</span>
+  pq.insert((<b class="calibre21">inf, null</b>))                                  <span class="fm-combinumeral">❸</span>
+  pq ← nNearestNeighbor(node, target, pq)                 <span class="fm-combinumeral">❹</span>
+  (nnnDist, _) ← pq.peek()                                <span class="fm-combinumeral">❺</span>
+  <b class="calibre34">if</b> nnnDist == <b class="calibre34">inf then</b>                                  <span class="fm-combinumeral">❻</span>
+    pq.top() 
+  <b class="calibre21">return</b> pq                                               <span class="fm-combinumeral">❼</span>
+ 
+<b class="calibre21">function</b> nNearestNeighbor(node, target, pq)               <span class="fm-combinumeral">❽</span>
+  <b class="calibre21">if</b> node == <b class="calibre21">null then</b>                                    <span class="fm-combinumeral">❾</span>
+    <b class="calibre21">return</b> pq
+  <b class="calibre21">else</b>
+    dist ← distance(node.point, target)                   <span class="fm-combinumeral">❿</span>
+    pq.insert((dist, node.point))                         <span class="fm-combinumeral">⓫</span>
+    <b class="calibre34">if</b> compare(target, node) &lt; 0 <b class="calibre21">then</b>                     <span class="fm-combinumeral">⓬</span>
+      closeBranch ← node.left
+      farBranch ← node.right
+    <b class="calibre34">else</b>                                                  <span class="fm-combinumeral">⓬</span>
+      closeBranch ← node.right
+      farBranch ← node.left
+    pq ← nNearestNeighbor(closeBranch, target, pq)        <span class="fm-combinumeral">⓭</span>
+    (nnnDist, _) ← pq.peek()                              <span class="fm-combinumeral">⓮</span>
+    <b class="calibre21">if</b> splitDistance(target, node) &lt; nnnDist <b class="calibre21">then</b>         <span class="fm-combinumeral">⓯</span>
+      pq ← nNearestNeighbor(farBranch, target, pq)        <span class="fm-combinumeral">⓰</span>
+    <b class="calibre21">return</b> pq                                             <span class="fm-combinumeral">⓱</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028002"></a><span class="fm-combinumeral">❶</span> Finds the <code class="fm-code-in-text2">n</code> points in the k-d tree that are closest to a given target</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028023"></a><span class="fm-combinumeral">❷</span> Initializes a max-heap (or any other (max) priority queue), bounded in its size, so that it will only contain the <code class="fm-code-in-text2">n</code> smallest elements added to it. Refer to chapter 2, section 2.7.3, to see how insertion in such a queue works.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028040"></a><span class="fm-combinumeral">❸</span> Before starting our search, we need to initialize the priority queue by adding a “guard”: a tuple containing infinity as distance, a value that will be larger than any other distance computed, and so it will be the first tuple removed from the queue if we find at least <code class="fm-code-in-text2">n</code> points in the tree.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028057"></a><span class="fm-combinumeral">❹</span> We start the search on the root, using a recursive internal function.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028074"></a><span class="fm-combinumeral">❺</span> We take a peek at the queue produced by the call at line #4, and . . .</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028091"></a><span class="fm-combinumeral">❻</span> . . . if its top element is still at an infinite distance, we need to remove it, because it means we have added less than <code class="fm-code-in-text2">n</code> elements to the queue.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028108"></a><span class="fm-combinumeral">❼</span> Once that’s taken care of, we can just return to the caller the queue with the elements we found.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028125"></a><span class="fm-combinumeral">❽</span> Internal version of the function taking an already initialized priority queue. The queue will encapsulate the logic about keeping track of the <code class="fm-code-in-text2">n</code>-th closest neighbors and their distances, which we’ll use to prune search.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028142"></a><span class="fm-combinumeral">❾</span> If <code class="fm-code-in-text2">node</code> is <code class="fm-code-in-text2">null</code> it's likely that we are traversing an empty tree, so the nearest neighbors can’t change with respect to what we have already found.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028159"></a><span class="fm-combinumeral">❿</span> Once we are sure the current node is not <code class="fm-code-in-text2">null</code> it's likely that we can compute the distance between the current node’s point and target.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028176"></a><span class="fm-combinumeral">⓫</span> We try to insert the tuple (current distance, current point) into the bounded (max) priority queue. This helper data structure takes care of keeping only the smallest <code class="fm-code-in-text2">n</code> tuples, so that current point will only be added if its distance is among the <code class="fm-code-in-text2">n</code> smallest distances found so far.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028193"></a><span class="fm-combinumeral">⓬</span> Checks if the target point is on the left branch of the split. If it is, the left branch is the closest to the target point; otherwise it is the furthest.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028210"></a><span class="fm-combinumeral">⓭</span> We certainly need to traverse the closest branch in search of the nearest neighbor. It is important to do so first and update the priority queue, and so the distance to the <code class="fm-code-in-text2">n</code>-th closest neighbor, to improve pruning.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028227"></a><span class="fm-combinumeral">⓮</span> We need to retrieve the distance to the <code class="fm-code-in-text2">n</code>-th closest neighbor, and we can do so by peeking at the tuple at the top of the bounded priority queue. Notice that this works if the queue has less than <code class="fm-code-in-text2">n</code> elements. Since at line #3 we added a tuple with distance equal to infinity, that tuple will be at the top of the heap until we add <code class="fm-code-in-text2">n</code> points, and so <code class="fm-code-in-text2">nnnDist</code> will be set to infinity here, as long as we haven’t yet added at least <code class="fm-code-in-text2">n</code> points to the queue. Note: Underscore here is a placeholder, meaning that we are not interested in the value of the second element of the pair.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028244"></a><span class="fm-combinumeral">⓯</span> Using one of the helper functions defined in listing 9.2, we compute the distance between the split line passing through the current node and the target point. If this distance is closer than the distance to the current <code class="fm-code-in-text2">n</code>-th nearest neighbor, as it’s stored in the queue, then the furthest branch might contain closer points.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028261"></a><span class="fm-combinumeral">⓰</span> Traverses furthest branch and updates current values for NNs and their distance</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1028278"></a><span class="fm-combinumeral">⓱</span> Returns the priority queue with the points found so far</p>
+
+  <p class="body"><a id="pgfId-1005566"></a>What’s the running time for nearest neighbor search? Let’s start with the bad news: in the worst-case scenario, even for a balanced tree, we might have to traverse the whole tree before finding a point’s nearest neighbor(s).</p>
+
+  <p class="body"><a id="pgfId-1005575"></a>Figure 9.23 shows a couple of examples of such a degenerate case. While the second example is artificially constructed as a literal edge case with all the points lying on a circle, the one in figure 9.23 (A) shows the same tree we used in our previous examples and demonstrates how even on random, balanced trees it is possible to find counter-examples where the method behaves poorly by just carefully choosing the target point for the search.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F23.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1035384"></a>Figure 9.23 Edge cases for nearest neighbor search, which require traversing the whole tree. (A) An example built on the k-d tree from figures 9.20–9.22. By carefully choosing the target point, we can force the algorithm to search the whole tree, as shown on the tree representation. (B) We show the spatial representation only of an edge case where all the points lie in a circle, and we choose the center of the circle as target of the search. Notice how the distance from <code class="fm-code-in-text">P</code> to a split line will always be shorter than the radius of the circle (which, in turn, is the distance to the nearest neighbor).</p>
+
+  <p class="body"><a id="pgfId-1005629"></a>So, unfortunately there isn’t much to do: the worst-case running time for this kind of query is <code class="fm-code-in-text">O(n)</code>.</p>
+
+  <p class="body"><a id="pgfId-1005640"></a>That’s the bad news. Luckily, there is also a silver lining.</p>
+
+  <p class="body"><a id="pgfId-1005654"></a>Turns out that the average running time for nearest neighbor search on a balanced k-d tree is <code class="fm-code-in-text">O(2<sup class="superscript1">k</sup> + log(n))</code>. The proof for this probabilistic bound is particularly complex and would require too much space to properly cover it here. You can find it in the original paper by Jon Bentley that first introduced k-d trees.</p>
+
+  <p class="body"><a id="pgfId-1005672"></a>Nevertheless, to give you an intuition about why it works this way, consider a two-dimensional space: one point divides it into two halves, two points info three regions, three points will create four regions, and so on, and in general <code class="fm-code-in-text">n</code> points will create <code class="fm-code-in-text">n+1</code> regions. If the tree is balanced and <code class="fm-code-in-text">n</code> is sufficiently big, we can assume these regions are approximately equally sized.</p>
+
+  <p class="body"><a id="pgfId-1005707"></a>Now suppose the dataset covers a unitary area.<a href="#pgfId-1008691"><sup class="footnotenumber">12</sup></a> When we run a nearest neighbor search we first traverse the tree from the root to the closest leaf,<a href="#pgfId-1008705"><sup class="footnotenumber">13</sup></a> and this, for a balanced tree, means traversing <code class="fm-code-in-text">O(log(n))</code> nodes. Since we hypothesized that each region is approximately the same size, and we have <code class="fm-code-in-text">n+1</code> of them, the area covered by the closest leaf will also be a rectangular region of area approximately equal to <code class="fm-code-in-text">1/n</code>. That means that there is a reasonably high probability that the distance between the target point and the nearest neighbor we have found during this traversal is no larger than half the diagonal of the region, which in turn is smaller than the square root of the region’s area, or in other words, <a id="id_Hlk4973484"></a><span class="cambria">√1/<i class="calibre17">n</i></span>.</p>
+
+  <p class="body"><a id="pgfId-1005731"></a>The next step in the algorithm is backtracking to visit all the regions that are within that distance from the target point. If all the regions are equally-sized and regularly shaped, this means that any region within distance must be in one of the neighboring rectangles (with respect to our leaf’s region), and from geometry we know that in such a situation, with regular equally sized rectangles that can be approximated to a rectangular grid, each rectangle has eight neighbors. From figure 9.24, however, it is possible to see how, on average, even if potentially we would have to traverse at most eight more branches, it’s likely we only have to check four of them, because only the ones adjacent to the current region’s sides will be within distance <span class="cambria">√1/<i class="calibre17">n</i></span>. Hence, this makes the total average running time <code class="fm-code-in-text">O(4*log(n))</code>.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F24.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1035426"></a>Figure 9.24 A perfectly regular k-d tree partitioning with square cells. On the left, we show what can be considered the average case, with the tree’s leaf point at the center of the region. Then the furthest the target could be, inside the region, is at half the distance of the square’s diagonal. If we draw the circle circumscribed to the square, it intersects just the four regions adjacent to the sides of the current one. On the right is an example of another more generic and less optimistic case. Even if the distance is larger than the average, the hypersphere centered at the target node only intersects four other regions. Of course, in the worst-case scenario, it might intersect up to eight other regions.</p>
+
+  <p class="body"><a id="pgfId-1005777"></a>If we move to <span class="cambria">ℝ</span><sup class="superscript">3</sup>, then the possible neighbors for each cube are 26, but the minimum distance will be <span class="cambria">∛1/<i class="calibre17">n</i></span>. With similar considerations we can infer that only less than eight regions will be close enough to have points within the minimum distance found so far; likewise, if we move to <span class="cambria">ℝ</span><sup class="superscript">4</sup>, and so on.</p>
+
+  <p class="body"><a id="pgfId-1005800"></a>So, in summary, after finding the region where the target point of our search lies, we need to examine another <code class="fm-code-in-text">O(2<sup class="superscript1">k</sup>)</code> points, making total running time <code class="fm-code-in-text">O(2<sup class="superscript1">k</sup> + log(n))</code>. While <code class="fm-code-in-text">k</code> is a constant for a given dataset, and we could in theory ignore it in big-O analysis, in the general case <code class="fm-code-in-text">k</code> is considered a parameter, as we measure the performance of this method with respect to both size and dimension of the k-d tree changes. It’s also apparent that for large values of <code class="fm-code-in-text">k</code>, <code class="fm-code-in-text">2<sup class="superscript1">k</sup></code> becomes so big that it dominates the running time, since</p>
+
+  <p class="fm-equation">log(<i class="calibre17">n</i>) &gt; 2<sup class="superscript"><i class="calibre15">k</i></sup> <span class="cambria"><span class="cambria">⇔</span></span> <i class="calibre17">n</i> &gt; 2<sup class="superscript">2<sup class="calibre27"><i class="calibre15">k</i></sup></sup></p>
+
+  <p class="body"><a id="pgfId-1005844"></a>and in practice for <span class="cambria">k ≥ 7</span> there is already no chance of having a dataset big enough to satisfy the inequality. For <code class="fm-code-in-text">n &gt; 2<sup class="superscript1">k</sup></code>, however, this method still has an advantage over the brute-force search.</p>
+
+  <p class="body"><a id="pgfId-1005865"></a>A final consideration: Pruning heavily depends on the “quality” of the nearest neighbor we have found so far. The shorter the distance to the current nearest neighbor, the more branches we can prune, and in turn the higher speed-up we can get. Therefore, it is important to update this value as soon as possible (we do this in our code for each node on the first time we visit it) and to traverse the most promising branches first. Of course, it is not easy to determine what the most promising branch is at any point. A good, although imperfect, indicator could be the distance between the target point and split line for a branch. The closer the target, the larger should be the intersection between the nearest neighbor perimeter (the hyper-sphere within which it’s still possible to find a closer point to the target), and the region on the other side of the split line. That’s the reason why we traverse the tree using a depth-first search: we backtrack on the smallest branches first, so hopefully when we reach larger branches close to the top of the tree, we can prune <a id="marker-1007651"></a><a id="marker-1007655"></a><a id="marker-1007659"></a>them.</p>
+
+  <h3 class="fm-head2" id="heading_id_14"><a id="pgfId-1005894"></a>9.3.6 Region search</h3>
+
+  <p class="body"><a id="pgfId-1005908"></a>While <a id="marker-1007663"></a><a id="marker-1007667"></a><a id="marker-1007671"></a>k-d trees were mainly designed to perform nearest neighbor search, they turned out to be particularly efficient for another kind of operation: querying the intersection of our dataset with a given region in the <code class="fm-code-in-text">k</code>-dimensional space.</p>
+
+  <p class="body"><a id="pgfId-1005924"></a>In theory this region could be of any shape, but this operation becomes meaningful only if we can efficiently prune the branches we traverse during the query, and this heavily depends on the region’s morphology.</p>
+
+  <p class="body"><a id="pgfId-1005933"></a>In practice, there are two main cases we are interested in:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1005942"></a>Hyper-spherical regions, as shown in figure 9.25; the geometric interpretation is to query points within a certain distance from a certain point of interest.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1005954"></a>Hyper-rectangular regions, as shown in figure 9.26; here, the geometric interpretation is to query points whose values are in certain ranges.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1005968"></a>When we deal with spherical regions, we are in a similar situation as the nearest neighbor search: we need to include all the points within a certain distance from a given point. It’s like performing a NN-search, where we never update the distance to the nearest neighbor, and instead of keeping track of only one point (the NN), we gather all points closer than that distance.</p>
+
+  <p class="body"><a id="pgfId-1005979"></a>In figure 9.25 you can see how we are going to prune branches. When we are at a split, we will certainly have to traverse the branch on the same side of the center of the search region <code class="fm-code-in-text">P</code>. For the other branch, we check the distance between <code class="fm-code-in-text">P</code> and its projection on the split line. If that distance is lower than or equal to the search region’s radius, it means that there is still an area of intersection between that branch and the search region, and so we need to traverse the branch; otherwise, we can prune it.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F25.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1035468"></a>Figure 9.25 Region search on a k-d tree returns all the points in a k-d tree within a given hyper-sphere. This means looking for points within a given Euclidean distance from the sphere’s center. We start our search from the root: it’s not within the sphere. The point is on <code class="fm-code-in-text">A</code>’s left branch, so we need to traverse it, but even if <code class="fm-code-in-text">A</code> is not within the sphere, the split line through it intersects the sphere, so there is a portion of the sphere intersecting the right branch of <code class="fm-code-in-text">A</code> as well (highlighted in the top-left figure). For the following steps, we are showing in parallel the execution on all branches at a given level, for the sake of space. (This is also a good hint that these processes could be executed in parallel.)</p>
+
+  <p class="body"><a id="pgfId-1006034"></a>Listing 9.11 shows the pseudo-code for this method. As you can see, it’s pretty similar to the regular NN-search.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015558"></a>Listing 9.11 The <code class="fm-code-in-text">pointsInSphere</code> method</p>
+  <pre class="programlisting"><b class="calibre21">function</b> pointsInSphere(node, center, radius)                        <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> node == <b class="calibre21">null then</b>                                               <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return</b> []
+  <b class="calibre21">else</b>
+    points ← []                                                      <span class="fm-combinumeral">❸</span>
+    dist ← distance(node.point, center)                              <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">if</b> dist &lt; radius <b class="calibre21">then</b>                                            <span class="fm-combinumeral">❺</span>
+      points.insert(node.point)
+    <b class="calibre21">if</b> compare(target, node) &lt; 0 <b class="calibre21">then</b>                                <span class="fm-combinumeral">❻</span>
+      closeBranch ← node.left
+      farBranch ← node.right
+    <b class="calibre21">else</b>                                                             <span class="fm-combinumeral">❻</span>
+      closeBranch ← node.right
+      farBranch ← node.left
+    points.insertAll(pointsInSphere(closeBranch, center, radius))    <span class="fm-combinumeral">❼</span>
+    <b class="calibre21">if</b> splitDistance(target, node) &lt; radius <b class="calibre21">then</b>                     <span class="fm-combinumeral">❽</span>
+      points.insertAll(pointsInSphere(farBranch, center, radius))    <span class="fm-combinumeral">❾</span>
+    <b class="calibre21">return</b> points                                                    <span class="fm-combinumeral">❿</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1027206"></a><span class="fm-combinumeral">❶</span> Finds all the points in the container intersecting a given hyper-sphere. We pass the hyper-sphere as its center and radius.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1027230"></a><span class="fm-combinumeral">❷</span> If <code class="fm-code-in-text2">node</code> is <code class="fm-code-in-text2">null</code>, we are traversing an empty tree, so there is no point to be added.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1027247"></a><span class="fm-combinumeral">❸</span> Otherwise, we have three tasks: check if the current node is inside the hyper-sphere, traverse the branch on the same side of the split with respect to the center of the sphere, and check if we can prune the other branch (or traverse it as well). We start by initializing the list of points found within this subtree.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1027264"></a><span class="fm-combinumeral">❹</span> We compute the distance between the current node’s point and sphere’s center.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1027284"></a><span class="fm-combinumeral">❺</span> If that’s less than the sphere’s radius, we can add the current point to the results.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1027301"></a><span class="fm-combinumeral">❻</span> Checks which branch is on the same side of the sphere’s center (close) and which on the other side (far)</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1027318"></a><span class="fm-combinumeral">❼</span> We certainly need to traverse the closest branch, because it intersects the sphere. Add all points found to the results for the current subtree.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1027335"></a><span class="fm-combinumeral">❽</span> Using one of the helper functions defined in listing 9.2, we compute the distance between the split line passing through the current node and the center of the sphere. If this distance is closer than the radius, the furthest branch will also intersect the sphere (see figure 9.25).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1027352"></a><span class="fm-combinumeral">❾</span> Traverses the furthest branch, and adds all points found to current results</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1027369"></a><span class="fm-combinumeral">❿</span> Returns the points found in this subtree</p>
+
+  <p class="body"><a id="pgfId-1024839"></a>The other region we are going to use for these queries is a rectangular shape. As you can imagine, the only difference with respect to <code class="fm-code-in-text">pointsinSphere</code> is the way we check whether we have to prune a branch. If we assume that the rectangle is oriented along the Cartesian axes used for splits, then pruning might even be considered easier, as shown in figure 9.26. But suppose we are at a horizontal split; then we need to understand if the split line intersects the search region, and in this case we will traverse both branches, or if it’s above or below the region, which tells us which branch we can prune. This can be checked by simply comparing the <code class="fm-code-in-text">y</code> coordinate current node’s point—call it <code class="fm-code-in-text">Ny</code>—with top (<code class="fm-code-in-text">Rt</code>) and bottom <code class="fm-code-in-text">(Rb) y</code> coordinates of the rectangular region, as we can have three cases:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1006439"></a><code class="fm-code-in-text">R<sub class="subscript1">b</sub></code> <span class="cambria">≤</span> <code class="fm-code-in-text">N<sub class="subscript1">y</sub></code> <span class="cambria">≤</span> <code class="fm-code-in-text">R<sub class="subscript1">t</sub></code>—We need to traverse both branches.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1006461"></a><code class="fm-code-in-text">N<sub class="subscript1">y</sub> &gt; R<sub class="subscript1">t</sub></code>—We can prune the left branch.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1006481"></a><code class="fm-code-in-text">R<sub class="subscript1">b</sub> &gt; N<sub class="subscript1">y</sub></code>—We can prune the right branch.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1006500"></a>And similarly for vertical splits, by checking the <code class="fm-code-in-text">x</code> coordinates instead of the <code class="fm-code-in-text">y</code> coordinates, it can also be generalized for <code class="fm-code-in-text">k</code>-dimensional spaces, cycling through dimensions.</p>
+
+  <p class="body"><a id="pgfId-1006519"></a>This method is particularly useful when we need to search values within simple boundaries for each feature in data. For instance, if we have a dataset containing the tenures and salaries of employees, we might want to search all employees who worked for the company between two and four years and have salaries between 40K and 80K . . . and give them a raise!<a href="#pgfId-1008719"><sup class="footnotenumber">14</sup></a></p>
+
+  <p class="body"><a id="pgfId-1006578"></a>This search, implemented in listing 9.12, translates into a rectangle with boundaries parallel to the dataset feature axes, meaning that in our boundaries each feature is independent of any other feature. If, instead, we had conditions that would mix more than one feature (for instance, a salary lower than 15K for each year of tenure), then the boundaries of the search region would be segments of generic lines, not parallel to any axis.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch09_F26.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1035539"></a>Figure 9.26 Region search on a k-d tree returns all the points in a k-d tree within a given hyper-rectangle. This means looking for points that, for each coordinate, satisfy two inequalities: each coordinate must be within a range. For instance, in this 2-D example, the points’ <code class="fm-code-in-text">x</code> coordinates need to be between <code class="fm-code-in-text">-2</code> and <code class="fm-code-in-text">3.5</code>, and <code class="fm-code-in-text">y</code> coordinates between <code class="fm-code-in-text">-4</code> and <code class="fm-code-in-text">2</code>.</p>
+
+  <p class="body"><a id="pgfId-1021398"></a>In that case, the problem becomes harder to solve, and we might need something more complex, such as the simplex algorithm,<a href="#pgfId-1008733"><sup class="footnotenumber">15</sup></a> to search the points satisfying our range query.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015623"></a>Listing 9.12 The <code class="fm-code-in-text">pointsInRectangle</code> method</p>
+  <pre class="programlisting"><b class="calibre21">function</b> pointsInRectangle(node, rectangle)                         <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> node == <b class="calibre21">null then</b>                                              <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return</b> []
+  <b class="calibre21">else</b>                                                              <span class="fm-combinumeral">❸</span>
+    points ← []                                                     <span class="fm-combinumeral">❹</span>
+      <b class="calibre21">if</b> (rectangle[i].min <span class="cambria">≤</span> node.point[i] <span class="cambria">≤</span> rectangle[i].max 
+           <span class="cambria">∀</span> 0<span class="cambria">≤</span>i&lt;k) <b class="calibre21">then</b>                                           <span class="fm-combinumeral">❺</span>
+      points.insert(node.point)
+    <b class="calibre21">if</b> intersectLeft(rectangle, node) <b class="calibre21">then</b>                          <span class="fm-combinumeral">❻</span>
+      points.insertAll(pointsInRectangle(node.left, rectangle))    
+    <b class="calibre21">if</b> intersectRight(rectangle, node) <b class="calibre21">then</b>                         <span class="fm-combinumeral">❼</span>
+      points.insertAll(pointsInRectangle(node.right, rectangle))
+    <b class="calibre21">return</b> points                                                   <span class="fm-combinumeral">❽</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1026561"></a><span class="fm-combinumeral">❶</span> Finds all the points in the container intersecting a given hyper-sphere. We pass the hyper-rectangle as an argument, so we can assume it is a list of named tuples, each containing the boundaries for a dimension of the rectangle, as a range (min-max values).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1026597"></a><span class="fm-combinumeral">❷</span> If the <code class="fm-code-in-text2">node</code> is <code class="fm-code-in-text2">null</code>, we are traversing an empty tree, so there is no point to be added.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1026614"></a><span class="fm-combinumeral">❸</span> Otherwise, we have three tasks: check if the current node is inside the hyper-rectangle, check if the left and right branches intersect the rectangle (at least one of them will), and traverse any that do intersect.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1026634"></a><span class="fm-combinumeral">❹</span> We start by initializing the list of points found within this subtree.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1026651"></a><span class="fm-combinumeral">❺</span> If, for each dimension <code class="fm-code-in-text2">i</code>, the <code class="fm-code-in-text2">i</code>-th coordinate of the current node’s point is within the rectangle’s boundaries for that coordinate, then we can add the current point to the results.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1026668"></a><span class="fm-combinumeral">❻</span> If the rectangle boundaries intersect the left branch, either being on the left of the current node’s split line, or intersecting it, then we need to traverse the left branch and add all points found to the current results. For the sake of space, we won’t provide this helper function, but you can easily write it using figure 9.26 as a reference.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1026685"></a><span class="fm-combinumeral">❼</span> If the rectangular search region intersects the right branch, we can symmetrically recurse on the right child.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1026562"></a><span class="fm-combinumeral">❽</span> Finally, we return all points found in this subtree.</p>
+
+  <p class="body"><a id="pgfId-1006915"></a>What’s the performance of both region-searches? Well, as you can imagine, it heavily depends on the regions we search. We go on a full range from two edge cases:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1006928"></a>For very small regions intersecting only a single branch corresponding to a leaf, we will prune every other branch, and just follow a path to the leaf, so the running time will be <code class="fm-code-in-text">O(h)</code>, where <code class="fm-code-in-text">h</code> is the height of the tree – <code class="fm-code-in-text">O(log(n))</code> for a balanced tree with <code class="fm-code-in-text">n</code> points.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1006950"></a>When the region is large enough to intersect all points, we will have to traverse the whole tree, and the running time will be <code class="fm-code-in-text">O(n)</code>.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1006964"></a>Therefore, we can only say that the worst-case running time is <code class="fm-code-in-text">O(n)</code>, even if the methods will efficiently prune the tree whenever <a id="marker-1007675"></a><a id="marker-1007679"></a><a id="marker-1007683"></a>possible.</p>
+
+  <h3 class="fm-head2" id="heading_id_15"><a id="pgfId-1006979"></a>9.3.7 A recap of all methods</h3>
+
+  <p class="body"><a id="pgfId-1006995"></a>As we have seen, k-d trees provide a speed-up over brute-force search on the whole dataset; table 9.1 summarizes the performance of the methods described in this chapter. While the worst-case running time for nearest neighbor search (and removal) is still linear (exactly as for brute-force), in practice the amortized performance on balanced k-d trees is slightly to consistently better. The improvement is higher in low dimensional spaces and still consistent in medium-dimensional spaces.</p>
+
+  <p class="body"><a id="pgfId-1007015"></a>In high-dimensional spaces, the exponential term on <code class="fm-code-in-text">k</code> for nearest neighbor becomes dominant and makes supporting the extra complexity of such a data <a id="marker-1007687"></a><a id="marker-1007691"></a><a id="marker-1007695"></a>structure not worth it.</p>
+
+  <p class="fm-table-caption"><a id="pgfId-1015706"></a>Table 9.1 Operations provided by k-d tree, and their cost on a balanced k-d tree with n elements</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1015712"></a>Operation</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1015714"></a>Running time</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1015716"></a>Extra space</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015718"></a><code class="fm-code-in-text2">search</code><a id="marker-1015753"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015720"></a><code class="fm-code-in-text2">O(log(n))</code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015722"></a><code class="fm-code-in-text2">O(1)</code></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015724"></a><code class="fm-code-in-text2">insert</code><a id="marker-1015754"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015726"></a><code class="fm-code-in-text2">O(log(n))</code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015728"></a><code class="fm-code-in-text2">O(1)</code></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015730"></a><code class="fm-code-in-text2">remove</code><a id="marker-1015755"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015732"></a><code class="fm-code-in-text2">O(n<sup class="superscript">1-1/k</sup>)<a class="calibre14" href="#pgfId-1015787"><sup class="footnotenumber2">16</sup></a></code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015734"></a><code class="fm-code-in-text2">O(1)</code></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015736"></a><code class="fm-code-in-text2">findMin</code><a id="marker-1015756"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015738"></a><code class="fm-code-in-text2">O(n<sup class="superscript">1-1/k</sup>)<a class="calibre14" href="#pgfId-1015787"><sup class="footnotenumber2">16</sup></a></code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015740"></a><code class="fm-code-in-text2">O(1)</code></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015742"></a><code class="fm-code-in-text2">nearestNeighbor</code><a id="marker-1015757"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015744"></a><code class="fm-code-in-text2">O(2<sup class="superscript">k</sup> + log(n))<a class="calibre14" href="#pgfId-1015787"><sup class="footnotenumber2">16</sup></a></code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015746"></a><code class="fm-code-in-text2">O(m)<a class="calibre14" href="#pgfId-1015838"><sup class="footnotenumber2">17</sup></a></code></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015748"></a><code class="fm-code-in-text2">pointsInRegion</code><a id="marker-1015758"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015750"></a><code class="fm-code-in-text2">O(n)</code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015752"></a><code class="fm-code-in-text2">O(n)</code></p>
+      </td>
+    </tr>
+  </table>
+
+  <h2 class="fm-head" id="heading_id_16"><a id="pgfId-1008037"></a>9.4 Limits and possible improvements</h2>
+
+  <p class="body"><a id="pgfId-1008053"></a>If <a id="marker-1008449"></a><a id="marker-1008453"></a><a id="marker-1008457"></a>we look back at our “find the closest hub” problem, we started this chapter with basically nothing better than brute-force search to find the nearest neighbor of a point in a multidimensional dataset. Then, going through a few less-than-ideal attempts, we built our understanding of the traps and challenges in such a task and finally introduced k-d trees.</p>
+
+  <p class="body"><a id="pgfId-1008072"></a>K-d trees are great because they offer a major speed-up over linear search; yet, they still have potential issues:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1008083"></a>K-d trees might be hard to implement efficiently.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008097"></a>K-d trees are not self-balancing, so they perform best when they are constructed from a stable set of points, and the number of inserts and removes are limited with respect to the total number of elements. Unfortunately, static datasets are not the norm in the big-data era.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008115"></a>When we deal with high-dimensional spaces, k-d trees become inefficient. As we have seen, the time needed for removal and nearest neighbor search is exponential in <code class="fm-code-in-text">k</code>, the dimension of the dataset. But for sufficiently large values of <code class="fm-code-in-text">k,</code> this can hinder any performance benefits over brute-force search. We have seen that nearest neighbor searches perform better than naïve search if <code class="fm-code-in-text">n &gt; 2<sup class="superscript1">k</sup></code>, so starting at <code class="fm-code-in-text">k ≈ 30</code>, we would need an ideal dataset (one with a regular distribution of points) with billions of elements in order for k-d tree to overperform brute-force.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008153"></a>K-d trees don’t work well with paged memory; they are not memory-efficient with respect to the locality of reference because points are stored in tree nodes, so close-by points won’t lie close by memory areas.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1008176"></a>While they handle points well, k-d trees can’t handle non-punctiform objects, such as shapes or any object with a non-zero measure.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1008190"></a>The inefficiency of high-dimensional datasets stems from the fact that in these datasets, data becomes very sparse. At the same time, when we traverse a k-d tree during NN-search, we can only prune a branch when it doesn’t intersect the hyper-sphere centered in the target point and with a radius equal to the minimum distance found so far. It is highly likely that this sphere will intersect many of the branches’ hyper-cubes in at least one dimension.</p>
+
+  <p class="body"><a id="pgfId-1008209"></a>To overcome these limitations, we could try a few approaches:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1008218"></a>We could use different criteria to decide where to partition the <code class="fm-code-in-text">k</code>-dimensional space, using different heuristics:</p>
+
+      <ul class="calibre20">
+        <li class="fm-list-bullet1">
+          <p class="list"><a class="calibre14" id="pgfId-1008232"></a>Don’t use a splitting line passing through points, but just divide a region into two balanced halves (either with respect to the number of points or the sub-regions’ size; basically, choose the mean instead of the median).</p>
+        </li>
+
+        <li class="fm-list-bullet1">
+          <p class="list"><a class="calibre14" id="pgfId-1008247"></a>Instead of cycling through dimensions, choose at every step the dimension with the greatest spread or variance, and store the choice in the tree node.</p>
+        </li>
+      </ul>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008259"></a>Instead of storing points in nodes, each node could describe a region of space and link (directly or indirectly) to an array containing the actual elements.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008271"></a>We could approximate nearest neighbor search. For instance, we could use <i class="calibre15">locality sensitive hashing</i>.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1008291"></a>Or we could find new ways to partition the <code class="fm-code-in-text">k</code>-dimensional space, ideally trying to reduce sparsity.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1008305"></a>Heuristics help on some datasets, but in general won’t solve the issue with higher dimensional spaces.</p>
+
+  <p class="body"><a id="pgfId-1008314"></a>The approximate approach doesn’t produce an exact solution, but there are many cases where we can settle with a sub-optimal result, or we can’t even define a perfect metric. For example, think about retrieving the closest document to an article or the closest item to something you want to buy, but is out of stock. We won’t go on this path for now. Instead, in the next chapter we will delve into the latter approach with SS-trees. We will also defer to chapter 11 the discussion about applications of nearest neighbor <a id="marker-1008461"></a><a id="marker-1008465"></a><a id="marker-1008469"></a>search.</p>
+
+  <h2 class="fm-head" id="heading_id_17"><a id="pgfId-1008351"></a>Summary</h2>
+
+  <ul class="calibre19">
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008363"></a>When the number of dimensions of a dataset grows, this usually brings an exponential increase in either the complexity or memory needed.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008375"></a>We need to carefully design our data structures to avoid or limit this exponential burst, but we can’t remove it altogether. When the number of dimensions is large, it’s hard, if even possible, to maintain good performance.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008391"></a>K-d trees are an advanced data structure that helps perform spatial queries (nearest neighbor search and intersections with spherical or rectangular regions) more efficiently.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008403"></a>K-d trees are great with low- and medium-dimensional spaces, but suffer sparsity with high-dimensional spaces.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008415"></a>K-d trees work better on static datasets because we can build balanced trees on construction, but <code class="fm-code-in-text">insert</code><a class="calibre14" id="marker-1008473"></a> and <code class="fm-code-in-text">remove</code><a class="calibre14" id="marker-1008477"></a> are not self-balancing <a class="calibre14" id="marker-1008481"></a><a class="calibre14" id="marker-1008485"></a><a class="calibre14" id="marker-1008489"></a>operations.</p>
+    </li>
+  </ul>
+  <hr class="calibre22"/>
+
+  <p class="fm-footnote"><sup class="footnotenumber">1.</sup> <a id="pgfId-1008506"></a>“Multidimensional binary search trees used for associative searching.” <i class="calibre17">Communications of the ACM</i>, 1975, Vol. 18, Issue 9, pp. 509-517</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">2.</sup> <a id="pgfId-1008520"></a>Here we choose points arbitrarily to obtain a clearer visualization. In section 9.3.3 we will explain how to make this choice programmatically to obtain a balanced tree.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">3.</sup> <a id="pgfId-1008532"></a>See <span class="fm-hyperlink"><a href="https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction#k-d-tree">https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction#k-d-tree</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">4.</sup> <a id="pgfId-1008548"></a>Don’t Repeat Yourself. In this case we have some code duplication that makes the code slightly less maintainable.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">5.</sup> <a id="pgfId-1008568"></a>Immutability of data structures is a key point of functional programming. It has several advantages, from being intrinsically thread-safe to easier debugging. While this code doesn’t implement an immutable data structure, it can be easily changed to adhere to that pattern.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">6.</sup> <a id="pgfId-1008584"></a>See <span class="fm-hyperlink"><a href="https://en.wikipedia.org/wiki/Master_theorem_(analysis_of_algorithms)">https://en.wikipedia.org/wiki/Master_theorem_(analysis_of_algorithms)</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">7.</sup> <a id="pgfId-1008600"></a>n*log(n) is often referred to as linearithmic, as a <i class="calibre17">crasis</i> of linear and logarithmic.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">8.</sup> <a id="pgfId-1008622"></a>Note that we could also use N’s predecessor in a symmetrical way.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">9.</sup> <a id="pgfId-1008638"></a>This is implied by invariant 4 as described in section 9.2.2</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">10.</sup> <a id="pgfId-1008657"></a>This method is usually denoted as a k-nearest-neighbor search, but the use of k here could cause confusion with the dimension of the tree; hence we will just use m or n to indicate the number of points we look for.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">11.</sup> <a id="pgfId-1008677"></a>As mentioned, this is also referred to as k-nearest-neighbor in literature.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">12.</sup> <a id="pgfId-1008691"></a>Since we can define an ad-hoc unit measure for the area, it is always possible to imagine so.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">13.</sup> <a id="pgfId-1008705"></a>The one leaf that is closest to the target point, as shown in listing 9.9.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">14.</sup> <a id="pgfId-1008719"></a>In a perfect world . . .</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">15.</sup> <a id="pgfId-1008733"></a>The simplex algorithm is an ingenious optimization method. It is not related to or helped by k-d trees and, as such, is out of scope for this chapter, but it’s interesting reading, and you can read more here: <span class="fm-hyperlink"><a href="https://en.wikipedia.org/wiki/Simplex_algorithm">https://en.wikipedia.org/wiki/Simplex_algorithm</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">16.</sup> <a id="pgfId-1015787"></a>Amortized, for a k-d tree holding <code class="fm-code-in-text1">k</code>-dimensional points.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">17.</sup> <a id="pgfId-1015838"></a>When searching for the <code class="fm-code-in-text1">m</code> nearest neighbors, with <code class="fm-code-in-text1">m</code> constant (not a function of <code class="fm-code-in-text1">n</code>).</p>
+</body>
+</html>

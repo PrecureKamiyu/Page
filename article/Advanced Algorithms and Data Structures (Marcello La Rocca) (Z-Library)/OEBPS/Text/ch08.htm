@@ -1,0 +1,349 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <title>Part 2</title>
+    
+  <link href="../../stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="../../page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+  <div class="tocheadb">
+    <h1 class="tochead" id="heading_id_3"><a id="pgfId-998650"></a><a id="pgfId-998662"></a><a id="id_Hlk807222"></a>8 Nearest neighbors search</h1>
+  </div>
+
+  <p class="co-summary-head"><a id="pgfId-1010595"></a>This chapter covers</p>
+
+  <ul class="calibre19">
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1010634"></a>Finding closest points in a multidimensional dataset</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1010635"></a>Introducing data structures to index multidimensional space</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1010636"></a>Understanding the issues with indexing high dimensional spaces</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1010623"></a>Introducing efficient nearest neighbor search</li>
+  </ul>
+
+  <p class="body"><a id="pgfId-998786"></a>So far in this book we have worked with containers that were holding unidimensional data: the entries that we stored in queues, trees, and hash tables were always assumed to be (or to be translatable to) numbers—simple values that could be compared in the most intuitive mathematical sense.</p>
+
+  <p class="body"><a id="pgfId-998891"></a>In this chapter, we will see how this simplification doesn’t always hold true in real datasets, and we’ll examine the issues connected to handling more complex, multidimensional data. Do not despair, though, because in the next chapters we will also describe data structures that can help handle this data and see real applications that leverage efficient nearest neighbor search as part of their workflow, such as <i class="calibre17">clustering</i><a id="marker-1004555"></a>.</p>
+
+  <p class="body"><a id="pgfId-1012531"></a>As we’ll see, the discussion on this area is particularly rich, and there is no way that we can cover it, not even just its crucial bits, in a single chapter. Therefore, while in part 1 each chapter was following the same pattern to explain topics, we’ll have to stretch this pattern to the whole part 2, where each chapter will cover only a single piece of our usual discussion:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1012532"></a>Chapter 8 contains an introduction to the problem and the real-world example we will tackle.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1012533"></a>Chapters 9-10 describe three data structures that can be used to implement nearest neighbor search efficiently.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1012534"></a>Chapter 11 applies those data structures to the problem described here and introduces more applications for them.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1012535"></a>Chapters 12-13 focus on a particular application of nearest neighbor search: clustering.</p>
+    </li>
+  </ul>
+
+  <h2 class="fm-head" id="heading_id_4"><a id="pgfId-999343"></a>8.1 The nearest neighbors search problem</h2>
+
+  <p class="body"><a id="pgfId-999367"></a>Let’s <a id="marker-1004559"></a>start our journey for this chapter from figure 8.1: a map showing a few cities (taken from an alternate universe) and the locations of some warehouses in their area.</p>
+
+  <p class="body"><a id="pgfId-999435"></a>Imagine you are living in the 1990s, the dawn of the internet era, with e-commerce taking its very first steps.</p>
+
+  <p class="body"><a id="pgfId-999479"></a>You are running an online store where you sell locally produced products by collaborating with a few retailers. They sell to shops in the real world, and you provide them with the infrastructure to also sell online, for a small price.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch08_F1.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1014013"></a>Figure 8.1 A hypothetical map of warehouses (marked with stars) next to the major cities on the coast (in an alternate universe)</p>
+
+  <p class="body"><a id="pgfId-999632"></a>Each warehouse will take care of deliveries for its orders, but to gain traction and have more retailers hop on board, you offer a special deal: for each delivery further than 10 km away, you will cut your commission proportionally to the distance.</p>
+
+  <p class="body"><a id="pgfId-999725"></a>Back to figure 8.1. You are the chief architect of this company and your main goal is finding a way, when a client orders a product, to come up with the closest warehouse that has the product in stock, and, if possible, keeping within a distance of 10 km.</p>
+
+  <p class="body"><a id="pgfId-999824"></a>Long story short, to keep your company in business and to keep your job, it’s vital that you always redirect each user to the closest warehouse.</p>
+
+  <p class="body"><a id="pgfId-999884"></a>Imagine that someone from Gotham City tries to order some French cheese. You look at your list of warehouses, compute the distance between your customer’s mailing address and each of them, and pick the closest one, P-5. Immediately after that, someone from Metropolis buys two wheels of the same cheese; unfortunately, you can’t use any of the distances computed before, because the source point, the location of the customer, is completely different. So, you just go through that list of stores again, compute all the distances, and choose warehouse B-2. If the next request comes, say, from Civic City, off you go! You once again need to compute all <code class="fm-code-in-text">N</code> distances again, to all <code class="fm-code-in-text">N</code> <a id="marker-1004563"></a>warehouses.</p>
+
+  <h2 class="fm-head" id="heading_id_5"><a id="pgfId-1000132"></a>8.2 Solutions</h2>
+
+  <p class="body"><a id="pgfId-1000144"></a>Now, <a id="marker-1004567"></a>I know, figure 8.1 only shows five warehouses, so it seems a trivial, quick operation to go through all warehouses for each user. You could even handle orders manually, choosing case by case based on your gut feeling and experience.</p>
+
+  <p class="body"><a id="pgfId-1000234"></a>But suppose that after one year, since your business is working well, more stores have decided to sell on your website, and you have close to a hundred of them in that same area. That’s challenging, and your customer care department can’t cope with a thousand orders a day: manually selecting the closest place for each order doesn’t work anymore.</p>
+
+  <p class="body"><a id="pgfId-1000371"></a>So, you write a small piece of code that automatically performs the previous steps for each order and checks all the distances for each order.</p>
+
+  <p class="body"><a id="pgfId-1000427"></a>After another year, however, the business is going so well that your CEO decides you are ready to go national after closing a deal that will see hundreds or thousands of medium and large stores (spread across the country) join your platform.</p>
+
+  <p class="body"><a id="pgfId-1000519"></a>Computing millions of distances per user starts to seem a little overwhelming and inefficient—also, since you are only in the late ‘90s, servers are not that fast, server farms are a rarity, and data centers are something for large hardware companies such as IBM. They are not yet a thing for e-commerce.</p>
+
+  <h3 class="fm-head2" id="heading_id_6"><a id="pgfId-1000632"></a>8.2.1 First attempts</h3>
+
+  <p class="body"><a id="pgfId-1000647"></a>Your <a id="marker-1004571"></a>first proposal can be precomputing the closest warehouse for each user once and for all products, but that doesn’t really work, because users can and will move, or sometimes they want to have stuff sent to their office or to the post office and not to their homes. Plus, the availability of goods will change over time, so the closest shop isn’t always the best one. You would need to keep a list of shops, ordered by distance, for each customer (or at least each city). Haven’t I already mentioned that data centers aren’t yet a <a id="marker-1004575"></a>thing?</p>
+
+  <h3 class="fm-head2" id="heading_id_7"><a id="pgfId-1000853"></a>8.2.2 Sometimes caching is not the answer</h3>
+
+  <p class="body"><a id="pgfId-1000877"></a>So, <a id="marker-1004579"></a><a id="marker-1004583"></a>this is one of those cases where cache doesn’t really help us a lot. As we mentioned in chapter 7, there aren’t many such situations, but sometimes they do happen.</p>
+
+  <p class="body"><a id="pgfId-1000950"></a>Reasoning in 2-D, we might try a different approach, inspired by real maps: divide our map into tiles, using a regular grid. This way, we can easily find which tile contains a point from its coordinates (simply dividing the value of each coordinate by the size of a tile; see figure 8.2) and search the closest points in the same tile or in the neighboring tiles. This, indeed, seems to help reduce the number of points we need to compare; there is, however, a catch. This approach works if data is regularly spaced, which is usually not the case with real datasets, as shown in figure 8.2.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch08_F2.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1014059"></a>Figure 8.2 Indexing 2-D space with regular, equal-sized tiles. While finding the tile where a point lies is easy, irregular distribution of points in a dataset causes, on average, many cells to be empty, while a few of them have high density.</p>
+
+  <p class="body"><a id="pgfId-1001274"></a>Real data forms clusters, dense conglomerates that gather many points close to each other, alternated with sparse areas with few points. With a regularly spaced grid, the risk is having many empty tiles and a few tiles that gather hundreds or thousands of points, hence defying the purpose of this approach. We need something different, something more <a id="marker-1004587"></a><a id="marker-1004591"></a>flexible.</p>
+
+  <h3 class="fm-head2" id="heading_id_8"><a id="pgfId-1001394"></a>8.2.3 Simplifying things to get a hint</h3>
+
+  <p class="body"><a id="pgfId-1001419"></a>The <a id="marker-1011963"></a>solution to this problem seems elusive. In these cases, it sometimes helps to solve a simplified version of the problem and then come up with a more general solution that works for our initial problem.</p>
+
+  <p class="body"><a id="pgfId-1001500"></a>Suppose, for instance, that we were able to restrict our search to a 1-D search space. Say that we need to serve only customers on a single road that extends for miles and miles, and all our warehouses are also placed along this same road.</p>
+
+  <p class="body"><a id="pgfId-1001597"></a>To simplify things even further, suppose that the road is perfectly straight, and that the total distance we cover is short enough that we don’t have to worry about the earth’s surface being curved, latitude, longitude, etc. Basically, we assume that an approximation with a 1-D segment is close enough to our space, and we can use Euclidean distance in 1-D as a proxy for the real distance between cities.</p>
+
+  <p class="body"><a id="pgfId-1001745"></a>Figure 8.3 might help you picture the scenario. We have a line segment with a starting point marked as <code class="fm-code-in-text">0</code>, and the cities and warehouses that we saw in figure 8.1, but now all of them are on the same line.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch08_F3.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1014101"></a>Figure 8.3 Cities and warehouses from figure 8.1, now projected on a 1-D space, a line segment</p>
+
+  <p class="body"><a id="pgfId-1001860"></a>This is an approximation of the initial scenario, where those points belong to a 2-D plane, which in turn is an approximation of the reality, where the same points are on a 3-D curved surface. Depending on the use case, we might be fine with either approximation, or require a more precise model taking into account the curvature of the earth’s surface.</p>
+
+  <p class="body"><a id="pgfId-1001988"></a>Given a random point on the segment, we would like to know which one of the reference points is closer. Being in a 1-D case, this looks awfully similar to binary search, right? Check figure 8.4 to see how binary search can be used to find the closest 1-D <a id="marker-1011093"></a>point.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch08_F4.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1014143"></a>Figure 8.4 How the 1-D version of the search problem is solved by humans and computers. Each city, warehouse, and customer is defined in terms of a distance from a fixed point (the origin, whose distance is 0). (A) Humans can easily look at a 1-D map, place a point on it, and see the closest entry. (B) A computer, on the other hand, needs instructions to find a relation between a point and what it sees as just an ordered sequence of numbers. Linear scan of the sequence is an option, but (C) binary search is a better option. We start from the middle of the sequence, check whether our value (75) is equal to the element in the middle (32), and since it is not, we move to the right of 32, in the middle of the sub-sequence between 40 and 93. We keep doing so until we either find a perfect match (which would also be the closest entry), or we end up with a sub-sequence that has just two elements. If that’s the case, we compare the two elements to our value, and see that 80 is closer than 62. So Happy Harbor is our winner.</p>
+
+  <h3 class="fm-head2" id="heading_id_9"><a id="pgfId-1002135"></a>8.2.4 Carefully choose a data structure</h3>
+
+  <p class="body"><a id="pgfId-1002159"></a>Binary <a id="marker-1004603"></a>search on an array is cool, but arrays are not really known for their flexibility (as we discuss in appendix C). If we would like to add another point between <code class="fm-code-in-text">W-3</code> and <code class="fm-code-in-text">B-2</code>, for instance, we would have to move all array entries points from <code class="fm-code-in-text">B-2</code> to <code class="fm-code-in-text">B-4</code>, and possibly reallocate the array if it’s a static array.</p>
+
+  <p class="body"><a id="pgfId-1002288"></a>Luckily, we do know a data structure that is more flexible than arrays and would allow us to perform a binary search efficiently. As its name suggests, a binary search tree<a id="marker-1004607"></a> (BST) is what we are looking for. In figure 8.5 we show a balanced binary search tree; remember that we need the tree to be balanced to guarantee logarithmic running time on the most common operations.</p>
+
+  <p class="body"><a id="pgfId-1002430"></a>For this example, we show a tree that contains both cities and warehouses. You can imagine, for the sake of simplification, that each city has a big warehouse or distribution center, so our searches can just return the closest entry (either a city or a warehouse) to a customer (that is not in one of the cities in the tree).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch08_F5.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1014197"></a>Figure 8.5 A balanced binary search tree containing cities and warehouses in our example. Note that this is only one of the possible balanced search trees for these values. For this set of values, there are at least 32 valid binary search trees that are also balanced. As an exercise, you can try to enumerate all of them (hint: Which internal nodes can be rotated<a href="#pgfId-1008261"><sup class="footnotenumber">1</sup></a> without changing the tree height?)</p>
+
+  <p class="body"><a id="pgfId-1012118"></a>And indeed, insertion, removal, and search are guaranteed to be logarithmic on our balanced BST. This is much better than our initial linear time search, isn’t it? A logarithmic running time grows amazingly slowly; just think that for a million points, we would go down from a million distances to be computed to just about 20!</p>
+
+  <p class="body"><a id="pgfId-1002831"></a>Figure 8.6 shows how we would run binary search on the binary search tree shown in figure 8.5 to find the nearest neighbor of a point whose distance from the origin (aka its <code class="fm-code-in-text">x</code> coordinate) is 75. If we had an exact match, the nearest neighbor would be the result of binary search. When we don’t have an exact match, which is the most common case, then the nearest neighbor will always be either the node where the binary search fails, or its parent.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch08_F6.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1014239"></a>Figure 8.6 Using search on a binary search tree to find the nearest neighbor (in 1-D) of a target point</p>
+
+  <p class="body"><a id="pgfId-1003064"></a>So, what’s the algorithm to find the nearest neighbor of a 1-D point, when our dataset is stored in a binary search tree?</p>
+
+  <ol class="calibre18">
+    <li class="fm-list-numbered">
+      <p class="list"><a class="calibre14" id="pgfId-1003117"></a>Run search on the binary search tree.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003141"></a>If there is an exact match, the entry found is the nearest neighbor (with distance equal to <code class="fm-code-in-text">0</code>).</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1003188"></a>Otherwise, check which entry is closest to your target between the last entry visited (the one on which search stopped) and its parent.</p>
+    </li>
+  </ol>
+
+  <p class="body"><a id="pgfId-1003244"></a>Now that we have brilliantly solved the problem in 1-D, the question arises: Can we use a similar data structure to solve the problem <a id="marker-1004611"></a>in <a id="marker-1004615"></a>2-D?</p>
+
+  <h2 class="fm-head" id="heading_id_10"><a id="pgfId-1003305"></a>8.3 Description and API</h2>
+
+  <p class="body"><a id="pgfId-1003321"></a>Of <a id="marker-1004619"></a>course, the answer is yes. Probably the fact that we asked the question already led you to suspect it. But nonetheless, getting from 1-D to 2-D is a big leap. There is no easy way to imagine a tree that works in two dimensions. Worry not, though; we’ll get into a detailed explanation in the next section. Once we have taken that leap, it will be easy to move to 3-D and in general to hyper-spaces with an arbitrary number of dimensions.</p>
+
+  <p class="body"><a id="pgfId-1003497"></a>We also won’t be limited to datasets that lie in 2-D or 3-D geometric space. The dimensions can be anything, as long as we can define a distance measure on them, with the caveat that the distance measure respects some requirements; namely, it needs to be Euclidian distance.<a href="#pgfId-1008277"><sup class="footnotenumber">2</sup></a> For example, we can have 2-D entries where the first coordinate is their price and the second coordinate is their rating, and then we can ask for the closest entry to a target tuple, like (100$, 4.5 rating). Even more, we will be able to ask for the <code class="fm-code-in-text">N</code> closest entries to that target.</p>
+
+  <p class="body"><a id="pgfId-1003711"></a>In this and the following chapters we are going to describe three data structures, three containers, that allow for efficient nearest neighbor queries. But not just that—they will provide a few special operations:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1003786"></a>Retrieving the <code class="fm-code-in-text">N</code> closest points to a target point (not necessarily in the container)</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003824"></a>Retrieving all the points in the container within a certain distance from a target point (geometrically interpretable as all points within a hyper-sphere)</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1003880"></a>Retrieving all the points in the container within a range (all points lying inside a hyper-rectangle, or a semi-hyperspace)</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1003928"></a>Let’s now briefly introduce the three structures we will describe in these chapters:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1003963"></a><i class="calibre15">K-d tree</i>—A k-d tree is a special binary tree in which every non-leaf node represents a splitting hyper-plane that divides the <code class="fm-code-in-text">k</code>-dimensional space into two half-spaces. Points on one side of this splitting hyper-plane are stored in the left subtree of the node and points in the other half-space created by the hyper-plane are stored in the right subtree. We’ll focus on k-d trees in chapter 9.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1004098"></a><i class="calibre15">R-tre</i>e—The <i class="calibre15">R</i> here is for rectangle. An R-tree<a class="calibre14" id="marker-1004623"></a> groups nearby points and defines the minimum bounding box (that is, hyper-rectangle) containing them. Points in the container are partitioned in a hierarchical sequence of minimum bounding boxes, one for each intermediate node, with the one at the root containing all the points, and the bounding box of each node fully containing all its children’s bounding boxes. In chapter 10 we will give a brief description of how R-trees work.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1004268"></a><i class="calibre15">SS-tree</i>—Similar to R-trees, but <i class="calibre15">Similarity Search Trees</i><a class="calibre14" id="id_Hlk55886381"></a> use hyper-spheres as bounding regions. Hyper-spheres are constructed with a recursive structure: the leaves only contain points, while inner spheres’ children are other hyper-spheres. Either way, a hyper-sphere can gather up to a certain number <code class="fm-code-in-text">n</code> of points (or spheres), within a certain distance from the sphere’s center. When it gets more than <code class="fm-code-in-text">n</code> children or some of them are too far away with respect to the others, then the tree<a class="calibre14" id="marker-1004627"></a> is rebalanced. We’ll describe in detail how this is done in chapter 10, which is devoted to SS-trees.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1004478"></a>And finally, let’s define a generic interface, common to all concrete <a id="marker-1004631"></a>implementations.</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="2" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1010803"></a>Abstract data structure: <code class="fm-code-in-text">NearestNeighborContainer</code></p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1010807"></a>API</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <pre class="programlisting">class NearestNeighborContainer {
+ size(),
+ isEmpty(),
+ insert(point),
+ remove(point),
+ search(point),
+ nearestNeighbor(point),
+ pointsInRegion(targetRegion)
+}</pre>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1010811"></a>Contract with client</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1010813"></a>The container allows inserting and removing points, and the following queries:</p>
+
+        <ul class="calibre29">
+          <li class="fm-table-list-bullet">
+            <p class="fm-table-body"><a id="pgfId-1010830"></a>Existence: Check if a point is in the container.</p>
+          </li>
+
+          <li class="fm-table-list-bullet">
+            <p class="fm-table-body"><a id="pgfId-1010832"></a>Nearest Neighbor: Return the closest point (or optionally the closest <code class="fm-code-in-text2">N</code> points, for any <code class="fm-code-in-text2">N</code>) to a target point. The target point doesn’t have to be in the container.</p>
+          </li>
+
+          <li class="fm-table-list-bullet">
+            <p class="fm-table-body"><a id="pgfId-1010834"></a>Region: Return all the points in the container within a certain region, either a hyper-sphere or hyper-rectangle.</p>
+          </li>
+        </ul>
+      </td>
+    </tr>
+  </table>
+
+  <h2 class="fm-head" id="heading_id_11"><a id="pgfId-1004636"></a>8.4 Moving to k-dimensional spaces</h2>
+
+  <p class="body"><a id="pgfId-1005014"></a>In <a id="marker-1008166"></a><a id="marker-1008170"></a>section 8.2, we showed that it is possible to efficiently solve the nearest neighbor problem in 1-D by using a binary search tree. If you read through the book and the appendices on core data structures, you should be familiar with binary trees. (If you did skip appendix C, this is your clue: go check out binary trees!)</p>
+
+  <p class="body"><a id="pgfId-1005145"></a>When we go from 1-D to 2-D, however, the situation becomes slightly more complicated, since at each node we don’t have a clear fork between two paths, namely left and right children. We have seen the same concept in ternary trees, where at each node we have a fork with three paths (or more, in <code class="fm-code-in-text">n</code>-ary trees), and the direction we have to follow depends on the result of comparison with more than just <code class="fm-code-in-text">true/false</code><a id="marker-1008174"></a> possible outcomes. But would an <code class="fm-code-in-text">n</code>-ary tree help us in this situation? Let’s analyze what happens in 1-D and see if we can generalize.</p>
+
+  <h3 class="fm-head2" id="heading_id_12"><a id="pgfId-1005355"></a>8.4.1 Unidimensional binary search</h3>
+
+  <p class="body"><a id="pgfId-1005373"></a>To <a id="marker-1008178"></a><a id="marker-1008182"></a><a id="marker-1008186"></a>recap what was described in section 8.2, it’s easy to perform binary search when our entries can lie on unidimensional space. Figure 8.7 exemplifies how the entries can be translated to points on a line (that’s basically a unidimensional space) so that each point on that line implicitly defines a left and a right.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch08_F7.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1014281"></a>Figure 8.7 Real numbers on <span class="cambria">ℝ</span>. Given a point <code class="fm-code-in-text">P</code>, the continuous line is naturally partitioned into a left and a right subset.</p>
+
+  <p class="body"><a id="pgfId-1005553"></a>So, each node has a value that corresponds to a point on that line, and each point on the line defines a left and right. But wait—in a binary search tree we also have left and right paths for each of our nodes: that’s why it’s so easy to know what to do in binary trees <a id="marker-1008190"></a><a id="marker-1008194"></a><a id="marker-1008198"></a>search!</p>
+
+  <h3 class="fm-head2" id="heading_id_13"><a id="pgfId-1005681"></a>8.4.2 Moving to higher dimensions</h3>
+
+  <p class="body"><a id="pgfId-1005701"></a>Now <a id="marker-1008202"></a><a id="marker-1008206"></a><a id="marker-1008210"></a>that we understand the mechanism for real numbers, what about <a id="id_Hlk3659848"></a><span class="cambria">ℝ</span><sup class="superscript">2</sup>? What about points in a Euclidean bidimensional space? What about C (the set of complex numbers)?</p>
+
+  <p class="fm-callout"><a id="pgfId-1005771"></a><span class="fm-callout-head">NOTE</span> Notice that <span class="cambria">ℝ</span><sup class="superscript2">2</sup> and C are bidimensional Euclidean spaces, and entries of these spaces can be represented with a pair of real numbers.</p>
+
+  <p class="body"><a id="pgfId-1005830"></a>Well, if we move to higher dimensions, how to run binary search is not as clear as in the unidimensional case.</p>
+
+  <p class="body"><a id="pgfId-1005878"></a>Binary search relies on recursively dividing a search space into halves, but if you consider a point <code class="fm-code-in-text">P</code> in the Cartesian plane, how can we partition the plane into two regions, left and right of <code class="fm-code-in-text">P</code>? Figure 8.8 shows a few possible ways to do so.</p>
+
+  <p class="body"><a id="pgfId-1005978"></a>A visually intuitive approach could be splitting the plane along a vertical line passing through <code class="fm-code-in-text">P</code>, so that in our representation of the Cartesian plane, the two semi-spaces will actually be drawn on the left and on the right of <code class="fm-code-in-text">P</code>. See figure 8.8.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch08_F8.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1014334"></a>Figure 8.8 Points in a Cartesian plane. Lines through the origin and each point are shown. A few possible partitionings into left and right of <code class="fm-code-in-text">P</code> are shown. (A) Splitting the plane with a vertical line passing through <a id="id_Hlk55886840"></a><code class="fm-code-in-text">P</code>. (B) Drawing a line passing through <code class="fm-code-in-text">P</code> and the origin will define two semi-spaces on the two sides of the line. (C) Using the same line as B but partitioning points whose projection on that line is left or right of <code class="fm-code-in-text">P</code>.</p>
+
+  <p class="body"><a id="pgfId-1006254"></a>This solution can look fine while using <code class="fm-code-in-text">P</code> as a pivot, but if we take other points, a couple of drawbacks will emerge:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1006307"></a>Looking at point <code class="fm-code-in-text">R</code> in figure 8.9, if we draw a vertical line, parallel to the <code class="fm-code-in-text">y</code> axis, and use the <code class="fm-code-in-text">x</code> coordinate to partition points, we get <code class="fm-code-in-text">W</code>, <code class="fm-code-in-text">P</code>, <code class="fm-code-in-text">O</code>, <code class="fm-code-in-text">Q</code>, and <code class="fm-code-in-text">U</code> in the left partition, and <code class="fm-code-in-text">S</code> and <code class="fm-code-in-text">T</code> in the right one. This means that despite <code class="fm-code-in-text">U</code> and <code class="fm-code-in-text">S</code> being much closer than <code class="fm-code-in-text">U</code> and <code class="fm-code-in-text">O</code> or <code class="fm-code-in-text">S</code> and <code class="fm-code-in-text">T</code>, they end up in different partitions (while the other two pairs of points are in the same partition).</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1006485"></a>If we consider <code class="fm-code-in-text">O</code>, in which partition will <code class="fm-code-in-text">Q</code> be? And what about any other point on the <code class="fm-code-in-text">y</code> axis? We can arbitrarily assign points with the same <code class="fm-code-in-text">x</code> coordinate of our pivot to the left or right partition, but we’ll have to do so for all of them, no matter how far they are from <code class="fm-code-in-text">O</code> on the <code class="fm-code-in-text">y</code> axis.</p>
+    </li>
+  </ul>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch08_F9.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1014379"></a>Figure 8.9 Another example of partitioning <span class="cambria">ℝ</span><sup class="superscript2">2</sup> space using a line parallel to y axis and passing for a given point (<code class="fm-code-in-text">R</code>, in this case)</p>
+
+  <p class="body"><a id="pgfId-1006688"></a>Both examples show issues that are derived from the same mistake: we are ignoring the points’ <code class="fm-code-in-text">y</code> coordinates altogether. Using only a fraction of the available information can’t be ideal; whenever we give up some info about a dataset, we are missing out on the opportunity to organize data more <a id="marker-1008214"></a><a id="marker-1008218"></a><a id="marker-1008222"></a>efficiently.</p>
+
+  <h3 class="fm-head2" id="heading_id_14"><a id="pgfId-1006798"></a>8.4.3 Modeling 2-D partitions with a data structure</h3>
+
+  <p class="body"><a id="pgfId-1006828"></a>Using <a id="marker-1008226"></a><a id="marker-1008230"></a>the same, single-direction approach for all points doesn’t really work, so maybe dividing a plane into four quadrants would be a better idea.</p>
+
+  <p class="body"><a id="pgfId-1006888"></a>Indeed, figure 8.10 shows that this works better than our previous attempts. Of course, since there are four quadrants, left and right partitioning doesn’t apply any more.</p>
+
+  <p class="body"><a id="pgfId-1006951"></a>We can use a tree where each node has four children instead of two, one child for each possible quadrant. Points on the axes or on the lines passing by a point can be arbitrarily assigned to one of the quadrants (as long as this is done consistently).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch08_F10.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1014421"></a>Figure 8.10 Four-way partitioning of the plane. For each point, we split the area it belongs to in four quadrants using the lines passing through the point and parallel to the axes. For the first one, <code class="fm-code-in-text">R</code> in the example, we get four infinite quadrants (left). When we choose the next point, <code class="fm-code-in-text">P</code> (right), we have to further divide the upper-left quadrant into four parts: we get a finite rectangle, to which <code class="fm-code-in-text">U</code> belongs, and three infinite sections of the plane. For each further point, such as <code class="fm-code-in-text">U</code>, we further split the region it belongs to into four more smaller regions.</p>
+
+  <p class="body"><a id="pgfId-1007085"></a>This seems to work for <span class="cambria">ℝ</span><sup class="superscript">2</sup>, allowing us to overcome the main limit we identified for our previous attempt. Both <code class="fm-code-in-text">x</code> and <code class="fm-code-in-text">y</code> coordinates are taken into consideration to group points together (this would be even more apparent if you add more points to the diagram).</p>
+
+  <p class="body"><a id="pgfId-1007190"></a>Now the question is whether we extend this solution to <span class="cambria">ℝ</span><sup class="superscript">3</sup>. To move to a 3-D space, we need to answer one question: Into how many sub-hyperplanes do we split the plane for each point? In 1-D, it was two segments for each point, in 2-D it was four quadrants, and similarly in 3-D we will need eight octants.<a href="#pgfId-1008294"><sup class="footnotenumber">3</sup></a></p>
+
+  <p class="body"><a id="pgfId-1007319"></a>Therefore, for each point in the dataset we will add a node with eight children, one for each octant resulting from splitting the 3-D space along lines parallel to the cartesian axes and passing through the point.</p>
+
+  <p class="body"><a id="pgfId-1007400"></a>In general, for a <code class="fm-code-in-text">k</code>-dimensional space, we will need <code class="fm-code-in-text">2<sup class="superscript1">k</sup></code><a id="id_Hlk55883684"></a> children for each node in the tree, because each point would partition the hyperspace in 2<sup class="superscript">k</sup> parts.</p>
+
+  <p class="body"><a id="pgfId-1007464"></a>For real datasets, with the advent of big data, we will have to deal with high-dimensional spaces, meaning that <code class="fm-code-in-text">k</code> might easily be in the order of 10 to 30, or even 100. It’s not unusual for datasets to have hundreds of features, and millions of points, and there are use cases where we need to perform nearest neighbor search on these datasets to make sense of them (clustering is one, as we will see in chapter 12).</p>
+
+  <p class="body"><a id="pgfId-1007627"></a>Even with a smaller number of features, in the order of 10, each node would already have around a thousand children. As we saw in chapter 2 when talking about d-way heaps, when the branching factor of a tree grows too much, the tree flattens and becomes closer to a list.</p>
+
+  <p class="body"><a id="pgfId-1007737"></a>But with 100-dimensional datasets, the number of children per node would be closer to 10<sup class="superscript">30</sup>, a number so large that it becomes challenging to store even a single node of such a tree. We certainly need to do better than that. But how?</p>
+
+  <p class="body"><a id="pgfId-1007840"></a>As we will see in the next couple of chapters, computer scientists have found a few different ways to cope with these issues. In the next chapter, in particular, we introduce k-d trees, a data structure that uses a tiny variation on the approach in section 8.4.3 to avoid the exponential growth of <a id="marker-1008234"></a><a id="marker-1008238"></a>the <a id="marker-1008242"></a><a id="marker-1008246"></a>tree.</p>
+
+  <h2 class="fm-head" id="heading_id_15"><a id="pgfId-1007957"></a>Summary</h2>
+
+  <ul class="calibre19">
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1007969"></a>We can’t use a conventional container to handle multidimensional data.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008000"></a>When the number of dimensions of a dataset grows, indexing with traditional methods becomes unfeasible due to the exponential growth of the number of branches at each step.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008066"></a>A common API for a class of containers can hold multidimensional data, providing a method to query for the closest points to an arbitrary <a class="calibre14" id="marker-1008250"></a>target.</p>
+    </li>
+  </ul>
+  <hr class="calibre22"/>
+
+  <p class="fm-footnote"><sup class="footnotenumber">1.</sup> <a id="pgfId-1008261"></a>Here, rotation refers to the balancing operation performed, among others, on red-black trees.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">2.</sup> <a id="pgfId-1008277"></a>A Euclidean distance is the ordinary straight-line distance between two points in Euclidean space, like the Euclidean plane or 3-D Euclidean space, and their generalizations to k dimensions.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">3.</sup> <a id="pgfId-1008294"></a>An octant is, by definition, one of the eight divisions of a Euclidean three-dimensional coordinate system. Usually octants refer to the eight hyper-cubes resulting from splitting <span class="cambria">ℝ</span><sup class="calibre28">3</sup> along the three Cartesian axes, so each octant is defined by the sign of the coordinates. For instance, (+++) is the octant where all coordinates are positive, (+-+) is the one where x and z are positive, and y is negative.</p>
+</body>
+</html>

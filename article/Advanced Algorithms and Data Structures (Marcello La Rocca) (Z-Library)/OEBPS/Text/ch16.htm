@@ -1,0 +1,845 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <title>16</title>
+    
+  <link href="../../stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="../../page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+  <div class="tocheadb">
+    <h1 class="tochead" id="heading_id_2"><a id="pgfId-998841"></a><a id="pgfId-998853"></a>16 <a id="id_Hlk34483682"></a>Gradient descent: Optimization problems (not just) on graphs</h1>
+  </div>
+
+  <p class="co-summary-head"><a id="pgfId-1010271"></a>This chapter covers</p>
+
+  <ul class="calibre19">
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1010310"></a>Developing a randomized heuristic to find the minimum crossing number</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1010311"></a>Introducing cost functions to show how the heuristic works</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1010312"></a>Explaining gradient descent and implementing a generic version</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1010313"></a>Discussing strengths and pitfalls of gradient descent</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1010292"></a>Applying gradient descent to the graph embedding problem</li>
+  </ul>
+
+  <p class="body"><a id="pgfId-998943"></a>If I mention a technique called <i class="calibre17">gradient descent</i><a id="marker-1004797"></a>, does it ring a bell? You might not have heard of it, or maybe you recognize the name but can’t quite recall how it works. If so, that’s fine. If, however, I ask you about machine learning, classification problems, or neural networks, chances are that you know exactly what I’m talking about; and I bet these terms also sparked your interest much more.</p>
+
+  <p class="body"><a id="pgfId-998961"></a>Well, gradient descent (or a variation on the theme) is the optimization technique that is used behind the scenes by many machine-learning algorithms. But did you know that long before being used as the backbone of supervised learning, this technique was designed to solve optimization problems, like some of the ones we have seen on graphs?</p>
+
+  <p class="body"><a id="pgfId-998974"></a>If you didn’t, or if you’d like to delve into this topic and learn more about how gradient descent works, this should be the perfect chapter for you.</p>
+
+  <p class="body"><a id="pgfId-998983"></a>Remember that in chapter 15 we discovered that while for planar graphs there are efficient algorithms that find a planar embedding in linear time, not all graphs are planar, and it’s not always possible to draw a graph’s edges in the plane without them intersecting.</p>
+
+  <p class="body"><a id="pgfId-998992"></a>What’s worse, each non-planar graph has a minimum number of intersections when drawn in the plane, but there is not (and there cannot be<a href="#pgfId-1005256"><sup class="footnotenumber">1</sup></a>) any efficient algorithm that can find this number (or an embedding with as few intersections as possible) for any generic graph.</p>
+
+  <p class="body"><a id="pgfId-999003"></a>The minimum edge crossing problem is NP-hard, and as of today, verifying crossing numbers is unfeasible for many categories of non-planar graphs with more than ~20 vertices.</p>
+
+  <p class="body"><a id="pgfId-999013"></a>Well, it seems there is not much we can do . . . or is there?</p>
+
+  <p class="body"><a id="pgfId-999024"></a>In this chapter, we are going to introduce heuristics to embed graphs with as few intersections as possible, approaching their crossing number. If you refer to figure 16.1, the goal of these heuristics, when applied, for instance, to graph <code class="fm-code-in-text">K<sub class="subscript1">4</sub></code>, is to find the embedding on the right or an equivalent one with no edges crossing. We’ll start with naïve, brute-force-style algorithms, and then refine them to obtain better results (fewer intersections) faster,<a href="#pgfId-1005270"><sup class="footnotenumber">2</sup></a> and we’ll talk about optimization.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F1.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1020850"></a>Figure 16.1 Two embeddings for the complete graph <code class="fm-code-in-text">K<sub class="subscript1">4</sub></code>. The one on the left is not optimal because there is a pair of edges crossing.</p>
+
+  <p class="body"><a id="pgfId-999067"></a>Throughout the following sections, we’ll define the category of optimization problems, which has deep implications for our daily lives: network routing, delivery schedules, circuit board printing, and component design. These problems can all be expressed in terms of graphs, a cost function, and an optimization algorithm whose goal is to find the minimum cost configuration. We’ll discuss three different optimization techniques to find approximate solutions for them: <i class="calibre17">random sampling</i><a id="marker-1004801"></a>, <i class="calibre17">Hill climbing</i><a id="marker-1004805"></a>, and <i class="calibre17">gradient descent</i><a id="marker-1004809"></a>.</p>
+
+  <h2 class="fm-head" id="heading_id_3"><a id="pgfId-999091"></a>16.1 Heuristics for the crossing number<a id="marker-1014916"></a><a id="marker-1014917"></a><a id="marker-1014918"></a><a id="marker-1014919"></a><a id="marker-1014920"></a></h2>
+
+  <p class="body"><a id="pgfId-999107"></a>In the introduction to the chapter, we were wondering if there was anything we could do to get us out of this tight spot with crossing number analysis. The truth is that to the best of current knowledge, we can’t do much, at least unless we relax the requirement for a deterministic algorithm to guarantee the correct answer and return an embedding with a graph’s <i class="calibre17">minimum crossing number</i><a id="marker-1004833"></a> (or <i class="calibre17">minimum rectilinear</i> <a id="marker-1004837"></a><a href="#pgfId-1005285"><sup class="footnotenumber">3</sup></a> <i class="calibre17">crossing number</i>).</p>
+
+  <p class="body"><a id="pgfId-999135"></a>A common strategy to deal with <i class="calibre17">NP-hard</i><a id="marker-1004841"></a> problems, in fact, is to use heuristics. These algorithms, often operating non-deterministically, are able to provide a sub-optimal answer in a reasonable amount of time.</p>
+
+  <p class="fm-callout"><a id="pgfId-999151"></a><span class="fm-callout-head">Note</span> We have already met randomized algorithms throughout this book, for instance, in chapters 3 and 4, but if you could use a refresher, feel free to take a look at appendix F, which provides a brief summary of randomized algorithms.</p>
+
+  <h3 class="fm-head2" id="heading_id_4"><a id="pgfId-999167"></a>16.1.1 Did you just say heuristics?</h3>
+
+  <p class="body"><a id="pgfId-999187"></a>I realize the concept of heuristics might be confusing: Why would we accept an algorithm that doesn’t return the correct answer? Sometimes we can’t. There are problems for which we absolutely need to get the right answer, even if we need to wait longer; for instance, if you are running a nuclear power plant or designing a new drug, you don’t want to settle for a sub-optimal solution before trying all the possible (and reasonable) configurations.</p>
+
+  <p class="body"><a id="pgfId-999202"></a>At other times, getting to the right answer might not even be possible. An exponential algorithm becomes unfeasible for inputs larger than a few dozen elements, and we would not even be able to see the program output an answer for larger inputs.</p>
+
+  <div class="fm-sidebar-block">
+    <p class="fm-sidebar-title"><a class="calibre14" id="pgfId-1020899"></a>Can’t we just make computers faster?</p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1020900"></a>Even a supercomputer that can perform ~10<code class="fm-code-in-text2"><sup class="superscript">16</sup></code> operations per second to run an exponential algorithm that performs <code class="fm-code-in-text2">O(2<sup class="superscript">n</sup>)</code> steps, for an input size 100 will need <code class="fm-code-in-text2">O(10<sup class="superscript">14</sup>)</code> seconds, which is, give or take, 3 million years!</p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1020922"></a>And if we were able to make our computers a million times faster (which, even when Moore’s law was holding, would have taken 30 years), then we would only increase our ability to solve the problem a tiny bit: our computation would still require 3 years for 100 elements, 3 thousand years for 110, and again 3 million years for 120!</p>
+  </div>
+
+  <p class="body"><a id="pgfId-999274"></a>For easier problems, even if the time to wait would not be longer than human history, it could still be too long. Think about live events or forecasting—there won’t be much use for tomorrow’s weather forecast if it’s delivered in three days!</p>
+
+  <p class="body"><a id="pgfId-999291"></a>So, in all these cases, we might be willing to accept a sub-optimal answer, provided we can get it within a reasonable time—but that’s not the whole story.</p>
+
+  <p class="body"><a id="pgfId-999302"></a>Another important consideration in favor of heuristics is that despite not being able to guarantee the optimal solution on all inputs, some heuristics are able to return the optimal result in a reasonable time for a subset of the whole problem space, and in some cases they prove to work quite well in practice on real-world data.</p>
+
+  <p class="body"><a id="pgfId-999313"></a>How is this possible? It’s because the theory of NP-hardness is about <i class="calibre17">worst-case performance</i><a id="marker-1004845"></a>, and for some problems there are a minority of edge cases that turn out to be hard to solve; but for practical applications we are often interested in <i class="calibre17">average-case hardness</i><a id="marker-1004849"></a>, aka how difficult on average it is to solve a problem on the instances of the problem that we see in real scenarios.</p>
+
+  <p class="body"><a id="pgfId-999330"></a>There are many heuristics that have been developed for graph algorithms, for example, to solve the traveling salesman problem<a href="#pgfId-1005299"><sup class="footnotenumber">4</sup></a> or find a clique on a graph.<a href="#pgfId-1005318"><sup class="footnotenumber">5</sup></a> Not all the heuristics are the same, of course. Usually they are a compromise between performance and accuracy, and for some of these algorithms it’s possible to prove bounds on their precision, such as proving that the solution they output will be within a certain margin from the optimal solution.</p>
+
+  <p class="body"><a id="pgfId-999352"></a>So, what kind of heuristic could we use to find a good (or at least decent) graph embedding?</p>
+
+  <p class="body"><a id="pgfId-999361"></a>Now, I’d like you to keep in mind what we said a few lines previously: there can be many different approximate algorithms for each problem, and not all of them are equally good.</p>
+
+  <p class="body"><a id="pgfId-999370"></a>We’ll start easy, with a simple heuristic that’s far from ideal. It will serve a purpose, let us understand the problem scenario, and then we can (and will) iterate over it to improve its performance.</p>
+
+  <p class="body"><a id="pgfId-999383"></a>Before we start with our first attempt, I encourage you to think about this before moving on, and try to develop your idea. Who knows, you might have a breakthrough and come up with a new solution!</p>
+
+  <p class="body"><a id="pgfId-999396"></a>Whenever you are ready, let’s go. We will reuse an algorithm that we saw in previous chapters, specifically a helper method we used in clustering.</p>
+
+  <p class="body"><a id="pgfId-999411"></a>Remember k-means?<a href="#pgfId-1005332"><sup class="footnotenumber">6</sup></a> We had this problem of initializing the centroids: come up with an initial choice for <code class="fm-code-in-text">k</code> points in a <code class="fm-code-in-text">n</code>-dimensional space. It looked easier than it actually was, didn’t it? And yet we saw how important it is to make a good choice for the initial points, so you can get a fast convergence and a good result.</p>
+
+  <p class="body"><a id="pgfId-999430"></a>Take a look at section 12.2, and in particular at listings 12.1 and 12.2, to see how we implemented the random initialization of points for the centroids.</p>
+
+  <p class="body"><a id="pgfId-999439"></a>Here, with the graph embedding, we have a similar problem. We need to choose a certain number of 2-D points, and the way we chose them will directly determine the result (this time, there isn’t an optimization algorithm running after the choice).</p>
+
+  <p class="body"><a id="pgfId-999454"></a>One important difference is that with k-means we had an underlying distribution and choosing the points such that they were uniformly distributed with respect to this distribution was harder and needed particular caution.</p>
+
+  <p class="body"><a id="pgfId-999465"></a>For graph embedding, we can draw our points from a finite portion of the plane, typically a rectangle,<a href="#pgfId-1005346"><sup class="footnotenumber">7</sup></a> and those points will determine the number of edge intersections.</p>
+
+  <p class="body"><a id="pgfId-999476"></a>Let’s define the problem more formally now:</p>
+
+  <p class="body"><a id="pgfId-999485"></a>Given a simple graph <code class="fm-code-in-text">G=(V,E)</code> with <code class="fm-code-in-text">n=|V|</code> vertices and <code class="fm-code-in-text">m=|E|</code> edges, we need to draw <code class="fm-code-in-text">n</code> random points from a finite rectangle whose corners<a href="#pgfId-1005360"><sup class="footnotenumber">8</sup></a> are <code class="fm-code-in-text">(0,0)</code> and <code class="fm-code-in-text">(W,H)</code>, so that</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-999512"></a>Each point <code class="fm-code-in-text">(x,y)</code> is such that <code class="fm-code-in-text">0</code><span class="cambria">≤</span><code class="fm-code-in-text">x&lt;W, 0</code><span class="cambria">≤</span><code class="fm-code-in-text">y&lt;H</code>.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-999528"></a>Edges will be drawn as straight-line segments.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-999538"></a>Vertices will be drawn as points (or circles) centered at those <code class="fm-code-in-text">n</code> points.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-999550"></a>No two vertices can be assigned to the same center, so given two points <code class="fm-code-in-text">(x1, y1)</code> and <code class="fm-code-in-text">(x2,y2)</code>, either <code class="fm-code-in-text">X1</code><span class="cambria">≠</span><code class="fm-code-in-text">X2</code> or <code class="fm-code-in-text">Y1</code><span class="cambria">≠</span><code class="fm-code-in-text">Y2</code>.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-999574"></a>No vertex can lie on the path of an edge.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-999584"></a>We assume <code class="fm-code-in-text">G</code> has no loops.<a class="calibre14" href="#pgfId-1005374"><sup class="footnotenumber">9</sup></a> If it did, we could always draw loops without intersecting any other edge.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-999600"></a>Figure 16.2 shows a few examples of valid and invalid choices of vertex centers, given our constraints; in particular, we will have to check the conditions at points 4 and 5 once we have chosen all the points, but we’ll defer the discussion about checking these issues. For now, we can assume we have helper methods for these checks, and if we find that any of these constraints are violated, then we have two strategies to make it right:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-999615"></a>Correct the vertices position, for example slightly perturbating, at random, those points that coincide or intersect an edge.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-999628"></a>Discard the solution violating a constraint and start over.</p>
+    </li>
+  </ul>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F2.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1020956"></a>Figure 16.2 Three embeddings for the same graph. On the left, a valid embedding. The embedding in the middle is not valid because two vertices are assigned the same position, while the one on the right has a vertex intersecting an edge (one for which it’s not an endpoint).</p>
+
+  <p class="body"><a id="pgfId-999659"></a>Notice that if we draw vertices as circles (as in figure 16.2) and not just points, we will have to make the requirement on vertices stronger, requiring that the two circles don’t intersect.</p>
+
+  <p class="body"><a id="pgfId-999670"></a>Now, as we saw for k-means, when we count on random methods, we can be lucky, but more often than not we won’t be. Figure 16.3 shows a particularly unlucky assignment for the <code class="fm-code-in-text">K<sub class="subscript1">6</sub></code> graph. As we know from chapter 15, it’s possible to draw this complete graph in the plane with three intersections between its edges.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F3.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1020996"></a>Figure 16.3 A random embedding for the K<code class="fm-code-in-text"><sub class="subscript1">6</sub></code> complete graph. Notice how particularly bad the choice of positions turned out to be.</p>
+
+  <p class="body"><a id="pgfId-999713"></a>A way to raise our chances with k-means was to use the random-restart technique, basically running the algorithm (and in turn the random initialization) several times, and then saving the best solution found across all those runs.</p>
+
+  <p class="body"><a id="pgfId-999722"></a>This strategy looks interesting for our problem as well:</p>
+
+  <ol class="calibre18">
+    <li class="fm-list-numbered">
+      <p class="list"><a class="calibre14" id="pgfId-999731"></a>Randomly generate the positions of the vertices.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-999744"></a>Check that the assignment abides by the constraints for edges and vertices (and discard the current assignments if it doesn’t).</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-999757"></a>Compute the number of edge intersections.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-999770"></a>If it’s the best result so far, keep it; otherwise, discard it.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-999783"></a>Restart from 1.</p>
+    </li>
+  </ol>
+
+  <p class="body"><a id="pgfId-999795"></a>This workflow is shown in figure 16.4 and implemented in listing 16.1. This heuristic is called <i class="calibre17"><b class="calibre21">random sampling</b><a id="marker-1004853"></a>.</i></p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F4.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021041"></a> Figure 16.4 A flowchart for the algorithm generating random embeddings and selecting the one with the fewest edge intersections</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1011044"></a>Listing 16.1 Random sampling for minimum crossing number embedding</p>
+  <pre class="programlisting"><b class="strong">function</b> randomEmbedding(graph, W, H, runs)                <span class="fm-combinumeral">❶</span>
+  kBest ← <b class="strong">inf</b>                                              <span class="fm-combinumeral">❷</span>
+  <b class="strong">for</b> i <b class="strong">in</b> {1..runs} <b class="strong">do</b>                                    <span class="fm-combinumeral">❸</span>
+    embedding ← []                                         <span class="fm-combinumeral">❹</span>
+    <b class="strong">for</b> j <b class="strong">in</b> {0..|graph.vertices|-1} <b class="strong">do</b>                    <span class="fm-combinumeral">❺</span>
+      x ← random(0, W)                                     <span class="fm-combinumeral">❻</span>
+      y ← random(0, H)
+      embedding[j] ← (x,y)                                 <span class="fm-combinumeral">❼</span>
+    <b class="strong">if not</b> validateEmbedding(embedding, graph) <b class="strong">then</b>        <span class="fm-combinumeral">❽</span>
+      i--
+    <b class="strong">else</b>
+      k ← edgeIntersections(graph, embedding)              <span class="fm-combinumeral">❾</span>
+      <b class="strong">if</b> k &lt; kBest <b class="strong">then</b>                                    <span class="fm-combinumeral">❿</span>
+        kBest ← k
+        embeddingBest ← embedding
+  <b class="strong">return</b> embeddingBest                                     <span class="fm-combinumeral">⓫</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1012779"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">randomEmbedding</code><a id="marker-1019342"></a> takes a graph, bounds for a rectangle hosting the embedding (as its width and height), and the number of runs, and returns an embedding encoded as an assignment of 2-D points for each vertex.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1012811"></a><span class="fm-combinumeral">❷</span> Initializes the best result found for the number of intersections to the maximum possible value.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1012845"></a><span class="fm-combinumeral">❸</span> Repeats the algorithm <code class="fm-code-in-text2">runs</code> times</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1012876"></a><span class="fm-combinumeral">❹</span> Initializes the array of points. In the end, it will contain one point per vertex, in the same order they are stored in the graph. Alternatively, this can be a dictionary, mapping vertices to points.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1012907"></a><span class="fm-combinumeral">❺</span> For each vertex in the graph . . .</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1012938"></a><span class="fm-combinumeral">❻</span> Uniformly draws a 2-D point from the rectangular region of size <code class="fm-code-in-text2">W*H</code>. Method <code class="fm-code-in-text2">random</code><a id="marker-1019428"></a> can return a floating point or just an integer; that’s up to your implementation and requirements.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1012970"></a><span class="fm-combinumeral">❼</span> Adds the new point to the <code class="fm-code-in-text2">embedding</code> array</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013103"></a><span class="fm-combinumeral">❽</span> If the assignment of vertices coordinates can’t be validated (that is, if it doesn’t abide by the constraints, and at least one vertex intersects another vertex or an edge), then it discards this assignment (decrementing <code class="fm-code-in-text2">i</code>, so that this iteration in the loop will be repeated).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013072"></a><span class="fm-combinumeral">❾</span> Computes the number of edges intersections: the method is generic, so it can support straight and curve edges, although in this case we assume the former.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013041"></a><span class="fm-combinumeral">❿</span> If this is the best result so far, stores it</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013010"></a><span class="fm-combinumeral">⓫</span> Returns the assignment with the fewest edge intersections</p>
+
+  <p class="body"><a id="pgfId-1000199"></a>One last word of caution: we don’t need to assume the graph is connected, but breaking it down into connected components before applying the heuristic can improve the final result.</p>
+
+  <p class="body"><a id="pgfId-1000208"></a>In listing 16.1 we abstract two important helper methods: <code class="fm-code-in-text">validate</code><a id="marker-1004865"></a> and <code class="fm-code-in-text">edgeIntersections</code><a id="marker-1004869"></a>. Both can be implemented separately and adapted to the actual context we decide to operate in.</p>
+
+  <p class="body"><a id="pgfId-1000223"></a>For both, however, it’s possible to give a generic definition that in turn abstracts over more specific methods: listings 16.2 and 16.3 shows these definitions.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1011242"></a>Listing 16.2 Method <code class="fm-code-in-text">validateEmbedding</code></p>
+  <pre class="programlisting"><b class="strong">function</b> validateEmbedding(graph, embedding)  n ← |graph.vertices|     <span class="fm-combinumeral">❶</span>
+  <b class="strong">for</b> i <b class="strong">in</b> {0..n-2} <b class="strong">do</b>                                                 <span class="fm-combinumeral">❷</span>
+    <b class="strong">for</b> j <b class="strong">in</b> {i+1..n-1} <b class="strong">do</b>                            
+      <b class="strong">if</b> vertexIntersectsVertex(embedding[i], embedding[j]) <b class="strong">then</b>       <span class="fm-combinumeral">❸</span>
+        <b class="strong">return false</b>
+  <b class="strong">for</b> edge <b class="strong">in</b> graph.edges <b class="strong">do</b>                                           <span class="fm-combinumeral">❹</span>
+    <b class="strong">for</b> vertex <b class="strong">in</b> graph.vertices <b class="strong">do</b>                                    <span class="fm-combinumeral">❺</span>
+        <b class="strong">if</b> vertex &lt;&gt; edge.source <b class="strong">and</b> vertex &lt;&gt; edge.destination <b class="strong">and</b> 
+            edgeIntersectsVertex(
+              embedding[indexOf(edge.source)],    
+              embedding[indexOf(edge.destination)],
+              embedding[indexOf(vertex)]) <b class="strong">then</b>                         <span class="fm-combinumeral">❻</span>
+          <b class="strong">return false</b>
+  <b class="strong">return true</b></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013148"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">validateEmbedding</code><a id="marker-1018920"></a> takes a graph and an embedding to validate, and returns <code class="fm-code-in-text2">true</code><a id="marker-1018922"></a> if the embedding passed the check, or <code class="fm-code-in-text2">false</code> if it needs to be rejected.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013212"></a><span class="fm-combinumeral">❷</span> Cycles through all pair of vertices</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013181"></a><span class="fm-combinumeral">❸</span> Checks that the two vertices don’t intersect each other. This check is context-dependent; it can be just making sure the two points aren’t the same, or checking that the circles used to draw the vertices have no intersection. If the check fails, the embedding is to be rejected.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013243"></a><span class="fm-combinumeral">❹</span> Cycles through all <code class="fm-code-in-text2">graph’s</code> edges</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013274"></a><span class="fm-combinumeral">❺</span> For each edge, cycles through all vertices to make sure <code class="fm-code-in-text2">vertex</code> is not drawn in such a way that it crosses the edge</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013323"></a><span class="fm-combinumeral">❻</span> If <code class="fm-code-in-text2">vertex</code> is not one of the edge’s endpoints, we need to make sure that the edge is not drawn over <code class="fm-code-in-text2">vertex</code> (otherwise, it might look like two edges adjacent to this vertex). If this happens for any vertex/edge, we need to reject the embedding.</p>
+
+  <p class="body"><a id="pgfId-1000526"></a>The implementation of the helper methods used in listings 16.2 and 16.3 was discussed in the last chapter, in section 15.4.</p>
+
+  <p class="body"><a id="pgfId-1000535"></a>Notice that the helper methods checking if a vertex intersects another vertex or an edge are context-dependent, based on how we draw vertices. If they are drawn with circles, we need to make sure that the circles used to draw every pair of vertices have no intersection, and that no edge is drawn over the vertex’s circle (otherwise, it might seem like it’s two edges adjacent to this vertex).</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1011274"></a>Listing 16.3 Method <code class="fm-code-in-text">edgeIntersections</code></p>
+  <pre class="programlisting"><b class="strong">function</b> edgeIntersections(graph, embedding)       <span class="fm-combinumeral">❶</span>
+  m ← |graph.edges|                                <span class="fm-combinumeral">❷</span>
+  k ← 0
+ 
+  <b class="strong">for</b> i <b class="strong">in</b> {0..m-2} <b class="strong">do</b>                             <span class="fm-combinumeral">❸</span>
+    edge1 ← graph.edges[i]
+      <b class="strong">for</b> j <b class="strong">in</b> {i+1..m-1} <b class="strong">do</b>                              
+        edge2 ← graph.edges[j]
+        <b class="strong">if</b> edgeIntersection(edge1, edge2) <b class="strong">then</b>     <span class="fm-combinumeral">❹</span>
+          k ← k + 1
+  <b class="strong">return</b> k</pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013364"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">edgeIntersections</code><a id="marker-1018624"></a> takes a graph and an embedding to validate, and returns the number of intersections between the graph’s edges when drawn with current embedding.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013406"></a><span class="fm-combinumeral">❷</span> Some basic initialization</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013437"></a><span class="fm-combinumeral">❸</span> Cycles through every pair of edges</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013472"></a><span class="fm-combinumeral">❹</span> If this pair of edges intersects when drawn, increases the intersections counter by <code class="fm-code-in-text2">1</code></p>
+
+  <p class="body"><a id="pgfId-1000741"></a>Like the previous method, we abstracted away the actual algorithm checking the edges. This way, depending on the context, you can use one assuming edges are drawn using straight-line segments, or Bézier curves, and so on.</p>
+
+  <h3 class="fm-head2" id="heading_id_5"><a id="pgfId-1000759"></a>16.1.2 Extending to curve-line edges</h3>
+
+  <p class="body"><a id="pgfId-1000777"></a>In the previous section, we added as a constraint that edges were to be drawn as straight-line segments. As a consequence, we were optimizing the embeddings to reduce the intersections of a straight-line drawing, and the total number of intersections could only be as low as the rectilinear crossing number of a graph. As we saw in chapter 15, there are many graphs for which the rectilinear crossing number is larger than the crossing number (which, in turn, is the absolute minimum for the number of intersections in any planar embedding of a graph).</p>
+
+  <p class="body"><a id="pgfId-1000792"></a>The restriction to straight-line drawings was not explicitly required in the code, which was kept as abstract as possible. However, if we would like to use curves for the edges, we need to apply at least one change to listing 16.1: we also have to decide how each edge is modeled. This can be done in several ways, the simplest being randomly choosing some parameters that determine how each edge is drawn—up to, possibly, running some optimization on these parameters to minimize the intersections.</p>
+
+  <p class="body"><a id="pgfId-1000807"></a>First, however, we need to decide which parameters we are talking about. To keep things simple, we restrict this to Bézier curves: quadratic Bézier curves can be described with three parameters (the two endpoints, plus a control point), while the cubic version, which (as shown in figure 16.5) is more flexible, needs two control points, for a total of four 2-D points (which make eight scalar parameters).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F5.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021083"></a>Figure 16.5 Examples of Bézier curves. Segment (A) can be considered an edge case with 0 control points, while quadratic curves (B) have one control point, and cubic ones (C, D), the most flexible variant, have two control points (plus the two endpoints, of course).</p>
+
+  <p class="body"><a id="pgfId-1000859"></a>We have discussed the details of these representations in section 15.4.3. By setting in stone the choice of a subcategory of these curves (the quadratic, symmetric Bézier curves, as shown in figure 16.6), we can already describe how to extend the algorithm in listing 16.1 to deal with the extra parameters.</p>
+
+  <p class="body"><a id="pgfId-1015273"></a>In particular, to stay true to the choice of a fully randomized algorithm, we could just randomly choose each edge’s control point(s); however, so much freedom in the choice could lead to weird shapes for the edges, making the convergence of the algorithm to a good solution slower.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F6.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021130"></a>Figure 16.6 A quadratic Bézier curve used to draw an edge between vertices <code class="fm-code-in-text">u</code> and <code class="fm-code-in-text">v</code>. The point <code class="fm-code-in-text">C</code> is the curve’s control point. For this example, we restrict to a subset of all the possible quadratic Bézier curves between two points, and in particular to just those curves where the control point lies on the line perpendicular to the segment <code class="fm-code-in-text">uv</code>, and passing through the middle of the segment (in other words, the line made by points in the plane that are at the same distance to <code class="fm-code-in-text">u</code> and <code class="fm-code-in-text">v</code>).</p>
+
+  <p class="body"><a id="pgfId-1000924"></a>A more feasible alternative could be restricting even more the curves that can be used, for example, using quadratic curves whose control point is at the same distance from both edge’s endpoints. This choice, explained in figure 16.6, allows us to balance flexibility and complexity so that we only need to add a single real number to the model of each edge, the distance of the control point from the segment between the endpoints (denoted with <code class="fm-code-in-text">d</code> in the figure). It’s also advisable (but not strictly necessary) to restrict the possible values of <code class="fm-code-in-text">d</code> so that its absolute value will be in the order of magnitude of <code class="fm-code-in-text">w</code>, the distance between the endpoints; negative values of <code class="fm-code-in-text">d</code> will cause the convexity of the edge to flip (in figure 16.6, with a negative value for <code class="fm-code-in-text">d</code>, the curve would be drawn below the segment <code class="fm-code-in-text">uv</code> passing through <a id="marker-1004885"></a>the <a id="marker-1004889"></a><a id="marker-1004893"></a><a id="marker-1004897"></a><a id="marker-1004901"></a><a id="marker-1004905"></a>vertices).</p>
+
+  <h2 class="fm-head" id="heading_id_6"><a id="pgfId-1000959"></a>16.2 How optimization works</h2>
+
+  <p class="body"><a id="pgfId-1000975"></a>So, <a id="marker-1004909"></a><a id="marker-1004913"></a><a id="marker-1004917"></a>random sampling seems to work. If you try the version implemented in the JsGraphs library<a id="marker-1004921"></a>,<a href="#pgfId-1005388"><sup class="footnotenumber">10</sup></a> you can see that (on average) the crossing number provided by the random algorithm with restart is better than the one returned by the one-pass random version. Intuitively, we can understand why: if we toss a coin 100 times, it’s easier to get at least one head than if we toss the same coin just once.</p>
+
+  <p class="body"><a id="pgfId-1001003"></a>To see how this operates in a more formal framework, we could use a visualization of how the optimization proceeds. This is not trivial, because what we are optimizing here is a function of <code class="fm-code-in-text">2n</code> parameters, when a graph has <code class="fm-code-in-text">n</code> vertices. For each vertex, we can change its <code class="fm-code-in-text">x</code> and <code class="fm-code-in-text">y</code> coordinates.</p>
+
+  <p class="body"><a id="pgfId-1001025"></a>Now, humans are really good at visualizing functions of 1 parameter in a 2-D plot: the <code class="fm-code-in-text">x</code> axis is usually the parameter, and the <code class="fm-code-in-text">y</code> axis shows the value of the function; with 2 parameters, we can still visualize things meaningfully. Until AR/VR goes mainstream, we have to make do with a 2-D projection of a 3-D plot, which is not ideal, but still feasible (as you’ll see in figure 16.8).</p>
+
+  <p class="body"><a id="pgfId-1001048"></a>The issue becomes harder when we get to 3 parameters. One workaround is to introduce “time” as the fourth dimension, and as such, the plot can be shown as a 3-D wave that changes depending on the third parameter.</p>
+
+  <p class="body"><a id="pgfId-1001063"></a>Besides being hard to make sense of, this solution doesn’t solve the problem when we have 4 or more parameters. What we can usually do in these cases is lock <code class="fm-code-in-text">k-2</code> parameters, out of <code class="fm-code-in-text">k</code> total variables, and see how the function behaves as the other 2 variables change.</p>
+
+  <p class="body"><a id="pgfId-1001076"></a>We’ll do something similar with our graph embedding problem to show you how this works, and to better understand our problem.</p>
+
+  <p class="body"><a id="pgfId-1001085"></a>But first of all, what function are we talking about in this case?</p>
+
+  <h3 class="fm-head2" id="heading_id_7"><a id="pgfId-1001094"></a>16.2.1 Cost functions</h3>
+
+  <p class="body"><a id="pgfId-1001108"></a>We <a id="marker-1004925"></a><a id="marker-1004929"></a>call the target of our optimization a <i class="calibre17"><b class="calibre21">cost function</b></i>: it expresses well the idea that our solution (each solution we try) has a cost, and that we are trying to minimize it.</p>
+
+  <p class="body"><a id="pgfId-1001124"></a>There is a vast category of problems called <i class="calibre17"><b class="calibre21">optimization problems</b></i><a id="marker-1015329"></a> for which finding a solution is equivalent to exploring the problem space and eventually picking the solution with the lowest cost. For these problems, usually there are many possible definitions of cost functions that can be used. Some are better than others (we’ll see why), and when we do have a choice, it’s important to spend time and choose wisely, because it can have a great impact on how fast we can find an optimal solution, or sometimes even on whether we can find one at all. In general, however, most optimization problems are proven to be NP-hard, regardless of the specific choice of cost function.</p>
+
+  <p class="body"><a id="pgfId-1001148"></a>The cost function we have chosen for our graph embedding problem is simply the number of edge intersections for a given embedding. Spoiler alert: this choice is problematic with some optimization algorithms, as we’ll see later.</p>
+
+  <p class="body"><a id="pgfId-1001157"></a>So, in figure 16.7 we can see the complete graph <code class="fm-code-in-text">K<sub class="subscript1">4</sub></code>, an embedding that has 8 degrees of freedom: let’s agree to lock 7 of them, and only allow the horizontal position of vertex <code class="fm-code-in-text">v<sub class="subscript1">4</sub></code> to change.</p>
+
+  <p class="body"><a id="pgfId-1001216"></a>The cost function looks like a <i class="calibre17">step function</i>, with its value going abruptly from <code class="fm-code-in-text">1</code> to <code class="fm-code-in-text">0</code> when the vertex enters the internal face of the sub-graph induced by the other three vertices (the triangle marked by the unnamed vertices in figure 16.7).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F7.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021182"></a>Figure 16.7 The cost function for “number of intersections” for a specific embedding of <code class="fm-code-in-text">K<sub class="subscript1">4</sub></code>. The position of 3 out of 4 vertices is locked, and for the last one, <code class="fm-code-in-text">v<sub class="subscript1">4</sub></code> in the graphic, we can only change its horizontal position. Under these assumptions, the cost as a function of <code class="fm-code-in-text">v<sub class="subscript1">4</sub></code>’s <code class="fm-code-in-text">x</code> position is a discontinuous function, equal to <code class="fm-code-in-text">0</code> when <code class="fm-code-in-text">0 &lt; x &lt; 25</code>, and equal to 1 when <code class="fm-code-in-text">x &lt; 0</code> or <code class="fm-code-in-text">x &gt; 25</code>. Notice how at <code class="fm-code-in-text">x==0</code> and <code class="fm-code-in-text">x==25</code> we have two discontinuity points, and in particular, we assume the cost is infinite at those points, because the vertex is exactly lying on one of the edges between the other vertices.</p>
+
+  <p class="body"><a id="pgfId-1001231"></a>If we had allowed vertex <code class="fm-code-in-text">v<sub class="subscript1">4</sub></code> to move both vertically and horizontally, we would have had, instead, a 3-D chart showing a surface.</p>
+
+  <p class="body"><a id="pgfId-1001245"></a>This is shown in figure 16.8 for the complete graph <code class="fm-code-in-text">K<sub class="subscript1">5</sub></code>, or to be more precise, for one of the possible embeddings for this graph.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F8.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021224"></a>Figure 16.8 The cost function for “number of intersections” for a specific embedding of <code class="fm-code-in-text">K<sub class="subscript1">45</sub></code>. The position of 4 vertices is locked, and only vertex <code class="fm-code-in-text">v</code> can be moved freely. If we move <code class="fm-code-in-text">v</code> inside the perimeter of the square created by the other vertices, the number of intersections is consistently 3; outside the square, it becomes 5. Notice that here we have surfaces of discontinuity!</p>
+
+  <p class="body"><a id="pgfId-1001285"></a>Notice that here we have <i class="calibre17">surfaces</i> of discontinuity, where the cost function changes its value: when <code class="fm-code-in-text">|x|==|y|</code> (<code class="fm-code-in-text">v</code> lying on a line passing through the diagonals of the square), and when <code class="fm-code-in-text">x</code> or <code class="fm-code-in-text">y</code> are equal to <code class="fm-code-in-text">0</code> or <code class="fm-code-in-text">100</code> (lines lying on the perimeter of the square). For any point on these surfaces, the cost will be infinite, because as shown in the third example in the figure, vertex <code class="fm-code-in-text">v</code> will lie on one of the edges between the other vertices (and our constraints assign an infinite cost to these invalid configurations).</p>
+
+  <p class="body"><a id="pgfId-1001313"></a>Moreover, as you can see, no matter how hard we try, we can’t find a position for vertex <code class="fm-code-in-text">v</code> that will guarantee us an embedding with the minimum possible crossing number; this is because the position of the other 4 vertices is not optimal for a straight-line drawing of <code class="fm-code-in-text">K<sub class="subscript1">5</sub></code>.</p>
+
+  <p class="body"><a id="pgfId-1001329"></a>In turn, the underlying reason is that if we consider the larger problem of finding the best embedding (with none of the vertices locked), we hit a <i class="calibre17"><b class="calibre21">local minimum</b></i><a id="marker-1004937"></a> of the cost function: a point or region in the n-dimensional problem space where the cost function has a lower value than in the surrounding area, but not the lowest possible overall.</p>
+
+  <p class="body"><a id="pgfId-1001343"></a>If we could take a 2-D projection of the cost function on a generic configuration of the graph (not specifically the embedding in figure 16.8), it might hypothetically look somewhat similar to <a id="marker-1004941"></a><a id="marker-1004945"></a>figure 16.9.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F9.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021266"></a>Figure 16.9 Local and global minima in a 1-D function</p>
+
+  <h3 class="fm-head2" id="heading_id_8"><a id="pgfId-1001378"></a>16.2.2 Step functions and local minima</h3>
+
+  <p class="body"><a id="pgfId-1001396"></a>Local <a id="marker-1004949"></a><a id="marker-1004953"></a>minima aren’t really good news. Ideally, we would like to have a single global minimum and a cost function that smoothly converges toward it.</p>
+
+  <p class="body"><a id="pgfId-1001412"></a>A bowl-shaped function, for example, like the section of conic curve shown in figure 16.9, would suit us particularly well and work fine with most learning algorithms.</p>
+
+  <p class="body"><a id="pgfId-1001421"></a>Why is that? Well, you can imagine an optimization algorithm like a marble that is left rolling on the surface of the cost function. There are, of course, marbles of different weights and friction, and some marbles on some surfaces get stuck and need to be pushed around; likewise, there are different learning algorithms.</p>
+
+  <p class="body"><a id="pgfId-1001436"></a>If you release a marble on a surface like the cost function in figure 16.9, there is a good chance that it will just stay on the plateau where it lands. If you give it a little push, it might end up in a pit corresponding to a local minimum, and be stuck there, unless you pick it up and release it elsewhere.</p>
+
+  <p class="body"><a id="pgfId-1001449"></a>Conversely, if you release a marble on a smooth surface like figure 16.10, like when you toss it into a bowl, then it will roll down to the bottom of the bowl, maybe oscillate a little, and in the end settle down in the lowest point, where gravity can’t pull it down any <a id="marker-1004957"></a><a id="marker-1004961"></a>further.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F10.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021303"></a>Figure 16.10 A convex function with a single and proper global minimum</p>
+
+  <h3 class="fm-head2" id="heading_id_9"><a id="pgfId-1001480"></a>16.2.3 Optimizing random sampling</h3>
+
+  <p class="body"><a id="pgfId-1001496"></a>Using <a id="marker-1004965"></a><a id="marker-1004969"></a>this “marble” analogy, an optimization problem can be seen as two things:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1001508"></a>The cost function is analogous to the marble track: the smoother its path to the optimal cost, the better algorithms can (in theory) work. Notice that we can build several “tracks” between a starting point and a finish line—engineering the best possible track is part of the solution.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1001522"></a>An optimization algorithm is like a marble rolling down the path. For the analogy to be more accurate, though, we need to say that both the marble and the way that it’s tossed and interacts with the track are part of the analogy of the optimization algorithm.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1001538"></a>What about our <i class="calibre17">random sampling</i> algorithm<a id="marker-1004973"></a>? How can we express it in our analogy? Regardless of the cost function, the algorithm does the same thing. Imagine the track is made of sand or mud, so when a marble is tossed onto the track, it digs a small hole in the sand or mud and stops where it lands. This mechanism is independent of the shape of the cost function, and it works the same even with a smooth, bowl-shaped function like the one in figure 16.10.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F11.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021349"></a>Figure 16.11 How a generic randomized heuristic works, explained using the marble analogy</p>
+
+  <p class="body"><a id="pgfId-1001557"></a>Figure 16.11 is an attempt at capturing how random sampling (which doesn’t perform any optimization after initialization) works.</p>
+
+  <p class="body"><a id="pgfId-1001585"></a>A randomized heuristic is like tossing dozens, hundreds, or thousands of marbles at our muddy track (without being able to see where the finish line is). They stay exactly where they land, and in the end, we just choose the one that landed the closest to the finish line. The key is doing many attempts, hoping that at least one will land close enough to the optimal solution. Of course, the track could be so long that no matter how many times we try, we won’t be able to get any closer to a good solution: that’s the case with exponential problems, where the number of possible solutions is huge, when the input is large enough.</p>
+
+  <p class="body"><a id="pgfId-1001598"></a>Moreover, we need to be careful when using a completely randomized algorithm. We might toss several marbles in the same position, and we could generate the same solution more than once.</p>
+
+  <p class="body"><a id="pgfId-1001613"></a>If there is a good thing about this approach (besides being extremely cheap), it’s that the shape of the cost function doesn’t matter. We don’t need to engineer a good “track,” because there isn’t going to be any “marble rolling” after initialization.</p>
+
+  <p class="body"><a id="pgfId-1001626"></a>At the same time, this is also the worst part—we can’t take advantage if we have a good cost function that smoothly degrades towards a global minimum.</p>
+
+  <p class="body"><a id="pgfId-1001637"></a>If we think about marbles races, we can perhaps find a workaround for that. If you’ve ever played with marble on the beach, you probably know what to do when one is stuck in a pit on the sand track—you give the marble a nudge to get it out of there and start rolling again.</p>
+
+  <p class="body"><a id="pgfId-1001652"></a>The analogy with randomized algorithms is <i class="calibre17">local optimization</i><a id="marker-1004977"></a>. We can have sub-heuristics performing a local optimization; for example, trying to move vertices around one by one within a short distance from the randomly assigned initial position and checking to see if the crossing number improves.</p>
+
+  <p class="body"><a id="pgfId-1001673"></a>This algorithm is called <i class="calibre17">Hill climbing</i><a id="marker-1004981"></a><i class="calibre17">,</i> or in our case, since we try to minimize a function instead of maximizing it, we can call it <i class="calibre17">Hill descent</i><a id="marker-1004985"></a>.</p>
+
+  <p class="body"><a id="pgfId-1001689"></a>Figure 16.12 visualizes the analogy. In our case, despite the nudge, the marble only travels a short distance (well, it’s a muddy track, isn’t it?), but we might still get some improvement. What we really do is explore the cost function in a small area around each solution, and if we find a position for which the cost is lower, we move our “marble” there.</p>
+
+  <p class="body"><a id="pgfId-1001704"></a>If you look closely at figure 16.12, you can see that in this case, the shape of the cost function does matter. While with a differentiable, bowl-shaped function we always get an improvement, with a step function (like our example, “minimum number of intersections”), sometimes the marbles are stuck in local minima and sometimes they are on large plateaus, so moving them around won’t get us anywhere better.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F12.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021394"></a>Figure 16.12 How a generic randomized heuristic with local optimization works, explained using the marble analogy. Notice that we need to try to update <code class="fm-code-in-text">x</code> in both directions and check if we get an improvement.</p>
+
+  <p class="body"><a id="pgfId-1001740"></a>Another thing that we must note is that with this algorithm, we have to try moving in both directions. By randomly exploring the area surrounding a solution, we are blindly poking similar solutions, but without any rationale. For instance, in the bottom example in figure 16.12, by looking at the marbles and the shape of the cost function, we would know that in order to get an improvement, we should increase the value of the only parameter for solutions 1 and 3, and decrease it for solution 2. Using hill descent, we would try to both increase and decrease it for all solutions, and just see what happens. For functions of more than a single parameter, we would either search the surrounding area around the current solution, or probe a random direction, and move if we can get a better value.</p>
+
+  <p class="body"><a id="pgfId-1001756"></a>Applying this to our graph problem, this means we would move a vertex in all directions, and each time compute the edge intersections of the new embedding.</p>
+
+  <p class="body"><a id="pgfId-1001765"></a>And if this looks bad with a 2-D cost function, remember that as the dimensionality of the search space grows, we face the curse of dimensionality (see chapters 9–11), and we will have <code class="fm-code-in-text">2n</code> parameters to tune for a graph with <code class="fm-code-in-text">n</code> vertices.</p>
+
+  <p class="body"><a id="pgfId-1001782"></a>So, we might want to try a more <a id="marker-1004989"></a><a id="marker-1004993"></a>efficient <a id="marker-1004997"></a><a id="marker-1005001"></a><a id="marker-1005005"></a>approach.</p>
+
+  <h2 class="fm-head" id="heading_id_10"><a id="pgfId-1001798"></a>16.3 Gradient descent</h2>
+
+  <p class="body"><a id="pgfId-1001812"></a>Why do we have to play “go fish” when we try local optimization? Remember that for a graph with <code class="fm-code-in-text">n</code> vertices, it means we are in <code class="fm-code-in-text">2n</code>-dimensional space, so trying to move in every direction<a href="#pgfId-1005404"><sup class="footnotenumber">11</sup></a> randomly . . . is a lot!</p>
+
+  <p class="body"><a id="pgfId-1001829"></a>Looking at our 2-D example, where the cost function depends on a single variable, the direction we should explore seems pretty obvious!</p>
+
+  <p class="body"><a id="pgfId-1001840"></a>But in a multidimensional space, where we can’t visualize the shape of the surface, how do we know which parameters should be tuned and in which direction?</p>
+
+  <p class="body"><a id="pgfId-1001849"></a>The mathematical solution to this quest is called <i class="calibre17">gradient descent</i><a id="marker-1005009"></a>. Gradient descent is an optimization technique that, under certain conditions, can be applied to different categories of optimization problems.</p>
+
+  <p class="body"><a id="pgfId-1001861"></a>The idea is simple: we can look at the slope of a function at a given point and move toward the direction in which the function decreases the fastest. The name stems from the fact that for a differentiable function, the direction of the steepest slope is given by its gradient.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F13.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021436"></a>Figure 16.13 Gradient descent: <span class="cambria">Δ</span><code class="fm-code-in-text">f</code> is the change in the cost function caused by a variation <span class="cambria">Δ</span><code class="fm-code-in-text">x</code> in its parameter.</p>
+
+  <p class="body"><a id="pgfId-1001870"></a>This is illustrated in figure 16.13 for a single-variable, differentiable function.</p>
+
+  <p class="body"><a id="pgfId-1001903"></a>Before discussing it a bit more formally, let’s see how we could frame it in our marbles example: it’s like we are allowed to push marbles with a nudge, and they can travel a short distance before stopping again in the sand. Similar to what happens when you play with marbles in the sand, you need several nudges to reach the goal, and they only move a short distance. If you give them a nudge in the right direction, they move a little further toward the finish line (or your goal). But to make things more interesting, in our game you can only see a short portion of the track next to your current position, as if you were playing in the fog or with lens distortion.</p>
+
+  <p class="body"><a id="pgfId-1001923"></a>Gradient descent is formally described using calculus. Don’t worry if you haven’t had an introduction to calculus, because you are not going to need it to apply gradient descent: there are many great libraries that already implement it for you. Actually, thinking about writing your own version is a bad idea, because this algorithm needs to be fine-tuned and highly optimized to exploit a GPU’s power.</p>
+
+  <h3 class="fm-head2" id="heading_id_11"><a id="pgfId-1001947"></a>16.3.1 The math of gradient descent</h3>
+
+  <p class="body"><a id="pgfId-1001965"></a>If <a id="marker-1005013"></a><a id="marker-1005017"></a><a id="marker-1005021"></a>you did take a calculus class, you probably remember the notion of a derivative: given a single-variable, continuous function <code class="fm-code-in-text">f(x)</code>, we define its derivative as the ratio between how <code class="fm-code-in-text">f</code> changes in response to a small change in its argument <code class="fm-code-in-text">x</code>. Formally, we write</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F_EQ1.png"/></p>
+
+  <p class="body"><a id="pgfId-1001998"></a>This value can be finite, infinite, or even not defined for a given function and a specific value of <code class="fm-code-in-text">x</code>; if for a function <code class="fm-code-in-text">f</code> its first derivative is always defined, we call <code class="fm-code-in-text">f</code> a differentiable function.</p>
+
+  <p class="body"><a id="pgfId-1002015"></a>For differentiable functions, there are formulas that allow us to find the exact mathematical definition of their derivatives, which in turn are going to be a function themselves. For instance, if <code class="fm-code-in-text">f(x)=x, then f’(x)=1</code> (the constant function). The derivative of the quadratic function <code class="fm-code-in-text">f(x)=x<sup class="superscript1">2</sup> is f’(x)=2x</code>, and the derivative of the exponential function <code class="fm-code-in-text">f(x)=e<sup class="superscript1">x</sup></code> is <code class="fm-code-in-text">f’(x)=e<sup class="superscript1">x</sup></code> (yes, it’s the exponential function itself!)</p>
+
+  <p class="body"><a id="pgfId-1002053"></a>There are many interesting results from the geometric interpretation of function derivates,<a href="#pgfId-1005420"><sup class="footnotenumber">12</sup></a> but we can’t go through them all here.</p>
+
+  <p class="body"><a id="pgfId-1002064"></a>The most important result, from our point of view, is that if we compute the value of the first derivative of a function in a given point, it tells us if the function is growing in that point, and how much. In other words, and as a simplification, it tells us if by slightly increasing the value of <code class="fm-code-in-text">x</code>, <code class="fm-code-in-text">f(x)</code> also increases, or decreases, or stays the same.</p>
+
+  <p class="body"><a id="pgfId-1002085"></a>We can apply this to our optimization algorithm. For instance, in figure 16.13, if we computed the first derivative of the cost function at point <code class="fm-code-in-text">x<sub class="subscript1">0</sub></code>, we’d get a negative value that would tell us that <code class="fm-code-in-text">f</code> grows when <code class="fm-code-in-text">x</code> becomes smaller. Since we want to move toward smaller values of <code class="fm-code-in-text">f</code>, we know that we should update <code class="fm-code-in-text">x</code> by assigning it a larger value.</p>
+
+  <p class="body"><a id="pgfId-1002110"></a>We can repeat this step over and over, thus following a downhill path along the cost function’s surface.</p>
+
+  <p class="body"><a id="pgfId-1002119"></a>If this looks easy to compute, however, in multidimensional spaces this gets far more complicated: for a <code class="fm-code-in-text">n</code>-dimensional function <code class="fm-code-in-text">g</code>, the gradient of the function at a given point is a vector whose components are the partial derivatives of the function, computed in that point.</p>
+
+  <p class="body"><a id="pgfId-1002132"></a>For instance, with a 2-D domain (see figure 16.15 to visualize it), we define the partial derivative of <code class="fm-code-in-text">g(x,y)</code> along <code class="fm-code-in-text">x</code> as</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F_EQ2.png"/></p>
+
+  <p class="body"><a id="pgfId-1002158"></a>And <a id="id_Hlk39850861"></a>we define the gradient of <code class="fm-code-in-text">g</code> in a point <code class="fm-code-in-text">P<sub class="subscript1">0</sub>=(x<sub class="subscript1">0</sub>,y<sub class="subscript1">0</sub>)</code> as a vector with one column and two rows, whose components are the partial derivates of function <code class="fm-code-in-text">g</code> with respect to <code class="fm-code-in-text">x</code> and <code class="fm-code-in-text">y</code>, computed at point <code class="fm-code-in-text">P<sub class="subscript1">0</sub></code></p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F_EQ3.png"/></p>
+
+  <p class="body"><a id="pgfId-1002197"></a>The geometrical interpretation of the gradient of a function is that it’s a vector pointing in the direction of fastest growth of the function. That’s why gradient descent actually uses the <i class="calibre17">negative gradient</i><a id="marker-1005025"></a>, <code class="fm-code-in-text">-</code><span class="cambria">∇</span><code class="fm-code-in-text">g</code>, which is simply the opposite of the gradient.</p>
+
+  <h3 class="fm-head2" id="heading_id_12"><a id="pgfId-1002217"></a>16.3.2 Geometrical interpretation</h3>
+
+  <p class="body"><a id="pgfId-1002231"></a>Listing 16.4 <a id="marker-1005029"></a><a id="marker-1005033"></a><a id="marker-1005037"></a>gives a summarized description of the gradient descent algorithm.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1011858"></a>Listing 16.4 Method <code class="fm-code-in-text">gradientDescent</code></p>
+  <pre class="programlisting"><b class="strong">function</b> gradientDescent(f, P0, alpha, maxSteps)        <span class="fm-combinumeral">❶</span>
+  <b class="strong">for</b> _ <b class="strong">in</b> {1..maxSteps} <b class="strong">do</b>                             <span class="fm-combinumeral">❷</span>
+    <b class="strong">for</b> i <b class="strong">in</b> {1.. |P0|} <b class="strong">do</b>                              <span class="fm-combinumeral">❸</span>
+      P[i] ← P0[i] – alpha * derivative(f, P0, i)       <span class="fm-combinumeral">❹</span>
+    <b class="strong">if</b> P == P0 <b class="strong">then</b>                                     <span class="fm-combinumeral">❺</span>
+      <b class="strong">break</b>
+    P0 ← P                                              <span class="fm-combinumeral">❻</span>
+  <b class="strong">return</b> P0</pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013869"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">gradientDescent</code><a id="marker-1018206"></a> takes a function <code class="fm-code-in-text2">f</code>, a starting point <code class="fm-code-in-text2">P0</code>, a learning rate <code class="fm-code-in-text2">alpha</code>, and the maximum number of steps to perform, <code class="fm-code-in-text2">maxSteps</code><a id="marker-1018208"></a>. It returns a point in the domain—ideally the point where <code class="fm-code-in-text2">f</code> has the smallest value (either locally or globally).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013902"></a><span class="fm-combinumeral">❷</span> Starts the iteration, running the main cycle at most <code class="fm-code-in-text2">maxSteps</code> times</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013933"></a><span class="fm-combinumeral">❸</span> Cycles through the coordinates of point <code class="fm-code-in-text2">P0</code></p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1013984"></a><span class="fm-combinumeral">❹</span> Creates a new point <code class="fm-code-in-text2">P</code>, where each coordinate of <code class="fm-code-in-text2">P</code> is assigned the corresponding coordinate of <code class="fm-code-in-text2">P0</code>, with a small delta computed from <code class="fm-code-in-text2">f</code>’s gradient: in particular we need to compute the partial derivative of <code class="fm-code-in-text2">f</code> with respect to its <code class="fm-code-in-text2">i</code>-th coordinate, and then the value this derivative has at point <code class="fm-code-in-text2">P0</code>. The value of the gradient is multiplied by a learning rate <code class="fm-code-in-text2">alpha</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1014016"></a><span class="fm-combinumeral">❺</span> If all the derivatives were <code class="fm-code-in-text2">0</code>, we are either in a plateau region, or in a minimum point, and so gradient descent can’t improve any further. In reality, we should check that the norm of the difference is not smaller than some precision, both because computer arithmetic has finite precision, and because when the gradient is very small, the possible improvement can be negligible, and not worth the computational resources.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1014051"></a><span class="fm-combinumeral">❻</span> At the end of each step, updates the current point</p>
+
+  <p class="body"><a id="pgfId-1002471"></a>It’s important to understand that we don’t have the full view of the cost function when we run gradient descent, and we don’t “move” over the surface; rather, at each step we only compute how much we should change the input variables, depending on the slope of the surface at that point. See figure 16.14 to get an idea of the steps, and figure 16.15 to get an idea of how it looks like with a 2-D function’s domain.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F14.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021481"></a>Figure 16.14 A few steps of gradient descent: notice the path made by concatenating the gradient vectors after each update; larger vectors mean the gradient was larger (and the curve slope steeper), so in turn <span class="cambria">Δ</span><code class="fm-code-in-text">x</code> the step update for our variable will also be larger.</p>
+
+  <p class="body"><a id="pgfId-1002507"></a>In our marble-race analogy, it’s as if the track is swathed in a dense fog, and we can only see a few feet away: enough to see where to aim for a cautious next step, because if we push the marble too hard, we risk sending it off of the track, or in the wrong direction.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F15.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021530"></a>Figure 16.15 Gradient descent applied to a function of two variables. The cost function defines a surface.</p>
+
+  <p class="body"><a id="pgfId-1002524"></a>The method itself is actually surprisingly short and simple, isn’t it? It’s an iterative optimization algorithm, so we have a loop to perform, and we pass an argument with the maximum number of steps allowed, just to be sure it won’t loop forever (we’ll see that there are situations where this is possible).</p>
+
+  <p class="body"><a id="pgfId-1002554"></a>We repeat the same update step until we get to a minimum of the function, or at most a certain number of times. The step itself is also basic: we compute the gradient of the input function coordinate by coordinate, by computing the first-order partial derivative of <code class="fm-code-in-text">f</code> along each of the directions of <code class="fm-code-in-text">f</code>’s domain (the problem space).</p>
+
+  <p class="body"><a id="pgfId-1002574"></a>As mentioned, we can stop when we reach a minimum. One of the most important results in calculus is <a id="id_Hlk56768534"></a>Fermat’s theorem<a href="#pgfId-1005433"><sup class="footnotenumber">13</sup></a> that proves a point in the domain of a differentiable function is a minimum or a maximum if and only if the derivative of that function is zero at that point; therefore, we can just check that all the partial derivatives are zero (or, more realistically, that their value is below some precision).</p>
+
+  <p class="body"><a id="pgfId-1002591"></a>By using the gradient of a function <code class="fm-code-in-text">f</code> to decide how much (and in what direction) we should move, we naturally take big steps when <code class="fm-code-in-text">f</code> changes fast, and small steps when <code class="fm-code-in-text">f</code> changes slowly. Transferred to our marble-race example, the marble would travel fast in a steep, straight section, while we would need to be careful when a turn is near to avoid going off-track.</p>
+
+  <p class="body"><a id="pgfId-1002610"></a>As for the starting point <code class="fm-code-in-text">P<sub class="subscript1">0</sub></code>, you might wonder how we choose it. There are different ways, but unless you have domain knowledge telling you otherwise, it’s best to choose it randomly and possibly run the optimization several times, starting each time from a new, randomly chosen point and keeping track of the best overall result.</p>
+
+  <p class="body"><a id="pgfId-1002628"></a>Can you see it? We are back to random sampling, but applying a sophisticated local optimization heuristic after each sample <a id="marker-1005049"></a><a id="marker-1005053"></a><a id="marker-1005057"></a>is <a id="marker-1005061"></a><a id="marker-1005065"></a><a id="marker-1005069"></a>taken.</p>
+
+  <h3 class="fm-head2" id="heading_id_13"><a id="pgfId-1002645"></a>16.3.3 When is gradient descent appliable?</h3>
+
+  <p class="body"><a id="pgfId-1002663"></a>To <a id="marker-1005073"></a><a id="marker-1005077"></a><a id="marker-1005081"></a>be able to apply gradient descent, we need the cost function to be differentiable, at least in the neighborhood of the points where we compute the gradient.</p>
+
+  <p class="body"><a id="pgfId-1002676"></a>Moreover, it helps if we already know the exact formula for the function we would like to optimize, so that we can also express the partial derivatives with mathematical formulas and compute gradients exactly. If we don’t have the definition for the function to optimize, however, we can always resort to the formal definition of derivatives as mathematical limits, and compute the gradient numerically by explicitly evaluating the ratio between <span class="cambria">Δ</span><code class="fm-code-in-text">f</code> and <span class="cambria">Δ</span><code class="fm-code-in-text">x<sub class="subscript1">i</sub></code> for increasingly small increments of each of the coordinates of the problem space.</p>
+
+  <p class="body"><a id="pgfId-1002690"></a>One question you might want to ask this: If we do have the definition of <code class="fm-code-in-text">f</code>, and it is differentiable, why do we have to run an iterative optimization? Can’t we just find its exact minimum using calculus?</p>
+
+  <p class="body"><a id="pgfId-1002705"></a>Well, that’s of course possible, in theory; it is also doable, at least for low-dimensional spaces and for some kinds of functions.</p>
+
+  <p class="body"><a id="pgfId-1002716"></a>However, finding exact solutions becomes hard to automate, and even to compute, in high-dimensional spaces. The number of equations needed to analytically find the global minimum grows exponentially with the problem’s size. Moreover, these functions can have hundreds, thousands, or even an infinite number of local minima (think, for example, about <code class="fm-code-in-text">sin(x+y)</code> or even <code class="fm-code-in-text">x*sin(y))</code>, and to automate the search of a global optimum, we’d need to have all those points checked.</p>
+
+  <p class="body"><a id="pgfId-1002743"></a>In general, gradient descent works well when we have a chance to design a cost function that has either a global minimum or, at most, a few local minima (better if they are of approximately the same cost). As we’ll see in section 16.4, that’s why it works perfectly with the kind of cost functions we design for supervised <a id="marker-1005085"></a><a id="marker-1005089"></a><a id="marker-1005093"></a>learning.</p>
+
+  <h3 class="fm-head2" id="heading_id_14"><a id="pgfId-1002758"></a>16.3.4 Problems with gradient descent</h3>
+
+  <p class="body"><a id="pgfId-1002774"></a>One <a id="marker-1005097"></a><a id="marker-1005101"></a><a id="marker-1005105"></a>important thing to note in listing 16.4 is that we provide a learning rate <code class="fm-code-in-text">alpha</code>. This is a hyper-parameter of the algorithm, regulating how big the steps are that we take. As in the marble analogy, when we don’t have a clear view of the track, taking large steps can speed us up, but it can also send the marble off-course; similarly, in gradient descent, large steps can miss minima (figure 16.16 (A)) or even worse, in some situations they can cause loops or even get far away from the best solution, in situations like the one shown in figure 16.16 (B).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F16.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021582"></a>Figure 16.16 Gradient descent: <span class="cambria">Δ</span> f is the change in the cost function caused by a variation <span class="cambria">Δ</span>x in its parameter.</p>
+
+  <p class="body"><a id="pgfId-1002825"></a>Vice versa, when alpha is too small (figure 16.16 (C)), convergence can be far too slow and the optimization algorithm will never get to a minimum within a reasonable time (or within the maximum number of iterations allowed).</p>
+
+  <p class="body"><a id="pgfId-1002834"></a>Which values of alpha are too big or too small also depends on the context, and in particular on the specific function we are trying to optimize.</p>
+
+  <p class="body"><a id="pgfId-1002844"></a>If we didn’t have the chance to pass this learning parameter, then for cost functions such as the one in figure 16.16 (B), where the slope of the curve is steep, the optimization would not converge to the minimum (but rather diverge), and at the same time, for examples like 16.14 (C), convergence would be too slow, or the algorithm could get stuck in local minima.</p>
+
+  <p class="body"><a id="pgfId-1002855"></a>By using a learning rate, we can tune<a href="#pgfId-1005449"><sup class="footnotenumber">14</sup></a> this <code class="fm-code-in-text">alpha</code> hyper-parameter and adapt the optimization algorithm to the function we need to optimize.</p>
+
+  <p class="body"><a id="pgfId-1002868"></a>An even better solution, however, is to use a variable <code class="fm-code-in-text">alpha</code>; for example, a value that decreases as the steps progress. Initially, it’s large enough to let the optimization quickly explore a wide area and possibly get out of local minima, and then it gets smaller and smaller, so that in the end, fine-tuning can be done and oscillation around stationary points (minima) is avoided.</p>
+
+  <p class="body"><a id="pgfId-1002886"></a>Another great option is to introduce the concept of momentum. Instead of basing the next step on just the last gradient, gradient descent with momentum smooths the update by computing the delta as a linear combination of the last few gradients (with older gradients having a lower weight on the final result than newer ones).</p>
+
+  <p class="body"><a id="pgfId-1002899"></a>As the term suggests, having a momentum (the way it happens in kinematics) means that if the algorithm speed was high, and so it was updating a coordinate with large steps, then when the slope of the curve changes, the speed will smooth out, but not abruptly.</p>
+
+  <p class="body"><a id="pgfId-1002910"></a>The easiest formula to add momentum into our update rule for points can look like this</p>
+  <pre class="programlisting">P<code class="fm-code-in-text2"><sub class="subscript">t+1</sub></code> ← <span class="cambria">β</span>*P<code class="fm-code-in-text2"><sub class="subscript">t</sub></code> – <span class="cambria">α</span>*(1-<span class="cambria">β</span>)*<span class="cambria">∇</span>g(P<code class="fm-code-in-text2"><sub class="subscript">t</sub></code>)</pre>
+
+  <p class="body"><a id="pgfId-1002936"></a>where <code class="fm-code-in-text">P<sub class="subscript1">t</sub></code> is a point in the problem space, specifically the point reached by the algorithm at time <code class="fm-code-in-text">t</code>. The higher is beta, the smoother (and slower) the update will be:</p>
+  <pre class="programlisting">P<sub class="calibre25">2</sub> ← <span class="cambria">β</span>*P<sub class="calibre25">1</sub> – <span class="cambria">α</span>*(1-<span class="cambria">β</span>)*<span class="cambria">∇</span>g(P<sub class="calibre25">1</sub>) = <span class="cambria">β</span>2*P<sub class="calibre25">0</sub> – <span class="cambria">α</span>*<span class="cambria">β</span>*(1-<span class="cambria">β</span>)*<span class="cambria">∇</span>g(P<sub class="calibre25">0</sub>) - <span class="cambria">α</span>*(1-<span class="cambria">β</span>)*<span class="cambria">∇</span>g(<span class="cambria">β</span>*P<sub class="calibre25">1</sub> – 
+<span class="fm-code-continuation-arrow">➥</span> <span class="cambria">α</span>*(1-<span class="cambria">β</span>)*<span class="cambria">∇</span>g(P1))</pre>
+
+  <p class="body"><a id="pgfId-1002991"></a>So, after 2 steps, if <span class="cambria">β</span><code class="fm-code-in-text">=0.99</code>, then <code class="fm-code-in-text">98%</code> of the value of <code class="fm-code-in-text">P<sub class="subscript1">2</sub></code> is given by <code class="fm-code-in-text">P<sub class="subscript1">0</sub></code>; conversely, if <span class="cambria">β</span><code class="fm-code-in-text">=0.1</code>, <code class="fm-code-in-text">P<sub class="subscript1">0</sub></code> directly influences <code class="fm-code-in-text">P<sub class="subscript1">2</sub></code> only <a id="marker-1011989"></a><a id="marker-1011990"></a><a id="marker-1011991"></a>for 1%.</p>
+
+  <h2 class="fm-head" id="heading_id_15"><a id="pgfId-1003022"></a>16.4 Applications of gradient descent</h2>
+
+  <p class="body"><a id="pgfId-1003038"></a>As <a id="marker-1005121"></a><a id="marker-1005125"></a><a id="marker-1005129"></a>mentioned earlier, gradient descent is an optimization technique that, given a cost function, helps find a solution (a point in the problem space) that has an optimal (or nearly optimal) cost.</p>
+
+  <p class="body"><a id="pgfId-1003051"></a>As such, it is only a piece of the process of solving a problem, and at the same time, it can be applied to several different problems and techniques.</p>
+
+  <p class="body"><a id="pgfId-1003060"></a>The overall algorithm depends first, as we have seen, on the cost function used, but also on the goal of the optimization.</p>
+
+  <p class="body"><a id="pgfId-1003069"></a>We have already discussed optimizing a cost function to find the cheapest solution to a well-defined problem, and this is a category of algorithms that greatly benefits from the application of gradient descent, whenever we can describe a differentiable cost function.</p>
+
+  <p class="body"><a id="pgfId-1003082"></a>Lately, though, a different category of algorithms using gradient descent has gained popularity: learning algorithms.</p>
+
+  <p class="fm-callout"><a id="pgfId-1003091"></a><span class="fm-callout-head">Note</span> I’ve always found the name machine learning a bit deceptive, because it somehow suggests this branch involves machines that can learn in the same way humans do, which unfortunately is not the case, although there are some similarities.</p>
+
+  <p class="body"><a id="pgfId-1003111"></a>When we apply gradient descent to solving a problem such as traveling salesman or graph embedding, we have a static (usually huge) domain, and our goal is to find a point in that domain. In machine learning, instead, we have a dataset, and we want to make sense of it by “learning” a model that describes the dataset and (more importantly) generalizes to inputs that were not in the dataset.</p>
+
+  <p class="body"><a id="pgfId-1003131"></a>Take, for instance, supervised learning (whose most prominent examples are shown in figure 16.17); this is a field where gradient descent is widely applied!</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F17.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021627"></a>Figure 16.17 A few approaches used in supervised machine learning. All of them use gradient descent for learning. Note that the models are arbitrarily chosen, and also for the loss functions there are other possible choices. Gradients and loss functions for neural networks are omitted for the sake of brevity. While only supervised learning is shown here, there are also clustering algorithms that leverage gradient descent.</p>
+
+  <p class="body"><a id="pgfId-1003161"></a>The goal of supervised learning is to develop a mathematical model<a href="#pgfId-1005465"><sup class="footnotenumber">15</sup></a> that can succinctly describe the dataset, and is able to predict the output for new, never-seen inputs, be they a real value (linear regression), a category (logistic regression), or a label (clustering).</p>
+
+  <p class="body"><a id="pgfId-1003174"></a>For all these types of learning, there is one extra step that we haven’t had in the optimization problems we’ve seen so far in this chapter when we were simply exploring a problem’s space. Now we also have to choose which model we want to use, which is actually the first thing we need to do.</p>
+
+  <p class="body"><a id="pgfId-1003187"></a>To better explain this, we’ll go into some details of linear regression.</p>
+
+  <h3 class="fm-head2" id="heading_id_16"><a id="pgfId-1003196"></a>16.4.1 An example: Linear regression</h3>
+
+  <p class="body"><a id="pgfId-1003212"></a>Speaking <a id="marker-1005133"></a>of deceptive names, we couldn’t avoid mentioning linear regression. The story of the origin of the name of this learning technique is also fascinating, and it’s worth Googling it. Hopefully, we stimulated your curiosity about it.</p>
+
+  <p class="body"><a id="pgfId-1003235"></a>But what is really important for us is that linear regression ultimately is about finding a model that describes the relation between one or more inputs (aka <i class="calibre17">independent variables</i>) and a real number outputted by the model (the <i class="calibre17">dependent variable</i>).</p>
+
+  <p class="body"><a id="pgfId-1003248"></a>We’ve mentioned this “model” a few times now, and you can also see it in figure 16.17, so you might be asking what it is.</p>
+
+  <p class="body"><a id="pgfId-1003259"></a>The model is a category of mathematical functions that we choose to approximate the true relation between dependent and independent variables in our dataset.</p>
+
+  <p class="body"><a id="pgfId-1003268"></a>For instance, we might have a dataset associating some characteristics of cars (the year they were built, their engine, how many miles they’ve traveled, and so on) to their market price, and we would like to learn the relation between the former and the latter so that we can input the description (in terms of the same independent variables we had in the dataset) of a car we spotted at the dealer’s, and see if the price they are asking is fair (and hopefully avoid being tricked into paying too much for a wreck).</p>
+
+  <p class="body"><a id="pgfId-1003281"></a>We need to choose the model we think could best fit the data.<a href="#pgfId-1005481"><sup class="footnotenumber">16</sup></a> To keep it simple, let’s restrict to functions with a single parameter (it could be the engine power). As shown in figure 16.18, we can choose a constant function (<code class="fm-code-in-text">y = m</code>, a line parallel to the <code class="fm-code-in-text">x</code> axis), a generic line of the form <code class="fm-code-in-text">y = mx + b</code>, a quadratic curve (<code class="fm-code-in-text">m<sub class="subscript1">1</sub>*x<sup class="superscript1">2</sup> + m<sub class="subscript1">2</sub> * x + b</code>), or even more complicated models.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F18.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021672"></a>Figure 16.18 Linear regression on a dataset (points shown as dots) using increasingly complex models: a constant, a line, and a quadratic curve. You can see that a higher-order model doesn’t necessarily fit the data better.</p>
+
+  <p class="body"><a id="pgfId-1003338"></a>The simpler the model, in general, the fewest data points are needed to “learn it,” because after we choose the complexity of the model, we have a category of functions, and we still have to learn the parameters that tell us which specific function in that category is the best for our dataset.</p>
+
+  <p class="body"><a id="pgfId-1003347"></a>For example, if we choose a generic line, then we still have to decide the values for the parameters <code class="fm-code-in-text">m</code> and <code class="fm-code-in-text">b</code>: it could be <code class="fm-code-in-text">y = x + 1</code> or <code class="fm-code-in-text">y = -0.5*x +42</code>.</p>
+
+  <p class="body"><a id="pgfId-1003364"></a>The way we choose those is through <i class="calibre17">training</i>, which is nothing other than applying gradient descent.</p>
+
+  <p class="body"><a id="pgfId-1003377"></a>In linear regression, in fact, we define a cost function (usually referred to as a <i class="calibre17">loss function</i><a id="marker-1005137"></a> in machine learning) that measures the distance between the value predicted by the model for the dependent variable associated to each point in the dataset,<a href="#pgfId-1005495"><sup class="footnotenumber">17</sup></a> and the actual value from the data.</p>
+
+  <p class="body"><a id="pgfId-1003392"></a>This function is generally the sum of least square errors, or some variant of it. As shown in figure 16.17 and 16.19, we minimize the squared distance, along the <code class="fm-code-in-text">y</code> axis, between each point and the model line, and this gives us a convex, bowl-shaped function with a global minimum—as we have seen, that’s pure gold for gradient descent!</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F19.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021714"></a>Figure 16.19 The cost function of the example in figure 16.18 (B). Using the sum of squared errors, the cost is a function of <code class="fm-code-in-text">m</code> and <code class="fm-code-in-text">b</code>.</p>
+
+  <p class="body"><a id="pgfId-1003434"></a>One important fact to highlight in both figures 16.17 and 16.19 is that the loss function depends on parameters <code class="fm-code-in-text">m</code> and <code class="fm-code-in-text">b</code>,<code class="fm-code-in-text"><a class="calibre14" href="#pgfId-1005510"><sup class="footnotenumber4">18</sup></a></code> not on the points of the dataset; therefore, when we compute its partial derivates, they are computed with respect to the model parameters, which are then updated by gradient descent.</p>
+
+  <p class="body"><a id="pgfId-1003452"></a>There is so much more to say about linear regression and supervised learning that it would take another full book!</p>
+
+  <p class="body"><a id="pgfId-1003461"></a>And, in fact, there are so many books you can check, if you’d like to delve into machine learning. Here there are a few suggestions that I’ve personally found extremely useful:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1003474"></a><i class="calibre15">Grokking Machine Learning</i>, a nice starting point for beginners, written by Luis Serrano (Manning Publications, 2019). You couldn’t ask for a better guide.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003493"></a><i class="calibre15">Grokking Deep Learning</i>, by DeepMind’s Andrew W. Trask (Manning Publications, 2019), an excellent introduction, ideal for approaching the world of deep learning.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003512"></a><i class="calibre15">Deep Learning with Python</i>, written by François Chollet, the author of the Keras library (Manning Publications, 2017); you’ll learn how to use it to build image and text classification models and generators.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1003529"></a><i class="calibre15">Deep Learning with JavaScript</i>, by Shanquing Cai, et al. (Manning Publications, 2020), in case you’d like to build models for the web that run in the browser, using Tensorflow.js and written by its main authors.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1003545"></a>There are, of course, many more great books out there. It’s impossible to list them all here, but these are a good <a id="marker-1005141"></a>starting <a id="marker-1005145"></a><a id="marker-1005149"></a><a id="marker-1005153"></a>point.</p>
+
+  <h2 class="fm-head" id="heading_id_17"><a id="pgfId-1003564"></a>16.5 Gradient descent for graph embedding</h2>
+
+  <p class="body"><a id="pgfId-1003582"></a>So, <a id="marker-1005157"></a><a id="marker-1005161"></a><a id="marker-1005165"></a><a id="marker-1005169"></a>now that we have discussed at length how gradient descent works and its (many) strengths and flaws, you should be able to figure out how to apply it to our case study, a heuristic to find a straight-line drawing for graphs, with the minimum number of intersections between edges.</p>
+
+  <p class="body"><a id="pgfId-1003598"></a>And your answer should be . . . that gradient descent can’t really help. If we look at figures 16.7–16.12, it’s clear that the cost function for “minimum number of intersections” is step-shaped, with large plateau regions (where the gradient is null) and sudden drops.</p>
+
+  <p class="body"><a id="pgfId-1003613"></a>You might be wondering, then, why we’ve introduced gradient descent. Some readers could guess the next step, but if you haven’t take a minute to mentally go over what we’ve learned in the last couple of chapters, and then let’s delve into our next challenge.</p>
+
+  <p class="body"><a id="pgfId-1003626"></a>Before revealing it, let me also highlight that the discussion in sections 16.3 and 16.4 allowed us to develop a better intuition about cost functions and provided a semi-formal characterization: even if the reward was just that, we wouldn’t have wasted our time, because the framework we have established will help us describe and understand the algorithms presented here and in the next two chapters.</p>
+
+  <p class="body"><a id="pgfId-1003637"></a>But there is more. If you went through chapter 15, in section 15.3 we reasoned about what it means for an embedding to be good, or just better than another. Edge intersections are a part of this, even an important one, but there are other considerations, for instance, that adjacent vertices should be close to each other. When there is no edge between a pair of vertices, they can and should be drawn far away from each other.</p>
+
+  <p class="body"><a id="pgfId-1003656"></a>Drawing a graph in an aesthetically-pleasing way can be as or more important than just reducing the number of edges crossing.</p>
+
+  <p class="body"><a id="pgfId-1003665"></a>It can make the graph look cleaner and more easily understandable, and it can help you use available space better (especially on dynamic websites) or make more meaningful charts.</p>
+
+  <p class="body"><a id="pgfId-1003676"></a>And last but not least, an aesthetically pleasing appearance can be expressed with a better cost function, a smoother one for which we can use optimization algorithms like gradient descent.</p>
+
+  <h3 class="fm-head2" id="heading_id_18"><a id="pgfId-1003688"></a>16.5.1 A different criterion</h3>
+
+  <p class="body"><a id="pgfId-1003704"></a>When <a id="marker-1005173"></a><a id="marker-1005177"></a>using straight-line drawings, we can imagine vertices as ions, electrically charged particles. When there is an edge between two vertices, the particles attract each other (as if they had opposite charges), while a pair of vertices not connected by edges repel each other.</p>
+
+  <p class="body"><a id="pgfId-1003722"></a>Then we can try to find an equilibrium point for the system, a disposition of the particles such that all the forces balance each other and the system can maintain a stable condition. Sometimes, instead of explicitly computing<a href="#pgfId-1005530"><sup class="footnotenumber">19</sup></a> the point of equilibrium, we can try to approximate it by simulating the evolution of the system using a heuristic.</p>
+
+  <p class="body"><a id="pgfId-1003737"></a>It turns out that there is a whole class of graph embedding algorithms that adopt this principle: the so-called <i class="calibre17">force-directed graph drawing</i> algorithms<a id="marker-1005181"></a>.</p>
+
+  <p class="body"><a id="pgfId-1003750"></a>The goal of these algorithms is to lay down a graph’s vertices in the 2-D space so that adjacent vertices are more or less at the same distance, and as such, all edges are of the same length in the plane, and, of course, there are as few edge intersections as possible. This is done by computing forces among the adjacent vertices (attractive forces), and among all non-adjacent vertices (repulsive), based on their relative positions, and then updating the system (that is, those positions) based on the forces computed and some parameters, trying to minimize the energy of the whole system.</p>
+
+  <p class="body"><a id="pgfId-1003800"></a>To further refine our initial analogy, we can use springs (or gravity) as the physics counterpart of edges, and a fainter electrical repulsion<a href="#pgfId-1005544"><sup class="footnotenumber">20</sup></a> among all pair of vertices. Note that all these forces depend on the distance between the vertices—you can replace them with different formulas, as long as you keep this characteristic. Figure 16.20 gives you an idea of how such systems can work.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F20.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021761"></a>Figure 16.20 A force-directed drawing algorithm using a physics simulation, with attractive and repulsive forces acting on vertices to provide an aesthetically pleasing embedding. Notice how forces are larger (thicker lines) when vertices are closer. For the sake of clarity, we don’t show all the forces acting on all pairs of vertices, just a few examples.</p>
+
+  <p class="body"><a id="pgfId-1003832"></a>The next thing we need is to formalize these criteria into a formula for the cost function. That will describe the landscape of the problem, which we can then try to explore by using gradient descent, or one of the other categories of algorithms we’ll discuss later in the book:</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F_EQ4.png"/></p>
+
+  <p class="body"><a id="pgfId-1003856"></a>where the term inside the summations is the squared 2-norm, that when computed on the (vector) difference of the two points, gives us the square of the distance between the two points.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F_EQ5.png"/></p>
+
+  <p class="body"><a id="pgfId-1003874"></a>If you are wondering why we use the squared distance, it’s not just because it’s cheaper to compute.<a href="#pgfId-1005561"><sup class="footnotenumber">21</sup></a> The main reason is that the derivative of a square root is a pain. And, of course, the shape of the function’s surface would also be different.</p>
+
+  <p class="body"><a id="pgfId-1003888"></a>Now, that’s a big improvement with respect to a step function. This function is at least differentiable, and that’s pretty good. Partial derivatives with respect to <code class="fm-code-in-text">x</code> and <code class="fm-code-in-text">y</code> coordinates of a generic vertex <code class="fm-code-in-text">w</code> can be precisely computed:</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F_EQ6.png"/></p>
+
+  <p class="body"><a id="pgfId-1003920"></a>Scalars <span class="cambria">β</span> and <span class="cambria">δ</span> are so-called hyper-parameters of the algorithm. They balance the importance of the attractive and repulsive force, and we need to adjust their values to get the result we want; this can be done manually or automatically.</p>
+
+  <p class="body"><a id="pgfId-1003938"></a>This isn’t always easy, of course. For instance, a large value for the attractive force parameter will work well for sparse graphs, keeping vertices from drifting apart, but for a dense graph, if <span class="cambria">β</span><code class="fm-code-in-text">&gt;</code><span class="cambria">δ</span>, then all the vertices will end up converging to the center of the graph.</p>
+
+  <p class="body"><a id="pgfId-1003954"></a>A possible alternative is deciding, based on the vertices/edges in the graph and on the size of the canvas where we embed the graph, the ideal length for an edge (or an ideal range for such length). This way, optimization will move away from solutions where all the vertices are clustered too closely:</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch16_F_EQ7.png"/></p>
+
+  <p class="body"><a id="pgfId-1003977"></a>Neither of these cost functions aims to directly reduce the number of intersections, but as you can imagine, having shorter edges and keeping adjacent vertices close to each other indirectly help drive that number down. And neither function is ideal, because they are not bowl-shaped, so they will have several local minima. While we can’t easily correct this shortcoming, we still have a workaround. We can use a random-restart algorithm, randomly selecting an initial position for the vertices, and surf the cost function downhill with gradient <a id="marker-1005185"></a><a id="marker-1005189"></a>descent.</p>
+
+  <h3 class="fm-head2" id="heading_id_19"><a id="pgfId-1003999"></a>16.5.2 Implementation</h3>
+
+  <p class="body"><a id="pgfId-1004011"></a>Perseverance <a id="marker-1005193"></a><a id="marker-1005197"></a>is the key, so if we repeat a gradient descent step a few times (or maybe a lot of times—it really depends on the context!), starting from different positions and perhaps even with different learning rates, the final result might not be that bad.</p>
+
+  <p class="body"><a id="pgfId-1004023"></a>In the next chapter, we’ll see a more sophisticated technique to make our optimization more flexible and raise our chances of landing a good result.</p>
+
+  <p class="body"><a id="pgfId-1004032"></a>For now, let’s implement the single-iteration gradient descent solution, starting with listing 16.5.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1012157"></a>Listing 16.5 Method <code class="fm-code-in-text">forceDirectedEmbedding</code></p>
+  <pre class="programlisting"><b class="strong">function</b> forceDirectedEmbedding(graph, alpha, maxSteps)          <span class="fm-combinumeral">❶</span>
+  <b class="strong">for</b> v <b class="strong">in</b> graph.vertices <b class="strong">do</b>                                     <span class="fm-combinumeral">❷</span>
+    (x[v], y[v]) ← randomVertexPosition()
+  <b class="strong">for</b> _ <b class="strong">in</b> {1..maxSteps} <b class="strong">do</b>                                      <span class="fm-combinumeral">❸</span>
+    <b class="strong">for</b> v <b class="strong">in</b> graph.vertices <b class="strong">do</b>                                   <span class="fm-combinumeral">❹</span>
+      x1[v] ← x[v] – alpha * derivative(graph, v, x)             <span class="fm-combinumeral">❺</span>
+      y1[v] ← y[v] – alpha * derivative(graph, v, y)
+    <b class="strong">if</b> x == x1 <b class="strong">and</b> y == y1 <b class="strong">then</b>                                  <span class="fm-combinumeral">❻</span>
+      <b class="strong">break</b>
+    (x,y) ← (x1, y1)                                             <span class="fm-combinumeral">❼</span>
+  <b class="strong">return</b> (x,y)</pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1014470"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">forceDirectedEmbedding</code><a id="marker-1017694"></a> takes a graph, a learning rate <code class="fm-code-in-text2">alpha</code>, and the maximum number of steps to perform, <code class="fm-code-in-text2">maxSteps</code>. It returns a point in the domain: an assignment for the coordinates of each vertex.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1014570"></a><span class="fm-combinumeral">❷</span> Cycles through each vertex, assigning its position randomly</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1014602"></a><span class="fm-combinumeral">❸</span> Starts the iteration, running the main cycle at most <code class="fm-code-in-text2">maxSteps</code><a id="marker-1017728"></a> times</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1014634"></a><span class="fm-combinumeral">❹</span> Cycles, again, through all vertices in the graph</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1014535"></a><span class="fm-combinumeral">❺</span> For each vertex, updates its <code class="fm-code-in-text2">x</code> and <code class="fm-code-in-text2">y</code> coordinates by using gradient descent rules. We must use a new variable to hold these new values, because for gradient descent to work, we need to compute all the gradients using the coordinates at current iteration before the update.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1014667"></a><span class="fm-combinumeral">❻</span> This way we can check if we’ve reached a minimum point, where the gradient is zero and no update is performed (likely, here we want to pass some tolerance <code class="fm-code-in-text2">epsilon</code>, and stop when the sum of the differences between the old and new positions is smaller than <code class="fm-code-in-text2">epsilon</code>).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1014698"></a><span class="fm-combinumeral">❼</span> At the end of each iteration, updates the current coordinates</p>
+
+  <p class="body"><a id="pgfId-1004302"></a>The code in listing 16.5 is a duplicate of the body of the general-purpose gradient descent method we previously saw in listing 16.4. While it’s still possible to use that method, in this case we have a more specific domain that can allow us some optimization, and overall, I believe, to express more clearly how this algorithm works internally.</p>
+
+  <p class="body"><a id="pgfId-1004317"></a>For instance, you can see that we never use the cost function, but we only need to be able to compute its partial derivatives. (Now it should make more sense why, as we had mentioned, we prefer to use the squared distance in the cost function to avoid square roots.)</p>
+
+  <p class="body"><a id="pgfId-1004332"></a>Speaking of the gradient, the partial derivates can easily be computed using the formula we have provided (or a similar one, if you use a different cost function). It only requires running two <code class="fm-code-in-text">for</code> loops over the vertices, so explicit code is not shown here.</p>
+
+  <p class="body"><a id="pgfId-1004345"></a>It’s easy to use this method for a random-restart algorithm: just decide how many attempts you’d like to perform, and run a loop calling method <code class="fm-code-in-text">forceDirectedEmbedding</code><a id="marker-1005209"></a>.</p>
+
+  <p class="body"><a id="pgfId-1004357"></a>The caveat is that in this case, we do need an explicit definition of the cost function, because (as shown in listing 16.6) after each call to <code class="fm-code-in-text">forceDirectedEmbedding</code>, we will have to check the cost of the solution returned and compare it to the best result so far.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1012185"></a>Listing 16.6 Method <code class="fm-code-in-text">forceDirectedEmbeddingWithRestart</code></p>
+  <pre class="programlisting"><b class="strong">function</b> forceDirectedEmbeddingWithRestart(graph, alpha, runs, maxSteps)   
+  bestCost ← <b class="strong">inf</b>
+  <b class="strong">for</b> _ <b class="strong">in</b> {1..runs} <b class="strong">do</b>                                                   
+    (x,y) ← forceDirectedEmbedding(graph, alpha, maxSteps)                
+    <b class="strong">if</b> cost(graph, x, y) &lt; bestCost <b class="strong">then</b>                                  
+      (bestX, bestY, bestCost) ← (x, y, cost(graph, x, y))
+  <b class="strong">return</b> (bestX,bestY)</pre>
+
+  <p class="body"><a id="pgfId-1004484"></a>This concludes our discussion of gradient descent. In the next chapters, we will explore alternative algorithms for optimization of cost-based<a id="marker-1016508"></a><a id="marker-1016509"></a> solutions.<a id="marker-1016490"></a><a id="marker-1016491"></a><a id="marker-1016492"></a><a id="marker-1016493"></a></p>
+
+  <h2 class="fm-head" id="heading_id_20"><a id="pgfId-1004514"></a>Summary</h2>
+
+  <ul class="calibre19">
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1004526"></a>Many problems, including many in machine learning, are based on defining a proper cost function that measures how good a solution is, and then running an optimization algorithm to try to find the solution with minimal cost.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1004538"></a>Gradient descent is based on the geometric interpretation of cost functions. For differentiable functions, we assume that each solution to the problem can be interpreted as a point in an <code class="fm-code-in-text">n</code>-dimensional space, and a single step of gradient descent is performed by computing the gradient of the cost function at the current point.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1004556"></a>These points, where the cost function takes a locally-optimal value, are the nemesis of optimization algorithms in general, and gradient descent in particular. The algorithm would get stuck in local minima and we would never find the globally-optimal solution.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1004572"></a>The crossing number doesn’t play well as a cost function, because it makes a step function with plenty of local minima plateaus.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1004587"></a>As an alternative, we can map our problem into a so-called force-directed graph<a class="calibre14" id="marker-1005237"></a> drawing simulation, which focuses on drawing a graph nicely, and optimizes the crossing number only <a class="calibre14" id="marker-1005241"></a><a class="calibre14" id="marker-1005245"></a>indirectly.</p>
+    </li>
+  </ul>
+  <hr class="calibre22"/>
+
+  <p class="fm-footnote"><sup class="footnotenumber">1.</sup> <a id="pgfId-1005256"></a>Unless somebody proves that P=NP, which is still unknown, but is considered unlikely.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">2.</sup> <a id="pgfId-1005270"></a>This refinement process will also continue in the next few chapters, where we introduce new categories of optimization algorithms.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">3.</sup> <a id="pgfId-1005285"></a>As we saw in chapter 15, if we only draw edges as straight-line segments, for some graphs we won’t be able to obtain an embedding with as few intersections as possible. That’s why the rectilinear crossing number has been introduced: the minimum number of edge intersections across all possible graph’s straight-line drawings.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">4.</sup> <a id="pgfId-1005299"></a>Given a list of cities and the distances between each pair of cities, find the shortest possible route that visits each city exactly once and returns to the origin city. This is, needless to say, an NP-complete problem.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">5.</sup> <a id="pgfId-1005318"></a>Find the largest subset of vertices in a graph such that each vertex in the subset is adjacent to all the other vertices in the same subset. In other words, find the largest complete subgraph of a given graph.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">6.</sup> <a id="pgfId-1005332"></a>Check out chapters 12 and 13.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">7.</sup> <a id="pgfId-1005346"></a>It is useful to have some flexibility about the region from which points are drawn, because this way we can get better results depending on the size of the graph, avoiding too dense and too sparse embeddings.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">8.</sup> <a id="pgfId-1005360"></a>Top-left and bottom-right, following the way we index the screen’s rows and columns in most programming languages.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">9.</sup> <a id="pgfId-1005374"></a>If you remember chapter 14, a loop is an edge that starts and ends at the same vertex.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">10.</sup> <a id="pgfId-1005388"></a>See <span class="fm-hyperlink"><a href="http://mng.bz/w9na">http://mng.bz/w9na</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">11.</sup> <a id="pgfId-1005404"></a>Here we are not talking about moving our imaginary marble on the surface of the cost function: this is a generic description fitting this entire category of optimization problems. For the particular problem of the minimum intersection embedding, the way we explore the surrounding area of the cost function is, indeed, moving each vertex around.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">12.</sup> <a id="pgfId-1005420"></a>Note that there are higher-order derivates too, although here we’ll stop at the first-order derivative.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">13.</sup> <a id="pgfId-1005433"></a>Not the most famous one! Although one might argue that this particular theorem is even more important.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">14.</sup> <a id="pgfId-1005449"></a>Tuning an algorithm’s hyper-parameters, as we’ll see, is one of the challenges of using heuristics. There is no single value for these parameters that works with all problems and instances, and the tuning is usually hard to automate. It’s an area where the experience of the algorithmist really makes the difference.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">15.</sup> <a id="pgfId-1005465"></a>Nothing more than a function from a domain to a range, really. No matter how complex this function can be, it’s still a deterministic mapping between an input (possibly multidimensional) and an output.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">16.</sup> <a id="pgfId-1005481"></a>Usually we try different models and automate the choice based on how well they perform, but this is far beyond the scope of this discussion.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">17.</sup> <a id="pgfId-1005495"></a>Actually, a subset of the dataset called a training set. This is not the place to go into the details of how and why we choose it; just remember it’s quite important to leave some dataset points out for later testing to assess the quality of the model.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">18.</sup> <a id="pgfId-1005510"></a>When we use a linear model: in general, we denote with <code class="fm-code-in-text1">W</code> or <span class="cambria">Θ</span> the vector of parameters for the model; remember, these parameters are actually the objective of the learning algorithm.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">19.</sup> <a id="pgfId-1005530"></a>The mathematical solution involves finding the zeroes of the differential equations describing a system.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">20.</sup> <a id="pgfId-1005544"></a>In reality, electrical forces between particles are orders of magnitude stronger than gravity, of course. But the purpose of the analogy is not to be exact, just to be lifelike and intuitive, and to reuse a well-studied framework.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">21.</sup> <a id="pgfId-1005561"></a>Square roots are notoriously expensive operations to perform.</p>
+</body>
+</html>

@@ -1,0 +1,760 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <title>11</title>
+    
+  <link href="../../stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="../../page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+  <div class="tocheadb">
+    <h1 class="tochead" id="heading_id_2"><a id="pgfId-998529"></a><a id="pgfId-998541"></a>11 Applications of nearest neighbor search</h1>
+  </div>
+
+  <p class="co-summary-head"><a id="pgfId-1008006"></a>This chapter covers</p>
+
+  <ul class="calibre19">
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1012958"></a>Adapting abstract algorithms to the complexity of real systems</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1008043"></a>Designing a solution for the “closest hub” problem using NN search</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1008044"></a>Adding filtering to NN search to support business logic and dynamic supply</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1008045"></a>Dealing with faulty networks and failure, and deploying to the real world</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1008046"></a>Applying NN search to other domains, such as physics and computer graphics</li>
+  </ul>
+
+  <p class="body"><a id="pgfId-998629"></a>It’s time to harvest what we’ve sown and to start solving the problems we have discussed in the last few chapters. As always, after a deep dive into theory, we try to give you a “real-life” angle, and in this chapter, we will incrementally build a solution for the “closest hub” problem, one that takes into account many of the issues a real application would face. But make no mistake—we can’t tackle all the possible issues here, and this chapter doesn’t aim to be an exhaustive description of all the possible problems you could face; neither it is a runbook about how to operate your e-commerce application. Only practice, rolling up your sleeves, and getting burned while trying can teach you that. What you can find in this chapter, besides a few examples of real-world technical challenges, is a hands-on example of the analysis process that brings you from a solution “on paper” for your use case, to a working application coping with the complex facets of reality.</p>
+
+  <h2 class="fm-head" id="heading_id_3"><a id="pgfId-998649"></a>11.1 An application: Find nearest hub</h2>
+
+  <p class="body"><a id="pgfId-998667"></a>Now <a id="marker-1002797"></a><a id="marker-1002801"></a>that we have seen how to implement k-d trees (in chapter 9) and SS-trees (chapter 10), we can focus on the problems we are able to solve by using these structures. And we can go back to our initial example: writing an application to find the closest warehouse/shop/retailer to customers, in real time. Figure 11.1 shows yet another variation of the map first introduced in figure 8.1, where we show a few (real) cities and some imaginary shops in the area around them. In our example, we need to find the closest shop that is able to deliver a certain item to customers after they purchase that item on our website. For this reason, we only show the kind of goods sold for each shop, rather than the shop’s name or brand.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch11_F1.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021298"></a>Figure 11.1 A map<a href="#pgfId-1003694"><sup class="footnotenumber">1</sup></a> with cities and hypothetical distribution centers (in this chapter we will often use retailer/ shop as synonyms), and customers (dots). For these shops, on the map we only indicate what they sell for the sake of clarity.</p>
+
+  <p class="body"><a id="pgfId-998705"></a>Given all the work done in the previous chapters, in this chapter we could actually get away without even writing any code. k-d tree, SS-tree, or another similar data structure can take care of all the operations we need; just create a container with the full list of warehouses, and then, for each customer’s request, query it to find the closest hub.</p>
+
+  <p class="body"><a id="pgfId-998720"></a>If, however, the retailer’s stock is dynamic, and items can go out of stock in one place or be restocked in another, then our current model won’t work, and we need to make a tiny change to our tree nodes and our search method. We will talk about these details later in this chapter. First, let’s see how we can write a solution to the basic version of our e-commerce problem.</p>
+
+  <h3 class="fm-head2" id="heading_id_4"><a id="pgfId-998733"></a>11.1.1 Sketching a solution</h3>
+
+  <p class="body"><a id="pgfId-998747"></a>Initially <a id="marker-1002805"></a><a id="marker-1002809"></a>we will make some assumptions to simplify our scenario. Assume all the shops have all the products in stock at all times. Figure 11.2 shows a possible workflow for order processing under this scenario; of course, this is not what would happen in real life, but simplifying a problem usually helps us sketch a first solution upon which we can iterate, introducing one by one the constraints found in real situations and reasoning about how they influence our applications and how we can cope with them:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-998763"></a>Shops have dynamic inventory, so we need to check whether the closest shop to a customer actually sells an item and has it in stock.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-998775"></a>Delivery costs and other considerations might cause us to prefer a further shop to the closest one.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-998787"></a>If we need to make HTTP calls as part of our workflow, we need to take extra care to avoid network pitfalls, and we might have to carefully select our algorithm to cope with issues such as fault tolerance and timeouts.</p>
+    </li>
+  </ul>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch11_F2.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021355"></a>Figure 11.2 Simplified workflow for an order on the e-commerce site. After receiving the order from the customer, look up the closest retailer (assuming there will be always one selling the item ordered) and then place the order with it. Since we assume everything always works, we have a very linear (and unrealistic) workflow.</p>
+
+  <p class="body"><a id="pgfId-998819"></a>The core of the problem, in this setting, is to keep an updated list of stores and retrieve the closest one to a customer each time an order is placed on the website.</p>
+
+  <p class="body"><a id="pgfId-998828"></a>Listing 11.2 shows these trivial operations; we also define an auxiliary type for shops in listing 11.1.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1008144"></a>Listing 11.1 The <code class="fm-code-in-text">Shop</code> class</p>
+  <pre class="programlisting">class Shop
+  <b class="calibre21">#type</b> string 
+  shopName
+  <b class="calibre21">#type</b> Array&lt;Item&gt;
+  items
+  <b class="calibre21">#type</b> tuple(k)
+  point
+ 
+  <b class="calibre21">function</b> Shop(shopName, location, items)    <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">function</b> order(item, customer)              <span class="fm-combinumeral">❷</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1020282"></a><span class="fm-combinumeral">❶</span> The constructor for the class</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1020303"></a><span class="fm-combinumeral">❷</span> Performs the actual purchase. (Details of this method can’t be generalized, and they are not relevant to our discussion. Just imagine that this will update stock and start the process of actually shipping the goods to the customer.)</p>
+
+  <p class="body"><a id="pgfId-998988"></a>It encapsulates the information associated with a retailer. It will become even more useful later in the chapter as we develop our final solution. We store the location of the shop in the field <code class="fm-code-in-text">point</code><a id="marker-1002813"></a>, for the sake of consistency with what we have seen in the previous chapters.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1008176"></a>Listing 11.2 The <code class="fm-code-in-text">addShop</code> and <code class="fm-code-in-text">BuyItem</code> methods</p>
+  <pre class="programlisting"><b class="calibre21">function</b> addShop(treeRoot, shopName, shopLocation, items=[])       <span class="fm-combinumeral">❶</span>
+  shop ← new Shop(shopName, shopLocation, items)                   <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">if</b> treeRoot == <b class="calibre21">null then</b>                                         <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return new</b> Node(shop, null, null, 0)                           <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">else</b>
+       <b class="calibre21">return</b> insert(treeRoot, shop, treeNode.level + 1)           <span class="fm-combinumeral">❺</span>
+ 
+<b class="calibre21">function</b> buyItem(treeRoot, customerLocation, item)                 <span class="fm-combinumeral">❻</span>
+  closestShop ← nearestNeighbor(treeRoot, customerLocation)        <span class="fm-combinumeral">❼</span>
+  closestShop.order(item, customerLocation)                        <span class="fm-combinumeral">❽</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019767"></a><span class="fm-combinumeral">❶</span> The <code class="fm-code-in-text2">addShop</code> method<a id="marker-1019771"></a> takes the root of our container tree, the name of the shop and its location (a 2-D point), and optionally a list of items.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019792"></a><span class="fm-combinumeral">❷</span> Creates a new instance of <code class="fm-code-in-text2">Shop</code><a id="marker-1019797"></a></p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019810"></a><span class="fm-combinumeral">❸</span> If the tree is empty . . .</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019827"></a><span class="fm-combinumeral">❹</span> . . . just creates a new root</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019844"></a><span class="fm-combinumeral">❺</span> Otherwise, inserts the new shop in the tree (<code class="fm-code-in-text2">insert</code> will create a new <code class="fm-code-in-text2">Node</code> for it)</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019861"></a><span class="fm-combinumeral">❻</span> Defines a method to call when a customer buys an item</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019878"></a><span class="fm-combinumeral">❼</span> Finds the closest retailer to the customer and stores it to the temporary variable <code class="fm-code-in-text2">closestShop</code></p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019895"></a><span class="fm-combinumeral">❽</span> Performs the order on that shop</p>
+
+  <p class="body"><a id="pgfId-999242"></a>From the previous snippets, however, it’s apparent that we’ll need to make some adjustments to the node objects and to the API of the methods we have defined in the previous chapters.</p>
+
+  <p class="body"><a id="pgfId-999254"></a>For example, the <code class="fm-code-in-text">Node</code> class<a id="marker-1002825"></a> could hold a reference to the shop, as shown in listing 11.3, rather than directly to a point, and methods like <code class="fm-code-in-text">insert</code><a id="marker-1002829"></a>, likewise, would take an instance of <code class="fm-code-in-text">Shop</code><a id="marker-1002833"></a> as an argument and not just a point, so that the new signature would look something like</p>
+  <pre class="programlisting">function insert(node, newShop, level=0)<a href="#pgfId-1003716"><sup class="footnotenumber1">2</sup></a></pre>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1008204"></a>Listing 11.3 Redefining <code class="fm-code-in-text">Node</code></p>
+  <pre class="programlisting">class Node
+  <b class="calibre21">#type</b> Shop
+  shop
+  <b class="calibre21">#type</b> Node
+  left
+  <b class="calibre21">#type</b> Node
+  right
+  <b class="calibre21">#type</b> integer
+  level
+ 
+  <b class="calibre21">function</b> Node(shop, left, right, level)</pre>
+
+  <p class="body"><a id="pgfId-999420"></a>The application code looks so simple, but do not let it fool you: the complexity is all hidden in the <code class="fm-code-in-text">order</code> function<a id="marker-1013297"></a> that performs all the operations involved in actually placing an order to a real shop. This likely means that you have to interact with each shop’s own web applications,<a href="#pgfId-1003740"><sup class="footnotenumber">3</sup></a> so first of all, you have to imagine that you need a common API by which all the shops’ services need to <a id="marker-1013301"></a><a id="marker-1013302"></a>abide.<a href="#pgfId-1003754"><sup class="footnotenumber">4</sup></a></p>
+
+  <h3 class="fm-head2" id="heading_id_5"><a id="pgfId-999446"></a>11.1.2 Trouble in paradise</h3>
+
+  <p class="body"><a id="pgfId-999460"></a>Now <a id="marker-1002849"></a><a id="marker-1002853"></a>we’ve finally have defined a simple method that we can use to find the closest retailer to our customer and let them know about the purchase so that they can ship goods to users.</p>
+
+  <p class="body"><a id="pgfId-999472"></a>Notice how simple listing 11.2 is. Simplicity, in IT as in life, is often a good thing. Simple code usually means maintainable and flexible code. The problem is that sometimes things look great on paper, but when you deploy your application and open it to real traffic, you often find issues you hadn’t thought of or even imagined. For example, in the real world, you have to deal with dynamic inventory for each shop and, even worse, race conditions.<a href="#pgfId-1003768"><sup class="footnotenumber">5</sup></a></p>
+
+  <p class="body"><a id="pgfId-999496"></a>The first issue we have overlooked is that not all the retailers have all the goods in stock. So, it’s not enough to find the closest shop to a customer; we need to find the closest retailer that can actually sell and deliver the product bought by our user. If the user buys more than one item and we need to deliver them all in one go (to save on shipping or just to reduce user churn), we likely want to filter shops that have all the items at the same time, whenever possible. But then another question arises. If the user buys products A and B, and there is one shop that could ship both, but it’s 100 miles away from the customer, and two shops each have only one of the items, but they’re within 10 miles of the customer, which solution should we choose? What about choosing between a closer shop that has a longer delivery time or higher cost, and another one that is further away, but cheaper and ultimately better for the customer?</p>
+
+  <p class="body"><a id="pgfId-999519"></a>Even more issues come up if we lay down the architecture of the system (see figure 11.3). So far, we have treated shop datasets as if they were local, but that’s not necessarily the case; each retailer can have their own system with which we need to interact:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-999532"></a>They can sell items offline, for instance. If that happens, our information about their stock can become stale. Similarly, we can get out of sync if a shop’s items are restocked.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-999552"></a>In listing 11.2 and figure 11.3, we assume that a call to <code class="fm-code-in-text">shop.order</code><a class="calibre14" id="marker-1002857"></a> will succeed, but since it’s likely to be a remote call over HTTP, there are many reasons why it could fail independently of the item availability in the shop’s inventory: the call could time out, the shop’s application could crash and be unreachable, and so on. If we don’t check their response, we will never know if the order was successfully placed. And if we do check, but never get a response, what should we do?</p>
+    </li>
+  </ul>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch11_F3.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021401"></a>Figure 11.3 Simplified architecture for the e-commerce application described in chapter 8 and here in section 11.1</p>
+
+  <p class="body"><a id="pgfId-999589"></a>These are extremely challenging issues, that we’ll try to solve in the <a id="marker-1002861"></a><a id="marker-1002865"></a>next <a id="marker-1002869"></a><a id="marker-1002873"></a>sections.</p>
+
+  <h2 class="fm-head" id="heading_id_6"><a id="pgfId-999604"></a>11.2 Centralized application</h2>
+
+  <p class="body"><a id="pgfId-999618"></a>Let’s <a id="marker-1002877"></a><a id="marker-1002881"></a>set architectural questions aside for the moment, assume we handle in-house (within the same virtual machine running our web application) all orders for retailers, and focus on the first round of questions. At some point, we asked how we should choose which shop or combination of shops is best in order to serve a customer. Neither k-d trees, nor SS-trees, nor any other data structure can (or should) answer this question. This is a business-related decision that changes from company to company, and perhaps over time or with other variables within the same company.</p>
+
+  <p class="body"><a id="pgfId-999640"></a>What we can do, though, is provide our containers with a way to filter points in a NN search by some conditions that we can pass into our code, thus allowing whoever uses the container to reason about the business rules, customize them, and pass them as arguments to the search method.</p>
+
+  <h3 class="fm-head2" id="heading_id_7"><a id="pgfId-999653"></a>11.2.1 Filtering points<a id="marker-1013575"></a><a id="marker-1013576"></a></h3>
+
+  <p class="body"><a id="pgfId-999667"></a>By creating hooks through which clients can customize business logic, we provide a template method<a id="marker-1002893"></a> that can be effectively customized depending on the business needs.</p>
+
+  <p class="body"><a id="pgfId-999685"></a>Listing 11.4 shows the code for k-d tree’s nearest neighbor search, modified to allow filtering of points.</p>
+
+  <p class="body"><a id="pgfId-999694"></a>As you can see, we pass an extra argument (with respect to the regular method in listing 9.9), a predicate that is evaluated on the current node before accepting this point as a nearest neighbor.</p>
+
+  <p class="body"><a id="pgfId-999705"></a>The only difference with the basic version, besides boilerplate to pass around this new argument, is at line #5, where the predicate is actually evaluated on the current node.</p>
+
+  <p class="body"><a id="pgfId-999716"></a>This version of the method allows us to filter single points and solve the first of the issues mentioned in the previous section, making sure that we choose a shop that actually has the item(s) a customer ordered.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1008524"></a>Listing 11.4 The <code class="fm-code-in-text">filteredNearestNeighbor</code> method</p>
+  <pre class="programlisting"><b class="calibre21">function</b> fNN(node, location, predicate, (nnDist, nn)=(inf, null))         <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> node == <b class="calibre21">null then</b>                                                    <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return</b> (nnDist, nn)
+  <b class="calibre21">else</b>                                                                    <span class="fm-combinumeral">❸</span>
+    dist ← distance(node.shop.point, location)                           <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">if</b> predicate(node) and dist &lt; nnDist <b class="calibre21">then</b>                             <span class="fm-combinumeral">❺</span>
+      (nnDist, nn) ← (dist, node.shop)
+    <b class="calibre21">if</b> compare(location, node) &lt; 0 <b class="calibre21">then</b>                                   <span class="fm-combinumeral">❻</span>
+      closeBranch ← node.left
+      farBranch ← node.right
+    <b class="calibre21">else</b>                                                                  <span class="fm-combinumeral">❻</span>
+      closeBranch ← node.right
+      farBranch ← node.left
+    (nnDist, nn) ← fNN(closeBranch, location, predicate, (nnDist, nn))   <span class="fm-combinumeral">❼</span>
+    <b class="calibre21">if</b> splitDistance(location, node) &lt; nnDist <b class="calibre21">then</b>                        <span class="fm-combinumeral">❽</span>
+      (nnDist, nn) ← fNN(farBranch, location, predicate, (nnDist, nn))   <span class="fm-combinumeral">❾</span>
+    <b class="calibre21">return</b> (nnDist, nn)                                                   <span class="fm-combinumeral">❿</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018957"></a><span class="fm-combinumeral">❶</span> Finds the closest point to a given target, among those satisfying a predicate. We also pass the best values found so far for NN and its distance to help pruning. These values default to <code class="fm-code-in-text2">null</code>, <code class="fm-code-in-text2">infinity</code> for a call on the tree root.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018981"></a><span class="fm-combinumeral">❷</span> If the node<a id="marker-1018985"></a> is <code class="fm-code-in-text2">null</code>, we are traversing an empty tree, so the nearest neighbor can’t be found in this branch of the tree. It is still possible that by backtracking, another branch is visited when it is found.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018999"></a><span class="fm-combinumeral">❸</span> Otherwise, we have three tasks: check if the current node is closer than the previously found NN, traverse the branch on the same side of the split with respect to the target point, and check if we can prune the other branch (or traverse it as well).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019016"></a><span class="fm-combinumeral">❹</span> We compute the distance between the current node’s point and the target location.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019033"></a><span class="fm-combinumeral">❺</span> If the current node satisfies the predicate provided and its distance to target is less than the current NN’s distance, we have to update the values stored for the NN and its distance.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019050"></a><span class="fm-combinumeral">❻</span> Checks if the target point is on the left branch of the split. If it is, the left branch is the closest to the target point; otherwise it is the furthest.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019067"></a><span class="fm-combinumeral">❼</span> We certainly need to traverse the closest branch in search of the nearest neighbor. It is important to do so first and update the mementos for NN’s distance, to improve pruning.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019084"></a><span class="fm-combinumeral">❽</span> Using one of the helper functions defined in listing 9.2, we compute the distance between the split line passing through the current node and the target point. If this distance is closer than the distance to the current nearest neighbor, then the furthest branch might contain points closer than the current nearest neighbor (see figure 9.21).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019101"></a><span class="fm-combinumeral">❾</span> Traverses the furthest branch and updates the current values for NN and its distance</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019118"></a><span class="fm-combinumeral">❿</span> Returns the closest point found so far</p>
+
+  <p class="body"><a id="pgfId-1000064"></a>For instance, we could redefine nodes as shown in listing 11.3, and pass to <code class="fm-code-in-text">fNN</code><a id="marker-1002901"></a> the predicate <code class="fm-code-in-text">hasItemX</code><a id="marker-1002905"></a><code class="fm-code-in-text">()</code> defined in listing 11.5. We can also define a more generic version, <code class="fm-code-in-text">hasItem()</code>, that takes two arguments, an item and a shop, and uses currying<a href="#pgfId-1003786"><sup class="footnotenumber">6</sup></a> to create a unary predicate checking a single fixed item in the shop, and pass it as shown in listing 11.6.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1008552"></a>Listing 11.5 Method <code class="fm-code-in-text">hasItemX</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> hasItemX(node)          <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">return</b> X <b class="calibre21">in</b> node.shop.items    <span class="fm-combinumeral">❷</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018837"></a><span class="fm-combinumeral">❶</span> Defines a function taking a node as argument to check if it has a certain item X (fixed)</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018858"></a><span class="fm-combinumeral">❷</span> Just checks whether the list of items associated with a shop contains the item X</p>
+
+  <p class="body"><a id="pgfId-1000149"></a>To find the nearest shop that can ship Pinot noir, we can call our <code class="fm-code-in-text">fNN</code> method<a id="marker-1002913"></a> with something like</p>
+  <pre class="programlisting">fNN(treeRoot, customerPosition, hasItem(“Pinot noir”))</pre>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1008580"></a>Listing 11.6 A curried version of <code class="fm-code-in-text">hasItemX</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> hasItem(item, node)                  <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">return</b> item <b class="calibre21">in</b> node.shop.items              <span class="fm-combinumeral">❷</span>
+ 
+nn = fNN(root, customerLocation, hasItem(X))  <span class="fm-combinumeral">❸</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018549"></a><span class="fm-combinumeral">❶</span> A generic version for <code class="fm-code-in-text2">hasItem</code> takes the item as well as the node as arguments.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018573"></a><span class="fm-combinumeral">❷</span> Checks if the list of items associated with a shop contains <code class="fm-code-in-text2">item</code></p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018590"></a><span class="fm-combinumeral">❸</span> We pass a curried instance of <code class="fm-code-in-text2">hasItem</code><a id="marker-1018594"></a> to the <code class="fm-code-in-text2">fNN</code> method<a id="marker-1018596"></a> to find the closest point whose shop has item <code class="fm-code-in-text2">X</code> in the inventory (here <code class="fm-code-in-text2">X</code> is supposed to be a variable containing the item we look for).</p>
+
+  <p class="body"><a id="pgfId-1000263"></a>Unfortunately, while this filtering mechanism allows us to filter out retailers that don’t have the items we need, it isn’t powerful enough to let us decide that it is best to choose a closer retailer with higher shipment costs over a cheaper one that is twice as far away, and in general it can’t deal with complex conditions comparing different <a id="marker-1002925"></a><a id="marker-1002929"></a>solutions.</p>
+
+  <h3 class="fm-head2" id="heading_id_8"><a id="pgfId-1000275"></a>11.2.2 Complex decisions</h3>
+
+  <p class="body"><a id="pgfId-1000289"></a>If <a id="marker-1002933"></a><a id="marker-1002937"></a>what we really need is not just filtering shops according to some criteria, but also choosing the best options among them, then we have to seek a more powerful mechanism.</p>
+
+  <p class="body"><a id="pgfId-1000301"></a>We have two main choices:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1013791"></a>Use <code class="fm-code-in-text">n</code>-nearest neighbor to retrieve a list of <code class="fm-code-in-text">n</code> shops that satisfy our criteria, and then process this list to decide which one, among the possible solutions, is the actual best choice.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1000326"></a>Or we can replace the predicate passed to our nearest neighbor method, as shown in listing 11.7, which instead of a unary predicate is using a binary function that takes as arguments the current node and the best solution found so far, and returns which one is the best.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1000342"></a>And, of course, we can also use a combination of the two methods.</p>
+
+  <p class="body"><a id="pgfId-1000351"></a>The first solution doesn’t ask for any change to our container, so we won’t need to develop it any further. You can use sorting, a priority queue, or any selector algorithm you like in order to decide which solution is the best, according to your business rules. This mechanism has an advantage: it also allows you to try solutions where you order different items at different shops and see if that works better than the best “all-at-one-place” solution.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1008644"></a>Listing 11.7 Another version of the <code class="fm-code-in-text">filteredNearestNeighbor</code> method</p>
+  <pre class="programlisting"><b class="calibre21">function</b> fNN(node, location, cmpShops, (nnDist, nn)=(inf, null))       <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> node == <b class="calibre21">null then</b>                                                 <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return</b> (nnDist, nn)
+  <b class="calibre21">else</b>                                                                 <span class="fm-combinumeral">❸</span>
+    dist ← distance(node.shop.point, location)                         <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">if</b> cmpShops((dist, node.shop), (nnDist, nn)) &lt; 0 <b class="calibre21">then</b>              <span class="fm-combinumeral">❺</span>
+      (nnDist, nn) ← (dist, node.shop)
+    <b class="calibre21">if</b> compare(location, node) &lt; 0 <b class="calibre21">then</b>                                <span class="fm-combinumeral">❻</span>
+      closeBranch ← node.left
+      farBranch ← node.right
+    <b class="calibre21">else</b>                                                               <span class="fm-combinumeral">❻</span>
+      closeBranch ← node.right
+      farBranch ← node.left
+    (nnDist, nn) ← fNN(closeBranch, location, cmpShops, (nnDist, nn))  <span class="fm-combinumeral">❼</span>
+    <b class="calibre21">if</b> splitDistance(location, node) &lt; nnDist <b class="calibre21">then</b>                     <span class="fm-combinumeral">❽</span>
+      (nnDist, nn) ← fNN(farBranch, location, cmpShops, (nnDist, nn))  <span class="fm-combinumeral">❾</span>
+    <b class="calibre21">return</b> (nnDist, nn)                                                <span class="fm-combinumeral">❿</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017781"></a><span class="fm-combinumeral">❶</span> Finds the closest point to a given target. In this case, we pass <code class="fm-code-in-text2">cmpShops</code> method<a id="marker-1017786"></a> to compare two shops and return which one is best. We assume the return value follows the standard conventions for the compare functions: <code class="fm-code-in-text2">-1</code> means the first argument is smaller, <code class="fm-code-in-text2">1</code> the second is smaller, and <code class="fm-code-in-text2">0</code> they are equal.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017813"></a><span class="fm-combinumeral">❷</span> If the node<a id="marker-1017817"></a> is <code class="fm-code-in-text2">null</code>, we are traversing an empty tree, so the nearest neighbor can’t change with respect to what we have already found.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017831"></a><span class="fm-combinumeral">❸</span> Otherwise, we have three tasks: check if the current node is better than the previously found NN, traverse the branch on the same side of the split with respect to the target point, and check if we can prune the other branch (or traverse it as well).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017848"></a><span class="fm-combinumeral">❹</span> We compute the distance between the current node’s point and the target location.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017865"></a><span class="fm-combinumeral">❺</span> We use the <code class="fm-code-in-text2">cmpShops</code> method to decide which of the shops better satisfies our needs.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017882"></a><span class="fm-combinumeral">❻</span> Checks if the target point is on the left branch of the split. If it is, the left branch is the closest to the target point; otherwise, it is the furthest.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017899"></a><span class="fm-combinumeral">❼</span> We certainly need to traverse the closest branch in search of the NN. It is important to do so first and update the mementos for NN’s distance to improve pruning.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017916"></a><span class="fm-combinumeral">❽</span> Using one of the helper functions defined in listing 9.2, we compute the distance between the split line passing through current node and the target point. If this distance is closer than the distance to current nearest neighbor, then the furthest branch might contain points closer than the current nearest neighbor (see figure 9.21).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017933"></a><span class="fm-combinumeral">❾</span> Traverses the furthest branch and updates the current values for NN and its distance</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017950"></a><span class="fm-combinumeral">❿</span> Returns the closest point found so far</p>
+
+  <p class="body"><a id="pgfId-1000717"></a>When we pass a compare function to <code class="fm-code-in-text">fNN</code><a id="marker-1002949"></a>, instead, this flexibility is not going to be possible, and we will only examine solutions where all items are shipped by the same shop.</p>
+
+  <p class="body"><a id="pgfId-1000729"></a>If that’s fine, because we have guarantees that we can always find such a shop (or we handle separately the case where we fail to find one), the “compare function” mechanism has the advantage of requiring less extra memory and being overall faster.</p>
+
+  <p class="body"><a id="pgfId-1000738"></a>As mentioned, the idea is that we can encapsulate all the business logic in a binary function that will compare the node currently being traversed in nearest neighbor search with the best solution found at that point of the traversal. We also assume that this predicate will perform any necessary filtering, for example, making sure that the current node’s retailer has all items in stock. The changes needed to our search method are minimal, as shown in listing 11.7. We simply gather together two steps (filtering shops and comparing the current solution with the best one found so far), and instead of just checking distances during our NN search, we use a function passed as an argument to <code class="fm-code-in-text">fNN</code>, function <code class="fm-code-in-text">cmpShops</code>,<code class="fm-code-in-text"><a class="calibre14" href="#pgfId-1003817"><sup class="footnotenumber4">7</sup></a></code> to decide which entry is nearer.</p>
+
+  <p class="body"><a id="pgfId-1000762"></a>So, now the heart of the business logic lies in this method, which in turn will decide which shops are filtered in and how we choose the our best option.</p>
+
+  <p class="body"><a id="pgfId-1000771"></a>There are a couple of edge cases that we should always address in this function:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1000780"></a>If the current node is filtered out, always choose the current NN.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1000792"></a>If the best solution found so far is empty (that is, <code class="fm-code-in-text">nn == null</code>), then the current node should always be chosen, unless it is filtered out (at point 1).</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1000809"></a>Listing 11.8 provides a possible generic implementation of this comparison method, including filtering out shops that don’t have all items in stock, and checking distances by using an unspecified heuristic method to decide which shop is the best.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1008678"></a>Listing 11.8 A possible comparison method</p>
+  <pre class="programlisting"><b class="calibre21">function</b> compareShops(boughtItems, (dist, shop), (nnDist, nnShop))       <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> shop==null or not (item in shop.items <span class="cambria">∀</span> item in boughtItems) <b class="calibre21">then</b>  <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return</b> 1
+  <b class="calibre21">else</b> if nnShop == <b class="calibre21">null then</b>                                            <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return</b> -1
+  <b class="calibre21">else</b> if dist &lt;= nnDist and heuristic(shop, nnShop) <b class="calibre21">then</b>                <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">return</b> -1
+  <b class="calibre21">else</b>                                                                   <span class="fm-combinumeral">❺</span>
+    <b class="calibre21">return</b> 1
+ 
+fNN(root, customerPosition, compareShops([“Cheddar”, “Gravy”, “Salad”])) <span class="fm-combinumeral">❻</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017357"></a><span class="fm-combinumeral">❶</span> A comparison method to decide which shop is preferable in our search. It takes both shops (the current node’s and the nearest neighbor’s found so far) as well as their distances.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017381"></a><span class="fm-combinumeral">❷</span> If <code class="fm-code-in-text2">shop</code> is <code class="fm-code-in-text2">null</code>, or it doesn’t have all the items in the purchase list (<code class="fm-code-in-text2">boughtItems</code>), then we return <code class="fm-code-in-text2">1</code> to let the caller know that the current nearest neighbor is still the best solution.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017398"></a><span class="fm-combinumeral">❸</span> Otherwise, if we haven’t yet stored a NN, return <code class="fm-code-in-text2">-1</code>: the current node is better than nothing.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017415"></a><span class="fm-combinumeral">❹</span> If the distance of the current node is not worse than what we had already found, we can compare the two shops using a heuristic and see which one is better. Here this heuristic encapsulates any business logic; for instance, if a shop has lower shipment costs, if they sell the goods at lower price, or any other domain-specific condition.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017432"></a><span class="fm-combinumeral">❺</span> If everything else fails, we just stick with what we have currently saved as nearest neighbor.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017449"></a><span class="fm-combinumeral">❻</span> An example of a call to the (filtered) nearest neighbor method, searching for the most convenient shop that sells all three items in the list</p>
+
+  <p class="body"><a id="pgfId-1001062"></a>Figure 11.4 summarizes the method logic in a flow chart.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch11_F4.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021443"></a>Figure 11.4 Flow chart describing the logic of the compare function defined in listing 11.8</p>
+
+  <p class="body"><a id="pgfId-1001089"></a>It’s worth clarifying once again that the choice of the heuristic is not connected to any of the data structures we have seen, and, vice versa, those algorithms don’t depend on this function. It’s just a heuristic method that encapsulates all the domain-specific logic, and so it changes from application to application. Depending on how you write it, and how you model the <code class="fm-code-in-text">Shop</code> class<a id="marker-1002953"></a>, you can customize the behavior of the search method to solve your instance of <a id="marker-1002957"></a><a id="marker-1002961"></a>the <a id="marker-1002965"></a><a id="marker-1002969"></a>problem.</p>
+
+  <h2 class="fm-head" id="heading_id_9"><a id="pgfId-1001109"></a>11.3 Moving to a distributed application</h2>
+
+  <p class="body"><a id="pgfId-1001125"></a>So <a id="marker-1014088"></a><a id="marker-1014089"></a>far, so good: we have solved the “closest hub” problem assuming we are in control of all the pieces of the applications, and we can be sure that the systems registering the order and starting the process to send goods to customers are always available and never fail.</p>
+
+  <p class="body"><a id="pgfId-1001137"></a>If only the world worked this way! Unfortunately, not only do systems (applications, computers, networks, and so on) fail, but there is also a good chance that, for an e-commerce web application like the one we described, some crucial pieces are not even under our control. That is, we are likely dealing with a distributed application that includes different services, running on different machines (possibly located far away from each other), and communicating through remote calls over a network. Figure 11.5 builds upon the simplified architecture in figure 11.3, depicting a more realistic situation, where the retailers’ servers live on their separate machines, and thus in a different addressing space, only accessible through remote calls (over HTTP, or any other communication protocol, such as <i class="calibre17">IPFS <a href="#pgfId-1003833"><sup class="footnotenumber">8</sup></a></i>).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch11_F5.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021488"></a>Figure 11.5 A more realistic design for the e-commerce application, taking into account the complexity of a distributed architecture and introducing a separate application server to deal with failures of HTTP calls to the shops’ servers</p>
+
+  <p class="body"><a id="pgfId-1001171"></a>As you can imagine, this changes the rules of the game. While we can have tight control of what runs on our machine (virtual or physical), once we introduce remote calls, we also introduce additional failure points, and we also need to deal with latency. For instance, if we synchronously call a method in our application, we know it can fail, and hopefully we also know why it would fail. We know it can take some time to compute (or, possibly, even loop forever), but we are also sure that the method was called and started doing its job.</p>
+
+  <p class="body"><a id="pgfId-1001198"></a>Processing an order, when we take all these factors into consideration, becomes sensibly more complicated, as shown in figure 11.6.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch11_F6.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021538"></a>Figure 11.6 A workflow for order processing that takes into account some possible sources of failure. As a result, the execution is not linear anymore, and the logic of handling an order is more complex.</p>
+
+  <h3 class="fm-head2" id="heading_id_10"><a id="pgfId-1001225"></a>11.3.1 Issues handling HTTP communication</h3>
+
+  <p class="body"><a id="pgfId-1001241"></a>When <a id="marker-1002981"></a><a id="marker-1002985"></a>we move to distributed systems, communication over the network is an additional source of uncertainty. We know that we sent an HTTP request, but if we don’t get an answer, we have no way of knowing if the message arrived, if the network is broken, if the server is broken, or if it is hanging on a time-consuming task.<a href="#pgfId-1003850"><sup class="footnotenumber">9</sup></a></p>
+
+  <p class="body"><a id="pgfId-1001260"></a>We therefore have to decide how to handle this uncertainty. First of all, are we going to wait until we get a response (synchronous layout); send a request and do something else while we wait for an answer; or “fire and forget”—that is, send a request and not wait for any answer from the remote server?</p>
+
+  <p class="body"><a id="pgfId-1001277"></a>This communication channel is part of a workflow of user interaction, with users waiting for a response, and their patience is usually limited. Who would wait 10 minutes (or just two!) before hitting reload on the page?</p>
+
+  <p class="body"><a id="pgfId-1001292"></a>And indeed, for an ecommerce page, where the user expects to see a live update within a reasonable time, usually web servers have short timeouts on the calls they receive, meaning they would respond with a 5XX error after a few seconds, usually less than 10.</p>
+
+  <p class="body"><a id="pgfId-1001305"></a>This introduces additional challenges, because if we keep a longer timeout for our call to the shop’s server, there is a chance that the HTTP call from the customer fails, but our call to the shop succeeds afterward,<a href="#pgfId-1003864"><sup class="footnotenumber">10</sup></a> and we introduce a discrepancy, possibly even causing the customer to buy the same item twice. See figure 11.7 illustrating this case with sequence diagrams.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch11_F7.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021587"></a>Figure 11.7 A sequence diagram showing how an improper handling of timeouts, when calls to external services are involved, could cause dire consequences. The application’s web server times out before receiving an answer from the external service, so the user sees that the order didn’t go through, while the retailer’s service has registered it. If the user tries to order the item again, there will be a duplicate.</p>
+
+  <p class="body"><a id="pgfId-1001334"></a>If the shops’ servers have a timeout set to 8 seconds<a href="#pgfId-1003878"><sup class="footnotenumber">11</sup></a> we need to complete all the remaining operations within 2 seconds, which likely leaves us less than a second to run the nearest neighbor search.</p>
+
+  <p class="body"><a id="pgfId-1001345"></a>In short, when we move to distributed architectures, there are lot more factors we need to be careful about that go beyond the mere use of algorithms. Nevertheless, the choice of the search algorithm is even more important. A bad choice can have dire consequences for our web <a id="marker-1002989"></a><a id="marker-1002993"></a>application.</p>
+
+  <p class="body"><a id="pgfId-1001361"></a>That means we need to be careful about the algorithm we implement:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1001370"></a>Different data structures have different levels of performance for the average and worst case. You can decide to go with the algorithm that is the fastest on average to serve as many requests as possible in the shortest time, or to go with the algorithm that has the best worst-case performance to be sure that all requests will complete within the allotted time (even if, on average, it will be slower).</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1001388"></a>If the dataset to search through constantly grows past a certain point, it will probably become too large to allow you to run a NN search in the time available. At that point, you need to think about other ways to scale your application—for example, with a geographical sharding of the data; or if that doesn’t make sense for your business, with an approximate algorithm leveraging a random sharding with parallelization, and then choosing the best of the solutions returned for each shard.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1001406"></a>If you are using an approximated algorithm, then usually you have a trade-off between performance and accuracy. In that case, you need to make sure you can compromise on the quality of the results to obtain an answer within the time you can afford to wait.</p>
+    </li>
+  </ul>
+
+  <h3 class="fm-head2" id="heading_id_11"><a id="pgfId-1001422"></a>11.3.2 Keeping the inventory in sync</h3>
+
+  <p class="body"><a id="pgfId-1001438"></a>If <a id="marker-1002997"></a><a id="marker-1003001"></a>the situation doesn’t already look complicated enough to you, there is another troubling issue that we haven’t considered yet: Where do we get the information about the availability of items?</p>
+
+  <p class="body"><a id="pgfId-1001450"></a>So far, we have assumed that this information is in the node of our k-d tree (or SS-tree), but that might not be the case. If you think about it, when we place an order to a retailer, their inventory goes down, but the inventory in our container does not necessarily reflect that.</p>
+
+  <p class="body"><a id="pgfId-1001467"></a>There are a number of issues to take into account: the retailer could sell goods through other channels (either another e-commerce site or a brick-and-mortar shop), and we need to update our copy of the inventory when that happens. We need to communicate over a network, so we need to be careful about race conditions to avoid placing orders twice or missing them.</p>
+
+  <p class="body"><a id="pgfId-1001481"></a>While we could think of workarounds for both issues, it is best to switch to a different approach. Figure 11.8 shows an ever more complex architecture for our app that includes a DB (which could be something like Memcached, a SQL DB, or a combination of both) and another service whose goal is just running (as a daemon, independently on the main app) and periodically asking the retailers’ servers for an updated inventory. Once a response is received asynchronously, the service will update the local DB with the fresh values.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch11_F8.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021632"></a>Figure 11.8 An even more advanced design, including a daemon that asynchronously polls shops’ servers to sync the local DB to their inventories</p>
+
+  <p class="body"><a id="pgfId-1001518"></a>This also means that when we run the nearest neighbor search, we need to make sure that our in-memory copy of the inventory for the shops is up-to-date. Here we will also have to compromise between performance and accuracy, because making one DB call (even if mediated through a fast cache) is likely going to be too slow. So we probably want to have another daemon running on our server’s machine on a thread in the application server that gets the diff from the database, only for the values changed from the last update, goes through the list of shops (kept in some shared memory area), and updates those <a id="marker-1003005"></a><a id="marker-1003009"></a>values.</p>
+
+  <h3 class="fm-head2" id="heading_id_12"><a id="pgfId-1001539"></a>11.3.3 Lessons learned</h3>
+
+  <p class="body"><a id="pgfId-1001553"></a>We <a id="marker-1003013"></a><a id="marker-1003017"></a>have delved into our e-commerce application, iterating from a coarse-grained design for a centralized application to the smallest details of a distributed system.</p>
+
+  <p class="body"><a id="pgfId-1001565"></a>While this discussion can’t be exhaustive, and isn’t meant to be, I hope it was useful to provide you with an idea of how you can structure the design process that leads from an algorithm to a full, production-ready application that leverages it. Hopefully, it also provided useful pointers to the possible issues you could face in the development of a web application and what you could look for if you’d like to keep learning in this area.</p>
+
+  <p class="body"><a id="pgfId-1001582"></a>Now it’s time to move on and present you with a few more problems, in completely different contexts, that can be solved using nearest <a id="marker-1003021"></a><a id="marker-1003025"></a>neighbor <a id="marker-1003029"></a><a id="marker-1003033"></a>search.</p>
+
+  <h2 class="fm-head" id="heading_id_13"><a id="pgfId-1001597"></a>11.4 Other applications</h2>
+
+  <p class="body"><a id="pgfId-1001611"></a>Maps aren’t the only field of application for nearest neighbor search. They were not even the application for which k-d trees were originally invented; k-d trees just happened to work very well on this domain, but these containers were meant to solve problems in higher dimensional spaces, rather than in 2-D or 3-D space.</p>
+
+  <p class="body"><a id="pgfId-1001626"></a>To give you an idea of the vast number of fields that can leverage these algorithms, we’ll briefly go through a few examples on very different domains.</p>
+
+  <h3 class="fm-head2" id="heading_id_14"><a id="pgfId-1001635"></a>11.4.1 Color reduction</h3>
+
+  <p class="body"><a id="pgfId-1001647"></a>The <a id="marker-1014468"></a><a id="marker-1014469"></a>problem is simple: you have an RGB bitmap image using a certain palette; for example, the usual 16 million RGB, where each pixel of the image has three channels associated with it—red, green, and blue—and each of these colors has an associated intensity value between 0 and 255. Figure 11.9 shows an example of how a bitmap image is encoded. For instance, if a pixel is meant to be completely red, it will be associate with the tuple (R=255, G=0, B=0),<a href="#pgfId-1003892"><sup class="footnotenumber">12</sup></a> a darker blue pixel with something like (0, 0, 146), and a yellow one with (255, 255, 0); black is (0, 0, 0), and white is (255, 255, 255).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch11_F9.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021674"></a>Figure 11.9 RGB bitmap format. An image is made of tiny points, its pixels, and for each of them its color is determined by the combination of three primary colors: red, green, and blue, each of which can have an intensity between 0 and 255.</p>
+
+  <p class="body"><a id="pgfId-1001691"></a>To store such an image, we need 3 bytes per pixel.<a href="#pgfId-1003906"><sup class="footnotenumber">13</sup></a> For an image with a resolution of 1280 x 720 pixels,<a href="#pgfId-1003920"><sup class="footnotenumber">14</sup></a> this means 2.7649.800 bytes, more than 2 MBs; and 1920 × 1080 pixels<a href="#pgfId-1003934"><sup class="footnotenumber">15</sup></a> images require almost 6 MBs at 16M colors.</p>
+
+  <p class="body"><a id="pgfId-1001706"></a>To save space, you could either use a compressed format, which could cause a loss of information or transform the data to a different space,<a href="#pgfId-1003948"><sup class="footnotenumber">16</sup></a> or reduce the number of colors you use for each pixel. Suppose that you are storing images for a specific purpose, such as images of road signs to be fed to a machine learning model for training.</p>
+
+  <p class="body"><a id="pgfId-1001719"></a>If you don’t care about the background, road signs themselves use a very limited set of colors, so you can decide that it is fine to down-sample the colors you use to a 256-color scale.<a href="#pgfId-1003962"><sup class="footnotenumber">17</sup></a> This will allow a factor of 3 savings for your storage, which means 4 GBs for every thousand pictures stored (if you are storing or processing them on the cloud, this likely means a huge savings of time and money).</p>
+
+  <p class="body"><a id="pgfId-1001733"></a>So the problem is this: How do you transform each image from one color scale to the other by keeping the highest fidelity?</p>
+
+  <p class="body"><a id="pgfId-1001743"></a>You will have to choose 256 colors and “bin” each of the 16M original colors into these 256 buckets. The key is how you choose the destination colors scale. There are, of course, many ways to do that; you could choose the same 256 colors for all images, perhaps by sampling uniformly the original 16M scale, but you could also decide for each image the best scale to reduce the loss of information.</p>
+
+  <p class="body"><a id="pgfId-1001761"></a>How you choose this scale was actually the subject of an interview question I was asked by one of the best engineers with whom I had the pleasure to work. We’ll leave it as an exercise for the reader to think about how this problem can be best solved, so we avoid spoiling the question.</p>
+
+  <p class="body"><a id="pgfId-1001774"></a>But once you somehow come up with the best choice for the 256 colors to use, how do you transform each pixel from one scale to the other?</p>
+
+  <p class="body"><a id="pgfId-1001783"></a>Here is where nearest neighbor search comes into play: we create a k-d tree, or SS-tree, containing each of the 256 selected colors for the destination scale; the dimension of the search space will be, as you can imagine, 3.</p>
+
+  <p class="body"><a id="pgfId-1001792"></a>For each pixel in the original image, we search its nearest neighbor in the tree, and store the index of the color in the destination scale closest to the original color of the pixel. Listing 11.9 shows pseudo-code for these operations, using an SS-tree.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1008723"></a>Listing 11.9 Down-sampling image colors using NN-search</p>
+  <pre class="programlisting">tree ← <code class="fm-code-in-text2">SsTree(sampledColors, 3)</code>                         <span class="fm-combinumeral">❶</span>
+<b class="calibre21">for</b> pixel <b class="calibre21">in</b> sourceImage <b class="calibre21">do</b>                                 <span class="fm-combinumeral">❷</span>
+  (r, g, b) ← pixel.color                                   <span class="fm-combinumeral">❸</span>
+  sampled_color ← tree.nearestNeighborSearch(r, g, b)       <span class="fm-combinumeral">❹</span>
+  destIndex[pixel.index].color_index ← sampled_color.index  <span class="fm-combinumeral">❺</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1016981"></a><span class="fm-combinumeral">❶</span> Creates an SS-tree starting from the list of 256 sampled colors. Here we explicitly pass the dimension of the search space, 3, just for clarity (it can be inferred from the points in the list, of course). We assume that each of the sampled colors in the container will be associated with its index in the destination color scale.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017005"></a><span class="fm-combinumeral">❷</span> Goes through each pixel in the source image</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017022"></a><span class="fm-combinumeral">❸</span> In the most generic case, pixels could be modeled as objects with more fields than just color; for instance, their position in the image. If that’s so, we just need the RGB components for the NN search.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017039"></a><span class="fm-combinumeral">❹</span> Finds the nearest neighbor of current color</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1017056"></a><span class="fm-combinumeral">❺</span> In the destination image, sets the color index for the transformed pixel based on the index in the destination color scale of the sampled color that is closest to the original pixel’s color.</p>
+
+  <p class="body"><a id="pgfId-1001935"></a>You can see how simple it is to perform such advanced tasks when you have the right data structure! That’s because all the complexity is encapsulated in the implementation of the SS-tree (or k-d tree or equivalent), and that’s also why the main goal of this book is helping readers to recognize the situations where they can use these data structures—that alone will make you stand out as a developer, producing faster and more reliable <a id="marker-1003045"></a><a id="marker-1003049"></a>code.</p>
+
+  <h3 class="fm-head2" id="heading_id_15"><a id="pgfId-1001950"></a>11.4.2 Particle interaction</h3>
+
+  <p class="body"><a id="pgfId-1001964"></a>In <a id="marker-1003053"></a><a id="marker-1003057"></a>particle physics simulations, scientists need to model systems where a high number of atoms, molecules, or sub-atomic particles interact in a closed environment. For instance, you could simulate the evolution of a gas when the temperature changes, or a laser beam hits the gas, and so on.</p>
+
+  <p class="body"><a id="pgfId-1001980"></a>Figure 11.10 shows a simplification of what such a simulation could look like. Considering that at an average 25°C room temperature there are approximately 1022 molecules in a square meter of air, you can imagine that even with small boxes and rarefied gases, your simulation should handle billions of billions of items for each step of the simulation.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch11_F10.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1021716"></a>Figure 11.10 A simplified representation of particle interaction. Several particles of different types interact in closed environment (for instance, gas particles in a sealed box). Each particle has a an associated velocity. For each particle, we compute the interaction only with the closest neighbors, to save computational resources.</p>
+
+  <p class="body"><a id="pgfId-1002009"></a>These particle simulations are all about computing the interaction between particles, but with such numbers, checking how each particle interacts with any other particle is simply not feasible. There would be ~10<sup class="superscript">40</sup> pairs to check, and that number is just too big for any traditional computer.<a href="#pgfId-1003976"><sup class="footnotenumber">18</sup></a></p>
+
+  <p class="body"><a id="pgfId-1002030"></a>Moreover, it doesn’t always even make sense: electrical force and gravity have a limited range of action, and so outside of a certain radius the magnitude of the interaction between two particles would be negligible.</p>
+
+  <p class="body"><a id="pgfId-1002039"></a>You see where I’m going, right? This is the perfect use case for either a <code class="fm-code-in-text">n</code>-nearest neighbor search, where we approximate the simulation by assuming that each particle is only influenced by the <code class="fm-code-in-text">n</code> closest particles to it (and by tuning <code class="fm-code-in-text">n</code> we can trade-off precision for speed), or alternatively we can only check the interaction of each particle with the ones inside the radius of action of the four fundamental forces (or a subset of them, depending on the type of particles).</p>
+
+  <p class="body"><a id="pgfId-1002057"></a>Listing 11.10 describes a possible implementation of such a simulation leveraging an SS-tree to perform range-based queries and filter, for each particle, the surrounding particles with which it is relevant to compute the interaction. The catch is that the k-d tree (or equivalent DS) used needs to be updated after every step of the simulation (since the position of each particle changes), but even so, the speedup that can be obtained is <a id="marker-1003061"></a><a id="marker-1003065"></a>impressive.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1008751"></a>Listing 11.10 Particle interaction with range search</p>
+  <pre class="programlisting"><b class="calibre21">function</b> simulation(numParticles, simulationComplete)                  <span class="fm-combinumeral">❶</span>
+  particles ← initParticles(numParticles)                              <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">while</b>  (not simulationComplete)                                      <span class="fm-combinumeral">❸</span>
+    tree ← SsTree(particles, 3)                                        <span class="fm-combinumeral">❹</span>
+    forces = {ō for particle in particles}                             <span class="fm-combinumeral">❺</span>
+    <b class="calibre21">for</b> particle in particles <b class="calibre21">do</b>                                       <span class="fm-combinumeral">❻</span>
+      neighbors ← tree.pointsInSphere(particle.position, radius)       <span class="fm-combinumeral">❼</span>
+      <b class="calibre21">for</b> neighbor in neighbors <b class="calibre21">do</b>                                     <span class="fm-combinumeral">❽</span>
+        forces[particle] += computeInteraction(particle, neighbor)     <span class="fm-combinumeral">❾</span>
+    <b class="calibre21">for</b> particle in particles do
+      update(particle, forces[particle])                               <span class="fm-combinumeral">❿</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1016230"></a><span class="fm-combinumeral">❶</span> Defines a function to run the simulation, to which we pass the number of particles and a predicate that becomes true once the simulation is complete (might be based on number of iterations or other conditions; for instance, the system getting into a stable state)</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1016250"></a><span class="fm-combinumeral">❷</span> First we need to initialize our <code class="fm-code-in-text2">n</code> particles: depending on the simulation we could desire a random initialization or setting a specific configuration.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1016267"></a><span class="fm-combinumeral">❸</span> Runs a loop until the simulation completes</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1016284"></a><span class="fm-combinumeral">❹</span> At each step of the simulation, we need to initialize an SS-tree (or similar DS) with the current configuration of the system. Since the position of the particles changes at each step, we need to update the tree or create a new one every time. We assume the simulation is in a 3-D environment, but there are special cases where the dimension of the tuples could be different.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1016301"></a><span class="fm-combinumeral">❺</span> Initialize an array holding, for each particle, the resultant force operating on it. Each entry is a 3-D vector (for the assumption made above), holding the vector sum of all forces acting on a particle. Initially we set elements to ō, the <code class="fm-code-in-text2">null</code> vector.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1016318"></a><span class="fm-combinumeral">❻</span> Iterates over each particle</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1016335"></a><span class="fm-combinumeral">❼</span> For a particle, find its neighbors, that is, the other particles whose effects will be more relevant on the current one. In this example, we use a spherical range search within a certain radius, for instance, a threshold at which interaction is not relevant anymore. This value depends on the problem, obviously. Alternatively, we could also decide to only compute the interaction with the <code class="fm-code-in-text2">m</code> closest points, for some <code class="fm-code-in-text2">m</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1016359"></a><span class="fm-combinumeral">❽</span> For each of the selected “neighbors,” computes the force resulting from the interaction of the two particles</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1016376"></a><span class="fm-combinumeral">❾</span> In this configuration, we compute the force between particles <code class="fm-code-in-text2">A</code> and <code class="fm-code-in-text2">B</code> twice: once when <code class="fm-code-in-text2">particle==A</code> and <code class="fm-code-in-text2">neighbor==B</code>, and once when <code class="fm-code-in-text2">particle==B</code> and <code class="fm-code-in-text2">neighbor==A</code>. This is harmless, though inefficient. With a small change we can keep track of the pairs updated and make sure to compute the interaction only once.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1016393"></a><span class="fm-combinumeral">❿</span> Once all forces are computed, cycles through all particles again and updates their position and velocity. We should also take into account interaction with the box boundaries; for instance, inverting the velocity if the particle hits the walls, assuming an elastic collision (or more complex interaction in case of inelastic collision).</p>
+
+  <h3 class="fm-head2" id="heading_id_16"><a id="pgfId-1002361"></a>11.4.3  Multidimensional DB queries optimization</h3>
+
+  <p class="body"><a id="pgfId-1002373"></a>As <a id="marker-1003069"></a><a id="marker-1003073"></a>we saw in chapter 9, k-d trees support <a id="id_Hlk56420870"></a>multidimensional range queries<a id="marker-1003077"></a> (MDRQ), searches that select intervals in two or more dimensions of a multidimensional search space. (For instance, as we suggested in chapter 9, a query that searches every employee between thirty and sixty years old and that earns between 40 and 100 thousand dollars per year).</p>
+
+  <p class="body"><a id="pgfId-1002395"></a>These queries are common in business applications, and many databases support optimized techniques to speed them up. While you won’t find it in MySQL, <a id="id_Hlk56420911"></a>PostgreSQL has supported NN search indexes since version 9, and Oracle implements them in Extensible Indexing<a id="marker-1003081"></a>.</p>
+
+  <p class="body"><a id="pgfId-1002413"></a>When indexing tables with a single key field (and many non-key fields), we can use a binary search tree to provide fast (logarithmic) lookup in searches based on the indexed field.</p>
+
+  <p class="body"><a id="pgfId-1002422"></a>K-d trees provide a natural extension of that use case when we need to index tables with composite keys. While traversing the tree, we will cycle through all the fields in the composite key. Moreover, k-d trees provide methods for exact match, best match (the nearest neighbor search), and range search; partial match queries could also be supported.</p>
+
+  <div class="fm-sidebar-block">
+    <p class="fm-sidebar-title"><a class="calibre14" id="pgfId-1022079"></a>Partial queries on k-d trees</p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1022080"></a>Although we haven’t included partial queries in our containers’ API, implementing them is straightforward—we perform a regular exact match traversal on the fields in the query, while we follow both branches in levels corresponding to fields of the keys that are not filtered in the query.</p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1022081"></a>For instance, if we use a k-d tree for geospatial data, and we look for all the points on a line parallel to the x axis, such that <code class="fm-code-in-text2">x==C</code>, we would traverse both branches in the nodes at odd levels (where we split on <code class="fm-code-in-text2">y</code>), while at even levels (corresponding to <code class="fm-code-in-text2">x</code> coordinate splits), we would only traverse the branch containing C.</p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1022082"></a>Figures 11.11 and 11.12 show how a partial range search works on a k-d tree.</p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1022084"></a>Alternatively, we can also use the existing <code class="fm-code-in-text2">pointsInRectangle</code> method<a id="marker-1022083"></a>, passing a range spanning from the minimum possible to the maximum possible value for those fields we are not going to put restrictions on. For instance, in this example, we would set these criteria:</p>
+    <pre class="programlisting">{x: {min:C, max:C}, y:{min=-inf, max=inf}}</pre>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1022071"></a> </p>
+  </div>
+
+  <p class="body"><a id="pgfId-1002548"></a>Figures 11.11 and 11.12 show an example of how a partial query can be run on a k-d tree.</p>
+
+  <p class="body"><a id="pgfId-1002608"></a>Many SQL queries can be directly translated into calls to our data structure’s methods. Let’s see a few examples of how that is possible.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch11_F11.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1022117"></a>Figure 11.11 An example of running a partial query on a k-d tree. The example shows a partial range query on a 2-D tree with fields <code class="fm-code-in-text">x</code> and <code class="fm-code-in-text">y</code>, where the search specifies a criterion only on <code class="fm-code-in-text">x</code>. Take all points whose x value is between -1.1 and 1.7, regardless of the value of <code class="fm-code-in-text">y</code>. In the first step, filtering is applied on the <code class="fm-code-in-text">x</code> coordinates of the root, since the first split is on the <code class="fm-code-in-text">x</code> coordinate. The second step, on nodes <code class="fm-code-in-text">C</code> and <code class="fm-code-in-text">B</code>, doesn’t perform any filtering, because the split on those nodes is on the y coordinates, while the partial search is only about an <code class="fm-code-in-text">x</code> range. The <code class="fm-code-in-text">x</code> coordinates of nodes <code class="fm-code-in-text">C</code> and <code class="fm-code-in-text">B</code> are checked to determine if they should be included in the results.</p>
+
+  <p class="body"><a id="pgfId-1002617"></a>First, let’s set the context. Imagine we have a SQL table with three fields: name, birthdate, and salary. The first two could be enough for a primary key,<a href="#pgfId-1003993"><sup class="footnotenumber">19</sup></a> but we also want to create an index on salary, because for some reason we run a lot of queries on salary. Thus, our index will use a 3-D tree with the same fields.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch11_F12.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1022162"></a>Figure 11.12 Continuing the example in figure 11.11 about running a partial query on a k-d tree. The third step, in the top part, shows another filtering step: nodes <code class="fm-code-in-text">D</code> and <code class="fm-code-in-text">E</code>’s split-coordinate is again <code class="fm-code-in-text">x</code>, so we can prune the branches on which we will search. On the last step, since we are at the leaf level, we only check whether nodes <code class="fm-code-in-text">G</code> and <code class="fm-code-in-text">F</code> should be added to the results (only <code class="fm-code-in-text">F</code> will).</p>
+
+  <p class="body"><a id="pgfId-1002670"></a>Table 11.1 shows a few examples of SQL snippets translated into calls to k-d tree’s <a id="marker-1020669"></a><a id="marker-1020670"></a>methods.</p>
+
+  <p class="fm-table-caption"><a id="pgfId-1009026"></a>Table 11.1 Translating SQL queries into calls to k-d tree methods (assuming a k-d tree is used to Implement multi-indexing on the table described in this section)</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1009030"></a><a id="id_Hlk9166570"></a>Operation</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1009032"></a>Exact match search</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009034"></a>SQL<a id="marker-1020682"></a><a href="#pgfId-1009045"><sup class="footnotenumber1">20</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009036"></a><code class="fm-code-in-text2"><b class="calibre34">SELECT</b> * <b class="calibre34">FROM</b> people <b class="calibre34">WHERE</b> name=”Bruce Wayne” <b class="calibre34">AND</b> birthdate=”1939/03/30” <b class="calibre34">AND</b> salary=150M</code></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009038"></a>k-d tree</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009040"></a><code class="fm-code-in-text2">tree.search((”Bruce Wayne”, ”1939/03/30”, 150M))</code></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1009165"></a>Operation</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1009167"></a>Range search</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009169"></a>SQL</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009171"></a><code class="fm-code-in-text2"><b class="calibre34">SELECT</b> * <b class="calibre34">FROM</b> people <b class="calibre34">WHERE</b> name&gt;=”Bruce” <b class="calibre34">AND</b> birthdate&gt;”1950” <b class="calibre34">AND</b> birthdate&lt;”1980” <b class="calibre34">AND</b> salary&gt;=1500 <b class="calibre34">AND</b> salary&lt;=10000</code></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009173"></a>k-d tree<a href="#pgfId-1008888"><sup class="footnotenumber1">21</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009175"></a><code class="fm-code-in-text2">tree.pointsInRectangle({name:{min:”Bruce”, max: <b class="calibre34">inf</b>}, birthdate:{min:”1950”, max:”1980”}, salary:{min: 1500, max:10000}})</code></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1009212"></a>Operation</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1009214"></a>Partial search</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009216"></a>SQL</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009218"></a><code class="fm-code-in-text2"><b class="calibre34">SELECT</b> * <b class="calibre34">FROM</b> people <b class="calibre34">WHERE</b> birthdate&gt;”1950” <b class="calibre34">AND</b> birthdate&lt;”1980” <b class="calibre34">AND</b> salary&gt;=1500 <b class="calibre34">AND</b> salary&lt;=10000</code></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009220"></a>k-d tree</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009222"></a><code class="fm-code-in-text2">tree.partialRangeQuery({birthdate:{min:”1950”, max:”1980”}, salary:{min: 1500, max:10000}})</code></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009224"></a>k-d tree<a href="#pgfId-1008975"><sup class="footnotenumber1">22</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1009226"></a><code class="fm-code-in-text2">tree.pointsInRectangle({name:{min:-<b class="calibre34">inf</b>, max: <b class="calibre34">inf</b>}, birthdate:{min:”1950”, max:”1980”}, salary:{min: 1500, max:10000}})</code></p>
+      </td>
+    </tr>
+  </table>
+
+  <h3 class="fm-head2" id="heading_id_17"><a id="pgfId-1003098"></a>11.4.4 Clustering</h3>
+
+  <p class="body"><a id="pgfId-1003501"></a>Finally, <a id="marker-1003673"></a><a id="marker-1003677"></a>we get to one of the most important applications of nearest neighbor search: clustering. This application is so important that we will pledge a whole chapter, the next chapter, to explaining two clustering algorithms that use NN search at their core: DBSCAN and OPTICS.</p>
+
+  <p class="body"><a id="pgfId-1003517"></a>We’ll provide a proper description of what clustering is in the next chapter. For now, suffice it to say that clustering is an unsupervised learning method, where a machine learning model is fed with a set of unlabeled points, and it outputs a possible grouping of these points in meaningful categories. For instance, we could develop a clustering algorithm that, given a dataset of people (with age, education, financial situation, and so on), groups them in categories that share similar interests. The algorithm won’t be able to tell us what these categories are, though. It’s a data scientist’s job to study the algorithm output and see, for instance, that one category matches middle-class teenagers, another seems to fit college-graduated baby boomers, and so on. This kind of algorithm is often used to target online advertisement.</p>
+
+  <p class="body"><a id="pgfId-1003546"></a>Clustering is also used as a preliminary step for other more sophisticated algorithms, because it provides a cheap way to break down large datasets into coherent groups. We’ll see this and lot more in the <a id="marker-1003681"></a><a id="marker-1003685"></a>next chapter.</p>
+
+  <h2 class="fm-head" id="heading_id_18"><a id="pgfId-1003568"></a>Summary</h2>
+
+  <ul class="calibre19">
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003580"></a>Nearest neighbor search can be used to improve geographical matching of physical resources; for example, finding the closest shop to a customer.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003594"></a>When we move from theory to real-world applications, we have to take many factors into account and adjust our NN search algorithm to take into account business logic; for instance, allowing filtering of the resources among which we search or weighting the results according to some business rules.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003610"></a>We also have to deal with the limitations of physical IT systems, including memory restrictions, CPU availability, and network constraints.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003622"></a>Distributed web applications impose new issues that need to be taken into account when designing a system. It’s not enough to come up with a good algorithm; we need to choose/design one that also works in the real system we are building.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003638"></a>NN search is useful in a number of other areas, from simulations in particle physics to machine <a class="calibre14" id="marker-1003689"></a>learning.</p>
+    </li>
+  </ul>
+  <hr class="calibre22"/>
+
+  <p class="fm-footnote"><sup class="footnotenumber">1.</sup> <a id="pgfId-1003694"></a>Sources: Esri, DeLorme; HERE; and MapmyIndia.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">2.</sup> <a id="pgfId-1003716"></a>We omit the implementation here that will differ from what is shown in chapters 9 and 10 for replacing every occurrence of <code class="fm-code-in-text1">newPoint</code> with <code class="fm-code-in-text1">newShop.point</code> and using <code class="fm-code-in-text1">newShop</code> instead of <code class="fm-code-in-text1">newPoint</code> as argument to the <code class="fm-code-in-text1">Node</code> constructor.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">3.</sup> <a id="pgfId-1003740"></a>Unless, of course, you also provide IT infrastructure to all the shops as part of the service, which is possible, although obviously more challenging both technically and financially.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">4.</sup> <a id="pgfId-1003754"></a>That’s probably the easy part, because each shop can write an adapter to bridge the gap between their internal software and your interface.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">5.</sup> <a id="pgfId-1003768"></a>A race condition is a situation that occurs when a system attempts to perform two or more operations at the same time, but the outcome of the operations depends on them being executed in a specific order. In other words, a race condition happens when operations A and B are executed at the same time, but we get a correct result if, for example, A finishes before B, while we get an error if B finishes before A.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">6.</sup> <a id="pgfId-1003786"></a>Currying is a functional programming technique that allows us to transform the execution of a function with <code class="fm-code-in-text1">n</code> arguments in a sequence of <code class="fm-code-in-text1">n</code> executions of unary functions. It allows, for instance, defining a generic function, such as <code class="fm-code-in-text1">add(a,b)</code> which adds numbers a and <code class="fm-code-in-text1">b</code>, and then creates new functions by fixing the first argument: <code class="fm-code-in-text1">add5 = add(5)</code>. Or we could just as easily call the original function like this to add 4 and 3: add<code class="fm-code-in-text1">(4)(3)</code>. Not all programming languages natively allow currying, but many allow workarounds to achieve it.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">7.</sup> <a id="pgfId-1003817"></a>Stands for <code class="fm-code-in-text1">compareShops</code>; the abbreviation was forced to better fit code lines onto the page.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">8.</sup> <a id="pgfId-1003833"></a>IPFS is a peer-to-peer hypermedia protocol; see <span class="fm-hyperlink"><a href="https://ipfs.io/">https://ipfs.io</a></span>. It’s worth checking it out.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">9.</sup> <a id="pgfId-1003850"></a>Obviously, if we do get an answer, we can check the HTTP code and see if there is a network error or, assuming the callee correctly implements rules on the HTTP code to send back in case of an error, why the remote service is failing.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">10.</sup> <a id="pgfId-1003864"></a>This is the case with HTTP/1.1, where requests cannot be canceled by the caller. HTTP/2 specification, on the other hand, introduces the possibility of canceling requests sent.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">11.</sup> <a id="pgfId-1003878"></a>Unfortunately, as mentioned, with HTTP/1.1 we can’t decide this timeout that is set on the servers. We have to adjust to the settings of shops’ servers, and in particular to the longest of those timeouts. So, in the example, assume that 8 seconds is the longest time after which a request to one of these servers is guaranteed to fail.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">12.</sup> <a id="pgfId-1003892"></a>Meaning that the intensity will be maximum for the red channel and minimum for the other two channels.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">13.</sup> <a id="pgfId-1003906"></a>If we store it uncompressed. Formats such as JPG or WEBM store a compressed version of the image with a slight loss in quality but using sensibly less memory—at least one order of magnitude less.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">14.</sup> <a id="pgfId-1003920"></a>An image at 720p resolution, also known as HD. Today this is even considered poor quality.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">15.</sup> <a id="pgfId-1003934"></a>Resolution 1080p or full HD. Still, far from the 4K resolution that’s the standard these days.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">16.</sup> <a id="pgfId-1003948"></a>JPG algorithm transforms the image from pixel space to frequency space.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">17.</sup> <a id="pgfId-1003962"></a>Although this is unlikely to be the case if you are trying to train a robust model, bear with me just for the sake of illustrating this.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">18.</sup> <a id="pgfId-1003976"></a>Quantum computers could come to the rescue, though, in these situations: check out <i class="calibre17">Learn Quantum Computing with Python and Q#</i>, by Sarah C. Kaiser and Christopher E. Granade (Manning Publications, 2021).</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">19.</sup> <a id="pgfId-1003993"></a>Of course, especially if we have a lot of data, we have no guarantee that these two fields will be unique, because two people can share the same birthdate and name. Let’s assume, just to keep our example simple, that this is not the case.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">20.</sup> <a id="pgfId-1009045"></a>Select * is usually frowned upon, and for good reason. We’ll use it here to keep code simple, but you should only select the fields you actually need to use.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">21.</sup> <a id="pgfId-1008888"></a>In our example implementation in listing 9.12, we passed a tuple of min-max objects</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">22.</sup> <a id="pgfId-1008975"></a>As an alternative to implementing explicitly the partial match query, we can use the <code class="fm-code-in-text1">pointsInRectangle</code> method<a id="marker-1020729"></a> by carefully choosing the ranges for the fields that have no restrictions.</p>
+</body>
+</html>

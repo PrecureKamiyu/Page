@@ -1,0 +1,772 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <title>5</title>
+    
+  <link href="../../stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="../../page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+  <div class="tocheadb">
+    <h1 class="tochead" id="heading_id_2"><a id="pgfId-998565"></a><a id="pgfId-998571"></a>5 Disjoint sets: Sub-linear time processing</h1>
+  </div>
+
+  <p class="co-summary-head"><a id="pgfId-1024916"></a>This chapter covers</p>
+
+  <ul class="calibre19">
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1024948"></a>Solving the problem of keeping a set partitioned into disjoint sets and merging partitions dynamically</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1024949"></a>Describing an API for a data structure for disjoint sets</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1024950"></a>Providing a simple linear-time solution for all methods</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1024951"></a>Improving the running time by using the right underlying data structure</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1024952"></a>Adding easy-to-implement heuristics to get quasi-constant running time</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1024937"></a>Recognizing use cases where the best solution is needed for performance</li>
+  </ul>
+
+  <p class="body"><a id="pgfId-998747"></a>In this chapter we are going to introduce a problem that seems quite trivial—so trivial that many developers wouldn’t even consider it worth a performance analysis, so they’d just implement the obvious solution to it. Nevertheless, if the expression “wolf in sheep’s clothing” was applied to data structures, this would be the best heading for this chapter.</p>
+
+  <p class="body"><a id="pgfId-998877"></a>We will use a disjoint set every time that we would like to account for the partitioning of an initial set of objects into disjoint groups (that is, subsets without any element in common between them). For instance, we might start with a list of wines, which would be the initial set, and partition those wines depending on their flavor, creating a disjoint set where wines with a similar flavor are grouped together, and groups have no intersections with each other. Or we could group foods based on their nature and properties, grouping vegetables, fruit, processed food, and so on. This would be a trivial example of a disjoint set, shown in figure 5.1.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F1.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037009"></a>Figure 5.1 An example of a disjoint set. The whole set, the so-called Universe, is the set of “Food.” Three partitions are shown: Fruit, Vegetables, and Sweets. The key point is that these subsets have no intersections with each other.</p>
+
+  <p class="body"><a id="pgfId-999211"></a>We will tackle this problem starting with its definition, then cover the most basic (and naïve) algorithms, to give readers an understanding of what an actual solution looks like. Once that’s clear, we will be ready to delve into making our solutions more efficient, and show how to use them as part of more complex algorithms. By the end of the chapter you will be able to code the best possible solution for disjoint sets and employ it to improve the performance of higher-level applications.</p>
+
+  <h2 class="fm-head" id="heading_id_3"><a id="pgfId-999398"></a>5.1 The distinct subsets problem</h2>
+
+  <p class="body"><a id="pgfId-999414"></a>For <a id="marker-1002435"></a>instance, imagine this: you are running a new, recently created, e-commerce website, and for your launch, you’d like to provide non-personalized recommendations to your users. If it helps you feel like this is a real situation, you might imagine owning a time-machine and being back in 1999. Or more realistically, you can think about opening a geographically localized website with stronger ties to your country’s retailers; or maybe you open a specialized retail website focusing on niche products. Either way, this can be a very interesting exercise.</p>
+
+  <p class="body"><a id="pgfId-999601"></a>So, non-personalized recommendations, we were saying. You might ask what that’s about. Allow me to take a short detour to explain this: personalized recommendations are targeted on individual customers, based on the data we have about them (past purchases or metadata that shows similarity with other users). But sometimes we don’t have this data at all: for instance, when we start a new website, or even when we get a new customer about which we know nothing at all. That’s why many websites, such as Twitter, Pinterest, Netflix, and MovieLens, ask you questions on sign-up to understand your tastes and be able to provide some rough personalized recommendations based on users with similar profiles.</p>
+
+  <p class="body"><a id="pgfId-999841"></a>Non-personalized recommendations, on the other hand, are not targeted to you, the customer, and are the same for all customers. They might be hardcoded associations, if you have no data at all, or based on purchases made by all other customers, for example.</p>
+
+  <p class="body"><a id="pgfId-999924"></a>And that’s exactly what we are going to do: whenever customers add something to their cart, we would like to provide them with a recommendation about something else they might want to buy along with it. Our goal is finding products that are frequently bought together; sometimes we are going to find reasonable associations, such as milk and bread bought together. Other times, the result might be more surprising: you probably have already heard about the research performed at Walmart linking the purchase of diapers and beer, since it’s one of the most quoted data science anecdotes.</p>
+
+  <p class="body"><a id="pgfId-1000123"></a>Figure 5.2 illustrates what we would like to achieve. Initially, since we have no data at all, we consider every product as a group of its own, or if you prefer, no two products will have an association.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F2.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037051"></a>Figure 5.2 An example of an application of a disjoint set. (A) In this scenario, an e-commerce website is trying to understand what products sell well together in order to provide better recommendations to its customers. (B) Initially, each item on sale is in a different category. (This would also work if we started from already predefined categories, such as SSD disks or blenders, and grouped categories of objects selling together. But for the sake of simplicity, bear with me and imagine there is only one product of each category on sale.) (C) Items frequently bought together, such as laptops and external disks, or tennis rackets and tennis balls, are grouped together. (D) After a while, things tend to stabilize and steady groups are formed. Now, the next time a customer adds a football to her cart, we can suggest a pair of skis as a follow-up purchase.</p>
+
+  <p class="body"><a id="pgfId-1000234"></a>When customers frequently buy two products together, we then establish a link between them, considering both to be part of the same group. To keep things simple, imagine that the rule set by the data science team is that if item <code class="fm-code-in-text">X</code> and item <code class="fm-code-in-text">Y</code> are bought together more than a fixed threshold during the last hour, then their two categories are merged.</p>
+
+  <p class="body"><a id="pgfId-1000367"></a>For instance, it might be that if, during the last hour, phones and tablets are bought together more than 500 times (or for more than 1% of total purchases), then they should be in the same group, so we merge their groups.</p>
+
+  <p class="body"><a id="pgfId-1000455"></a>Then if a customer buys a product <code class="fm-code-in-text">X</code>, we can suggest to them a random item from the same group.</p>
+
+  <p class="body"><a id="pgfId-1000496"></a>This process described is pretty common in data science. Some of you might have recognized that it’s nothing less than hierarchical clustering. If that doesn’t ring a bell, do not worry; we will expand on clustering in section 5.7.3.</p>
+
+  <p class="body"><a id="pgfId-1000584"></a>This is, obviously, an extreme simplification. In a real non-personalized recommender system, we would track associations between products, measuring the strength of the link as the confidence that when <code class="fm-code-in-text">X</code> is bought, <code class="fm-code-in-text">Y</code> is also. For that, we may compute the number of purchases where both appear, divided by the total number of purchases where at least <code class="fm-code-in-text">Y</code> appears. That would give us better insight about what goes with what, we could define a threshold on the confidence for merging groups, and instead of picking a random item in the same group, show the top five strongest associations.</p>
+
+  <p class="body"><a id="pgfId-1000786"></a>Nevertheless, clustering items in groups will probably be a smart move, because it will help performance, allowing us to run some algorithms on each group of items separately rather than on the whole catalog.</p>
+
+  <p class="body"><a id="pgfId-1000853"></a>If you are interested in knowing more about non-personalized (and personalized) recommender systems, we suggest you look at Practical Recommender Systems (by Kim Falk, Manning Publications, 2019), a fine and thorough guide to the topic.</p>
+
+  <p class="body"><a id="pgfId-1000915"></a>Back to our example: the gist is that we would need to start from this huge set of items and partition them into disjoint groups. And of course, new items are added to the catalog all the time, and relations are dynamic, so we would need to be able to update both the list of items and the <a id="marker-1002439"></a>groups.</p>
+
+  <h2 class="fm-head" id="heading_id_4"><a id="pgfId-1001037"></a>5.2 Reasoning on solutions</h2>
+
+  <p class="body"><a id="pgfId-1001049"></a>In <a id="marker-1002443"></a>this and the following sections, we will mainly use the term <i class="calibre17">partition</i> to refer to disjoint groups. However, <i class="calibre17">group</i> and <i class="calibre17">set</i><a id="marker-1002447"></a> can also appear as synonyms.</p>
+
+  <p class="body"><a id="pgfId-1001114"></a>We will also restrict to the aggregative case; in other words, two partitions can be merged in a single, bigger set; the opposite, however, is not allowed. That is, a partition can’t be split into two subsets.</p>
+
+  <p class="body"><a id="pgfId-1001196"></a>Now imagine that there was a design discussion between your data science team and your support engineering team, and one engineer fiercely stood up and exclaimed, “Well, that’s easy! You keep an array (a dynamic array or a vector) for each subset.”</p>
+
+  <p class="body"><a id="pgfId-1001289"></a>You don’t want to be that person, believe me, and one of the goals of this book is making sure you don’t find yourself in that situation. Because the next thing to happen, hopefully, is that somebody else points out how, by using arrays, understanding whether two elements are in the same set could potentially require going over all the elements of all the subsets. Likewise, just understanding which subset an element belongs to could require the same number of element checks; that is, search could be linear in the total number of elements.</p>
+
+  <p class="body"><a id="pgfId-1001477"></a>This would be a real performance concern, and it seems obvious we should be able to do better.</p>
+
+  <p class="body"><a id="pgfId-1001516"></a>The next idea in this brainstorming could involve adding a map from elements to subsets, together with the list of subsets explained previously. This is a slightly better improvement for some operations; although, as we will see, it still forces operations such as merging two sets to potentially require <code class="fm-code-in-text">O(n)</code> assignments.</p>
+
+  <p class="body"><a id="pgfId-1001618"></a>Performance, however, is not the main concern with that design. Using two independent data structures is a terrible idea, because you will have to manually sync them every time you face this problem in your application. This is very error-prone.</p>
+
+  <p class="body"><a id="pgfId-1001702"></a>An already better solution is to provide a wrapper class that internally uses those two structures: it gives you encapsulation and isolation and as a result, you are able to write only once the code that syncs both structures on, say, add or merge (and so you gain reusability). Even more important, you are able to unit test your class in isolation and hence have a reasonable guarantee that it’s going to do its job without experiencing bugs every time you use it in your application (that is, provided you do write good and thorough unit tests, acing the edge cases and challenging the behavior of your class in all possible contexts).</p>
+
+  <p class="body"><a id="pgfId-1001931"></a>So, let’s assume we agree on the need to write a class that takes care of the whole problem, keeping track of which (disjoint) subset an element belongs to, and encapsulating all the logic in it. We are going to delay the discussion on implementation for now: before focusing on the details, let’s discuss its public API and behavior.</p>
+
+  <p class="body"><a id="pgfId-1002060"></a>Depending on the size of the catalog, we could even fit such a data structure in memory, but let’s instead assume that we set up a REST service (illustrated in figure 5.3) based on a persisted Memcached-like storage,<a href="#pgfId-1020250"><sup class="footnotenumber">1</sup></a> something like Redis. Durability of the data is important in this case, because in our example, the monitoring activity over the items will last for years, and we don’t want to recompute the whole disjoint set structure every time there is a change or a new product is added.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F3.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037103"></a>Figure 5.3 A possible design for an application using disjoint set. The disjoint set client can be anything ranging from a library to a REST client. The purpose of the (thin) client here is to be an interface between the in-memory storage (the Memcached node in the picture) and the server, which has persistent storage. The server can be a web server, but it could also just be another native application storing data on a disk. The disjoint set client will run on the same intranet, possibly even on the same machine, as the e-commerce server. It will have a cron job to keep the persistent storage in sync with the in-memory version (this could happen every few seconds or asynchronously after each operation). Moreover, it will respond to calls from the e-commerce site, querying the in-memory storage or, when needed, calling the web server (and, in case not all the data will fit in memory, it will also take care of swaps).</p>
+
+  <p class="body"><a id="pgfId-1002274"></a>Alternatively, if the size of the universe<a href="#pgfId-1020285"><sup class="footnotenumber">2</sup></a> is small enough to fit in memory, it could be possible to imagine a synchronization mechanism that periodically serializes our in-memory data structure into a persistent <a id="marker-1002451"></a>database.</p>
+
+  <h2 class="fm-head" id="heading_id_5"><a id="pgfId-1002351"></a>5.3 Describing the data structure API: Disjoint set</h2>
+
+  <p class="body"><a id="pgfId-1025125"></a>In <a id="marker-1025124"></a>our design, our data structure needs to offer only a few, though crucial, operations.</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="2" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1025150"></a>Abstract data structure: <code class="fm-code-in-text">DisjointSet</code></p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1025154"></a>API</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <pre class="programlisting">class DisjointSet {
+  init(U);
+  findPartition(x);
+  merge(x, y);
+  areDisjoint(x,y);
+}</pre>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1025158"></a>Contract with client</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1025160"></a>A disjoint set keeps track of the mutual relations between elements in a universe U.</p>
+
+        <p class="fm-table-body"><a id="pgfId-1025190"></a>The relation is not explicitly defined by the data structure; it is left to the client to define it.</p>
+
+        <p class="fm-table-body"><a id="pgfId-1025192"></a>However, it is assumed that such a relation <span class="cambria">®</span> has the reflexive, symmetric and transitive properties; this means that given x, y, z elements of U</p>
+
+        <ul class="calibre29">
+          <li class="fm-table-list-bullet">
+            <p class="fm-table-body"><a id="pgfId-1025194"></a>x<sup class="calibre30">®</sup> x</p>
+          </li>
+
+          <li class="fm-table-list-bullet">
+            <p class="fm-table-body"><a id="pgfId-1025196"></a>if x<sup class="calibre30">®</sup> y, then y<sup class="calibre30">®</sup> x</p>
+          </li>
+
+          <li class="fm-table-list-bullet">
+            <p class="fm-table-body"><a id="pgfId-1025198"></a>if x<sup class="calibre30">®</sup> y and y<sup class="calibre30">®</sup> z then x<sup class="calibre30">®</sup> z</p>
+          </li>
+        </ul>
+
+        <p class="fm-table-body"><a id="pgfId-1025200"></a>The guarantees provided by the class are</p>
+
+        <ul class="calibre29">
+          <li class="fm-table-list-bullet">
+            <p class="fm-table-body"><a id="pgfId-1025202"></a>It’s possible to add a relation between any two elements.</p>
+          </li>
+
+          <li class="fm-table-list-bullet">
+            <p class="fm-table-body"><a id="pgfId-1025204"></a>If two elements at any point are merged (that is, a relation between them is added), they will be part of the same disjoint set.</p>
+          </li>
+
+          <li class="fm-table-list-bullet">
+            <p class="fm-table-body"><a id="pgfId-1025206"></a>If there is a chain of elements <span class="cambria">x</span><sub class="calibre25">1</sub>, <span class="cambria">x</span><sub class="calibre25">2</sub>, ..., <span class="cambria">x</span><sub class="calibre25"><i class="calibre15">n</i></sub> such that <span class="cambria">x</span><sub class="calibre25">1</sub> has been merged to <span class="cambria">x</span><sub class="calibre25">2</sub>, <span class="cambria">x</span><sub class="calibre25">2</sub> has been merged with <span class="cambria">x</span><sub class="calibre25">3</sub> and so on, then <span class="cambria">x</span><sub class="calibre25">1</sub> and <span class="cambria">x</span><sub class="calibre25"><i class="calibre15">n</i></sub> will be in the same partition.</p>
+          </li>
+
+          <li class="fm-table-list-bullet">
+            <p class="fm-table-body"><a id="pgfId-1025208"></a>If two elements are not in the same partition, then there is no other element belonging to both elements’ disjoint sets.</p>
+          </li>
+        </ul>
+      </td>
+    </tr>
+  </table>
+
+  <p class="body"><a id="pgfId-1003018"></a>First, we’d like, obviously, to initialize our instance on construction. Without any loss of generality, we can restrict to the case where the Universe <code class="fm-code-in-text">U</code>, that is, the set of all possible elements, is known in advance and static. We also assume that initially every element is in its own partition. Workarounds to support violations to these assumptions are easily achievable by making wise use of dynamic arrays and the class’s very own methods.</p>
+
+  <p class="body"><a id="pgfId-1003178"></a>Finally, throughout this chapter we assume the elements of our Universe <code class="fm-code-in-text">U</code> are the integers between <code class="fm-code-in-text">0</code> and <code class="fm-code-in-text">n-1</code>. This is not a real restriction, because we can easily associate an index to each of the actual elements of <code class="fm-code-in-text">U</code>.</p>
+
+  <p class="body"><a id="pgfId-1003266"></a>Initialization, therefore, just takes care of allocation of the basic fields needed by the class and assigns each element into its own partition.</p>
+
+  <p class="body"><a id="pgfId-1003312"></a>The <code class="fm-code-in-text">findPartition</code> method<a id="marker-1010560"></a>, when called on an element <code class="fm-code-in-text">x</code> of <code class="fm-code-in-text">U</code>, will return the partition to which <code class="fm-code-in-text">x</code> belongs. This output might not be meaningful outside of the instance of our data structure: think of this method mostly as a <i class="calibre17">protected method</i><a id="marker-1010564"></a> <a href="#pgfId-1020302"><sup class="footnotenumber">3</sup></a> for the class, or even consider restricting its visibility to <i class="calibre17">private</i>.</p>
+
+  <p class="body"><a id="pgfId-1003428"></a>The two main operations that we’d like to perform <a id="marker-1010568"></a>are</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1003454"></a>Given two elements <code class="fm-code-in-text">x</code> and <code class="fm-code-in-text">y</code>, both belonging to <code class="fm-code-in-text">U</code>, we’d like to check if they belong to different partitions (<code class="fm-code-in-text">areDisjoint</code><a class="calibre14" id="marker-1010572"></a>).</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003511"></a>Given two elements <code class="fm-code-in-text">x</code> and <code class="fm-code-in-text">y</code>, we’d like to merge their partitions into a single one (<code class="fm-code-in-text">merge</code><a class="calibre14" id="marker-1010576"></a>).</p>
+    </li>
+  </ul>
+
+  <h2 class="fm-head" id="heading_id_6"><a id="pgfId-1003556"></a>5.4 Naïve solution<a href="#pgfId-1020319"><sup class="footnotenumber3">4</sup></a></h2>
+
+  <p class="body"><a id="pgfId-1003569"></a>The <a id="marker-1010580"></a>most immediate solution for our problem is to represent each partition with a list (or array), as illustrated in figure 5.4. For each element, we need to keep track of the pointer to the head of the list.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F4.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037145"></a>Figure 5.4 Representing a disjoint set with lists. Each array element stores a pointer to the head of a linked list. Each linked list, in turn, represents a set. Here sets are numbered arbitrarily, as the index doesn’t really provide any information on the set (nor can it be retrieved).</p>
+
+  <p class="body"><a id="pgfId-1003657"></a>To find out if two elements are in the same partition, we need to retrieve the list for one element, and check if it is the same list as for the other.<a href="#pgfId-1020334"><sup class="footnotenumber">5</sup></a></p>
+
+  <p class="body"><a id="pgfId-1003852"></a>To merge two partitions, <code class="fm-code-in-text">P<sub class="subscript1">1</sub></code> and <code class="fm-code-in-text">P<sub class="subscript1">2</sub></code>, modeled with two lists, <code class="fm-code-in-text">L<sub class="subscript1">1</sub></code> and <code class="fm-code-in-text">L<sub class="subscript1">2</sub></code>, we need to update the <code class="fm-code-in-text">next</code> pointer<a href="#pgfId-1020365"><sup class="footnotenumber">6</sup></a> of the last element in <code class="fm-code-in-text">L<sub class="subscript1">1</sub></code> so that it points to the head of <code class="fm-code-in-text">L<sub class="subscript1">2</sub></code> (or vice versa, with the last element of <code class="fm-code-in-text">L<sub class="subscript1">2</sub></code> pointing to the head of <code class="fm-code-in-text">L<sub class="subscript1">1</sub></code>). This operation, which is shown in figure 5.5, can be done in constant time by keeping an extra (constant space) pointer to the tail of each list. Unfortunately, though, we aren’t done just yet: for every element in <code class="fm-code-in-text">L<sub class="subscript1">2</sub></code>, we also need to update its list pointer in our map to point to the head of the new merged list.</p>
+
+  <p class="body"><a id="pgfId-1004087"></a>This operation requires linear time in the worst case, because we might have to update up to <code class="fm-code-in-text">n-1</code> elements (where <code class="fm-code-in-text">n</code> is the total number of elements in the Uni-verse <code class="fm-code-in-text">U</code>).</p>
+
+  <p class="body"><a id="pgfId-1004156"></a>There is one way to slightly improve the expected number of assignments we have to perform: by always appending the shortest of the two lists, we will make sure that we won’t have to update more than <code class="fm-code-in-text">n/2</code> elements’ pointers. Unfortunately, this does not improve the asymptotic execution time.<a href="#pgfId-1020383"><sup class="footnotenumber">7</sup></a></p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F5.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037190"></a>Figure 5.5 Merging two partitions. On the left: one of the two lists is appended to the other by adding a new edge tail-to-head and removing links from the array to the second list. On the right is shown the result after the merge, with all head-pointers for array elements belonging to the appended list (elements 1 and 5 in the example) updated.</p>
+
+  <p class="body"><a id="pgfId-1004418"></a>Let’s delve into code to better explain how this works.</p>
+
+  <h3 class="fm-head2" id="heading_id_7"><a id="pgfId-1004448"></a>5.4.1 Implementing naïve solution</h3>
+
+  <p class="body"><a id="pgfId-1004463"></a>Let’s start with the pseudo-code for the constructor, and the class definition (see listing 5.1). All methods in the next sections will be assumed to be class methods for <code class="fm-code-in-text">DisjointSet</code><a id="marker-1010584"></a>.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1025279"></a>Listing 5.1 Naïve solution, <code class="fm-code-in-text">constructor</code></p>
+  <pre class="programlisting"><b class="calibre21">class</b> DisjointSet
+  <b class="calibre21">#type</b> HashMap[Element, List[Element]]
+  partitionsMap
+ 
+<b class="calibre21">function</b> DisjointSet(initialSet=[])                        <span class="fm-combinumeral">❶</span>
+    <b class="calibre21">this</b>.partitionsMap ← <b class="calibre21">new</b> HashMap()                     <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">for</b> elem in initialSet <b class="calibre21">do</b>                              <span class="fm-combinumeral">❸</span>
+      <b class="calibre21">throw-if</b> (elem == <b class="calibre21">null or</b> partitionsMap.has(elem)))  <span class="fm-combinumeral">❹</span>
+      partitionsMap[elem] ← <b class="calibre21">new</b> Set(elem)                  <span class="fm-combinumeral">❺</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035993"></a><span class="fm-combinumeral">❶</span> The constructor takes a list of elements as argument, but by default initializes the disjoint set with an empty set.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036014"></a><span class="fm-combinumeral">❷</span> Creates a new map from elements to sets</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036034"></a><span class="fm-combinumeral">❸</span> Goes over each element in the argument list</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036051"></a><span class="fm-combinumeral">❹</span> Throws an exception if the element is <code class="fm-code-in-text2">null</code> or a duplicate</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036068"></a><span class="fm-combinumeral">❺</span> Adds a mapping between current element and a new singleton set containing current element only</p>
+
+  <p class="body"><a id="pgfId-1004912"></a>Initialization is simple: we will check that the list passed as argument contains no duplicates and initialize the disjoint set with its elements.</p>
+
+  <p class="body"><a id="pgfId-1004965"></a>In a real implementation, you should worry about how elements are compared. Depending on the programming language, it can use referential equality, an equality operator, or a method defined on the elements’ class. The following code is only meant to illustrate how a basic solution works, so we won’t worry about the details.</p>
+
+  <p class="body"><a id="pgfId-1005082"></a>First, we initialize the associative array that is going to index the elements and map them to the partition they belong to (line #2).</p>
+
+  <p class="body"><a id="pgfId-1005132"></a>Next, we just go through <code class="fm-code-in-text">initialSet</code><a id="marker-1010588"></a>’s elements, one by one, check they are defined and that there is no duplicate, and then initialize their partition to the singleton containing the element itself (initially each element is disjoint from every other element).</p>
+
+  <p class="body"><a id="pgfId-1005219"></a>Now that we have taken care of initializing our disjoint set, we can provide a couple of useful methods. For example, we can add a <code class="fm-code-in-text">size</code> public property, simply defined as the number of entries stored in the local partitions map.</p>
+
+  <p class="body"><a id="pgfId-1005304"></a>You can find examples of such methods implemented in our <span class="fm-hyperlink">repo</span>. Here, instead, we will focus on the main API methods, starting with the <code class="fm-code-in-text">add</code> method<a id="marker-1037300"></a>, illustrated in figure 5.6, whose pseudo-code is shown in listing 5.2.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F6.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037258"></a>Figure 5.6 Adding a new element to the container. Provided the new element is not a duplicate of any element currently in our container, we can add it by creating a new singleton partition, which will only contain the newly added element.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1025316"></a>Listing 5.2 Naïve solution, <code class="fm-code-in-text">add</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> add(elem)                       <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">throw-if</b> elem == <b class="calibre21">null</b>                  <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">if</b> partitionsMap.has(elem) <b class="calibre21">then</b>        <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return false</b>
+  partitionsMap[elem] ← <b class="calibre21">new</b> Set(elem)    <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">return true</b></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035760"></a><span class="fm-combinumeral">❶</span> Takes an element and returns <code class="fm-code-in-text2">true</code><a id="marker-1035764"></a> iff<a href="#pgfId-1020408"><sup class="footnotenumber1">8</sup></a> the element was added successfully, <code class="fm-code-in-text2">false</code><a id="marker-1035766"></a> otherwise</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035783"></a><span class="fm-combinumeral">❷</span> Checks that the element is valid</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035800"></a><span class="fm-combinumeral">❸</span> If the element is already in the data structure, returns <code class="fm-code-in-text2">false</code> without updating anything</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035817"></a><span class="fm-combinumeral">❹</span> Otherwise just adds a mapping between the element and a newly created singleton<a href="#pgfId-1020423"><sup class="footnotenumber1">9</sup></a> set and returns <code class="fm-code-in-text2">true</code></p>
+
+  <p class="body"><a id="pgfId-1005700"></a>This method is used to allow the Universe to grow, with new (unique) elements that can be added at any time. Every time we add a new element, we just add a brand-new partition containing that element alone. But, of course, we need to check that the argument passed to <code class="fm-code-in-text">add</code><a id="marker-1010604"></a> is well-defined, so that it’s not <code class="fm-code-in-text">null</code> and not a duplicate of another element already in our Universe.</p>
+
+  <p class="body"><a id="pgfId-1005854"></a>Now we get to the really interesting stuff: first and foremost, the <code class="fm-code-in-text">findPartition</code> method<a id="marker-1010608"></a>, shown in listing 5.3.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1025344"></a>Listing 5.3 Naïve solution, <code class="fm-code-in-text">findPartition</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> findPartition(elem)                               <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">throw-if</b> (elem == <b class="calibre21">null or not</b> partitionsMap.has(elem))   <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">return</b> partitionsMap[elem]                               <span class="fm-combinumeral">❸</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035539"></a><span class="fm-combinumeral">❶</span> Takes an element and returns a <code class="fm-code-in-text2">Set</code><a id="marker-1035543"></a>, the partition (aka disjoint set) to which the element belongs</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035561"></a><span class="fm-combinumeral">❷</span> Checks that the element is valid</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035578"></a><span class="fm-combinumeral">❸</span> Returns the <code class="fm-code-in-text2">Set</code> containing the argument</p>
+
+  <p class="body"><a id="pgfId-1006087"></a>In this basic implementation, the method is particularly trivial: after the usual validation (including checking that the element is actually stored in the disjoint set), we just need to return the partition containing <code class="fm-code-in-text">elem</code>.</p>
+
+  <p class="body"><a id="pgfId-1006162"></a>As we mentioned, this implementation of the <code class="fm-code-in-text">findPartition</code> method<a id="marker-1010616"></a> only requires constant time (assuming that the hash for <code class="fm-code-in-text">elem</code> can be computed in constant time).</p>
+
+  <p class="body"><a id="pgfId-1006218"></a>Another easy-to-implement method, shown in listing 5.4, is the one checking if two elements belong to the same partition.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1025372"></a>Listing 5.4 Naïve solution, <code class="fm-code-in-text">areDisjoint</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> areDisjoint(elem1, elem2)      <span class="fm-combinumeral">❶</span>
+  p1 ← <b class="calibre21">this</b>.findPartition(elem1)        <span class="fm-combinumeral">❷</span>
+  p2 ← <b class="calibre21">this</b>.findPartition(elem2)        <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">return</b> p1 != p2                       <span class="fm-combinumeral">❹</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035299"></a><span class="fm-combinumeral">❶</span> Takes two elements and returns <code class="fm-code-in-text2">true</code><a id="marker-1035303"></a> iff the elements are valid but don’t belong to the same partition, <code class="fm-code-in-text2">false</code><a id="marker-1035305"></a> iff the elements are valid but do belong to the same partition. Notice that if either element is <code class="fm-code-in-text2">null</code> or hasn’t been added to this container, then this method will throw an error (because in turn <code class="fm-code-in-text2">findPartition</code><a id="marker-1035306"></a> will throw an error).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035323"></a><span class="fm-combinumeral">❷</span> Retrieves the disjoint set to which <code class="fm-code-in-text2">elem1</code> belongs. If the argument is invalid or not found, this call will throw an error.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035343"></a><span class="fm-combinumeral">❸</span> Repeats the same operation for <code class="fm-code-in-text2">elem2</code><a id="marker-1035347"></a></p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035361"></a><span class="fm-combinumeral">❹</span> Compares the two sets, and checks if they are the same, and hence if the elements belong to the same partition</p>
+
+  <p class="body"><a id="pgfId-1006650"></a>We just need to reuse <code class="fm-code-in-text">findPartition</code><a id="marker-1010636"></a>, call it for both elements, and check whether both calls return the same partition. Note that by reusing <code class="fm-code-in-text">findPartition</code>, we can make sure that the implementation of <code class="fm-code-in-text">areDisjoint</code><a id="marker-1010640"></a> won’t need to change, no matter how our elements are stored or <code class="fm-code-in-text">findPartition</code> is implemented (as long as its interface remains the same, and partitions can be compared with the inequality operator).</p>
+
+  <p class="body"><a id="pgfId-1006794"></a>Moreover, we decided to implement a check for elements belonging to different partitions rather than for elements belonging to the same one: this is because of how disjoint sets are normally used. We are normally interested in checking whether two elements don’t belong to the same partition, and if that’s the case, we merge the two partitions. But depending on the way you are going to use this container, it is possible that the other way around is more convenient, and there is nothing preventing you from defining a <code class="fm-code-in-text">samePartition</code> method<a id="marker-1010644"></a> instead.</p>
+
+  <p class="body"><a id="pgfId-1006984"></a>All the methods we have seen so far run in constant time with respect to the size of the container. Now, it’s time to implement the method merging two partitions, shown in listing 5.5 (and illustrated in figure 5.5). As we have seen, the <code class="fm-code-in-text">merge</code> method<a id="marker-1010648"></a> requires <code class="fm-code-in-text">O(n)</code> assignments in the worst case.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1025400"></a>Listing 5.5 Naïve solution, <code class="fm-code-in-text">merge</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> merge(elem1, elem2)           <span class="fm-combinumeral">❶</span>
+  p1 ← <b class="calibre21">this</b>.findPartition(elem1)       <span class="fm-combinumeral">❷</span>
+  p2 ← <b class="calibre21">this</b>.findPartition(elem2)       <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">if</b> p1 == p2 <b class="calibre21">then</b>                     <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return false</b>
+  <b class="calibre21">for</b> elem in p1 <b class="calibre21">do</b>                    <span class="fm-combinumeral">❹</span>
+    p2.add(elem)                       <span class="fm-combinumeral">❺</span>
+    <b class="calibre21">this</b>.partitions[elem] ← p2         <span class="fm-combinumeral">❻</span>
+  <b class="calibre21">return true</b></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034896"></a><span class="fm-combinumeral">❶</span> Takes two elements, merges their partitions, and returns <code class="fm-code-in-text2">true</code><a id="marker-1034901"></a> iff the two elements were in two different partitions that now are merged, or <code class="fm-code-in-text2">false</code><a id="marker-1034902"></a> if they were already in the same partition</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034919"></a><span class="fm-combinumeral">❷</span> Retrieves the partitions to which <code class="fm-code-in-text2">elem1</code><a id="marker-1034923"></a> and <code class="fm-code-in-text2">elem2</code><a id="marker-1034925"></a> belong. If the argument is invalid or not found, these calls will throw.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034938"></a><span class="fm-combinumeral">❸</span> Compares <code class="fm-code-in-text2">p1</code> and <code class="fm-code-in-text2">p2</code>, and if they are the same, there is nothing left to do. The elements are already in the same partition, and so no merge happens: <code class="fm-code-in-text2">false</code> is returned.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034955"></a><span class="fm-combinumeral">❹</span> Loops over the elements in the first partition. For each element in <code class="fm-code-in-text2">p1</code> do:</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034975"></a><span class="fm-combinumeral">❺</span> . . . add the element to <code class="fm-code-in-text2">p2</code> . . .</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034992"></a><span class="fm-combinumeral">❻</span> . . . then update the mapping for that element, which now belongs to <code class="fm-code-in-text2">p2</code>.</p>
+
+  <p class="body"><a id="pgfId-1007629"></a>This method is more complex than the previous ones. And yet, by reusing <code class="fm-code-in-text">findPartition</code><a id="marker-1010668"></a>, it still looks quite simple.</p>
+
+  <p class="body"><a id="pgfId-1007674"></a>We first check if elements belong to the same partition by calling <code class="fm-code-in-text">findPartition</code> on both and checking the result. Those calls also take care of validating the input.</p>
+
+  <p class="body"><a id="pgfId-1007735"></a>Once we’ve established that we actually need to perform an action, we proceed and merge the two sets, correcting the pointers in the partitions map when needed. If the partitions were implemented with linked lists instead of <code class="fm-code-in-text">Set</code>, we could have just appended the head of a list to the tail of the other. Sets, instead, force us to actually add elements one by one. An extra linear number of assignments is needed (worst case), but this doesn’t change the order of the function’s runtime; we still need to update the references for elements of one of the two lists (that is, sets) anyway.</p>
+
+  <p class="body"><a id="pgfId-1007951"></a>Here, we show the simplest code, always pouring the first partition’s elements into the second one. On our <span class="fm-hyperlink">repo</span> on GitHub<a href="#pgfId-1020438"><sup class="footnotenumber">10</sup></a> you can find a slightly better version that checks which set is smaller and adds its elements to the larger sets; however, this is just a constant-time improvement on the simplest version and the running time remains linear in the minimum of the sets’ <a id="marker-1010672"></a>sizes.</p>
+
+  <h2 class="fm-head" id="heading_id_8"><a id="pgfId-1008090"></a>5.5 Using a tree-like structure<a href="#pgfId-1020455"><sup class="footnotenumber3">11</sup></a></h2>
+
+  <p class="body"><a id="pgfId-1008106"></a>To <a id="marker-1010676"></a>recap what we attained with our basic implementation, we managed to write a constant-time <code class="fm-code-in-text">findPartition</code> method<a id="marker-1010680"></a> and a worst-case linear-time <code class="fm-code-in-text">merge</code> method<a id="marker-1010684"></a>.</p>
+
+  <p class="body"><a id="pgfId-1008164"></a>Now, can we do any better than linear, not just for <code class="fm-code-in-text">findPartition</code>, but for all the operations on a disjoint set? Well, turns out that yes, we can!</p>
+
+  <h3 class="fm-head2" id="heading_id_9"><a id="pgfId-1008227"></a>5.5.1 From list to trees</h3>
+
+  <p class="body"><a id="pgfId-1008242"></a>The idea is simple: instead of using lists to represent each partition, we will use trees, as shown in figure 5.7. Each partition is then uniquely identified by the root of the tree associated with the partition. The advantage of trees over lists is that if the tree is balanced, any operation on the tree is logarithmic (instead of linear, as for a list).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F7.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037361"></a>Figure 5.7 Representing a disjoint set with trees. Trees are named after their root, because we use the tree root as a unique identifier for the partition (we can do so under the assumption that elements are unique). Each element in the array points to a tree node: in the naïve implementation there is a 1:1 mapping between elements and tree nodes. This means that to get to the root of the tree, we might need to climb up the whole tree (and, on average, half of the height of the tree).</p>
+
+  <p class="body"><a id="pgfId-1008582"></a>When we merge two partitions, we will set one tree root as the child of the root of the other tree; see figure 5.8 to see an example.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F8.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037403"></a>Figure 5.8 Merging two sets when using the tree representation. It only requires creating one new link (plus some tree traversing). In the figure on the left, we add one edge from the root tree of Tree 1 to the root of Tree 0, to merge them. On the right, we show how this changes the data structure: now we only have two trees, but the height of tree 0 is now larger than before the merge.</p>
+
+  <p class="body"><a id="pgfId-1008710"></a>This is a huge improvement over the naïve solution, because we won’t have to update the partition map for any of the other elements in the partitions merged. Instead, each node in the tree will maintain a link to its parent (we don’t need to save links to children, because they are of no use in this case).</p>
+
+  <p class="body"><a id="pgfId-1008837"></a>The roots of the tree, as mentioned, uniquely identify each partition. So, when we need to find out which partition an element belongs to, we just retrieve the tree node it’s pointing to and walk up to the root of its tree. In method <code class="fm-code-in-text">areDisjoint</code><a id="marker-1010688"></a>, if we do the same for both elements and then compare the roots found, we can easily see if two elements belong to the same partition (if and only if the two roots are equal).</p>
+
+  <p class="body"><a id="pgfId-1009015"></a>So, merging two partitions now requires a constant number of changes, plus the number of look-ups needed to find the two roots. Finding the set to which an element belongs (or seeing if two elements belong to the same partition) requires logarithmic time on average (remember when we introduced trees?<a href="#pgfId-1020471"><sup class="footnotenumber">12</sup></a>) but linear time in the worst case. That’s because when merging partitions, we might get unlucky with the choice of which tree’s root we set as child of the other. By randomly choosing each time which root is going to be used as a child of the other, we can make this worst-case scenario unlikely . . . but it would still be possible (although extremely unlucky) to find ourselves in an edge situation such as the one depicted in figure 5.9. This means that our worst-case scenario for <code class="fm-code-in-text">merge</code><a id="marker-1010692"></a> still requires <code class="fm-code-in-text">O(n)</code> lookups and, what’s worst, now even <code class="fm-code-in-text">findPartition</code><a id="marker-1010696"></a> has linear running time.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F9.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037456"></a>Figure 5.9 Worst case scenario for naive tree implementation: the height of the final tree is equal to <code class="fm-code-in-text">n</code>, the total number of elements, because the tree degenerated into a list.</p>
+
+  <p class="body"><a id="pgfId-1009422"></a>Before seeing how we can improve this further, let’s check out some code for our improved version.</p>
+
+  <h3 class="fm-head2" id="heading_id_10"><a id="pgfId-1009462"></a>5.5.2 Implementing the tree version</h3>
+
+  <p class="body"><a id="pgfId-1009477"></a>Let’s see in detail how this improved implementation works. Most code remains unchanged from the previous section, so we won’t show it here. In the methods that have changes with respect to the naïve version, we will underline those changes to help readers quickly compare the two versions.</p>
+
+  <p class="body"><a id="pgfId-1009592"></a>Instead of mapping to an actual set, elements in the partition map point to each element’s parent in the tree. That’s why, as you can see in the book’s repo, we can rename our <code class="fm-code-in-text">partitionsMap</code><a id="marker-1010700"></a> to <code class="fm-code-in-text">parentsMap</code><a id="marker-1010704"></a> to make its purpose explicit.</p>
+
+  <p class="body"><a id="pgfId-1009691"></a>At initialization, we conveniently set each element as its own parent. Trust me on that one; we’ll see why later.</p>
+
+  <p class="body"><a id="pgfId-1009735"></a>The same change applies to the <code class="fm-code-in-text">add</code> method<a id="marker-1010708"></a>, which otherwise stays unchanged.</p>
+
+  <p class="body"><a id="pgfId-1009763"></a>The <code class="fm-code-in-text">findPartition</code> method<a id="marker-1010712"></a> (described in listing 5.6) needs quite a bit of tuning to work properly. Two notes on its implementation:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1009803"></a>With respect to the basic implementation, in this case we won’t return a list anymore, but rather the element at the root of the partition’s tree.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1009865"></a>The return value of <code class="fm-code-in-text">findPartition</code> might not immediately make sense to an external caller, and in fact this method will mostly be used internally when called by merge and <code class="fm-code-in-text">areDisjoint</code> methods<a class="calibre14" id="marker-1010716"></a>.</p>
+    </li>
+  </ul>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1025439"></a>Listing 5.6 Tree-based solution, <code class="fm-code-in-text">findPartition</code></p>
+  <pre class="programlisting"><b class="calibre21">class</b> DisjointSet
+  <span class="calibre31"><b class="calibre21">#type</b> HashMap[Element, Tree[Element]]</span>
+  <span class="calibre31">parentsMap</span>
+ 
+<b class="calibre21">function</b> findPartition(elem)                             <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">throw-if</b> (elem == <b class="calibre21">null or not</b> parentsMap.has(elem)))   <span class="fm-combinumeral">❷</span>
+  <span class="calibre31">parent ← <b class="calibre21">this</b>.parentsMap[elem]</span>                         <span class="fm-combinumeral">❸</span>
+  <span class="calibre31"><b class="calibre21">if</b> parent != elem <b class="calibre21">then</b></span>                                 <span class="fm-combinumeral">❹</span>
+    <span class="calibre31">parent ← <b class="calibre21">this</b>.findPartition(parent)</span>                  <span class="fm-combinumeral">❺</span>
+  <b class="calibre21">return</b> parent                                          <span class="fm-combinumeral">❻</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034461"></a><span class="fm-combinumeral">❶</span> Takes an element and returns another element, the one element at the root of the tree for the partition to which <code class="fm-code-in-text2">elem</code> belongs</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034482"></a><span class="fm-combinumeral">❷</span> Checks that the element is valid</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034502"></a><span class="fm-combinumeral">❸</span> Retrieves the parent of the element</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034519"></a><span class="fm-combinumeral">❹</span> If the current element’s parent is <code class="fm-code-in-text2">elem</code> itself, then we’ve already gotten to the root of the tree; otherwise . . .</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034536"></a><span class="fm-combinumeral">❺</span> . . . we need to climb up recursively to the root, by looking for <code class="fm-code-in-text2">parent</code>’s partition.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034553"></a><span class="fm-combinumeral">❻</span> At this point, <code class="fm-code-in-text2">parent</code> stores the root of the tree for the partition containing <code class="fm-code-in-text2">elem</code>, so we can return it.</p>
+
+  <p class="body"><a id="pgfId-1010400"></a>After getting the element’s parent, we check to see if it’s the element itself. If an element is its own parent, then we know this means we’ve reached the root of the partition’s tree, because of the way we initialize this field, and because, in <code class="fm-code-in-text">merge</code><a id="marker-1010720"></a>, we never change a root’s parent.</p>
+
+  <p class="body"><a id="pgfId-1010721"></a>Otherwise, if the current element does have a parent, we walk up the tree toward its root and perform a recursive call to <code class="fm-code-in-text">findPartition</code><a id="marker-1017817"></a>, returning its result (line #5).</p>
+
+  <p class="body"><a id="pgfId-1010784"></a>This new implementation of <code class="fm-code-in-text">findPartition</code>, as we already mentioned, is not running in constant time anymore. We will have as many recursive calls as the height of the partition’s tree. Since we can’t make any assumption about the trees so far, this means that we possibly have a number of calls proportional to the number of elements in the Universe <code class="fm-code-in-text">U,</code> although this is the worst case and, on average, we can expect far better performance.</p>
+
+  <p class="body"><a id="pgfId-1010947"></a>It might seem so far that we have only made our data structure’s performance worse. We need to define our new implementation of the <code class="fm-code-in-text">merge</code> operation, shown in listing 5.7, to see the advantage of using trees.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1025467"></a>Listing 5.7 Tree-based solution, <code class="fm-code-in-text">merge</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> merge(elem1, elem2)               <span class="fm-combinumeral">❶</span>
+  p1 ← <b class="calibre21">this</b>.findPartition(elem1)           <span class="fm-combinumeral">❷</span>
+  p2 ← <b class="calibre21">this</b>.findPartition(elem2)           <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">if</b> p1 == p2 <b class="calibre21">then</b>                         <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return false</b>
+  <span class="calibre31"><b class="calibre21">this</b>.parentsMap[p2] ← p1</span>                 <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">return true</b></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034176"></a><span class="fm-combinumeral">❶</span> Takes two elements, merges their partitions, and returns <code class="fm-code-in-text2">true</code><a id="marker-1034180"></a> iff the two elements were in two different partitions that now are merged, <code class="fm-code-in-text2">false</code><a id="marker-1034182"></a> if they were already in the same partition</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034199"></a><span class="fm-combinumeral">❷</span> Retrieves the partitions to which <code class="fm-code-in-text2">elem1</code> and <code class="fm-code-in-text2">elem2</code> belong to. If the argument is invalid or not found, this call will throw.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034216"></a><span class="fm-combinumeral">❸</span> Compares <code class="fm-code-in-text2">p1</code> and <code class="fm-code-in-text2">p2</code>, and if they are the same there is nothing left to do. The elements are already in the same partition, and so no merge happens: <code class="fm-code-in-text2">false</code> is returned.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034233"></a><span class="fm-combinumeral">❹</span> Sets the parent of <code class="fm-code-in-text2">p2</code> to be equal to <code class="fm-code-in-text2">p1</code>, so that now both <code class="fm-code-in-text2">p1</code> and <code class="fm-code-in-text2">p2</code> have the same parent, but also all elements in <code class="fm-code-in-text2">p2</code> will ultimately share <code class="fm-code-in-text2">p1</code> as the root of their tree</p>
+
+  <p class="body"><a id="pgfId-1011266"></a>By comparing the two implementations you can immediately see that this is simpler, although only the last few lines changed. The good news is that we no longer need to iterate through a list of elements! To merge two partitions, we simply need to get to both trees’ roots, and then set one root as the parent of the other. We still need to find those tree roots, though.</p>
+
+  <p class="body"><a id="pgfId-1011408"></a>The new line we added only requires constant time, so the method runtime is dominated by the two calls to <code class="fm-code-in-text">findPartition</code><a id="marker-1017829"></a>. As we have seen, they require time proportional to the height of the tree they are called on, and in the worst case this can still be linear. However, in the average case, and especially in the early stages after initialization, we know the height of the trees will be much smaller.</p>
+
+  <p class="body"><a id="pgfId-1011561"></a>So, in summary, with this implementation we have a disjoint set for which all the operations still require linear time in the worst case, but on average will only need logarithmic time—even for those operations that were constant-time in the naïve implementation. Admittedly, that doesn’t sound like a great result if we focus on worst cases. Nevertheless, if you look at it from a different perspective, we’ve already managed to have a more balanced set of operations on our disjoint set, which is especially nice in those contexts where <code class="fm-code-in-text">merge</code><a id="marker-1017833"></a> is a common operation (while in read-intensive applications, where <code class="fm-code-in-text">merge</code> is only executed rarely, the naïve implementation could overall be preferable).</p>
+
+  <p class="body"><a id="pgfId-1011794"></a>Just read through the next section before dismissing the tree solution; it will be worth <a id="marker-1026310"></a>it.</p>
+
+  <h2 class="fm-head" id="heading_id_11"><a id="pgfId-1011833"></a>5.6 Heuristics to improve the running time<a href="#pgfId-1020486"><sup class="footnotenumber3">13</sup></a></h2>
+
+  <p class="body"><a id="pgfId-1011855"></a>The <a id="marker-1026315"></a><a id="marker-1026316"></a>next step in our quest for optimal performance is to make sure <code class="fm-code-in-text">findPartition</code><a id="marker-1026317"></a> is logarithmic even in the worst-case scenario. Luckily, this is pretty easy! We discussed balanced trees in appendix C; feel free to check it out if you feel you could use a refresher.</p>
+
+  <p class="body"><a id="pgfId-1011960"></a>Long story short, here we can easily keep track of the <i class="calibre17">rank</i> (aka size) of each tree, using linear extra space and performing constant-time extra operations in method <code class="fm-code-in-text">merge</code><a id="marker-1017853"></a>, where we will update rank only for trees’ roots.</p>
+
+  <p class="body"><a id="pgfId-1012044"></a>When we merge two trees, we will make sure to set as child the tree with the smallest number of nodes, as shown in figure 5.10.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F10.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037501"></a>Figure 5.10 Merging two set trees: examples of balanced vs unbalanced merges. Arrows from the array are omitted for convenience, because each array element points to the corresponding tree element (so all light red elements point to the red [light] tree, and so on).</p>
+
+  <p class="body"><a id="pgfId-1012176"></a>It can be proven by induction that this tree will also be the one with the smallest height: this means the new tree will either have the same height as the old one, or just have its height increased by 1. It is also provable that the height of a tree can’t be increased more than a logarithmic number of times.</p>
+
+  <p class="body"><a id="pgfId-1012309"></a>As a logarithm grows really slowly (for instance <code class="fm-code-in-text">ln(1000) ~= 10, ln(1000000) ~= 20)</code>, this is, in practice, already a good result, sufficient for most applications.</p>
+
+  <p class="body"><a id="pgfId-1012371"></a>However, if you are writing some really critical core code, such as a kernel or firmware code, you might want to do even better.</p>
+
+  <p class="body"><a id="pgfId-1012422"></a>Why? Well, because you can. And sometimes also because you need to. If you shave 0.001ms over an operation you will repeat a billion times, you’ve already saved 16 minutes of computation.</p>
+
+  <p class="fm-callout"><a id="pgfId-1012491"></a><span class="fm-callout-head">Note</span> Most of the time, in our job as developers, performance isn’t the only metric to consider regarding this kind of improvement. First, it depends on whether you are saving those 16 minutes over a computation taking an hour or a day (needless to say, in the latter situation the gain would be irrelevant). But it also depends at what price you get the savings. If it makes your code terribly more fragile, more complicated, and harder to maintain, or just requires weeks of development time, you will have to weigh the pros and cons before going down this path. Luckily for disjoint sets, this is not the case, and path compression is easy to implement, while it gives a big gain.</p>
+
+  <p class="body"><a id="pgfId-1012746"></a>Let’s see how we could have this further improvement before delving into code.</p>
+
+  <h3 class="fm-head2" id="heading_id_12"><a id="pgfId-1012779"></a>5.6.1 Path compression</h3>
+
+  <p class="body"><a id="pgfId-1012789"></a>As <a id="marker-1017857"></a><a id="marker-1017861"></a>Hinted in the previous section, we can do even better than just having balanced trees and logarithmic-time methods.</p>
+
+  <p class="body"><a id="pgfId-1012835"></a>To improve our results further, we can use a heuristic called <i class="calibre17">path compression</i><a id="marker-1028448"></a>. The idea, shown in figure 5.11, is even simpler: for each node in the trees, instead of storing a link to its parent, we can store one to the root of the tree. After all, we don’t really need to keep track of the history of the merges we performed; we just need to know at the current time what the root is for an element’s partition—and find that out as quickly as we can.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F11.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037543"></a>Figure 5.11 Disjoint set represented using a tree with path compression. Internal representation is shown next to the elements’ array. In tree representation, dashed arrows are parent links, while solid arrows are pointers to the set’s root. The structure initially holds two sets, colored in light red and dark blue and whose roots are respectively 0 and 1.</p>
+
+  <p class="body"><a id="pgfId-1013151"></a>Now, if you were to update all the root pointers as part of merge, it wouldn’t be a logarithmic method anymore; we would need linear time to update each node in the tree.</p>
+
+  <p class="body"><a id="pgfId-1013224"></a>But let’s see—what happens if we don’t update immediately the parent pointers in the nodes of the tree set as child? Simply put, next time we run <code class="fm-code-in-text">findPartition</code><a id="marker-1017869"></a> on one of the elements in that tree—call it <code class="fm-code-in-text">x</code>—we need to walk the tree from <code class="fm-code-in-text">x</code> up to its old root <code class="fm-code-in-text">x<sub class="subscript1">R</sub></code>, and then from <code class="fm-code-in-text">x<sub class="subscript1">R</sub></code> to the new root <code class="fm-code-in-text">R</code>.</p>
+
+  <p class="body"><a id="pgfId-1013363"></a>Keep in mind that the pointers for the elements in the old tree could have been in sync before the merge (and then we would just need two hops to get to the new root; see figure 5.12), or they might have never been updated.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F12.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037586"></a>Figure 5.12 Call to <code class="fm-code-in-text">find</code><a id="marker-1037585"></a> on the same disjoint set of figure 5.11. Notice that the dark blue tree is out of sync. If we call <code class="fm-code-in-text">find</code> on the element <code class="fm-code-in-text">6</code>, the algorithm starts slowly crawling up the blue tree, until it finds its root (third diagram). Then (bottom diagrams), the algorithm backtracks, updating the root for the intermediate elements <code class="fm-code-in-text">9</code> and <code class="fm-code-in-text">6</code>.</p>
+
+  <p class="body"><a id="pgfId-1013604"></a>Because we will have to walk up the tree anyway, we can then retrace our steps from the top, <code class="fm-code-in-text">R</code>, down to <code class="fm-code-in-text">x</code> and update the root pointers for all those elements. This won’t influence our asymptotic performance for <code class="fm-code-in-text">findPartition</code>, since by retracing the same path we just double the number of steps (and constant factors are irrelevant in asymptotic analysis; see appendix B).</p>
+
+  <p class="body"><a id="pgfId-1013748"></a>But as a consequence of these extra steps that we take, next time we call <code class="fm-code-in-text">findPartition</code><a id="marker-1017877"></a> on any elements in the path from <code class="fm-code-in-text">x</code> to <code class="fm-code-in-text">root(x)</code>, we know for sure that those pointers will be up to date and we will just need one single step to find their root.</p>
+
+  <p class="body"><a id="pgfId-1013854"></a>At this point, we would like to understand how many times we will need to update the root pointers, on average, for a single operation or, in amortized analysis, over a certain number <code class="fm-code-in-text">k</code> of operations. This is where the analysis of the algorithm gets a bit complicated.</p>
+
+  <p class="body"><a id="pgfId-1013953"></a>We won’t go into its details. Just know that it is proven that the running amortized time for <code class="fm-code-in-text">m</code> calls to <code class="fm-code-in-text">findPartition</code> and <code class="fm-code-in-text">merge</code> on a set of <code class="fm-code-in-text">n</code> elements will require <code class="fm-code-in-text">O(m * Ack(n))</code> array accesses.</p>
+
+  <p class="body"><a id="pgfId-1014033"></a>Here <code class="fm-code-in-text">Ack(n)</code> is an approximation of the <i class="calibre17">inverse Ackermann</i> function<a id="marker-1017881"></a>, a function growing so slowly that it can be considered a constant (its value will be lower than 5 for any integer that can be stored on a computer).</p>
+
+  <p class="body"><a id="pgfId-1014115"></a>So, we managed to obtain an amortized constant bound for all the operations on this data structure! If you are not impressed by this result . . . you should be!</p>
+
+  <p class="body"><a id="pgfId-1014179"></a>It is not yet known if this is the lowest bound for the <a id="id_Hlk55997907"></a>Union-Find data structure. It has been proven,<a href="#pgfId-1020499"><sup class="footnotenumber">14</sup></a> though, that <code class="fm-code-in-text">O(m * InvAck(m, n))</code> is a strict lower bound, where <code class="fm-code-in-text">InvAck(m, n)</code> is the true inverse Ackermann function.</p>
+
+  <p class="body"><a id="pgfId-1014264"></a>I know, this is a lot to take in. But do not despair; it turns out that we only need a few small changes to implement the path compression<a id="marker-1017885"></a> <a id="marker-1017889"></a><a id="marker-1017893"></a>heuristic.</p>
+
+  <h3 class="fm-head2" id="heading_id_13"><a id="pgfId-1014329"></a>5.6.2 Implementing balancing and path compression</h3>
+
+  <p class="body"><a id="pgfId-1014347"></a>We <a id="marker-1017897"></a><a id="marker-1017901"></a>will now discuss the final implementation of our disjoint set structure, including both the “tree balancing by rank” and “path compression” heuristics.</p>
+
+  <p class="body"><a id="pgfId-1014404"></a>For each element, we’ll have to store some information about its subtree. Therefore, we’ll use a helper (private) class <code class="fm-code-in-text">Info</code><a id="marker-1017905"></a> to gather all the info together, as shown in listing 5.8.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1025496"></a>Listing 5.8 Class <code class="fm-code-in-text">Info</code></p>
+  <pre class="programlisting"><b class="calibre21">class</b> Info
+  <b class="calibre21">function</b> Info(elem)       <span class="fm-combinumeral">❶</span>
+    <b class="calibre21">throw-if</b> elem == <b class="calibre21">null</b>   <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">this</b>.root ← elem        <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">this</b>.rank ← 1           <span class="fm-combinumeral">❹</span>
+ 
+<b class="calibre21">class</b> DisjointSet
+  <span class="calibre31"><b class="calibre21">#type</b> HashMap[Element, Info]</span>
+  parentsMap  </pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033955"></a><span class="fm-combinumeral">❶</span> The constructor for the <code class="fm-code-in-text2">Info</code> class<a id="marker-1033959"></a> just takes an element of the disjoint set.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033977"></a><span class="fm-combinumeral">❷</span> Validates the argument</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033994"></a><span class="fm-combinumeral">❸</span> Initially, an element is assigned to the singleton tree rooted at the element itself.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034014"></a><span class="fm-combinumeral">❹</span> The rank of the subtree is initially 1, because it only contains one element.</p>
+
+  <p class="body"><a id="pgfId-1014784"></a>This <code class="fm-code-in-text">Info</code> class models (the info associated with) a node of the partitions’ tree. It is, to all purposes, just a container for two values: the root of the tree and the rank (that is, size) of the tree rooted at the current element.</p>
+
+  <p class="body"><a id="pgfId-1014875"></a>In the root property, we won’t store references to other nodes. Instead, we will directly store the (index of) the element itself, that we then use as a key to a <code class="fm-code-in-text">HashMap</code><a id="marker-1030723"></a>, exactly as we have shown in the previous sections.</p>
+
+  <p class="body"><a id="pgfId-1014964"></a>If we were actually modeling a tree data structure, this design would result in imperfect encapsulation. But we are just using the <code class="fm-code-in-text">Info</code> class<a id="marker-1017917"></a> as a tuple<a id="marker-1017921"></a> to gather all the properties associated with an element.</p>
+
+  <p class="body"><a id="pgfId-1015042"></a>Most implementations for disjoint set would use two arrays for this.Since our implementation does not restrict keys to integers and we are using hash maps, we could define two <code class="fm-code-in-text">Maps</code><a id="marker-1017925"></a> for the element’s roots and ranks. In doing so, however, we would store each element three times: twice as a key of each map and once as a root of some tree (this last entry could store, of course, some keys several times and some others not once).</p>
+
+  <p class="body"><a id="pgfId-1015205"></a>By using this extra wrapper and a single “info” map, we make sure to store elements only once as keys.</p>
+
+  <p class="body"><a id="pgfId-1015249"></a>While objects would be stored as reference, with minimal overhead, immutable values, and especially strings, would be stored by value. Therefore, even avoiding storeing each element once more can lead to consistent memory saving.</p>
+
+  <p class="body"><a id="pgfId-1015321"></a>We could, in theory, do even better by storing each element in object wrappers and using those wrappers as keys. This way, we would only store each key once, and use wrappers’ references all the time, both as keys for our map(s) and as values.</p>
+
+  <p class="body"><a id="pgfId-1015414"></a>Is the overhead and increased complexity of the wrapper solution worth it? This depends on the assumptions you can make on the type and size of the keys. In most cases, it is probably not, so be sure to properly profile your application and analyze your input before embarking on such optimizations.</p>
+
+  <p class="body"><a id="pgfId-1015518"></a>To go back to our implementation: once again, changes are minimal. In both constructor and <code class="fm-code-in-text">add</code><a id="marker-1017929"></a>, we just need to update the very last line:</p>
+  <pre class="programlisting">parentsMap[elem] = new Info(elem)</pre>
+
+  <p class="body"><a id="pgfId-1015591"></a>We use the constructor for <code class="fm-code-in-text">Info</code> and create a new instance associated with each element.</p>
+
+  <p class="body"><a id="pgfId-1015631"></a>Things definitely get more interesting when we move to <code class="fm-code-in-text">findPartition</code><a id="marker-1017933"></a>, implemented in listing 5.9.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1025524"></a>Listing 5.9 Tree-with-heuristics solution, <code class="fm-code-in-text">findPartition</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> findPartition(elem)                              <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">throw-if</b> (elem == <b class="calibre21">null or not</b> parentsMap.has(elem)))    <span class="fm-combinumeral">❷</span>
+  info ← <b class="calibre21">this</b>.parentsMap[elem]                            <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">if</b> (info.root == elem) <b class="calibre21">then</b>                             <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">return</b> elem
+  info.root ← <b class="calibre21">this</b>.findPartition(info.root)               <span class="fm-combinumeral">❺</span>
+  <b class="calibre21">return</b> info.root</pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033627"></a><span class="fm-combinumeral">❶</span> Takes an element and <code class="fm-code-in-text2">return</code> another element, the one element at the root of the tree for the partition to which elem belongs</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033648"></a><span class="fm-combinumeral">❷</span> Checks that the element is valid</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033668"></a><span class="fm-combinumeral">❸</span> Retrieves the info node stored for current element</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033685"></a><span class="fm-combinumeral">❹</span> If the element’s root<a id="marker-1033689"></a> is the element itself, then we already got to the root of the tree, and we can return it.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033703"></a><span class="fm-combinumeral">❺</span> Otherwise, we need to climb up recursively to the root, but meanwhile we can update the root link for the current element so that it points to the actual root of the tree.</p>
+
+  <p class="body"><a id="pgfId-1016074"></a>As described at the beginning of the section, when using the path compression heuristic, we don’t update the root of all elements on <code class="fm-code-in-text">merge</code><a id="marker-1017941"></a>, but we do update it on <code class="fm-code-in-text">findPartition</code><a id="marker-1017945"></a>. So, the main difference from the older version is that we save the result of the recursive calls to <code class="fm-code-in-text">findPartition</code> at line #6, and we use it to update the current element’s root. Everything else remains exactly the same.</p>
+
+  <p class="body"><a id="pgfId-1016226"></a>It goes without saying that the largest portion of changes will be implemented in the <code class="fm-code-in-text">merge</code> method, as shown in listing 5.10.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1025552"></a>Listing 5.10 Tree-with-heuristics solution, <code class="fm-code-in-text">merge</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> merge(elem1, elem2)               <span class="fm-combinumeral">❶</span>
+  r1 ← <b class="calibre21">this</b>.findPartition(elem1)           <span class="fm-combinumeral">❷</span>
+  r2 ← <b class="calibre21">this</b>.findPartition(elem2)           <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">if</b> r1 == r2 <b class="calibre21">then</b>                         <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return false</b>
+  info1 ← <b class="calibre21">this</b>.parentsMap[r1]              <span class="fm-combinumeral">❹</span>
+  info2 ← <b class="calibre21">this</b>.parentsMap[r2]
+  <b class="calibre21">if</b> info1.rank &gt;= info2.rank <b class="calibre21">then</b>         <span class="fm-combinumeral">❺</span>
+    info2.root ← <b class="calibre21">inf</b>o1.root;               <span class="fm-combinumeral">❻</span>
+    info1.rank += info2.rank;              <span class="fm-combinumeral">❼</span>
+  <b class="calibre21">else</b>
+    info1.root ← <b class="calibre21">inf</b>o2.root;               <span class="fm-combinumeral">❻</span>
+    info2.rank += info1.rank;              <span class="fm-combinumeral">❼</span>
+ <b class="calibre21">return true</b></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033075"></a><span class="fm-combinumeral">❶</span> Takes two elements, merges their partitions, and returns <code class="fm-code-in-text2">true</code><a id="marker-1033080"></a> iff the two elements were in two different partitions that now are merged, <code class="fm-code-in-text2">false</code><a id="marker-1033081"></a> if they were already in the same partition</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033101"></a><span class="fm-combinumeral">❷</span> Retrieves the roots of the trees to which <code class="fm-code-in-text2">elem1</code> and <code class="fm-code-in-text2">elem2</code> belong to. If its argument is invalid or not found, these calls will throw.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033118"></a><span class="fm-combinumeral">❸</span> Compares <code class="fm-code-in-text2">R<sub class="subscript">1</sub></code> and <code class="fm-code-in-text2">r2</code>, and if they are the same there is nothing left to do. The elements are already in the same partition, and so no merge happens: <code class="fm-code-in-text2">false</code> is returned.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033135"></a><span class="fm-combinumeral">❹</span> At this point, we know we need to merge the two partitions, so it looks for the info nodes for both roots.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033152"></a><span class="fm-combinumeral">❺</span> Checks if the first tree has a larger rank (more elements) or vice versa. The smallest tree will become a subtree of the root of the largest tree.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033169"></a><span class="fm-combinumeral">❻</span> Sets the root of the smallest tree to the other root</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033186"></a><span class="fm-combinumeral">❼</span> Updates the rank of the root (of both trees, now). It’s not worth updating the rank of the other (former) root, because it will never be checked again.</p>
+
+  <p class="body"><a id="pgfId-1017025"></a>We still retrieve the elements at the roots of the trees as before, and still check that they are not the same.</p>
+
+  <p class="body"><a id="pgfId-1017072"></a>But after that, we actually have to retrieve the info for both roots, and we check which tree is larger: the smaller one will end up as the child, and we will reassign its root. Moreover, we need to update the rank for the larger tree’s root; its subtree will now also contain all the elements in its new child.</p>
+
+  <p class="body"><a id="pgfId-1017201"></a>If you’d like to look at some code for the heuristics implementation, we have an example on <span class="fm-hyperlink">GitHub</span>.</p>
+
+  <p class="body"><a id="pgfId-1017243"></a>This is all we need to change in order to achieve a tremendous boost in performance. The simplicity of the code shows you how clever this solution is, and in the next sections we will also see why it is so important to get <a id="marker-1017957"></a><a id="marker-1017961"></a>it <a id="marker-1017965"></a><a id="marker-1017969"></a>right.</p>
+
+  <h2 class="fm-head" id="heading_id_14"><a id="pgfId-1017346"></a>5.7 Applications</h2>
+
+  <p class="body"><a id="pgfId-1017353"></a>Applications <a id="marker-1017973"></a>for disjoint set are ubiquitous, and the reason they have been studied at length is exactly due to the number of cases where they prove useful.</p>
+
+  <h3 class="fm-head2" id="heading_id_15"><a id="pgfId-1017413"></a>5.7.1 Graphs: Connected components</h3>
+
+  <p class="body"><a id="pgfId-1017425"></a>For <a id="marker-1017977"></a><a id="marker-1017981"></a><a id="marker-1017985"></a><i class="calibre17">undirected graphs</i>, there is a simple algorithm that uses disjoint sets to keep track of their <i class="calibre17">connected components</i>, that is, areas of the graph that are interconnected.</p>
+
+  <p class="body"><a id="pgfId-1017489"></a>While connected components are usually computed using <a id="id_Hlk55998291"></a>Depth First Searc<a id="marker-1017987"></a>h (<i class="calibre17">DFS</i>), we can use a disjoint set to keep track of the components while we scan all the graph’s edges. An example is shown in listing 5.11.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1025580"></a>Listing 5.11 Computing connected components of a graph with a disjoint set</p>
+  <pre class="programlisting"> disjointSet = new DisjointSet(graph.vertices)       <span class="fm-combinumeral">❶</span>
+ <b class="calibre21">for</b> edge <b class="calibre21">in</b> graph.edges <b class="calibre21">do</b>                          <span class="fm-combinumeral">❷</span>
+   disjointSet.merge(edge.source, edge.destination)  <span class="fm-combinumeral">❸</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032917"></a><span class="fm-combinumeral">❶</span> Creates a new disjoint set where each vertex of the graph is initially in a different partition</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032953"></a><span class="fm-combinumeral">❷</span> Loops over each edge in the graph</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032918"></a><span class="fm-combinumeral">❸</span> Merges the partitions to which source and destination vertices belong to</p>
+
+  <p class="body"><a id="pgfId-1017758"></a>At the end, each partition of vertices in <code class="fm-code-in-text">disjointSet</code><a id="marker-1017991"></a> will be a connected component.</p>
+
+  <p class="body"><a id="pgfId-1017992"></a>It’s worth noting that this algorithm can not be used for <i class="calibre17">directed graphs</i> and <i class="calibre17">strongly connected</i> <a id="marker-1020157"></a><a id="marker-1020161"></a><a id="marker-1020165"></a><i class="calibre17">components</i>.</p>
+
+  <h3 class="fm-head2" id="heading_id_16"><a id="pgfId-1018037"></a>5.7.2 Graphs:<a href="#pgfId-1020534"><sup class="footnotenumber5">15</sup></a> Kruskal’s algorithm for minimum spanning tree</h3>
+
+  <p class="body"><a id="pgfId-1018063"></a>A <a id="marker-1020169"></a><a id="marker-1020173"></a><a id="marker-1020177"></a>spanning tree for a connected undirected <i class="calibre17">graph</i> <code class="fm-code-in-text">G</code> is a tree whose nodes are the vertex of the graphs, and whose edges are a subset of <code class="fm-code-in-text">G</code>’s edges. If <code class="fm-code-in-text">G</code> is connected, then it certainly has at least one spanning tree—possibly many, if it also has cycles (see figure 5.13).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F13.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037638"></a>Figure 5.13 An example of a graph with several spanning trees. (A) An undirected, connected graph, containing cycles. (B) Since the graph has cycles, there are several spanning trees covering all nodes. A few examples are shown, each of them selecting only the smallest set of edges (the thick ones) that “span” all vertices. (C) For each set of edges, several trees can be obtained, depending on the root of the tree and the order of the children. (Only a few examples are shown. Notice, though, how they are not limited to binary trees.)</p>
+
+  <p class="body"><a id="pgfId-1018395"></a>Among all possible spanning trees, a <i class="calibre17">minimum spanning tree</i><a id="marker-1020181"></a> (<i class="calibre17">MST</i>) is the one for which the sum of edges’ weights is minimal.</p>
+
+  <p class="body"><a id="pgfId-1018448"></a>Kruskal’s algorithm is beyond the scope of this book. Here it suffices to say that it constructs the MST for a graph by</p>
+
+  <ol class="calibre18">
+    <li class="fm-list-numbered">
+      <p class="list"><a class="calibre14" id="pgfId-1018501"></a>Starting with each vertex in a difference set.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1018523"></a>Keeping a disjoint set of the graph vertices.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1018545"></a>Going through the graph’s edges <i class="calibre15">in order of increasing weight</i>.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1018570"></a>For each edge, if its extremes are not in the same partition, merge their components.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1018603"></a>If all vertices belong to the same component, stop.</p>
+    </li>
+  </ol>
+
+  <p class="body"><a id="pgfId-1018623"></a>The MST will be defined by the list of edges that triggers, at point (4), merge calls for the disjoint <a id="marker-1020185"></a><a id="marker-1020189"></a><a id="marker-1020193"></a>set.</p>
+
+  <h3 class="fm-head2" id="heading_id_17"><a id="pgfId-1018673"></a>5.7.3 Clustering</h3>
+
+  <p class="body"><a id="pgfId-1018680"></a>Clustering <a id="marker-1020197"></a><a id="marker-1020201"></a>is the most-used unsupervised learning<a href="#pgfId-1020549"><sup class="footnotenumber">16</sup></a> algorithm. The problem here is that we would like to get a partitioning of a set of points into a few, usually disjoint subsets, as shown in figure 5.14.</p>
+
+  <p class="body"><a id="pgfId-1018752"></a>There are several types of clustering algorithms. Although a taxonomy of clustering is beyond the scope of this chapter (we will devote chapter 12 to this topic), here we will mention one particular class of these algorithms.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F14.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037680"></a>Figure 5.14 An example of clustering. On the left, we have a raw dataset of 2-D points. We have no extra information about the points or the relationships between them. After clustering the dataset, on the right we can see that we have inferred some relationships between the points, and in particular we grouped them in three subsets whose points seem to show higher correlation.</p>
+
+  <p class="body"><a id="pgfId-1018983"></a><i class="calibre17">Agglomerative hierarchical clustering</i><a id="marker-1029474"></a> starts with each point in its own <i class="calibre17">cluster</i> (partition) and continuously merges two points (and their clusters) until all clusters are merged into one; figure 5.15 shows an example of how it works. The algorithm keeps a history of this process, and it is possible to get a snapshot of the clusters created at any of the steps. The exact point where this snapshot is taken is controlled by a few parameters and determines the result of the algorithm.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch05_F15.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1037722"></a>Figure 5.15 An example of hierarchical clustering. On the left, the dataset (a collection of 2-D points) is shown with progressive grouping shown as ellipses. From the figure, it can be inferred that, for instance, A and B are grouped together before C is added to the two of them to form a larger cluster. Hence, the relationship between A and B is inferred to be stronger than the one between A and C or B and C. On the right, the same process is shown using a dendrogram.<a href="#pgfId-1020596"><sup class="footnotenumber">17</sup></a> Note that both figures could be the result either of agglomerative or divisive clustering: the former produces the dendrogram starting from the bottom, the latter starting from the top.</p>
+
+  <p class="body"><a id="pgfId-1019395"></a>The description of the algorithm should ring a bell: at each step we need to find two points belonging to two different clusters. You can easily imagine what the best data structure is to compute and find that information. In chapter 13, we’ll see a practical application of disjoint set as part of a distributed clustering <a id="marker-1020209"></a><a id="marker-1020213"></a>algorithm.</p>
+
+  <h3 class="fm-head2" id="heading_id_18"><a id="pgfId-1019518"></a>5.7.4 Unification</h3>
+
+  <p class="body"><a id="pgfId-1019525"></a>Unification <a id="marker-1020217"></a><a id="marker-1020221"></a>is the process of solving equations between symbolic expressions. One of the ways of solving such an equation is finding terms on both sides that are equivalent, and removing them from the equation.</p>
+
+  <p class="body"><a id="pgfId-1019600"></a>Of course, solution strategies depend on which expressions (terms) can appear in the equation and how you can compare them or when they are considered to be equal. For instance, they might be evaluated and considered equal if they have the same value, or they might be symbolic and considered equal if they are equivalent, possibly net of some variable substitution.</p>
+
+  <p class="body"><a id="pgfId-1019728"></a>As you can imagine, the disjoint set data structure is perfect for high-performance algorithms solving <a id="marker-1020225"></a><a id="marker-1020229"></a>this <a id="marker-1020233"></a>problem.</p>
+
+  <h2 class="fm-head" id="heading_id_19"><a id="pgfId-1019768"></a>Summary</h2>
+
+  <ul class="calibre19">
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1019775"></a>The beauty of a disjoint set is that we can build increasingly complex and efficient solutions to solve it, just adding small incremental changes.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1019829"></a>We can sometimes settle for a sub-optimal implementation if that’s efficient enough and performance is not critical.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1019867"></a>Probably we could settle for the naïve linear time solution, but it is such a fundamental part of many graph algorithms that we just need to optimize it as much as possible.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1019935"></a>We do know a theoretical lower bound for the running time of operations of a disjoint set, but we don’t know if there exists an algorithm that runs with that bound, or even any other algorithm faster than the ones we know.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1020025"></a>The <i class="calibre15">inverse Ackermann function</i><a class="calibre14" id="marker-1020237"></a>, whose value won’t be greater than 5 for any integer that could fit on a computer, models the order of magnitude of the running time for the <code class="fm-code-in-text">merge</code><a class="calibre14" id="marker-1020241"></a> operation on disjoint sets. Merging two subsets will, on average, only require at most five <a class="calibre14" id="marker-1020245"></a>swaps.</p>
+    </li>
+  </ul>
+  <hr class="calibre22"/>
+
+  <p class="fm-footnote"><sup class="footnotenumber">1.</sup> <a id="pgfId-1020250"></a>A (no-SQL) key-value store used as a distributed object caching system.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">2.</sup> <a id="pgfId-1020285"></a>The set of all possible items—traditionally denoted as Universe (<code class="fm-code-in-text1">U</code>) in set theory.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">3.</sup> <a id="pgfId-1020302"></a>Definition of protected visibility varies depending on the programming language. Here, we assume a protected method or attribute is only visible to the class declaring it and its sub-classes. A private method, conversely, is not visible to any classes inheriting from the one in which it is declared.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">4.</sup> <a id="pgfId-1020319"></a>This is a theory-intensive section.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">5.</sup> <a id="pgfId-1020334"></a>As an implementation detail, we likely need to use referential equality here when comparing lists.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">6.</sup> <a id="pgfId-1020365"></a>For a refresher on linked lists, or if you are not sure what the <code class="fm-code-in-text1">next</code> pointer is, check out appendix C.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">7.</sup> <a id="pgfId-1020383"></a>Remember that constant factors are irrelevant in big-O analysis, so <code class="fm-code-in-text1">O(n/2) = O(n)</code>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">8.</sup> <a id="pgfId-1020408"></a>Abbreviation for “if and only if.”</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">9.</sup> <a id="pgfId-1020423"></a>A singleton is a set with exactly one element.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">10.</sup> <a id="pgfId-1020438"></a>See <span class="fm-hyperlink"><a href="https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction#disjoint-set">https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction#disjoint-set</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">11.</sup> <a id="pgfId-1020455"></a>This section is theory-intensive and features advanced concepts.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">12.</sup> <a id="pgfId-1020471"></a>Check out appendix C, section C.1.3.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">13.</sup> <a id="pgfId-1020486"></a>This section is theory-intensive and features advanced concepts.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">14.</sup> <a id="pgfId-1020499"></a>It is possible to find plenty of literature on the subject. Be aware, though, that it’s very interesting reading, but challenging.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">15.</sup> <a id="pgfId-1020534"></a>For an introduction to graphs, see appendix G.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">16.</sup> <a id="pgfId-1020549"></a>Unsupervised machine learning deals with making sense of “unlabeled” data (that is, data that has not been classified or categorized), with the goal of finding a structure in the raw data.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">17.</sup> <a id="pgfId-1020596"></a>A dendrogram (from Greek dendro “tree” and gramma “drawing”) is a tree diagram specifically used to illustrate the arrangement of the clusters produced by hierarchical clustering.</p>
+</body>
+</html>

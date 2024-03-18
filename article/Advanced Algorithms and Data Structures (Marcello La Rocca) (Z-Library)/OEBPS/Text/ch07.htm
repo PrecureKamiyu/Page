@@ -1,0 +1,1385 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <title>7</title>
+    
+  <link href="../../stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="../../page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+  <div class="tocheadb">
+    <h1 class="tochead" id="heading_id_2"><a id="pgfId-998625"></a><a id="pgfId-998637"></a>7 Use case: LRU cache</h1>
+  </div>
+
+  <p class="co-summary-head"><a id="pgfId-1013344"></a>This chapter covers</p>
+
+  <ul class="calibre19">
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1013376"></a>Avoiding computing things twice</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1013377"></a>Introducing caching as a solution</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1013378"></a>Describing different types of caches</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1013379"></a>Designing an efficient solution for LRU cache</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1013380"></a>Discussing MFU and other choices for handling priority</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1013381"></a>Discussing caching strategies</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1013382"></a>Reasoning about concurrency and synchronization</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1013365"></a>Describing how caches can be applied in a sentiment analyzer’s pipeline</li>
+  </ul>
+
+  <p class="body"><a id="pgfId-998759"></a>This chapter is going to be different from what you have seen so far in this book. We are not going to introduce a new data structure, but instead we will use the ones described in chapters 2–5 to create a more complex data structure. By using lists, queues, hash tables, and so on as building blocks, we will be able to create an advanced data structure that can be used to quickly access values and computed results that were recently accessed—although one could argue that a cache is more than just a data structure; it’s a sophisticated component with several moving parts. In its simplest form, a cache can be implemented as an associative array, but we will see during the course of this chapter that it can become as complex as a web service.</p>
+
+  <p class="body"><a id="pgfId-998782"></a>In this chapter, we’ll delve into the details of how caches of increasing complexity work, so after reading it, you should be able to articulate an informed opinion on the topic.</p>
+
+  <h2 class="fm-head" id="heading_id_3"><a id="pgfId-998793"></a>7.1 Don’t compute things twice</h2>
+
+  <p class="body"><a id="pgfId-998811"></a>In <a id="marker-999349"></a>our daily job as software developers, we write applications, most of which perform really simple tasks. Adding two numbers, or even dividing them, or adding two vectors (with modern GPUs<a href="#pgfId-1006914"><sup class="footnotenumber">1</sup></a>) are trivial operations, fast enough that we don’t need to bother with optimizing them. (Of course, this wasn’t always the case, but if you happen to be young enough, you’ve never had to deal with x86 processors.)</p>
+
+  <p class="body"><a id="pgfId-998836"></a>Yet, no matter how fast and optimized multicore processors or server clusters become, there will always be some kind of computations, some complex operations for which it will just be too expensive for us to ignore how wasteful it would be to perform them multiple times when we don’t need to.</p>
+
+  <p class="body"><a id="pgfId-998849"></a>Back to the previous vector sum. If our vectors have billions of elements (or too many to fit in a GPU’s memory at once), then even this operation becomes quite expensive. The same is true if we are going to repeat the same divisions billions of times when we could have gotten away with a few hundred of them: the impact on our applications’ running time will be sensible.</p>
+
+  <p class="body"><a id="pgfId-998864"></a>Number crunching is not the only context in which optimizing your computation matters. If we move to web applications, for example, one of the costliest operations is certainly accessing a database, and even more so if it involves iterating through a cursor to count or compute something.</p>
+
+  <p class="body"><a id="pgfId-998873"></a>It’s not just terribly expensive (in terms of resources) and slow. Database cursors<a href="#pgfId-1006932"><sup class="footnotenumber">2</sup></a> might involve extensive (possibly even table- or DB-wide) locks<a href="#pgfId-1006946"><sup class="footnotenumber">3</sup></a> if they are not read-only, but even writing single rows can, in some DBs, require locking a page or a whole table.</p>
+
+  <p class="body"><a id="pgfId-998886"></a>Every time we lock some data, all read operations on that data have to wait until the lock is released. If this is not handled carefully, a big load of write operations to the DB can put it on fire,<a href="#pgfId-1006963"><sup class="footnotenumber">4</sup></a> slowing your application down and producing an inconvenient lag for your users, or even grinding your DB to a halt, which in turn will cause all your HTTP calls to time out and thus an outage of your website/application.</p>
+
+  <p class="body"><a id="pgfId-998902"></a>Wow, that’s scary, isn’t it? Now, if there only was a way to avoid it!</p>
+
+  <p class="body"><a id="pgfId-998911"></a>Many companies, even tech giants, in their early days (and at the dawn of the internet age), had to experience first-hand the troubles of running and growing a website smoothly. That is, until they found ways to adapt and cope with it.</p>
+
+  <p class="body"><a id="pgfId-998922"></a>One of the best ways to ease the load on a database is to avoid computing expensive results twice in a short time. There are many other strategies orthogonal to this, from sharding<a id="marker-999353"></a><a href="#pgfId-1006977"><sup class="footnotenumber">5</sup></a> to loosening the consistency constraint (moving to eventual consistency<a id="marker-999357"></a><a href="#pgfId-1006993"><sup class="footnotenumber">6</sup></a>), that are needed or at least helpful in order to achieve good, stable performance on a web application. This is obviously not the right place to present them, but the literature on scalability is rich, and if you are going to work in the field, we definitely recommend you look at some of the amazing books or web guides that have been published.<a href="#pgfId-1007007"><sup class="footnotenumber">7</sup></a></p>
+
+  <p class="body"><a id="pgfId-998954"></a>In this chapter we are going to focus, instead, on caching. To narrow our scope a bit, and hopefully make our example clearer, let’s consider a plausible situation where you could actually use some caching.</p>
+
+  <p class="body"><a id="pgfId-998966"></a>Imagine you have this aggregator service that gathers news about companies from social networks, and provides some sort of insight on them; for example, if people are talking about a company in a positive or negative way (what’s called sentiment analysis<a id="marker-999361"></a><a href="#pgfId-1007025"><sup class="footnotenumber">8</sup></a> in data science). Figure 7.1 shows a possible simplified architecture for such a service.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F1.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1025320"></a>Figure 7.1 A possible architecture for the “Get social networks daily summary” application. (1) The client sends an HTTP call to the web server asking for the daily summary (for a specific company). (2) The web server contacts the app server to get the data from the major social networks (here the list is just meant as an example). The app server might be physically and logically on the same machine as the web server (in which case the call is a method call), or physically hosted on the same machine but in a different process, or even hosted in a different machine, such that the call ends up being an actual HTTP call. (3) The data gatherer starts one new thread for each loader/social network. All these calls are asynchronous. (4) Each loader sends an HTTP call to an external API over the internet. Once it’s done, it returns the loaded data to the gatherer. Once all the loaders are finished, the gatherer returns all the collected data to its caller (the web server, in this case). (5) The web server synchronously calls the sentiment analyzer, passing the raw data, and expecting the summary in return. Alternatively, the web server could have called an orchestrator or the sentiment analyzer directly at point 2, and this step would be delegated. (6) Once the sentiment has been computed and passed back to the web server, it builds an HTTP response around it and sends it back to the client.</p>
+
+  <p class="body"><a id="pgfId-999002"></a>You will need to call external APIs to gather posts from the major social networks and then analyze them and assign a sentiment to each post. Once they are all labeled, each with a certain degree of confidence, you need to decide if overall the sentiment about the company is positive or negative. For instance, you can decide that a tweet spoke positively about company X, with a degree of confidence of 70%, while for another tweet you have a degree of confidence of 95% that the sentiment is negative. Then you’ll have to weigh the two of them, taking that confidence into consideration (among many other things).</p>
+
+  <p class="body"><a id="pgfId-999026"></a>You will likely have to subscribe to, pay for, and connect to different services for the different social networks and write adapters that cope with the different formats.</p>
+
+  <p class="body"><a id="pgfId-999037"></a>Each external service requires an HTTP call outside your intranet, and each call will have some latency that’s different for the various services. You can call each service in parallel, but even then, if you do need all the data to make a decision, your latency will be at least as high as the slowest of those services.</p>
+
+  <p class="body"><a id="pgfId-999050"></a>Latency can really be a problem; say you offered your customer a <i class="calibre17">service-level agreement</i><a id="marker-1018464"></a> (SLA) where you committed to return 95% of your monthly calls within 750ms, but unfortunately, during peaks of traffic, a couple of those external services can take as long as 3s to answer.</p>
+
+  <p class="body"><a id="pgfId-999067"></a>To make things worse, your timeout for HTTP responses is set to 3.5s, meaning that you have to return an answer to the client within 3.5 seconds; otherwise your load balancer will kill the call. I can imagine you are thinking it would be enough to adjust the timeout, but suppose you can’t change this timeout, because otherwise you couldn’t support the traffic load, given the resources you have available. So, assuming you take around 250ms to process data for a single source, if it takes 3 seconds to get that data, considering the time to handle the incoming call, do some post-processing, and send the response back, you risk having a lot of 503<a href="#pgfId-1007055"><sup class="footnotenumber">9</sup></a> errors. And guess what? That also goes against your SLA.</p>
+
+  <p class="body"><a id="pgfId-999088"></a>At this point it is worth noting that if you are a paid service and you violate your SLA, you might have to give some money back to your customers. So, you definitely would like to avoid that.</p>
+
+  <p class="body"><a id="pgfId-999103"></a>Let’s say, in order to keep things simple for our example, that you’d like to provide this sentiment analysis for one company at a time (one company per HTTP call), per day, and always only based on the day before. Imagine that people will use the information gathered yesterday before the stock market opens to decide whether or not it’s a good idea to invest in a company. Also, let’s assume we only provide our prediction service to the Fortune 100 top <a id="marker-1018517"></a>companies.</p>
+
+  <h2 class="fm-head" id="heading_id_4"><a id="pgfId-999130"></a>7.2 First attempt: Remembering values</h2>
+
+  <p class="body"><a id="pgfId-999146"></a>At <a id="marker-999373"></a>this point, we know that we can’t afford to compute each intermediate result over and again every time we receive a call; that would be too expensive. So, the most natural thing to do is store these intermediate results once we compute them and look them up when we need the results again.</p>
+
+  <p class="body"><a id="pgfId-999159"></a>We are obviously in luck because the function to produce the summary takes only one argument, the name (or internal ID) of the company and its domain<a href="#pgfId-1007069"><sup class="footnotenumber">10</sup></a> is relatively small.<a href="#pgfId-1007083"><sup class="footnotenumber">11</sup></a> And thus we can easily identify the intermediate results we need, and we can expect to reuse them several times. If our application runs for long enough without restarting, after an initial warm-up period when we have to actually compute values (and hence latency will be high during this warm-up), we will have computed enough intermediate results to respond to calls quickly, without the extra latency due to the external HTTP calls.</p>
+
+  <p class="body"><a id="pgfId-999179"></a>Take a look at how these assumptions change our architecture in figure 7.2, and meet the cache, our knight in shining armor that will save us from failing our SLA and going out of business.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F2.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1025385"></a>Figure 7.2 With the introduction of cache, before issuing a call to the app server, the web server checks if the results have already been computed, and in that case skips steps 3–6 in this figure. Note that cache can be added also for the single loaders, in case we allow partial results (for instance, if one of the external services is down). In theory, it can also be added to the “data cruncher” instead of the web server, delegating the interface with the data gatherer to the data cruncher, so that the web server directly calls only the data cruncher. Having cache on the web server (physically on the same machine), however, has several advantages.</p>
+
+  <p class="body"><a id="pgfId-999233"></a>To get rid of all the nitty-gritty HTTP related details that are not particularly important for our analysis, let’s abstract them out in a magic function that can be called by our sentiment analyzer and just return all the data we need for all the social networks we draw our posts from. Figure 7.3 shows the simplified architecture for the sentiment analyzer.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F3.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1025430"></a>Figure 7.3 The architecture of our example application, after abstracting out all details relative to the generation of the summary into an ad hoc component, the “sentiment generator”, that we can imagine is hosted on the web server, and is called synchronously from the web app.</p>
+
+  <p class="body"><a id="pgfId-999269"></a>It looks much cleaner now, right? Remember, we are hiding all complexity in the “sentiment generator” because we want to focus on the caching mechanism, and we are not interested in the details of how this sentiment is computed. Nonetheless, this doesn’t mean that you can only use caching in-memory or for standalone applications; on the contrary, web applications are probably one of the best places to add some caching layers: the detailed example from which we started should have made this clear.</p>
+
+  <p class="body"><a id="pgfId-999284"></a>Moreover, it is important to remember that simplifying complex things by abstracting low-level details is a paramount technique in algorithm analysis. For instance, we often assume that some containers will store integers instead of worrying about every possible type of entry that could be stored, and even the RAM model itself, that we introduced in appendix B, is a simplification to hide the details of the myriad of different configurations that real computers can have.</p>
+
+  <h3 class="fm-head2" id="heading_id_5"><a id="pgfId-999299"></a>7.2.1 Description and API</h3>
+
+  <p class="body"><a id="pgfId-999311"></a>As <a id="marker-999377"></a>always, let’s draft an API and a contract that our data structure should adhere <a id="marker-999381"></a>to.</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="2" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1013559"></a>Abstract data structure: Cache</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013563"></a>API</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <pre class="programlisting">class Cache {
+  init(maxSize);
+  get(key);
+  set(key, value);
+  getSize();
+}</pre>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013567"></a>Contract with client</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013569"></a>A cache stores a certain number of entries (the <code class="fm-code-in-text2">maxSize</code> argument for the constructor, in the API), always allows you to set new entries, and retains elements based on the concrete cache’s implementation of the eviction policy.<a href="#pgfId-1013572"><sup class="footnotenumber1">a</sup></a></p>
+
+        <p class="fm-table-body"><a id="pgfId-1013581"></a>When <code class="fm-code-in-text2">set</code> is called, if an entry with the same key already exists on the cache, the new value will overwrite the old one.</p>
+      </td>
+    </tr>
+  </table>
+
+  <p class="fm-footnote"><sup class="footnotenumber">a</sup> <a id="pgfId-1013572"></a>A cache’s eviction policy is used to decide which element should be purged from a full cache to make room for a new entry.</p>
+
+  <h3 class="fm-head2" id="heading_id_6"><a id="pgfId-999382"></a>7.2.2 Fresh data, please</h3>
+
+  <p class="body"><a id="pgfId-999569"></a><a id="marker-1000418"></a>Now that we have a first solution for our specific example, we could ask if these conclusions apply also to the general case. To that end, we need to discuss some concerns that we’ve swept under the proverbial rug so far. We need to question if the computation is static, isolated, and time-independent. Think, for instance, of a matrix product or numerically computing a complex integral. If that’s the case, we are in luck, because we can compute the results once (for each input), and they will be valid forever.</p>
+
+  <p class="body"><a id="pgfId-999598"></a>It might happen, instead, that we have to deal with some computation that can vary depending on time (for instance, on day of the week or month) or on any other external factor (for instance, an aggregate of daily orders that will change when new orders are placed and when the date changes). In this case, we would have to be careful when reusing values we have already computed, because they can go stale; meaning that under some conditions, the value once computed and stored in our cache might not be the most up to date, or even relevant, anymore.</p>
+
+  <p class="body"><a id="pgfId-999616"></a>How we deal with stale cache depends heavily on the context. In some cases, even stale values can provide an acceptable approximation when a certain margin of error is acceptable. For instance, if we do compute aggregates on daily sales and show them in a live chart, we might be OK with having data synched every minute or every 10 minutes. This would avoid recomputing all the aggregates (possibly grouped by product or store) every time the chart is displayed in our reporting tool, which could be used by tens of employees at the same time.</p>
+
+  <p class="body"><a id="pgfId-999631"></a>Probably the best example explaining why this “controlled staleness” can be acceptable is provided by web caches. HTTP standards allow the server (the provider of the content) to add headers<a href="#pgfId-1007097"><sup class="footnotenumber">12</sup></a> to resources (web pages, but also images, files, and so on) to let the client (usually the browser) know when it is allowed to read a certain resource from cache, and also to let intermediate cache nodes know if<a href="#pgfId-1007117"><sup class="footnotenumber">13</sup></a> and for how long the response provided by the server to an HTTP (GET, usually) call can be cached.</p>
+
+  <p class="body"><a id="pgfId-999652"></a>Vice versa, if we have a time-critical, safety-critical application, such as a monitoring application for a nuclear power plant (for some reason, this example works well in communicating a sense of criticality . . . ), then we can’t afford approximations and stale data (certainly not for more than a few seconds).</p>
+
+  <p class="body"><a id="pgfId-999667"></a>The other open questions are these: What makes data stale and do we have a quick way to know when that happens? If data simply ages, we can store a timestamp when we write it to cache and check it when we read it. If it’s too old to still be relevant, we can recompute and update the cache. If there are other external conditions—for instance, a change in configuration or some event, such as a new order made or a change of the required precision for calculus—we are still fine as long as we can check these conditions, and the check is relatively inexpensive with respect to computing the value again from scratch.</p>
+
+  <p class="body"><a id="pgfId-999692"></a>In the rest of the chapter we simplify the problem by assuming that cached content doesn’t go stale. Handling stale content can be seen as an orthogonal task that can enhance the base caching mechanism we built, for the most part independently of the choices we made for this <a id="marker-1000422"></a>mechanism.</p>
+
+  <h3 class="fm-head2" id="heading_id_7"><a id="pgfId-999705"></a>7.2.3 Handling asynchronous calls</h3>
+
+  <p class="body"><a id="pgfId-999721"></a>Acknowledging <a id="marker-1025503"></a><a id="marker-1025504"></a>the existence of stale data and discussing workarounds was a good starting point toward generalizing caching solutions to more than just our carefully crafted example. The next step is generalizing the computation model. So far, we have assumed we are in a single-threaded environment, so calls are handled by a synchronous queue and are executed one after the other. This is not only unrealistic; this is also wasteful. Real-world applications can’t afford the latency that would result in leaving clients waiting while previous calls are being processed. We can run many copies of this pipeline, as shown in figure 7.4, but each of them will have its own cache and will be able to handle one call at a time. Caching would not be as effective as possible, because if two threads get the same request, neither will be able to read the result from cache. But even worse, assuming the sentiment generator works synchronously, handling one request at a time slows us down even more.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F4.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1025558"></a>Figure 7.4 A possible configuration for the app running with one cache per thread. Each thread hosts a full pipeline (web server, sentiment generator, and cache) and handles one call at a time, running synchronously. A load balancer makes sure to distribute the calls to the many threads running, waiting for each web server to answer before forwarding the next call (in the figure, the web app in thread 2 would have returned the response for call #2 before the load balancer could forward call #4).</p>
+
+  <p class="body"><a id="pgfId-999774"></a>Consider any of the threads depicted in figure 7.4 and suppose the cache has already stored the intermediate results for Twitter and Facebook when the sentiment generator receives four more requests for Google, Twitter, Facebook, and Google. For the first request, we’ll have to compute everything from scratch, but for the next two, we already have all we need in cache, and we could output the result immediately. In a synchronous architecture, however, we would be forced to wait for the first call to complete before the next two (and all the others that would possibly pile up in the meantime) could be processed by the sentiment generator and returned. In an asynchronous configuration, however, the web app can call the sentiment generator asynchronously for each sentiment analysis request, “join” on the responses containing the intermediate results, and return as soon as all the information for a call is gathered, and it can compute the final result. What happens, though, if in the figure’s example sequence the second request for Google is processed while the first one is still computing the intermediate results?</p>
+
+  <p class="body"><a id="pgfId-999804"></a>If the first call hasn’t finished yet, no value is added to the cache for Google. So, when the second call comes, the web app sees a cache miss and calls the sentiment generator to retrieve all the data from social networks and compute the sentiment again.</p>
+
+  <p class="body"><a id="pgfId-999815"></a>Then, the result of whichever call that finishes first will be stored in the cache. And when the other call finally produces a result, it will also try to store that result in the cache. Depending on the implementation of the cache, this can simply overwrite the old result (they could be different for a lot of reasons), discard the new result, or in the worst-case scenario, produce a duplicate.<a href="#pgfId-1007132"><sup class="footnotenumber">14</sup></a></p>
+
+  <p class="body"><a id="pgfId-999826"></a>But regardless of how the collision is handled, the worst part is that we twice compute a result that we could have retrieved from cache. This in turn means unnecessarily high latency, and in some cases extra costs. For instance, in our example, data providers do charge for data from social <a id="marker-1000434"></a><a id="marker-1000438"></a>networks.</p>
+
+  <h3 class="fm-head2" id="heading_id_8"><a id="pgfId-999844"></a>7.2.4 Marking cache values as “Loading”</h3>
+
+  <p class="body"><a id="pgfId-999856"></a>Finding <a id="marker-1000442"></a>a perfect solution for race conditions is not easy. In some cases, it is impossible. Here, for example, if we consider the fully detailed architecture of figure 7.2, we have several HTTP calls that can have a variable latency or fail altogether. So, we can’t be sure which one of the two calls to retrieve Google sentiment would return first. Assuming the first call finishes first can be reasonable, but it can also lead to inefficiency, if for any reason the first call to the data gatherer<a href="#pgfId-1007152"><sup class="footnotenumber">15</sup></a> lasts more than the average. That’s not the worst-case scenario, though: if we decide that the second call to our /<code class="fm-code-in-text">sentiment</code> endpoint will wait and reuse the result computed for the first one, and then the calls to the data gatherer fail for some reason, the net result will be that both web calls to our web server will fail.</p>
+
+  <p class="body"><a id="pgfId-999880"></a>That said, we can and need to try to do better and avoid wasting resources. To handle the situation described in the last sub-section, one thing we could do is certainly add a “loading” state for cache values, used to mark entries in the cache that are currently being computed. When the first call to <code class="fm-code-in-text">/sentiment/Google</code> checks the cache and finds a miss, it will create an entry for Google and mark it as “in progress.”</p>
+
+  <p class="body"><a id="pgfId-999898"></a>When the second call checks the cache, it will be aware that the value is being computed. Then we can either do some time-based polling of the cache, checking every few hundreds of milliseconds until a value is stored for that entry, or implement a publisher-subscriber mechanism, with the web app subscribing to the cache to let it know it’s interested in the entry “Google,” and the cache notifying all subscribers for that entry once its value is finally computed.</p>
+
+  <p class="body"><a id="pgfId-999910"></a>Either way, we can’t completely solve the problems with the race conditions mentioned here, but risking a little extra delay and a few more 500s responses is in many cases worth the savings we earn by avoiding re-computing values that are <a id="marker-1000454"></a>in <a id="marker-1000458"></a>progress.</p>
+
+  <h2 class="fm-head" id="heading_id_9"><a id="pgfId-999925"></a>7.3 Memory is not enough (literally)</h2>
+
+  <p class="body"><a id="pgfId-999945"></a>Let’s stop for a minute and recap what we have discussed so far:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-999954"></a>We have a complex problem which has a lot of intermediate results that can internally be reused frequently.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-999968"></a>To exploit this fact, we need a mechanism to remember the intermediate results so that we compute them only once (or at least as few times as possible).</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-999980"></a>That seems straightforward, right? For our example, it probably is: we have a very small number of possible entries (at most 100), and for each one we only store the sentiment computed. It seems likely that we would be OK with a very small amount of memory to store our cache.</p>
+
+  <p class="body"><a id="pgfId-999993"></a>What do you think would happen, however, if we needed to create a cache for the data gatherer in figure 7.2, storing all the messages across the major social networks mentioning a company in their raw format? Consider that there could be millions of those, for the “coolest” companies, and each one would on average require a few kilobytes (assuming we store media as links or don’t store them at all). Even with just a hundred companies, it could be on the order of a few gigabytes.</p>
+
+  <p class="body"><a id="pgfId-1000002"></a>Likewise, consider how an application like Facebook would work. When you try to access your wall, an algorithm computes the best posts to show you, based on your friends’ walls, your preferences, the pages you follow, and so on.</p>
+
+  <p class="body"><a id="pgfId-1000025"></a>It’s a pretty complex and resource-consuming algorithm, so you want to cache its results as much as possible, since you probably don’t need to recompute the feed if the same user accesses their wall after one or five minutes (or maybe you have an incremental update mechanism that only surfaces new posts when they are published—but that’s another story and slightly off the point).</p>
+
+  <p class="body"><a id="pgfId-1000042"></a>Now consider this caching mechanism for a billion walls: even if we store just the top 50 posts per wall, and for each post we just store its ID (typically a few bytes), we still need a terabyte for the cache.</p>
+
+  <p class="body"><a id="pgfId-1000051"></a>These examples show how we can easily reach a size, for the cache, that’s hard or impossible to keep in the RAM. It would still be possible to use NoSQL databases, or distributed caches, such as Memcached, Redis, or Cassandra, to name a few, but even there, the more entries we store, the slower it will be checking the cache. This will be clearer when we discuss the implementation of a typical cache.</p>
+
+  <p class="body"><a id="pgfId-1000071"></a>We can also imagine a situation where we keep receiving different inputs that would need new entries in the cache. As you can imagine, we can’t add new entries indefinitely to a cache: being a finite system, there will always be a point when an infinite number of entries will saturate it.</p>
+
+  <p class="body"><a id="pgfId-1000086"></a>Therefore, once we have filled the cache, if we want to add new entries, we need to start purging some of the existing ones.</p>
+
+  <p class="body"><a id="pgfId-1000095"></a>The question is, of course, which entries should we purge? The somehow uncanny answer is that it would be ideal to remove the ones that won’t be requested anymore, or at least those that will be requested fewer times.</p>
+
+  <p class="body"><a id="pgfId-1000104"></a>Unfortunately, as much as we’ve gotten better at forecasting, despite the amazing progress in AI we have seen, even computers don’t have any psychic superpower, so we can’t predict <i class="calibre17">exactly</i> which elements we are going to need the most and which ones the least.<a href="#pgfId-1007174"><sup class="footnotenumber">16</sup></a></p>
+
+  <p class="body"><a id="pgfId-1000117"></a>Spoiler alert: there are some assumptions that we can use to try to make educated guesses. One reasonable assumption is that if an entry hasn’t been accessed for a long time, it has less value than an entry that was recently accessed. Depending on the size of the cache and on the time elapsed until the entry was last accessed, we could infer that the oldest entry is somehow stale, and it’s likely it won’t be needed soon or ever again.</p>
+
+  <p class="body"><a id="pgfId-1000143"></a>On the other hand, depending on the context, even the opposite could be true: that entries that haven’t been accessed for a long time will be needed soon. In that case, though, removing the fresher items usually doesn’t work very well, and some other criteria must be found.</p>
+
+  <p class="body"><a id="pgfId-1000158"></a>If we only look at the timestamp of last access, though, we discard other useful information. For example, if an entry was accessed several times, but not for the last few minutes, then all newer entries, even if only accessed once, will be considered more valuable. If you think about it, if an entry is only required once, it means it has been computed but never read from the cache, so caching it has not yet brought any advantage. After some time, if that entry is not yet accessed, the utility of keeping it becomes questionable. So, a different approach could be assigning a value to entries based on how often they are accessed.</p>
+
+  <p class="body"><a id="pgfId-1000171"></a>We will discuss these recipes in detail in the next few sections, while we also detail the implementation of these caches.</p>
+
+  <h2 class="fm-head" id="heading_id_10"><a id="pgfId-1000182"></a>7.4 Getting rid of stale data: LRU cache</h2>
+
+  <p class="body"><a id="pgfId-1000200"></a>The first type of cache, or rather of eviction policy, that we are going to describe is the LRU (least recently used) cache, purging the cache’s <i class="fm-italics">least recently used</i> entry each time.</p>
+
+  <p class="body"><a id="pgfId-1000226"></a>What do we need to implement this data structure? The operations we want to optimize for are</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1000235"></a>Storing an entry given the name of a company (obviously)</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1000247"></a>Checking if there is an entry stored for a name</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1000259"></a>Retrieving an entry by name</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1000271"></a>Getting the number of elements stored</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1000283"></a>Getting the oldest entry and purging it from the cache</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1000295"></a>As we explained in section 7.3, this data structure will only be able to store a certain number of elements at the same time. The actual size of the cache can be decided on creation and, depending on the implementation, can even be changed dynamically. We will denote with <code class="fm-code-in-text">N</code> the number of elements that can be stored in the cache. When the cache is already at its full capacity, if we need to add a new entry, we will have to remove one of the existing ones, and in this case we will remove the one that was least recently used (hence the name).</p>
+
+  <p class="body"><a id="pgfId-1000317"></a>Let’s now reason about which one, among the basic data structures we have seen so far, could guarantee us the best performance. Handling the size of the cache is easy; we can keep a variable for that and update it in constant time, so we won’t mention it any further in this analysis.</p>
+
+  <p class="body"><a id="pgfId-1000326"></a>Checking if an entry exists is based on finding an entry by name, so only the latter operation needs to be analyzed.</p>
+
+  <p class="body"><a id="pgfId-1000335"></a>Storing and retrieving entries by name should ring a bell. It’s clearly what an associative array does, so hash tables would be the obvious choice there. Hash tables, however, are not great when it comes to retrieving the minimum (or maximum) element they contain.<a href="#pgfId-1007188"><sup class="footnotenumber">17</sup></a></p>
+
+  <p class="body"><a id="pgfId-1000350"></a>In fact, removing the oldest element could take up to linear time and, unless the expected life of the cache is so short that, on average, we are not going to fill it completely, this could slow down every insertion of a new entry.</p>
+
+  <p class="body"><a id="pgfId-1000359"></a>Using arrays doesn’t seem like a good idea, because they would not speed up any of the operations, or at most just a single one, while requiring all the space for maximum capacity to be allocated from the start.</p>
+
+  <p class="body"><a id="pgfId-1000370"></a>Linked lists seem promising for keeping the order of insertion, but they wouldn’t be great when it comes to looking up entries.</p>
+
+  <p class="body"><a id="pgfId-1000379"></a>If you read appendix C, you might remember that there is a data structure offering a compromise between all of these different operations: balanced trees! With a tree, we would be able to guarantee that all of these operations could be performed in logarithmic time in the worst-case scenario.<a id="id_Hlk521771426"></a></p>
+
+  <p class="fm-table-caption"><a id="pgfId-1013668"></a>Table 7.1 Comparative analysis of performance vs implementation for cache with <code class="fm-code-in-text">n</code> elements</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1013680"></a> </p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1013682"></a>Array (unsorted)</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1013684"></a>Array (sorted)</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1013686"></a>Linked list</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1013688"></a>Hash table</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1013690"></a>Balanced tree</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013692"></a>Storing an entry</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013694"></a>O(1)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013696"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013698"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013700"></a>O(1) <a href="#pgfId-1013750"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013702"></a>O(log n)</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013704"></a>Finding entry by name</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013706"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013708"></a>O(log n) <a href="#pgfId-1013780"><sup class="footnotenumber1">b</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013710"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013712"></a>O(1) <a href="#pgfId-1013750"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013714"></a>O(log n)</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013716"></a>Removing oldest entry</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013718"></a>O(n) <a href="#pgfId-1013801"><sup class="footnotenumber1">c</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013720"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013722"></a>O(1)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013724"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1013726"></a>O(log n)</p>
+      </td>
+    </tr>
+  </table>
+
+  <p class="fm-footnote"><sup class="footnotenumber">a</sup> <a id="pgfId-1013750"></a>Amortized.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">b</sup> <a id="pgfId-1013780"></a>Using binary search.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">c</sup> <a id="pgfId-1013801"></a>It requires O(1) time to locate the entry but, considering a static array, after removing its first element, the rest of the elements must be shifted one position.</p>
+
+  <p class="body"><a id="pgfId-1000771"></a>So, from table 7.1, we could infer that</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1000780"></a>The tree would look like the best compromise on the general case.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1000793"></a>The hash table would be the best choice if we know the size of the cache is big enough (and the insertion of new elements infrequent enough) to rarely require removal of the oldest entry.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1000806"></a>The linked list could be a valid option if removing old entries was more important than storing entries or finding cache elements: but in that case, the cache would basically be useless and adding it would provide no benefit.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1000820"></a>In all cases, the memory needed to store <code class="fm-code-in-text">n</code> entries is <code class="fm-code-in-text">O(n)</code>.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1000836"></a>Now the question is, can we do any better?</p>
+
+  <h3 class="fm-head2" id="heading_id_11"><a id="pgfId-1000845"></a>7.4.1 Sometimes you have to double down on problems</h3>
+
+  <p class="body"><a id="pgfId-1000857"></a>As you can imagine, if the answer were no, we wouldn’t really be asking the question in the first place.</p>
+
+  <p class="body"><a id="pgfId-1000868"></a>But how can we do any better? There isn’t any other data structure that allows us to optimize all three main operations at the same time.</p>
+
+  <p class="body"><a id="pgfId-1000877"></a>And yet . . . . What if I told you that it is possible to design an LRU cache that takes <code class="fm-code-in-text">O(1)</code> amortized time<a href="#pgfId-1007202"><sup class="footnotenumber">18</sup></a> for all those operations?</p>
+
+  <p class="body"><a id="pgfId-1000894"></a>Before you go on and read the solution to the riddle, please try for a couple of minutes to imagine how that could be possible.</p>
+
+  <p class="body"><a id="pgfId-1000903"></a>Let me give you two hints (spoiler alert: you might want to try designing a solution before reading them):</p>
+
+  <ol class="calibre18">
+    <li class="fm-list-numbered">
+      <p class="list"><a class="calibre14" id="pgfId-1000912"></a>You can use as much extra memory as you want (but staying within <code class="fm-code-in-text">O(n)</code> should be your target).</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1000926"></a>The fact that I mentioned linked lists should ring a bell, and make you think about a specific data structure we saw in appendix C. Nevertheless, we have seen that it’s not enough if you take it alone.</p>
+    </li>
+  </ol>
+
+  <p class="body"><a id="pgfId-1000938"></a>Both hints point to the same idea: a single data structure might not be enough to build the most efficient solution to the problem.</p>
+
+  <p class="body"><a id="pgfId-1000947"></a>On the one hand, we have data structures that are particularly good for quickly storing and retrieving entries. Hash tables are pretty much impossible to beat if that’s the game.</p>
+
+  <p class="body"><a id="pgfId-1000960"></a>On the other hand, hash tables are terrible when it comes to maintaining an ordering of things, but we have other structures that handle this very well. Depending on the kind of ordering we would like to keep, we might need trees, or we might be fine with lists. We’ll actually see both cases in the rest of the chapter.</p>
+
+  <p class="body"><a id="pgfId-1000969"></a>In light of this new hint, pause for another minute and try to imagine how to make this work. Can you come up with an idea of how to combine a hash table and another data structure in order to optimize all operations on a cache?</p>
+
+  <h3 class="fm-head2" id="heading_id_12"><a id="pgfId-1000982"></a>7.4.2 Temporal ordering</h3>
+
+  <p class="body"><a id="pgfId-1000996"></a>It turns out that<a id="marker-1002351"></a> we have a very simple way to do so. Before delving into this section, you might want to look at appendix C if you can’t exactly remember the running time for operations on arrays and lists, and the difference between singly- and doubly-linked lists.</p>
+
+  <p class="body"><a id="pgfId-1001013"></a>So, imagine that you only have to keep an ordering on the cache entries, being able to go from the least to the most recently used. Since the order is only based on insertion time, new elements are not changing the order of the older elements; therefore, we don’t need anything fancy: we only need a structure that supports FIFO. We could just use a list or a queue. As you should remember, a linked list is usually the best choice when we don’t know in advance the number of elements we will have to store or the number can change dynamically, while a queue is usually implemented using an array (and so more static in dimension), but optimized for insertion on the head and removal on the tail.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F5.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1025611"></a>Figure 7.5 Structure of an LRU cache. You can see the tree data elements that are stored for the cache and need to be updated after every operation: (1) The hash table. (2) The head of a doubly-linked list. (3) A pointer to the last element in the list. Notice how each element in the hash table points to a node in the list where all the data is stored. To get from a list entry to the corresponding hash entry, we have to hash the name of the company stored in the node, which is the key for the table. For the sake of simplicity, collision resolution is not considered in this and the following figures.</p>
+
+  <p class="body"><a id="pgfId-1001040"></a>Linked lists can also support fast insertion/removal at their ends. We need, however, a doubly-linked list, as shown in figure 7.5, where we insert elements on the front, and remove from the tail. By always keeping a pointer to the tail and links from each node to its predecessor, we can implement tail removal in <code class="fm-code-in-text">O(1)</code> time.</p>
+
+  <p class="body"><a id="pgfId-1001091"></a>Listing 7.1 shows some pseudo-code implementing an LRU with linked lists.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1013853"></a>Listing 7.1 LRU cache construction</p>
+  <pre class="programlisting">class LRUCache
+  <b class="calibre21">#type</b> integer
+  maxSize         
+  <b class="calibre21">#type</b> HashTable
+  hashTable         
+  <b class="calibre21">#type</b> LinkedList
+  elements         
+  <b class="calibre21">#type</b> LinkedListNode
+  <b class="calibre21">this</b>.elementsTail = <b class="calibre21">null</b>       
+ 
+  <b class="calibre21">function</b> LRUCache(maxElements)             <span class="fm-combinumeral">❶</span>
+    maxSize ← maxElements                    <span class="fm-combinumeral">❷</span>
+    hashTable ← <b class="calibre21">new</b> HashTable(maxElements)   <span class="fm-combinumeral">❸</span>
+    elements ← <b class="calibre21">new</b> LinkedList()              <span class="fm-combinumeral">❹</span>
+    elementsTail ← <b class="calibre21">null</b>                      <span class="fm-combinumeral">❺</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1024021"></a><span class="fm-combinumeral">❶</span> The signature of the constructor for the <code class="fm-code-in-text2">LRUCache</code><a id="marker-1024026"></a> object. We pass the max number of elements that the cache should store.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1024043"></a><span class="fm-combinumeral">❷</span> We need to remember how many entries we can store.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1024060"></a><span class="fm-combinumeral">❸</span> Init the hash table (the max size helps computing the internal parameters for the table).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1024077"></a><span class="fm-combinumeral">❹</span> Init the linked list for the elements (for now, it’s just empty).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1024094"></a><span class="fm-combinumeral">❺</span> The list is empty, so the pointer to last element is <code class="fm-code-in-text2">null</code>.</p>
+
+  <p class="body"><a id="pgfId-1001345"></a>When static queues are implemented using arrays, we can save some extra memory in comparison to linked lists, which would use it for pointers to other nodes and for the node object itself. This is an implementation detail, though, that depends on the language used and doesn’t change the order of magnitude of the memory used: it’s <code class="fm-code-in-text">O(n)</code> in both cases.</p>
+
+  <p class="body"><a id="pgfId-1001365"></a>So, in the end, how do we choose between lists and queues? Well, we need to reason a bit more about our design. So far, we have only considered the hash table and the linked list separately, but we need to make them work together in synchrony.</p>
+
+  <p class="body"><a id="pgfId-1001389"></a>We might store very large objects in the cache, and we definitely don’t want to duplicate them in both data structures. One way to avoid duplication is storing the entries only in one of the structures and referencing them from the other one. We could either add the entries to the hash table and store in the other DS the key to the hash table, or vice versa.</p>
+
+  <p class="body"><a id="pgfId-1001402"></a>Both linked lists and queues could support either way. But we are going to use a linked list instead; the reason will be clear in a few lines.</p>
+
+  <p class="body"><a id="pgfId-1001413"></a>We also need to decide which data structure should hold the values and which one should be left with the reference. Here, we are arguing that the best choice is having hash table entries store pointers to linked list nodes, and have the latter store the actual values, and the main reason for that is the same as for choosing lists over queues.<a href="#pgfId-1007222"><sup class="footnotenumber">19</sup></a></p>
+
+  <p class="body"><a id="pgfId-1001428"></a>This reason stems from a situation we haven’t considered yet.</p>
+
+  <p class="body"><a id="pgfId-1001437"></a>This cache is called <i class="calibre17">least recently use</i>d. It’s not least recently <i class="calibre17">added</i>. This means the ordering is not just based on the time we first add an element to cache, but on the last time it was accessed (which can be the same, for unlucky entries that are never reused after they have been saved, although it usually shouldn’t be).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F6.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1025656"></a>Figure 7.6 Add on a cache miss. (A) The cache before adding a new element. At this point, we look up “Acme” and get a cache miss. (B) We add to the front of the list a new node for “Acme.” (C) We create a new entry in the hash table and update the pointer to the new head of the list.</p>
+
+  <p class="body"><a id="pgfId-1001457"></a>So, considering the <code class="fm-code-in-text">set</code> method<a id="marker-1002359"></a> to add a new entry to the cache (implemented in listing 7.2), when we have a <i class="calibre17">cache miss</i><a id="marker-1002363"></a>, trying to access an element that is not on the cache, we just add a new entry to the front of our linked list, as shown in figure 7.6.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1013881"></a>Listing 7.2 LRU cache set</p>
+  <pre class="programlisting"><b class="calibre21">function</b> LRUCache::set(key, value)          <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> hashTable.contains(key) <b class="calibre21">then</b>           <span class="fm-combinumeral">❷</span>
+    node ← hashTable.get(key)               <span class="fm-combinumeral">❸</span>
+    node.setValue(value)                    <span class="fm-combinumeral">❹</span>
+    elements.moveToFront(node)              <span class="fm-combinumeral">❺</span>
+    <b class="calibre21">return false</b>                            <span class="fm-combinumeral">❻</span>
+  <b class="calibre21">elsif</b> getSize() &gt;= maxSize <b class="calibre21">then</b>           <span class="fm-combinumeral">❼</span>
+    evictOneEntry()                         <span class="fm-combinumeral">❽</span>
+  newNode = elements.addFront(key, value)   <span class="fm-combinumeral">❾</span>
+  hashTable.set(key, newNode)               <span class="fm-combinumeral">❿</span>
+  <b class="calibre21">if</b> elementsTail == <b class="calibre21">null then</b>              <span class="fm-combinumeral">⓫</span>
+    elementsTail ← newNode                                     
+  <b class="calibre21">return true</b>                               <span class="fm-combinumeral">⓬</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1023271"></a><span class="fm-combinumeral">❶</span> Declares method <code class="fm-code-in-text2">set</code>. The prefix <code class="fm-code-in-text2">LRUCache::</code> is just a notation to remind that this function is a method of class <code class="fm-code-in-text2">LRUCache</code><a id="marker-1023276"></a>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1023296"></a><span class="fm-combinumeral">❷</span> Checks that the entry isn’t already in the cache</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1023313"></a><span class="fm-combinumeral">❸</span> If it is, we retrieve the node containing all entry’s data.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1023330"></a><span class="fm-combinumeral">❹</span> Updates the value stored in the node</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1023347"></a><span class="fm-combinumeral">❺</span> Moves the existing node to the front of the queue</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1023364"></a><span class="fm-combinumeral">❻</span> [OPTIONAL] Returns <code class="fm-code-in-text2">false</code> to flag that no new entry was added. We need to return here, though, to avoid running the rest of the code in the method.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1023381"></a><span class="fm-combinumeral">❼</span> If the entry is not in the cache, we need to check if the cache is already full.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1023398"></a><span class="fm-combinumeral">❽</span> If the cache is full, we need to delete one element from the cache. The implementation of this method defines the eviction policy of the cache: for LRUs, the oldest element will be removed.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1023415"></a><span class="fm-combinumeral">❾</span> At this point, the cache holds at most <code class="fm-code-in-text2">maxSize-1</code> elements, so there is certainly room for one more. Creates a new node at the front of the list.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1023432"></a><span class="fm-combinumeral">❿</span> Adds an entry in the cache table pointing at the new node</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1023449"></a><span class="fm-combinumeral">⓫</span> If the pointer to the tail of the list was <code class="fm-code-in-text2">null</code>, it means the list was empty, so now the tail should point to the new element.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1023466"></a><span class="fm-combinumeral">⓬</span> Returns <code class="fm-code-in-text2">true</code> to flag that a new entry was added to the cache</p>
+
+  <p class="body"><a id="pgfId-1001804"></a>But when we run into a <i class="calibre17">cache hit</i><a id="marker-1019234"></a>, as shown in figure 7.7, accessing an element that is indeed stored on the cache, we need to move an existing list element to the front of the list, and we can only do that efficiently if we can both retrieve in constant(-ish<a href="#pgfId-1007236"><sup class="footnotenumber">20</sup></a>) time a pointer to the linked list node for the existing entry (which could be anywhere in the list, for what we know), and remove an element from the list in constant time (again, we need a doubly-linked list for this; with an array-based implementation of a queue, removal in the middle of the queue takes linear time).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F7.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1025708"></a>Figure 7.7 Update of a cache entry on cache hit. (A) The initial state of the cache. At this stage, the entry to update, “EvilCorp,” has been looked up and we had a cache hit. The lookup happens on the hash table; hence, the EvilCorp entry and link are highlighted. (B) The list node for EvilCorp is updated with the new data (looks like EvilCorp spent some cash to turn around its reputation!) and it’s also removed from the list, whose links are updated. (C) The node is now added to the front of the list. No update is necessary for the hash table.</p>
+
+  <p class="body"><a id="pgfId-1001857"></a>If the cache is full, we need to remove the least-recently-used entry before we can add a new one. In this case, the method to remove the oldest entry, described in listing 7.3 and illustrated in figure 7.8, can access the tail of the linked list in constant time, from which we recover the entry to delete. To locate it on the hash table and delete from it, we will need to hash the entry (or its ID) at an extra cost (potentially non-constant: for strings, it will depend on the length of the string).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F8.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1025755"></a>Figure 7.8 Removal of the LRU entry (will be followed by an add on miss, like the one in figure 7.6). (A) The initial state of a full cache. (B) The pointer to the tail of the list is updated, as well as the links from/to the second-to-last node. The corresponding entry in the hash table is also removed, so the node for the entry is not referenced from the cache anymore (depending on the language, it might be garbage collected, or we need to manually destroy it and release the memory it uses).</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1013909"></a>Listing 7.3 LRU cache <code class="fm-code-in-text">evictOneEntry</code> (private method)</p>
+  <pre class="programlisting"><b class="calibre21">function</b> LRUCache::evictOneEntry()
+  <b class="calibre21">if</b> hashTable.isEmpty() <b class="calibre21">then</b>          <span class="fm-combinumeral">❶</span>
+    <b class="calibre21">return false</b>                       <span class="fm-combinumeral">❷</span>
+  node ← elementsTail    
+  elementsTail ← node.previous()       <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">if</b> elementsTail != <b class="calibre21">null then</b>         <span class="fm-combinumeral">❹</span>
+    elementsTail.next ← <b class="calibre21">null</b>
+  hashTable.delete(node.getKey())      <span class="fm-combinumeral">❺</span>
+  <b class="calibre21">return true</b>                          <span class="fm-combinumeral">❻</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022919"></a><span class="fm-combinumeral">❶</span> Checks that the cache is not empty</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022940"></a><span class="fm-combinumeral">❷</span> If it is, returns <code class="fm-code-in-text2">false</code> to flag failure</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022957"></a><span class="fm-combinumeral">❸</span> Updates the pointer to the least recent element. Invariant: if the cache is not empty, the tail is not <code class="fm-code-in-text2">null</code></p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022974"></a><span class="fm-combinumeral">❹</span> If the new tail is not <code class="fm-code-in-text2">null</code>, updates its pointer to the next element (that must be <code class="fm-code-in-text2">null</code> now, being the new tail)</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022991"></a><span class="fm-combinumeral">❺</span> Removes the entry from the hash table</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1023008"></a><span class="fm-combinumeral">❻</span> Returns <code class="fm-code-in-text2">true</code> to flag success</p>
+
+  <p class="body"><a id="pgfId-1002105"></a>There are still a couple of methods in the API that we haven’t discussed yet: <code class="fm-code-in-text">get(key)</code> and <code class="fm-code-in-text">getSize</code><a id="marker-1002379"></a><code class="fm-code-in-text">()</code>. Their implementation, though, is trivial, because they are just wrappers for the homonymous methods in hash tables, at least if we keep values in the hash table directly. If, instead, we keep values in the linked list, and the hash table has pointers to list nodes, then in <code class="fm-code-in-text">get</code><a id="marker-1002383"></a> we need to resolve this further indirection, as shown in <a id="marker-1002387"></a>listing 7.4.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1013937"></a>Listing 7.4 LRU cache <code class="fm-code-in-text">get</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> LRUCache::get(key)
+  node ← hashTable.get(key)     <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> node == <b class="calibre21">null then</b>
+    <b class="calibre21">return null</b>                 <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">else</b>
+    <b class="calibre21">return</b> node.getValue()      <span class="fm-combinumeral">❸</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022759"></a><span class="fm-combinumeral">❶</span> Searches the hash table for the argument key. The output of <code class="fm-code-in-text2">get</code> is a node of the linked list or <code class="fm-code-in-text2">null</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022780"></a><span class="fm-combinumeral">❷</span> If node is <code class="fm-code-in-text2">null</code>, the key is not stored in the hash table; hence, the entry is not in the cache.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022797"></a><span class="fm-combinumeral">❸</span> Otherwise, we just return the value stored in the linked list’s node.</p>
+
+  <h3 class="fm-head2" id="heading_id_13"><a id="pgfId-1002267"></a>7.4.3 Performance</h3>
+
+  <p class="body"><a id="pgfId-1002279"></a>So, <a id="marker-1002391"></a>if you look at all the previous listings, they only contain operations that are either constant-time or amortized constant-time (for the hash table). That gives us the boost in performance that we were looking for!</p>
+
+  <p class="body"><a id="pgfId-1002292"></a>Table 7.2 shows an updated version of table 7.1, including an entry for the <a id="marker-1002395"></a>LRU cache.</p>
+
+  <p class="fm-table-caption"><a id="pgfId-1014018"></a>Table 7.2 Comparative analysis of performance vs implementation for cache with <code class="fm-code-in-text">n</code> elements</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1014030"></a> </p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1014032"></a>Array (unsorted)</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1014034"></a>Linked list</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1014036"></a>Hash table</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1014038"></a>Balanced tree</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1014040"></a>LRU cache</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014042"></a>Storing an entry</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014044"></a>O(1)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014046"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014048"></a>O(1) <a href="#pgfId-1014105"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014050"></a>O(log n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014052"></a>O(1)<a href="#pgfId-1014105"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014054"></a>Finding entry by name</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014056"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014058"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014060"></a>O(1)<a href="#pgfId-1014105"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014062"></a>O(log n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014064"></a>O(1)<a href="#pgfId-1014105"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014066"></a>Eviction</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014068"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014070"></a>O(1)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014072"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014074"></a>O(log n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1014076"></a>O(1)<a href="#pgfId-1014105"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+    </tr>
+  </table>
+
+  <p class="fm-footnote"><sup class="footnotenumber">a</sup> <a id="pgfId-1014105"></a>Amortized time</p>
+
+  <h2 class="fm-head" id="heading_id_14"><a id="pgfId-1002676"></a>7.5 When fresher data is more valuable: LFU</h2>
+
+  <p class="body"><a id="pgfId-1002698"></a>We <a id="marker-1003636"></a>have hinted at this in the previous sections: sometimes the least recently used entries are the ones less likely to be requested again . . . but that is not necessarily true in all contexts.</p>
+
+  <p class="body"><a id="pgfId-1002718"></a>It may happen that some data was popular in the past and currently becomes temporarily irrelevant, but then it will likely be accessed again in the near future.</p>
+
+  <p class="body"><a id="pgfId-1002727"></a>Think about an online retailer that operates worldwide. If a product is particularly popular in one or just a few countries, it will hit high peaks of requests during busy hours for that country, while it will hardly be accessed at all during the low peaks of activity for that same area.<a href="#pgfId-1007251"><sup class="footnotenumber">21</sup></a></p>
+
+  <p class="body"><a id="pgfId-1002742"></a>Another example could simply be a spurious peak of requests for certain items, as shown in figure 7.9.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F9.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1025816"></a>Figure 7.9 An example of a possible situation where LRU eviction policy would purge most “best-selling” items from a cache, in favor of the more recently viewed ones which become popular during a peak of requests. In the figure, items are ordered according to their most recent view; the number of views is shown only to display how most recent views during a peak can wipe out normal best-selling products. While LRU policy never guarantees that best-selling items will stay in the cache, the higher frequency with which they are accessed makes it more likely that they will stay in the cache (because it is likely they will go to the head of the queue before being purged). During a peak, if the number of items that suddenly become popular is large enough, they could fill the cache and force the usual items to be purged. This would be a temporary side effect that will regress after the peak. In some situations, this could also be desirable, because items popular during a peak should be accessed faster than the regular best-selling ones. LRU has a more dynamic turnaround than LFU, as we will see.</p>
+
+  <p class="body"><a id="pgfId-1002772"></a>Either way, we might end up purging from the cache data that on average is used frequently over time, because there might be fresher data—entries that have been accessed more recently, but perhaps will never ever (or for a long time, longer than the average life of a cache entry) be accessed again.</p>
+
+  <p class="body"><a id="pgfId-1002783"></a>If that’s a possibility, an alternative policy could be based on counting how many times an entry has been accessed since it was added to the cache, and always retaining those items that are accessed the most.</p>
+
+  <p class="body"><a id="pgfId-1002794"></a>This purging strategy is called <i class="calibre17">LFU</i> for <i class="calibre17">Least Frequently Used</i> (sometimes also referred to as <i class="calibre17">MFU</i>, <i class="calibre17">Most Frequently Used</i><a id="marker-1003640"></a>) and comes with the advantage that items that are stored in the cache and never accessed again get purged out of the cache fairly quickly.<a href="#pgfId-1007268"><sup class="footnotenumber">22</sup></a></p>
+
+  <h3 class="fm-head2" id="heading_id_15"><a id="pgfId-1002826"></a>7.5.1 So how do we choose?</h3>
+
+  <p class="body"><a id="pgfId-1002846"></a>Those <a id="marker-1003644"></a>are not the only possible strategies for cache purging. A web cache, for instance, could also consider the cost of retrieving some information in terms of latency, compute time, and even actual costs when, as in our example, you need to pay an external service to retrieve some information.</p>
+
+  <p class="body"><a id="pgfId-1002859"></a>And that’s just one of many examples. The key point here is that you need to choose the best strategy for your context and for the characteristics of your application. Partly you can determine it during design, but to validate and fine tune your choice, you will likely have to run some profiling and collect statistics on the usage of your cache <a id="marker-1003648"></a>(don’t be alarmed, though; there are several tools that can automatically do that for you).</p>
+
+  <h3 class="fm-head2" id="heading_id_16"><a id="pgfId-1002878"></a>7.5.2 What makes LFU different</h3>
+
+  <p class="body"><a id="pgfId-1002894"></a>To <a id="marker-1003652"></a><a id="marker-1003656"></a>describe an LFU, we are not going to start from scratch; that would make no sense, as we already have a good basis to start with—our LRU cache.</p>
+
+  <p class="body"><a id="pgfId-1002912"></a>We’ve said it over and again: the difference between two cache types is the eviction policy. Well, that’s true for the most part, although not quite the whole story.</p>
+
+  <p class="body"><a id="pgfId-1002921"></a>As shown in figure 7.10, we could implement our LFU from the code in section 7.4 by just changing the eviction policy and therefore the order of elements in the list.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F10.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1025861"></a>Figure 7.10 An inefficient implementation of an LFU cache. When all elements of a list with <code class="fm-code-in-text">n</code> entries have the same value for counter, and one element at the end of the list is accessed, we will have to perform <code class="fm-code-in-text">n-1</code> node swaps to bubble up the updated entry to the front of the list.</p>
+
+  <p class="body"><a id="pgfId-1002959"></a>When we add a new entry, we set its counter to 1, and we could insert it at the tail of the list, while on a cache hit we could increment the node’s counter and move it toward the head of the list until we find another node with a larger counter.</p>
+
+  <p class="body"><a id="pgfId-1002972"></a>That would certainly work correctly. But how efficient would it be? Would there be a way to improve the performance of our cache?</p>
+
+  <p class="body"><a id="pgfId-1002983"></a>We can forget about constant-time insertion: that only works for the LRU. We can at least maintain constant-time lookup, and it’s better than nothing.</p>
+
+  <p class="body"><a id="pgfId-1002999"></a>But adding or updating a new element could take up to linear time in edge cases where most of the elements are used with the same frequency.</p>
+
+  <p class="body"><a id="pgfId-1003008"></a>Can we do any better? Well, once again, at this point a bell should ring (if it doesn’t, you might want to take a look at chapter 2 and appendix C before moving on).</p>
+
+  <p class="body"><a id="pgfId-1003017"></a>We are no longer basing our eviction policy on a FIFO (first in, first out<a id="marker-1003660"></a>) queue.<a href="#pgfId-1007287"><sup class="footnotenumber">23</sup></a> The order of insertion doesn’t matter anymore; instead, we have a priority associated with each node.</p>
+
+  <p class="body"><a id="pgfId-1003035"></a>Now do you see where I am going? The best way to keep an order on entries based on their dynamically changing priority is, of course, a priority queue. It might be a heap, a Fibonacci heap, or any other implementation, but we will stick with the abstract data structure in the code, leaving to users the task of thinking about which implementation works best for them, depending on the programming language they use and, of course, the context in which they will use the cache.<a href="#pgfId-1007302"><sup class="footnotenumber">24</sup></a> For the performance analysis, though, we will consider a heap because it gives us reasonable-enough performance guarantees on all operations, combined with a clean, simple implementation.</p>
+
+  <p class="body"><a id="pgfId-1003060"></a>Take a look at figure 7.11 to see how this changes our cache internals. Now we have only two things to change in our implementation to switch from an LRU to an LFU:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1003069"></a>The eviction policy (all the logic about choosing which element to remove)</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1003081"></a>The data structure used to store elements</p>
+    </li>
+  </ul>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F11.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1025910"></a>Figure 7.11 As opposed to the example in figure 7.10, an efficient implementation of an LFU cache, using a priority queue to keep track of which elements should be evicted next. Here the <code class="fm-code-in-text">PriorityQueue</code><a id="marker-1025911"></a>, which is an abstract data type, is represented as a binary heap. Note that we don’t need to keep separate pointers for the points of insertion and eviction like for the linked list.</p>
+
+  <p class="body"><a id="pgfId-1003115"></a>It’s time to look at some more code. We highlighted the differences between the corresponding LRU’s methods to make it easier for the readers to compare them.</p>
+
+  <p class="body"><a id="pgfId-1003128"></a>The initialization of the cache, shown in listing 7.5, is almost identical to the LRU one; we just create an empty priority queue instead of a linked list.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1014143"></a>Listing 7.5 LFU cache construction</p>
+  <pre class="programlisting"><b class="calibre21">function</b> LFUCache(maxElements)
+  maxSize ← maxElements        
+  hashTable ← <b class="calibre21">new</b> HashTable(maxElements)    
+  <span class="calibre31">elements ← </span><b class="calibre21"><span class="calibre31">new</span></b><span class="calibre31"> PriorityQueue()</span>          <span class="fm-combinumeral">❶</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022697"></a><span class="fm-combinumeral">❶</span> This time we need to create a priority queue. On the other hand, we don’t need the pointer to the tail anymore. We assume that elements with lower values for priorities are towards the top of the queue (as it happens in a min-heap).</p>
+
+  <p class="body"><a id="pgfId-1003224"></a>When it comes to adding an entry, things get a bit trickier. Remember that we mentioned how you need to be careful in order to implement the priority? We want to make sure that among the elements with the minimum number of entries, the oldest is removed first; otherwise, we could end up removing the latest entry over and over again, without giving it a chance to have its counter increased.</p>
+
+  <p class="body"><a id="pgfId-1003235"></a>The solution is described in listing 7.6, where we use a tuple, <code class="fm-code-in-text">&lt;counter, timestamp&gt;</code> as priority, where the timestamp is the time of last access to an entry, and it’s used to break ties on the counter; here, higher frequency and larger timestamps mean higher priority.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1014173"></a>Listing 7.6 LFU cache set</p>
+  <pre class="programlisting"><b class="calibre21">function</b> LFUCache::set(key, value)
+  <b class="calibre21">if</b> hashTable.contains(key) <b class="calibre21">then</b>     
+    <span class="calibre31">node ← this.hashTable.get(key)</span>                                  <span class="fm-combinumeral">❶</span>
+    node.setValue(value)      
+    <span class="calibre31">node.updatePriority(new Tuple(node.getCounter() + 1, time()))</span>   <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return false</b>       
+  <b class="calibre21">elsif</b> getSize() &gt;= maxSize <b class="calibre21">then</b>     
+    evictOneEntry()
+  <span class="calibre31">newNode ← elements.add(key, value, new Tuple(1, time()))</span>          <span class="fm-combinumeral">❸</span>
+  hashTable.set(key, newNode)     
+  <b class="calibre21">return true</b>       </pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022494"></a><span class="fm-combinumeral">❶</span> Checks that the entry isn’t already in the cache (we get a different kind of object here).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022515"></a><span class="fm-combinumeral">❷</span> Instead of just moving the node to the front of the list, here we have to increment the counter by one, update the time of last access, and trickle the entry down towards the end of the queue.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022532"></a><span class="fm-combinumeral">❸</span> Adds a new entry to the priority queue. Here the counter is 1, being a new entry.</p>
+
+  <p class="body"><a id="pgfId-1003429"></a>Finally, we have the method to evict one of the entries, which is implemented in listing 7.7. Using a priority queue makes its implementation even easier, because all the details of removing the element and updating the queue are encapsulated in the priority queue <a id="marker-1003668"></a><a id="marker-1003672"></a>itself.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1014201"></a>Listing 7.7 LFU cache <code class="fm-code-in-text">evictOneEntry</code> (private method)</p>
+  <pre class="programlisting"><b class="calibre21">function</b> LFUCache::evictOneEntry()
+  <b class="calibre21">if</b> hashTable.isEmpty() <b class="calibre21">then</b>     
+    <b class="calibre21">return false</b>       
+  <span class="calibre31">node ← elements.pop()</span>             <span class="fm-combinumeral">❶</span>
+  hashTable.delete(node.getKey())     
+  <b class="calibre21">return true</b>        </pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022432"></a><span class="fm-combinumeral">❶</span> Instead of handling removal from the tail of a linked list, we just remove the top element from a priority queue. Invariant: if the hash table is not empty, the queue must not be empty.</p>
+
+  <h3 class="fm-head2" id="heading_id_17"><a id="pgfId-1003547"></a>7.5.3 Performance</h3>
+
+  <p class="body"><a id="pgfId-1003559"></a>Let’s <a id="marker-1003676"></a>once again update our table with the performance for LFU. As shown in table 7.4, since all writing operations for an LFU involve modifying a heap, we can’t have the constant time guarantee anymore, except for the lookup.</p>
+
+  <p class="body"><a id="pgfId-1003574"></a>It’s worth noting that with a Fibonacci heap<a id="marker-1015152"></a>, insertion and update of priority in the heap would run in amortized constant time, but deleting the top element would still require logarithmic time, so we couldn’t improve the asymptotic running time needed for storing an entry <a id="marker-1015154"></a>(because it uses delete).</p>
+
+  <p class="fm-table-caption"><a id="pgfId-1015338"></a>Table 7.3 Comparative analysis of performance vs implementation for cache with <code class="fm-code-in-text">n</code> elements</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1015352"></a> </p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1015354"></a>Array</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1015356"></a>List</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1015358"></a>Hash table</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1015360"></a>Tree</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1015362"></a>LRU cache</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1015364"></a>LFU cache</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015366"></a>Storing an entry</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015368"></a>O(1)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015370"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015372"></a>O(1) <a href="#pgfId-1015432"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015374"></a>O(log n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015376"></a>O(1) <a href="#pgfId-1015432"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015378"></a>O(log n) <a href="#pgfId-1015432"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015380"></a>Finding entry by name</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015382"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015384"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015386"></a>O(1) <a href="#pgfId-1015432"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015388"></a>O(log n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015390"></a>O(1) <a href="#pgfId-1015432"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015392"></a>O(1) <a href="#pgfId-1015432"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015394"></a>Eviction</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015396"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015398"></a>O(1)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015400"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015402"></a>O(log n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015404"></a>O(1) <a href="#pgfId-1015432"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015406"></a>O(log n) <a href="#pgfId-1015432"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+    </tr>
+  </table>
+
+  <p class="fm-footnote"><sup class="footnotenumber">a</sup> <a id="pgfId-1015432"></a>Amortized time.</p>
+
+  <h3 class="fm-head2" id="heading_id_18"><a id="pgfId-1004011"></a>7.5.4 Problems with LFU</h3>
+
+  <p class="body"><a id="pgfId-1004025"></a>Of <a id="marker-1005980"></a>course, no policy is always perfect, and even LFU has some cons. Most notably, if the cache runs for long, the turnaround time for older entries that are not popular anymore could be very long.</p>
+
+  <p class="body"><a id="pgfId-1004047"></a>Let’s consider an example: if you have a cache with at most <code class="fm-code-in-text">n</code> entries, and the most frequently used one, <code class="fm-code-in-text">X</code>, has been requested <code class="fm-code-in-text">m</code> times before, but at some point isn’t being accessed anymore (for example, it goes out of stock), then for a set of <code class="fm-code-in-text">n</code> new entries to cause the eviction of <code class="fm-code-in-text">X</code>, they will have to be requested <code class="fm-code-in-text">n*m</code> times at least.</p>
+
+  <p class="body"><a id="pgfId-1004076"></a>Plugging in some numbers, if your cache holds a thousand elements and <code class="fm-code-in-text">X</code> was requested a thousand times, it will take at least one million accesses to a thousand brand-new entries before <code class="fm-code-in-text">X</code> is evicted after it becomes useless. Obviously, if more accesses are made to other entries already in the cache, then this number goes down, but on average it should be in that order of magnitude.</p>
+
+  <p class="body"><a id="pgfId-1004091"></a>To solve this issue, some possible solutions are</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1004100"></a>Limiting the maximum value for the counter of an entry</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1004113"></a>Resetting or halving the counter of entries over time (for instance, every few hours)</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1004128"></a>Computing the weighted frequency based on the time of last access (this would also solve our issue with ties on the counter, and we could avoid storing tuples as priorities)</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1004140"></a>LRU and LFU are not the only type of cache available. Starting from an LFU cache, and just (this time for real) changing the eviction policy by choosing a different metric for entries priority, custom types can be created to adapt to specific contexts.</p>
+
+  <p class="body"><a id="pgfId-1004149"></a>For instance, we could decide that certain companies are more important than others, or we might want to weight the number of accesses with the age of the data, halving it every 30 minutes from the last access.</p>
+
+  <p class="body"><a id="pgfId-1004158"></a>As complicated as it may sound so far, that’s not all of it. You have choices about how to run a cache, but you also have more choices when it comes to how to <a id="marker-1005984"></a>use <a id="marker-1005988"></a>it.</p>
+
+  <h2 class="fm-head" id="heading_id_19"><a id="pgfId-1004171"></a>7.6 How to use cache is just as important</h2>
+
+  <p class="body"><a id="pgfId-1004189"></a>That’s <a id="marker-1005992"></a>right, the cache type is only part of the story. To make it work properly, you also need to use it in the best possible way for your application.</p>
+
+  <p class="body"><a id="pgfId-1004200"></a>For instance, if you place a cache in front of a database, on writing operations you could decide to write values only to the cache and only update the DB if another client requests the same entry; or, on the other hand, you could decide to always update the DB.</p>
+
+  <p class="body"><a id="pgfId-1004209"></a>Even more, you could decide to write on the DB only and update the cache just when data is requested for read, or update the cache on writes.</p>
+
+  <p class="body"><a id="pgfId-1004218"></a>These policies described above all have names, because they are widely used in software design and engineering.</p>
+
+  <p class="body"><a id="pgfId-1004231"></a><a id="id_Hlk56234938"></a><i class="calibre17">Write-Behind</i><a id="marker-1005996"></a> (or <i class="calibre17">Write-Back</i><a id="marker-1006000"></a>), our first example, is a storage policy where data is written into cache on every change while it’s written into the corresponding location on the main storage (memory, DB, and so on) only at specified intervals of time or under certain conditions (for instance, on reads).</p>
+
+  <p class="body"><a id="pgfId-1004254"></a>In this case, the data on cache is always fresh, while data on the DB (or other support) might be stale. This policy helps keep latency low and also reduces the load on the DB, but it might lead to data loss; for instance, when we write back only on reads, and an entry stored in cache is never read after write. In some applications this data loss is fine, and in those cases write back is the preferred policy.</p>
+
+  <p class="body"><a id="pgfId-1004265"></a><a id="id_Hlk56235057"></a><i class="calibre17">Write-Through</i><a id="marker-1006004"></a> (or <i class="calibre17">Write-Ahead</i><a id="marker-1006008"></a>), always writes entries both on cache and on the main storage at the same time. This way the database will usually have only one write and will (almost) never be hit by the application for read. This is slower than Write-Behind, but reduces the risk of data loss, bringing it down to zero, with only the exception of edge cases and malfunctions. Write-Through strategy doesn’t improve writing performance at all (but caching would still improve reading performance); instead, it is particularly useful for read-intensive applications when data is written once (or seldom) and read many times (usually in a short time). Session data is a good example of usage for this strategy.</p>
+
+  <p class="body"><a id="pgfId-1004301"></a><a id="id_Hlk56235139"></a><i class="calibre17">Write-Around</i><a id="marker-1006012"></a> refers to the policy of writing data only to the main storage, and not to cache. This is good for write-and-forget applications, those ones that seldom or never reread recently written data. The cost of reading recently written data in this configuration is high because they will result in a cache miss.</p>
+
+  <p class="body"><a id="pgfId-1004324"></a><i class="calibre17">Read-Through</i><a id="marker-1006016"></a> refers to the overall strategy of writing entries on the cache only when they are read, so they are already written on another, slower, memory support. The writing policy that’s used for this purpose can be any of Write-Back or Write-Around. The peculiarity of this policy is that in Read-Through, the application only interfaces to cache for reading, and the <i class="calibre17">cache store</i> will be delegated to read data from the main storage on a cache miss.</p>
+
+  <p class="body"><a id="pgfId-1004353"></a><a id="id_Hlk56235236"></a><i class="calibre17">Refresh-Ahead</i><a id="marker-1006020"></a> is a caching strategy used in caches where elements can go stale, and they would be considered expired after a certain time.<a href="#pgfId-1007315"><sup class="footnotenumber">25</sup></a> In this approach, cache entries with high requests that are about to expire are proactively (and asynchronously) read and updated from the main source. This means that the application will not feel the pain of a slow DB read and cache store.</p>
+
+  <p class="body"><a id="pgfId-1004376"></a><a id="id_Hlk56235266"></a><i class="calibre17">Cache-Aside</i><a id="marker-1006024"></a> has the cache sitting on the side of the application, and only talking to the application. It’s different from Read-Through because in this case the responsibility of checking the cache or the DB is on the application, which will first check the cache and, in case of miss, do some extra work to also check the DB and store the value read on the cache.</p>
+
+  <p class="body"><a id="pgfId-1004400"></a>Choosing the best strategy can be as important as acing the cache implementation, because choosing unwisely can overload and crash your database <a id="marker-1006028"></a>(or whatever the main storage is, in your case).</p>
+
+  <h2 class="fm-head" id="heading_id_20"><a id="pgfId-1004413"></a>7.7 Introducing synchronization</h2>
+
+  <p class="body"><a id="pgfId-1004427"></a>So <a id="marker-1006032"></a>far, we have always assumed that our cache objects were used in a single-threaded environment.</p>
+
+  <p class="body"><a id="pgfId-1004438"></a>What do you think would happen if we used code in listing 7.6 in a concurrent environment? If you are familiar with concurrent code, you can already imagine that we might have issues with race conditions.</p>
+
+  <p class="body"><a id="pgfId-1004449"></a>Let’s take another look at that code, copied over to listing 7.8 for your convenience, with some minimal simplifications.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015485"></a>Listing 7.8 Simplified version of LFU cache set</p>
+  <pre class="programlisting"><b class="calibre21">function</b> LFUCache::set(key, value)
+  <b class="calibre21"><span class="calibre31">if</span></b><span class="calibre31"> (</span><b class="calibre21"><span class="calibre31">this</span></b><span class="calibre31">.hashTable.contains(key)) </span><b class="calibre21"><span class="calibre31">then</span></b>                                   #1
+    node ← <b class="calibre21">this</b>.hashTable.get(key)                                         #2
+    node.setValue(value)                                                   #3
+    <b class="calibre21">return</b> node.updatePriority(node.getCounter())                          #4
+  <b class="calibre21"><span class="calibre31">elsif</span></b><span class="calibre31"> getSize() &gt;= </span><b class="calibre21"><span class="calibre31">this</span></b><span class="calibre31">.maxSize</span>                                          #5
+    evictOneEntry()                                                        #6
+  newNode ← <b class="calibre21">this</b>.elements.add(key, value, 1)                               #7
+  hashTable.set(key, newNode)                                              #8
+  <b class="calibre21">return true</b></pre>
+
+  <p class="body"><a id="pgfId-1004605"></a>Let’s imagine we have two concurrent calls to add two new entries (neither of them is in the cache yet) and our cache already contains <code class="fm-code-in-text">maxSize-1</code> elements. In other words, the next element will fill the cache to its maximum capacity.</p>
+
+  <p class="body"><a id="pgfId-1004620"></a>Now those two requests will proceed in parallel and suppose call A is the first one to get to line 5 in listing 7.8. The condition is <code class="fm-code-in-text">false</code>; then it moves to line 7. But before call A executes line 7, call B gets to line 5, and—guess what?—the <code class="fm-code-in-text">if</code> condition is still <code class="fm-code-in-text">false</code>, so call B will move on to line 7 as well and execute it and line 8.</p>
+
+  <p class="body"><a id="pgfId-1004645"></a>As a result, the cache will hold one element more than allowed. Figure 7.12 shows this situation. The good news is that on line 5, we already do things the right way and check if current size is greater than or equal to the max allowed size. If we were just checking for equality, this race condition would have caused the cache to grow indefinitely, likely until it overflowed your system’s heap.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F12.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1025953"></a>Figure 7.12 A shared cache used in a multithreaded environment, without implementing synchronization. (A) Two threads concurrently try to add a new element to a cache with only one free spot. When the <code class="fm-code-in-text">LFUCache::set</code> method<a id="marker-1025954"></a> inside each thread concurrently checks for cache size (line 5 in listing 7.8), they both see it’s not full. (B) Without synchronization, both threads add an element to the cache (line 7), without evicting. Depending on the implementation of the cache (and of <code class="fm-code-in-text">elements.add</code><a id="marker-1025955"></a>), this could lead to overflow of the cache or just to one of the two values being overwritten by the other. It’s important to understand that even if the cache handles purging internally, as it should be (the app should only worry about reading/writing elements; only the cache should decide when purging is necessary), if cache’s methods are not synchronized, race conditions can and do happen inside those methods.</p>
+
+  <p class="body"><a id="pgfId-1004688"></a>Likewise, line 1 could bring to race conditions if two parallel calls to set the same key happen simultaneously.</p>
+
+  <p class="body"><a id="pgfId-1004697"></a>It also gets worse than this. For instance, think about how we might want to fix this problem. You might be tempted to add another check right before line 7, but would that work? It would somehow lower the odds that things might go berserk, but it wouldn’t really solve the problem.</p>
+
+  <p class="body"><a id="pgfId-1004712"></a>The issue here is that the set operation is not <i class="calibre17">atomic</i>: while we are in the process of setting a new entry (or updating an old one), at the same time we might be performing the same operation in another thread for another entry, the same operation for the same entry, or even an entirely different operation, such as evicting an element from the cache.</p>
+
+  <p class="body"><a id="pgfId-1004727"></a>When we operate in a single-threaded environment, calling cache’s methods synchronously, things go smoothly because each method call is completed before anyone else can change the cache, so we have the illusion of atomicity.</p>
+
+  <p class="body"><a id="pgfId-1004736"></a>In a multi-threaded environment, we need to be careful and explicitly regulate the execution of these methods and access to the shared resources, so that all methods that mutate the state of an object are executed simulating full isolation (so no one else can modify the resource, and perhaps also no one else can read from it). Figure 7.13 can give you an idea of how we can correct the workflow to prevent the race conditions previously discussed.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F13.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1025997"></a>Figure 7.13 Using a synchronized implementation for the cache, we can avoid race conditions. In the example shown in figure 7.12, a synchronized data structure requires any thread to acquire a lock on it (B) before being able to write a value (C). If another thread tries to acquire the lock while it is still in use by thread <code class="fm-code-in-text">N</code>, it will be left waiting until the lock is released (D). After that (not shown in the figure), the waiting thread can acquire the lock, or possibly compete with other threads trying to acquire it.</p>
+
+  <p class="body"><a id="pgfId-1004766"></a>For composite data structures such as caches, we need to be twice as careful, because we need to make sure that also the basic data structures upon which they’re built are <i class="calibre17">thread-safe</i><a id="marker-1006044"></a>.<a href="#pgfId-1007333"><sup class="footnotenumber">26</sup></a></p>
+
+  <p class="body"><a id="pgfId-1004783"></a>And thus, for LFU, we need to ensure that both the priority queue and the hash table support concurrent execution.</p>
+
+  <p class="body"><a id="pgfId-1004792"></a>Modern programming languages provide plenty of mechanisms to ensure thread-safety, from locks to semaphores to latches.</p>
+
+  <p class="body"><a id="pgfId-1004801"></a>An extensive covering of this topic would require a book on its own, so unfortunately we will have to make do with an example. We’ll show how to solve this problem in Java, providing the full code for thread-safe LRU/LFU in our repo on GitHub.<a href="#pgfId-1007345"><sup class="footnotenumber">27</sup></a></p>
+
+  <h3 class="fm-head2" id="heading_id_21"><a id="pgfId-1004822"></a>7.7.1 Solving concurrency (in Java)</h3>
+
+  <p class="body"><a id="pgfId-1004836"></a>If <a id="marker-1006048"></a><a id="marker-1006052"></a><a id="marker-1006056"></a>we are making another exception in this chapter, showing some code in a specific programming language rather than pseudo-code, it’s because we feel that these concepts can only by tackled effectively within the concrete context of a real language.</p>
+
+  <p class="body"><a id="pgfId-1004849"></a>As many programming languages support the same concepts, it should be easy to port this logic to your favorite environment.</p>
+
+  <p class="body"><a id="pgfId-1004858"></a>We actually need to start from the class constructor, implemented in listing 7.9, because there will be new elements to be added.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015513"></a>Listing 7.9 Java implementation, LFU cache constructor</p>
+  <pre class="programlisting">LFUCache(int maxSize) {
+  <b class="calibre21">this</b>.maxSize = maxSize;                                                  #1
+  <b class="calibre21">this</b>.hashTable=<b class="calibre21">new</b> ConcurrentHashMap&lt;Key, PriorityQueueNode &gt;(maxSize);  #2
+  <b class="calibre21">this</b>.elements = <b class="calibre21">new</b> ConcurrentHeap&lt;Pair&lt;Key, Value&gt;, Integer&gt;();         #3
+  ReentrantReadWriteLock lock = <b class="calibre21">new</b> ReentrantReadWriteLock();              #4
+  <b class="calibre21">this</b>.readLock = lock.readLock();                                         #5
+  <b class="calibre21">this</b>.writeLock = lock.writeLock();
+}</pre>
+
+  <p class="body"><a id="pgfId-1004997"></a>There are a few noticeable changes with respect to listing 7.5, besides, of course, switching to Java syntax.</p>
+
+  <p class="body"><a id="pgfId-1005006"></a>At lines 2 and 3, notice how we used a <code class="fm-code-in-text">ConcurrentHashMap</code><a id="marker-1006060"></a> instead of a simple <code class="fm-code-in-text">HashMap</code><a id="marker-1006064"></a>, as you might have expected, and the same goes for the <code class="fm-code-in-text">ConcurrentHeap</code><a id="marker-1006068"></a><a href="#pgfId-1007361"><sup class="footnotenumber">28</sup></a> class. We want our internal data structures to be synchronized as well, to guarantee atomicity and isolation. Technically, if we handle the synchronization of <code class="fm-code-in-text">LRUCache’s</code> methods correctly, there will be no concurrent access at all to its internal fields, so we could also be fine with the regular, single-thread data structures. If we use their concurrent versions, we need to be super-careful, because that could lead to bugs and <a id="marker-1006076"></a><a id="marker-1006080"></a><a id="marker-1006084"></a>deadlocks.<a href="#pgfId-1007382"><sup class="footnotenumber">29</sup></a></p>
+
+  <h3 class="fm-head2" id="heading_id_22"><a id="pgfId-1005041"></a>7.7.2 Introducing locks</h3>
+
+  <p class="body"><a id="pgfId-1005055"></a>When <a id="marker-1006088"></a><a id="marker-1006092"></a><a id="marker-1006096"></a>we get to line 4, though, we see a new entry, a brand-new attribute for our class: an object of type <code class="fm-code-in-text">ReentrantReadWriteLock</code><a id="marker-1006100"></a>. Before explaining what a reentrant lock is, we should make one thing clear: this is the mechanism that we are going to use to handle concurrent access to <code class="fm-code-in-text">LFUCache’s</code> methods. Java provides several different ways to do so, from declaring methods as synchronized to using semaphores, latches, and so on of these mechanisms. Which one is the best depends—as always—on the context, and sometimes more than one method could work. In this case, I prefer using a reentrant <i class="calibre17">read/write</i> lock rather than declaring methods as synchronized, because it gives us more flexibility in deciding when we should use a lock on read and when on write. As we’ll see, there might be a big impact on performance if we don’t get this right.</p>
+
+  <p class="body"><a id="pgfId-1005093"></a>But first things first: we still need to define what a lock is, not to mention what reentrant means.</p>
+
+  <p class="body"><a id="pgfId-1005102"></a>A lock is a concurrency mechanism whose name is pretty self-explanatory. You probably have already heard of database locks, and the principle is exactly the same for code. If an object (an instance of class) has some code wrapped inside a lock, this means that for that instance, no matter how many calls are made to that method, the locked portion of code can only be executed by one call at a time—all the others will have to wait for their turn.</p>
+
+  <p class="body"><a id="pgfId-1005115"></a>In our example, it means that of the two calls to <code class="fm-code-in-text">set</code><a id="marker-1006108"></a>, while the first is executed, the second is left waiting.</p>
+
+  <p class="body"><a id="pgfId-1005127"></a>As you can see, this is a powerful mechanism, but it’s also dangerous, because failing to release a lock can leave all other calls hanging forever (<i class="calibre17">deadlock</i><a id="marker-1006112"></a>) and even just using locks excessively can degrade performance sensibly, introducing unnecessarily long delays.</p>
+
+  <p class="body"><a id="pgfId-1005139"></a>Locks basically move execution from parallel to synchronous (hence the term <i class="calibre17">synchronization</i>) by using waiting queues to regulate access to a shared resource.</p>
+
+  <p class="body"><a id="pgfId-1005151"></a>Explaining in-depth how a lock works and how deadlocks can happen and can be prevented usually takes a couple of chapters in a book on operating systems, so it’s out of our scope. We encourage interested readers to go on and read more on the subject<a href="#pgfId-1007396"><sup class="footnotenumber">30</sup></a> because it’s becoming more and more important for modern programming and web applications, but also compute-intensive applications that run in parallel on GPUs.</p>
+
+  <p class="body"><a id="pgfId-1005173"></a>Now, what does reentrant mean? As the word suggests, with a reentrant lock a thread can enter (or lock) a resource more than once, and every time it does, a counter is incremented by one, while when it unlocks the resource, the counter is decremented by one, and the lock is actually released when this counter gets to zero. Why is it important to have a reentrant lock? Because if the same thread tries to lock the same resource more than once, we could get into a deadlock.</p>
+
+  <p class="body"><a id="pgfId-1005186"></a>No, seriously, why is it important to us? You will have to wait a few paragraphs until we will show you in <a id="marker-1006120"></a><a id="marker-1006124"></a><a id="marker-1006128"></a>practice.</p>
+
+  <h3 class="fm-head2" id="heading_id_23"><a id="pgfId-1005199"></a>7.7.3 Acquiring a lock</h3>
+
+  <p class="body"><a id="pgfId-1005213"></a>So, <a id="marker-1006132"></a><a id="marker-1006136"></a>now that we have an idea of what a lock is, we are ready to take a look at the modified version of the <code class="fm-code-in-text">set</code> method<a id="marker-1006140"></a> in listing 7.10.</p>
+
+  <p class="body"><a id="pgfId-1005230"></a>As you can see, as soon as we enter the method, we lock our resource (the whole cache) for writing. What does it mean? When a write lock is set on a resource, the thread holding the lock is the only one that can write to <i class="calibre17">and</i> read from that resource. It means that all other threads, either trying to read or write on the resource, are going to have to wait until the current lock holder releases it.</p>
+
+  <p class="body"><a id="pgfId-1005243"></a>The second instruction here is a <code class="fm-code-in-text">try</code>, with a <code class="fm-code-in-text">finally</code> block at the end of the method (lines marked with 4 and 5), where we release the lock. This is necessary to prevent deadlock: if any of the operations inside the <code class="fm-code-in-text">try</code> fail, we still release the lock before exiting the function, so that other threads can acquire the lock and not be blocked anymore.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015549"></a>Listing 7.10 Java concurrent LFU cache set</p>
+  <pre class="programlisting">public boolean set(Key key, Value value) {
+  writeLock.lock();                                                        #1
+  try {                                                                    #2
+    <b class="calibre21"><span class="calibre31">if</span></b><span class="calibre31"> (</span><b class="calibre21"><span class="calibre31">this</span></b><span class="calibre31">.hashTable.contains(key)) {</span>     
+      PriorityQueueNode node = <b class="calibre21">this</b>.hashTable.get(key);
+      node.setValue(value);  
+      <b class="calibre21">return</b> node.updatePriority(node.getCounter());
+    } <b class="calibre21"><span class="calibre31">else</span></b><span class="calibre31">  <b class="calibre21">if</b> (</span><b class="calibre21"><span class="calibre31">this</span></b><span class="calibre31">.getSize() &gt;= </span><b class="calibre21"><span class="calibre31">this</span></b><span class="calibre31">.maxSize) {</span>
+      <b class="calibre21">this</b>.evictOneEntry();                                                #3
+    }
+    PriorityQueueNode newNode = <b class="calibre21">this</b>.elements.add(key, value, 1);
+    <b class="calibre21">this</b>.hashTable.put(key, newNode);
+    <b class="calibre21">return true</b>;
+  } <b class="calibre21">finally</b> {                                                              #4
+    writeLock.unlock();                                                    #5
+  }
+}</pre>
+
+  <p class="body"><a id="pgfId-1005476"></a>In these examples, we are still using the hash table to store references to the priority queue nodes, the way we were storing references to the linked list nodes for LRU. While for LRU this makes sense, in order to keep the constant running time for all operations, as explained in section 7.4.2, for LFU cache we can store just values in the hash table. This makes implementation simpler, as shown on our <span class="fm-hyperlink">repo</span>, but possibly at the cost of changing the running time for the operation.</p>
+
+  <p class="body"><a id="pgfId-1005493"></a>Take a minute to think about it before reading the explanation. The reason, as you may have figured out, is simple: both in <code class="fm-code-in-text">set</code><a id="marker-1006144"></a> and <code class="fm-code-in-text">get</code><a id="marker-1006148"></a> we call <code class="fm-code-in-text">updatePriority</code><a id="marker-1006152"></a> on the priority queue. If we have a reference to the node to update, <code class="fm-code-in-text">pushdown</code> and <code class="fm-code-in-text">bubbleUp</code><a id="marker-1006156"></a> will require logarithmic time, as shown in chapter 2, sections 2.6.1 and 2.6.2.</p>
+
+  <p class="body"><a id="pgfId-1005518"></a>Finding an element in a heap, however, would normally require linear time. Alternatively, in section 2.6.8 we showed that it is possible to use an auxiliary hash table inside our priority queue and have search performed in amortized constant time, so that <code class="fm-code-in-text">updatePriority</code> would then run in amortized logarithmic time.</p>
+
+  <p class="body"><a id="pgfId-1005535"></a>We previously hinted at the fact that we should go easy on using locks, so the question arises: Could we acquire the lock later in the function?</p>
+
+  <p class="body"><a id="pgfId-1005544"></a>That depends. We need to make sure that while we check the hash table for <code class="fm-code-in-text">key</code>, no other thread is writing on it. If we use a concurrent structure for the hash table, we could move the write lock acquisition inside the first branch of the <code class="fm-code-in-text">if</code>, but then we would also need to change the rest of the function (because evicting one entry and adding the new one should all happen as an atomic operation) and be careful with how we use the hash table, since we introduce a second resource on which we lock, and that might lead to deadlock.<a href="#pgfId-1007415"><sup class="footnotenumber">31</sup></a></p>
+
+  <p class="body"><a id="pgfId-1005557"></a>So, the short answer is, let’s keep it simple <a id="marker-1006160"></a><a id="marker-1006164"></a>(also because we wouldn’t have much of an advantage anyway).</p>
+
+  <h3 class="fm-head2" id="heading_id_24"><a id="pgfId-1005569"></a>7.7.4 Reentrant locks</h3>
+
+  <p class="body"><a id="pgfId-1005583"></a>Now <a id="marker-1006168"></a><a id="marker-1006172"></a>we can finally explain how a reentrant lock prevents deadlock in our case. At the line marked with #3 in listing 7.10, the current thread calls <code class="fm-code-in-text">evictOneEntry</code><a id="marker-1006176"></a> to remove one item from the cache. We decided to keep the method private in our example, for good reason, but let’s now imagine that we need to have it as a public method, guaranteeing the option to clients to free space in the cache. (Maybe because of memory or garbage collection issues we need to shrink the cache dynamically—we certainly would rather not restart it altogether and lose all of its content.)</p>
+
+  <p class="body"><a id="pgfId-1005607"></a>In that case, we need to make <code class="fm-code-in-text">evictOneEntry</code><a id="id_Hlk521770366"></a><a id="marker-1006180"></a> synchronized as well, and hence acquire a write lock inside of it. With a non-reentrant lock, <code class="fm-code-in-text">evictOneEntry</code> would try to acquire the write lock, but <code class="fm-code-in-text">set</code> has already acquired it, and can’t free it until <code class="fm-code-in-text">evictOneEntry</code> finishes. Long story short, our thread is stuck waiting for a resource that will never be freed, and all other threads will soon be stuck as well. That is basically a recipe for deadlock, and it’s that easy to get yourself into such a situation. That’s why you should be careful with synchronization mechanisms.</p>
+
+  <p class="body"><a id="pgfId-1005632"></a>With reentrant locks instead, since both <code class="fm-code-in-text">evictOneEntry</code> and <code class="fm-code-in-text">set</code> belong to the same thread, <code class="fm-code-in-text">evictOneEntry</code> on line 1 is able to acquire the lock that is held by <code class="fm-code-in-text">set</code> and can go on with its execution. Deadlock avoided, at least this <a id="marker-1006184"></a><a id="marker-1006188"></a>time!</p>
+
+  <h3 class="fm-head2" id="heading_id_25"><a id="pgfId-1005656"></a>7.7.5 Read locks</h3>
+
+  <p class="body"><a id="pgfId-1005670"></a>We <a id="marker-1006192"></a><a id="marker-1006196"></a>haven’t yet talked about read locks. We mentioned how important they are for performance, but why? Let’s revisit the <code class="fm-code-in-text">get</code> method<a id="marker-1006200"></a> in listing 7.11.</p>
+
+  <p class="body"><a id="pgfId-1005691"></a>We acquire a read lock before reading data from the cache’s internal fields and release it as the very last step before exiting the function.</p>
+
+  <p class="body"><a id="pgfId-1005700"></a>It seems exactly like what we do with <code class="fm-code-in-text">set</code><a id="marker-1006204"></a>, right? The only change is that we use a read lock instead, so the difference must be there—and it actually is.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1015577"></a>Listing 7.11 LFU cache <code class="fm-code-in-text">get</code>, Java version</p>
+  <pre class="programlisting"><b class="calibre21">public</b> Value get(Key key) {
+  readLock.lock();                                                         #1
+  try {
+    PriorityQueueNode node = <b class="calibre21">this</b>.hashTable.get(key);
+    <b class="calibre21">if</b> (node == <b class="calibre21">null</b>) {
+      <b class="calibre21">return null</b>;
+    } <b class="calibre21">else</b>  {
+      node.updatePriority(node.getCounter() + 1);                          #2
+      <b class="calibre21">return</b> node.getValue();
+    }
+  } <b class="calibre21">finally</b> {
+    readLock.unlock();                                                     #3
+  }
+}</pre>
+
+  <p class="body"><a id="pgfId-1005883"></a>Only one thread can hold a write lock at a single time, but a read lock can be held by many threads at the same time, provided no thread is holding a write lock.</p>
+
+  <p class="body"><a id="pgfId-1005894"></a>When we read from a data structure (or a database) we don’t modify it, so if 1, 2, 10, or a million threads are reading from the same resource at the same time, they will always get consistent results (if the invariant is implemented correctly, and we don’t have side effects that mutate the resource).</p>
+
+  <p class="body"><a id="pgfId-1005908"></a>When we write on a resource, we change it, and while the process is ongoing, all reads and writes will make no sense, because they will be based on inconsistent data. That leads to four possible combinations of locks (Read-Read, Read-Write, Write-Read, and Write-Write), as shown in table 7.4.</p>
+
+  <p class="body"><a id="pgfId-1005930"></a>If any (other) thread is holding a read lock, we can acquire another read lock, but need to wait for a write lock until all the read locks are released.</p>
+
+  <p class="body"><a id="pgfId-1005941"></a>If any thread is holding a write lock, all other threads need to wait to acquire either a write or a read lock.</p>
+
+  <p class="fm-table-caption"><a id="pgfId-1015621"></a>Table 7.4 Combinations of locks requested and held</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1015627"></a>Lock requested/held</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1015629"></a>Read</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1015631"></a>Write</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015633"></a>Read</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015635"></a>Allowed</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015637"></a>Need to wait</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015639"></a>Write</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015641"></a>Need to wait</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1015643"></a>Need to wait</p>
+      </td>
+    </tr>
+  </table>
+
+  <p class="body"><a id="pgfId-1006221"></a>So, the advantage of actually distinguishing between read and write locks for our cache is that all calls to <code class="fm-code-in-text">get</code><a id="marker-1006849"></a> can be executed in parallel, and only calls to <code class="fm-code-in-text">set</code> will block. Had we not made this distinction, access to the cache would as a result have been entirely synchronous, with only one thread at a time being able to check the cache. This would have introduced an unnecessary latency in our application, reducing the advantage of using a cache and possibly even making it <a id="marker-1006853"></a><a id="marker-1006857"></a><a id="marker-1006861"></a>counterproductive.</p>
+
+  <h3 class="fm-head2" id="heading_id_26"><a id="pgfId-1006347"></a>7.7.6 Other approaches to concurrency</h3>
+
+  <p class="body"><a id="pgfId-1006363"></a>Using <a id="marker-1006865"></a><a id="marker-1006869"></a><a id="marker-1006873"></a>locking mechanisms is not the only way to deal with concurrency. Locking handles the access to a segment of code that mutates a resource, so that we are sure that these instructions applying modification will be executed by one thread, and one thread only, at each instant in time.</p>
+
+  <p class="body"><a id="pgfId-1006385"></a>On the other end of the spectrum, there is a completely symmetrical approach championed by functional programming: remove mutability from your resources altogether.</p>
+
+  <p class="body"><a id="pgfId-1006394"></a>One of the principles of functional programming is, in fact, that all objects should be immutable. This has several advantages; for instance, it makes it easier to reason about code because we can analyze a function to be sure that no other method will influence what it does, and it removes race conditions altogether. It also has some disadvantages; for instance, it makes some operations harder, like keeping a running state, and makes it more expensive to update state in large objects.</p>
+
+  <p class="body"><a id="pgfId-1006413"></a>When we talk about concurrency, having immutable objects means that you can read your resource without worrying that someone else will change it while you are reading it, so you don’t have to set a lock.</p>
+
+  <p class="body"><a id="pgfId-1006424"></a>Writing remains a bit more complicated.<a href="#pgfId-1007429"><sup class="footnotenumber">32</sup></a> In the functional world, a method like <code class="fm-code-in-text">set</code> would return not a Boolean, but a new instance of the cache itself, where its content has <a id="marker-1006877"></a><a id="marker-1006881"></a><a id="marker-1006885"></a>been <a id="marker-1006893"></a>updated.</p>
+
+  <h2 class="fm-head" id="heading_id_27"><a id="pgfId-1006449"></a>7.8 Cache applications</h2>
+
+  <p class="body"><a id="pgfId-1006463"></a>This <a id="marker-1006897"></a>section would definitely be shorter if we listed examples of systems that do <i class="calibre17">not</i> use cache! Cache is ubiquitous, at all levels, from processors to the highest-level applications you can imagine.</p>
+
+  <p class="body"><a id="pgfId-1006489"></a>Low-level, hardware caches work slightly differently, though, so we’d better stick to software caches.</p>
+
+  <p class="body"><a id="pgfId-1006500"></a>As mentioned, many single- and multi-thread applications employ ad hoc in-memory caches to avoid repeating expensive computations.</p>
+
+  <p class="body"><a id="pgfId-1006511"></a>These caches are usually objects (in OO<a href="#pgfId-1007465"><sup class="footnotenumber">33</sup></a> languages), provided by libraries, and allocate dynamic memory in the heap of the same application that uses them. In the case of multi-thread applications, the cache might run in its own thread and be shared among several threads (as we saw in the previous section, this configuration requires special attention to prevent race conditions).</p>
+
+  <p class="body"><a id="pgfId-1006526"></a>The next step is bringing the cache out of one application, into its own process, and communicating with it through a certain protocol; this can be HTTP, Thrift, or even RPC.</p>
+
+  <p class="body"><a id="pgfId-1006539"></a>A typical case is the several layers of cache in a web application:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1006548"></a>A CDN to cache and deliver static content (and some dynamic content)</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1006560"></a>A web cache that caches content from the web server (usually entire pages and might be the CDN itself)</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1006574"></a>An application cache storing the result of expensive server computations</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1006587"></a>A DB cache storing the most-used rows, tables, or pages from a database</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1006601"></a>Finally, for large applications with thousands of requests per second (or more), caches need to be scaled together with the rest of the web stack. This means that a single process might not be enough to hold all the entries that the application needs to cache in order to run smoothly. For instance, if we have a million accesses per second to a database, a cache in front of it that can only store a million elements is probably close to useless, because there would be too high a turnaround, and all requests would basically go ahead to the DB, crashing it to a halt in a few minutes.</p>
+
+  <p class="body"><a id="pgfId-1006616"></a>For this reason, distributed caches have been introduced. These caches, such as Cassandra, use several processes called nodes, each one of them being a standalone cache, plus another process (sometimes a special node), called the orchestrator, that is in charge of routing requests to the right node. Distributed caches use a special hashing function, <i class="calibre17">consistent hashing</i><a id="marker-1006901"></a><a href="#pgfId-1007480"><sup class="footnotenumber">34</sup></a> (see figure 7.14), to decide which node should store an entry.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch07_F14.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1026039"></a>Figure 7.14 An array of cache nodes using consistent hashing for distributing keys. On the left, the initial nodes array. Nodes and keys map to the same metric space (the IDs space), usually represented as a circle (which could be obtained even with just a modulo operation on the hash values). Keys are assigned to the next node in the circle—that is, the node whose value is the smallest node’s ID larger than the key’s hashing. On the right, we can see how, when a cache node is removed or added, only a fraction of the keys needs to be remapped.</p>
+
+  <p class="body"><a id="pgfId-1006657"></a>Web clients also make extensive use of caching: browsers have their own caches (although those work slightly differently, storing content on your disk), but they also have a DNS cache to store the IP addresses corresponding to the domains you browse. Lately, more caching has been added with local and session storage, and perhaps the most promising of all, service worker <a id="marker-1006905"></a>caching.</p>
+
+  <h2 class="fm-head" id="heading_id_28"><a id="pgfId-1006672"></a>Summary</h2>
+
+  <ul class="calibre19">
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1006684"></a>Caches are ubiquitous at all levels of the computation stack, from hardware caches in your processor to distributed web caches on the internet.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1006698"></a>Whether you’re running complex vector algebra on a GPU or connecting to an external subscription service, if it is reasonable to assume that the result you just computed might be used again in the near future, just store it in a cache.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1006710"></a>Caches are useful at all levels, but while you could probably ignore them in standalone applications running locally on a single computer, they are paramount to allow web applications to scale to billions of requests per day.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1006722"></a>There are different types of caches, and the distinction is based on their eviction policy. A cache usually has a fixed maximum size, and when reached, the eviction policy states which entries must be purged out of the cache to make room for the newer ones.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1006738"></a>There are also different ways to plug a cache into a system. We have seen the difference between Write-Ahead, Read-Ahead, Write-Through, Write-Behind, and Refresh-Ahead.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1006776"></a>When we share a resource (in this case, a cache) between multiple threads, we need to be very careful in designing it so that we won’t end up with race conditions, inconsistent data, or—even worse—deadlocks.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1006794"></a>If we use functional programming, we might make our life easier when it comes to <a class="calibre14" id="marker-1006909"></a>concurrency.</p>
+    </li>
+  </ul>
+  <hr class="calibre22"/>
+
+  <p class="fm-footnote"><sup class="footnotenumber">1.</sup> <a id="pgfId-1006914"></a>Graphics Processing Units were originally designed to speed up image processing and buffering for display devices. With the turn of the century they became increasingly used as general (parallel) computation devices, so much so that they actually are the election choice, instead of CPUs (Central Processing Unit), for algebraic-intensive tasks such as machine learning.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">2.</sup> <a id="pgfId-1006932"></a>Cursors are control structures that allow traversing a set of rows in a DB table; as a simplification, they can be thought of as pointers to the next row to read in a portion of the table, and they are used to subsequently process rows (either reading data or modifying it) one by one, as opposed to a batch read/write where a group of records is read/written at once.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">3.</sup> <a id="pgfId-1006946"></a>Locks are another DB construct that prevents all reads/writes on a raw/table/DB while data is being modified. They are needed for consistency, but they can have a dramatic impact on availability. In general, using cursors that allow updating the data is not advised because they might hold locks for a long time.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">4.</sup> <a id="pgfId-1006963"></a>Not literally! Just jargon.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">5.</sup> <a id="pgfId-1006977"></a>Sharding consists in breaking down data, users or transactions (or all of them) in groups, each of which is assigned to a different machine/cluster/data-center. This balances the loads and allows us to use smaller, cheaper servers and databases for each group, ultimately allowing applications to scale better and in a cheaper way.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">6.</sup> <a id="pgfId-1006993"></a>Relaxing the temporal requirement on consistency. We’ll explain a bit more later in the chapter.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">7.</sup> <a id="pgfId-1007007"></a>For instance, <span class="fm-hyperlink"><a href="https://www.manning.com/books/principles-of-cloud-design">https://www.manning.com/books/principles-of-cloud-design</a></span> or <span class="fm-hyperlink"><a href="https://www.manning.com/books/progressive-web-apps">https://www.manning.com/ books/progressive-web-apps</a></span>, which also has a nice chapter on caching.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">8.</sup> <a id="pgfId-1007025"></a>Using techniques such as natural language processing, text analysis, and computational linguistics to automatically identify the attitude of one or more subjects with respect to some topic.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">9.</sup> <a id="pgfId-1007055"></a>HTTP status code for “Service unavailable.”</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">10.</sup> <a id="pgfId-1007069"></a>The set of possible inputs for the function.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">11.</sup> <a id="pgfId-1007083"></a>As we said, we are restricting ourselves to only top Fortune 100 companies in this example.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">12.</sup> <a id="pgfId-1007097"></a>Ideally, all http responses should add <code class="fm-code-in-text1">Cache-Control</code>, <code class="fm-code-in-text1">Expires</code>, and <code class="fm-code-in-text1">Last-Modified</code> headers to make sure the resources are taken from cache as much as possible.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">13.</sup> <a id="pgfId-1007117"></a>Not all data can be shared without limits. That’s why there are private caches where data is shared with a single user/IP, and public caches (used, for example, for static, anonymous content) shared with anyone interested in the resource.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">14.</sup> <a id="pgfId-1007132"></a>We’ll pick this example up again in section 7.7. Figure 7.12 illustrates it.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">15.</sup> <a id="pgfId-1007152"></a>A software component shown in figures 7.1 and 7.2.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">16.</sup> <a id="pgfId-1007174"></a>Of course, there are many techniques, including machine learning, that can provide good predictions, but always with some degree of error—especially high in a field like this where the users’ behavior can change quickly and unexpectedly.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">17.</sup> <a id="pgfId-1007188"></a>See chapter 2 and appendix C for a refresher.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">18.</sup> <a id="pgfId-1007202"></a>Technically, as we have seen, it’s more correct to say that the amortized time for <code class="fm-code-in-text1">n</code> operations is <code class="fm-code-in-text1">O(n)</code>, so individual calls usually take constant time, but some of them might and will take longer, up to <code class="fm-code-in-text1">O(n)</code>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">19.</sup> <a id="pgfId-1007222"></a>There is also more to the story. If we do the opposite, then the way we link from a linked list node to the hash table entry will be tied to the implementation of the hash table. It could be an index for open addressing or a pointer if we use chaining. This coupling to an implementation is neither good design nor, often, possible, as you usually can’t access standard library internals (for good reason!).</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">20.</sup> <a id="pgfId-1007236"></a>Remember we still need to include the time for computing each hash value for the entry we look up. See appendix C for more on this topic.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">21.</sup> <a id="pgfId-1007251"></a>This example is purely for illustration. In all likelihood, cache, DBs, web servers, and so on for such a retailer will be sharded geographically exactly to exploit this locality of preferences.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">22.</sup> <a id="pgfId-1007268"></a>If implemented correctly. In particular, you need to be careful how you break ties when two entries have the same count—assigning higher value to newer entries is usually the best choice.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">23.</sup> <a id="pgfId-1007287"></a>One could say a FIFO+ queue, because elements can also be moved to the head of the queue at any time.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">24.</sup> <a id="pgfId-1007302"></a>Depending on the relative frequency of read/write, you might want to fine-tune one operation or the other.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">25.</sup> <a id="pgfId-1007315"></a>This kind of cache is particularly useful in <i class="calibre17">eventually consistent</i> systems. Eventual consistency relaxes the consistency constraint, allowing for instance data in the cache to be slightly off-sync with respect to the most recent version of the same entry stored in a database. This can be useful if we are fine with some information being slightly off-sync. For instance, for a shopping cart, we can probably handle the availability of an entry being off-sync for a 100ms or even a second.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">26.</sup> <a id="pgfId-1007333"></a>Or, in other words, they can be safely run in a multi-threading environment, without leading to race conditions.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">27.</sup> <a id="pgfId-1007345"></a>See <span class="fm-hyperlink"><a href="https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction#cache">https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction#cache</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">28.</sup> <a id="pgfId-1007361"></a>Java standard library doesn’t provide an implementation of <code class="fm-code-in-text1">PriorityQueue</code><a id="marker-1007377"></a>, so you won’t find this class natively in your JRE. We provide a version of a synchronized heap in our repo.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">29.</sup> <a id="pgfId-1007382"></a>A situation where all threads are blocked waiting for some shared resources, but none of them can acquire it. This causes the application to become unresponsive and stuck, and ultimately crash.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">30.</sup> <a id="pgfId-1007396"></a>A superb start is <i class="calibre17">C++ Concurrency in Action</i> (by Anthony Williams, Manning Publications, 2019), if you are familiar with C++, or would like to learn more about it. <i class="calibre17">Concurrency in .NET</i> (by Riccardo Terrell, Manning Publications, 2018) is your choice of election if functional programming is your way.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">31.</sup> <a id="pgfId-1007415"></a>If thread A locks on the hash table and thread B acquires the write lock on the whole cache, and then both need the other thread to continue, we get to the equivalent of a Mexican standoff for threads. And that never ends well in movies.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">32.</sup> <a id="pgfId-1007429"></a>You can still have race conditions when two threads try to update the shared cache at the same time, but this case can be solved with <i class="calibre17">optimistic locks</i>, basically (in an extreme simplification) versioning your resource. For further insight into optimistic locks, you might take a look at the <i class="calibre17">Compare-and-swap (CAS) algorithm</i>. Using immutability plus optimistic locks, you can get a sensible performance boost in many common contexts/languages.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">33.</sup> <a id="pgfId-1007465"></a>Object-Oriented languages like Java where classes and objects are language basic building blocks.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">34.</sup> <a id="pgfId-1007480"></a>Consistent hashing is a special kind of hashing that guarantees that when one of the nodes is removed, only the keys hosted on that node need to be remapped. See figure 7.14 to get an idea of how it works. It’s not just about caches: if applied to a hash table, consistent hashing guarantees that when a table with n slots is resized, only one n-th of the keys stored needs to be remapped. This is particularly important for distributed caches, where billions of elements might need to be remapped or possibly cause the whole cache to crash.</p>
+</body>
+</html>

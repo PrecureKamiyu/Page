@@ -1,0 +1,1552 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <title>4</title>
+    
+  <link href="../../stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="../../page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+  <div class="tocheadb">
+    <h1 class="tochead" id="heading_id_2"><a id="pgfId-998553"></a><a id="pgfId-998565"></a>4 Bloom filters: Reducing the memory for tracking content</h1>
+  </div>
+
+  <p class="co-summary-head"><a id="pgfId-1041148"></a>This chapter covers</p>
+
+  <ul class="calibre19">
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1041189"></a>Describing and analyzing Bloom filters</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1041190"></a>Keeping track of large documents using little memory</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1041191"></a>Showing why dictionaries are an imperfect solution</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1041192"></a>Improving the memory print by using Bloom filters</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1041193"></a>Recognizing use cases where Bloom filters improve performance</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1041173"></a>Using metrics to tune the quality of Bloom filters’ solutions</li>
+  </ul>
+
+  <p class="body"><a id="pgfId-998764"></a>Starting with this chapter we’ll be reviewing less common data structures that solve, as strange as it might seem, common problems. <i class="fm-italics">Bloom filters</i><a id="marker-1002040"></a> are one of the most prominent examples; they are widely used in most industries, but not as widely known as you would expect for such a cornerstone.</p>
+
+  <p class="body"><a id="pgfId-998875"></a>In section 4.1 we introduce the problem that will be our North Star in this chapter: we need to keep track of large entities with the smallest memory print possible.</p>
+
+  <p class="body"><a id="pgfId-998943"></a>In section 4.2 we continue our narration by discussing a few increasingly complex solutions, showing their strengths and weaknesses; the latter, in particular, ought to be considered chances for improvement and fertile ground for algorithms designers.</p>
+
+  <p class="body"><a id="pgfId-999021"></a>As part of this discussion, we introduce the <i class="fm-italics">dictionary</i><a id="marker-1002044"></a>, an abstract data type that we discuss in depth in section 4.3, while section 4.4 switches to concrete data structures that implement dictionaries: hash tables, binary search trees, and Bloom filters.</p>
+
+  <p class="body"><a id="pgfId-999111"></a>You have probably guessed that we are particularly interested in the latter, because it is the topic of this chapter. We describe in section 4.5 the principles governing how a Bloom filter works; then we delve into each of its methods in section 4.6, showing the pseudo-code for the crucial parts.</p>
+
+  <p class="body"><a id="pgfId-999214"></a>Section 4.7 closes the first part of the chapter with a discussion of some typical use cases for Bloom filters: from distributed databases and file systems to rooters, this technology is pervasive.</p>
+
+  <p class="body"><a id="pgfId-999287"></a>In order to reach this goal, we keep a practical approach with an emphasis on enabling readers to recognize opportunities to use Bloom filters and giving them the instruments to do so.</p>
+
+  <p class="body"><a id="pgfId-999358"></a>Starting with section 4.8, the focus shifts to theory, providing a background for the interested reader who wants to understand not just how, but why, Bloom filters work. To facilitate understanding of these sections, readers can go through appendix F (as well as appendices B and C, if needed) to review randomized algorithms, big-O notation, and basic data structures prior to starting with section 4.8.</p>
+
+  <p class="body"><a id="pgfId-999496"></a>The next few sections will then closely examine the performance of our data structure, including running time and memory print (section 4.9), as well as the accuracy of the algorithm (section 4.10).</p>
+
+  <p class="body"><a id="pgfId-999560"></a>Finally, section 4.11 describes some of the most advanced variants of Bloom filters used to provide new features or lower the false-positive rate.</p>
+
+  <h2 class="fm-head" id="heading_id_3"><a id="pgfId-999613"></a>4.1 The dictionary problem: Keeping track of things</h2>
+
+  <p class="body"><a id="pgfId-999642"></a>Let’s <a id="marker-1002048"></a>go over a hypothetical scenario: you work for a company that is large enough to maintain its own email service. This is a legacy service, providing basic features only. After the last reorganization, the new CTO<a href="#pgfId-1034617"><sup class="footnotenumber">1</sup></a> decides that you need to reinvent the email service to be aggressive on the market segment, and she puts your new manager in charge of the product redesign.</p>
+
+  <p class="body"><a id="pgfId-999776"></a>They want a brand-new, modern client with features like a contacts list and cool tricks. For instance, when you add a new recipient to an email, your application should check whether it’s already in the contacts list, and if it’s not, a popup (like the one shown in figure 4.1) should appear asking you if you’d like to add the new recipient.</p>
+
+  <p class="body"><a id="pgfId-999910"></a>And, needless to say, you are the lucky one who gets to be responsible for implementing this feature.</p>
+
+  <p class="body"><a id="pgfId-999952"></a>Of course, the resources allocated for the project are scarce, so you are only going to do a refactoring of the client, while on the server side you’ll have to make do with legacy code and legacy services running on proprietary machines.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F221.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1054990"></a>Figure 4.1 Our email application prompting the user to add a new contact after an unsuccessful search</p>
+
+  <p class="body"><a id="pgfId-1000095"></a>Calling the database every time you need to check an email address against your contacts list is out of the question: you are stuck with this legacy machine that can’t scale up, and you didn’t get funds for refactoring and scaling it out.<a href="#pgfId-1034632"><sup class="footnotenumber">2</sup></a> Your DB could not support more than a few calls per second, and your management’s projection is in the hundreds of emails written per second (they are very optimistic, and a bit reckless, but let’s not worry about that for now!). Your first instinct would be to ask for a remote distributed cache, like Memcached, Cassandra, or Redis. A roundtrip to the cache server alone would take in the range of a hundred milliseconds, best case scenario, which would be good. But neither spinning up a new server for the cache, nor buying it as a cloud service is feasible for you, budget-wise.</p>
+
+  <p class="body"><a id="pgfId-1000395"></a>In the end, you decide you only have one way to solve this: asynchronously get your contacts list when you log in (or, more lazily, the first time you click on Compose during the current browser session), save the contacts list in your web page’s session storage space, and check the local copy of that data every time you look for existing contacts.</p>
+
+  <p class="body"><a id="pgfId-1000528"></a>So far for the application design, figure 4.2 shows a possible architecture for our minimum viable product. Now you just need an efficient way to browse a contacts list and check if an email belongs to it.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F222.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1055034"></a>Figure 4.2 A possible architecture for the “save new contact (with suggestion)” feature. On the client side, the web app receives the contacts list from the web server, and with those data creates a dictionary on the session storage. Whenever the user adds a recipient on an email, the web app checks the dictionary. If the contact is not in the list, a popup is shown to the user, who can then decide to save it. In that scenario, to save the new contact another HTTP call is made to the web server, and at the same time the dictionary is updated with the new value (although without going through the server).</p>
+
+  <p class="body"><a id="pgfId-1000631"></a>Looking through a list for a certain entry is a common problem in computer science, known as the <i class="calibre17">dictionary <a id="marker-1002052"></a>problem</i>.</p>
+
+  <h2 class="fm-head" id="heading_id_4"><a id="pgfId-1000681"></a>4.2 Alternatives to implementing a dictionary</h2>
+
+  <p class="body"><a id="pgfId-1000703"></a>The <a id="marker-1002060"></a>name shouldn’t be surprising; it’s exactly like when you need to look up a word in a dictionary (and by dictionary I mean one of those old gigantic paper books that have been almost entirely replaced by online dictionaries and search engines) or even in a phone book (which had no better luck after the third computer revolution).</p>
+
+  <p class="body"><a id="pgfId-1000831"></a>To recap, our contacts web app needs to</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1000854"></a>Download the list of contacts from a server</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1000880"></a>Create a local copy for fast lookup/storage</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1000904"></a>Allow looking up for a contact</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1000926"></a>Provide the option to add a new contact if lookup is unsuccessful</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1000960"></a>Sync with the server when a new contact is added (or an existing one modified)</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1001000"></a>What we really need is a data structure that is specialized in these kinds of operations; we need it to support fast insertion, and at the same time it needs to provide a way to look up an entry by value.</p>
+
+  <p class="body"><a id="pgfId-1001086"></a>To be clear, when we use a plain array, we don’t have an efficient array’s method that tells us the index of an element <code class="fm-code-in-text">X</code>, nor an efficient (as in <i class="calibre17">sublinear</i>) method to tell us if an element is in the array or not. The only way we have to tell if an element is in the array is by going through all the array’s elements, although in a sorted array we could use binary search to speed up the search.</p>
+
+  <p class="body"><a id="pgfId-1001253"></a>For example, we could store the strings <code class="fm-code-in-text">[“the”, “lazy”, “fox”]</code> in an array, and to search for <code class="fm-code-in-text">“lazy”</code>, we would skim through the whole array, element by element.</p>
+
+  <p class="body"><a id="pgfId-1001322"></a>An associative array, instead, by definition has a native method that efficiently accesses the stored entries with a lookup by value. Usually this structure allows storing (key, value) pairs. For instance, we would have a list like <code class="fm-code-in-text">&lt;(“the”, article)</code>, <code class="fm-code-in-text">(“lazy”, adjective)</code>, <code class="fm-code-in-text">(“fox”, noun)&gt;</code>. We could search for <code class="fm-code-in-text">“lazy”</code> and the associative array would return <code class="fm-code-in-text">adjective</code>.</p>
+
+  <p class="body"><a id="pgfId-1001446"></a>Another difference with regular arrays would be that the order of insertion in an associative array doesn’t matter; it’s not even well defined. That’s the price you pay to speed up lookup by value.</p>
+
+  <p class="body"><a id="pgfId-1001524"></a>To really understand how efficiently we can solve this problem, we need to get into the details of implementations. Using the dictionary abstraction, however, allows us to discuss how to solve a problem (for instance, finding whether an email belongs to a list of contacts) without having to deal with the details of the data structure’s representation, hence leaving us free to focus on the task <a id="marker-1002064"></a>itself.</p>
+
+  <h2 class="fm-head" id="heading_id_5"><a id="pgfId-1001673"></a>4.3 Describing the data structure API: Associative array</h2>
+
+  <p class="body"><a id="pgfId-1001701"></a>An <a id="marker-1002068"></a><a id="marker-1002072"></a><a id="marker-1002076"></a>associative array (also referred to as <i class="fm-italics">dictionary</i>,<a id="marker-1002080"></a><a href="#pgfId-1034656"><sup class="footnotenumber">3</sup></a> <i class="fm-italics">symbol table</i><a id="marker-1002084"></a>, or just <i class="fm-italics">map</i>), is composed of a collection of (key, value) pairs, such that</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1001769"></a>Each possible key appears at most once in the collection.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1001801"></a>Each value can be retrieved directly through the corresponding key.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1001831"></a>The easiest way to grasp the essence of associative arrays is to think about regular arrays as a special case: the keys are just the set of indices between <code class="fm-code-in-text">0</code> and the size of the array minus <code class="fm-code-in-text">1</code>, and we can always retrieve a value by providing its index, so that the (plain) array <code class="fm-code-in-text">[“the”, “lazy”, “fox”]</code> can be interpreted as a dictionary storing the associations <code class="fm-code-in-text">(0, “the”), (1, “lazy”)</code> and <code class="fm-code-in-text">(2, “fox”)</code>.</p>
+
+  <p class="body"><a id="pgfId-1001984"></a>Associative arrays generalize this concept, allowing keys to be drawn from virtually any possible domain.</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="2" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1041489"></a>Abstract data structure: Associative array (aka dictionary)</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041493"></a>API</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <pre class="programlisting">class Dictionary {
+  insert(key, value)
+  remove(key) <span class="cambria">→</span> value
+  contains(key) <span class="cambria">→</span> value
+}</pre>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041497"></a>Contract with client</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041499"></a>A dictionary permanently stores all the pairs added by the client(s). If a pair <code class="fm-code-in-text2">(K,V)</code> was added to the dictionary (and not removed afterward), then <code class="fm-code-in-text2">contains(K)</code> will return <code class="fm-code-in-text2">V</code>.</p>
+      </td>
+    </tr>
+  </table>
+
+  <p class="body"><a id="pgfId-1002085"></a>With this API defined, we can sketch a solution for our initial problem.</p>
+
+  <p class="body"><a id="pgfId-1002322"></a>When users log in to their email, our client receives a list of contacts from the server and stores them in a <i class="fm-italics">dictionary</i><a id="marker-1003515"></a> that we can keep in memory (having so many contacts that it won’t fit the browser’s session storage would be an exceptional situation even for an Instagram rock star!). If the user adds a new contact to our address book, we perform a call to <code class="fm-code-in-text">insert</code><a id="marker-1003519"></a> on the dictionary; likewise, if users remove an existing contact, we just keep the dictionary in sync by calling <code class="fm-code-in-text">remove</code><a id="marker-1003523"></a>. Whenever a user writes an email and inserts a recipient, we first check the dictionary, and only if the contact is not in the address book do we show a popup asking users if they would like to save the new contact.</p>
+
+  <p class="body"><a id="pgfId-1002597"></a>This way, we never do an HTTP call to our server (and in turn to the DB) to check whether a contact is on our address book, and we only read from the DB once on startup (or the first time during a session that we write an <a id="marker-1003527"></a><a id="marker-1003531"></a><a id="marker-1003535"></a>email).</p>
+
+  <h2 class="fm-head" id="heading_id_6"><a id="pgfId-1002703"></a>4.4 Concrete data structures</h2>
+
+  <p class="body"><a id="pgfId-1002721"></a>So <a id="marker-1003539"></a><a id="marker-1003543"></a><a id="marker-1003547"></a>far, so good with the theory, but of course, implementing associative arrays to be used on real systems is a completely different thing.</p>
+
+  <p class="body"><a id="pgfId-1002775"></a>In theory, if the domain (the set of possible keys) is small enough, we can still use arrays by defining a total ordering on the keys and using their position in the order as the index for a real array. For instance, if our domain is made of the words <code class="fm-code-in-text">{“a”, “terrible”, “choice”}</code>, we could sort keys lexicographically, and then we would store the values in a plain string array; for instance, <code class="fm-code-in-text">{“article”, “noun”, “adjective”}</code>. If we need to represent a dictionary that only contains a value for key <code class="fm-code-in-text">“choice”</code>, we could do that by setting the values corresponding to missing keys to <code class="fm-code-in-text">null</code>: <code class="fm-code-in-text">{null, “noun”, null}</code>.</p>
+
+  <p class="body"><a id="pgfId-1003002"></a>Usually, however, this is not the case, and the set of possible values for the keys is large enough to make it impractical to use an array with an element for any possible key’s value; it would just require too much memory, which would remain largely unused.</p>
+
+  <p class="body"><a id="pgfId-1003101"></a>To overcome this issue with the memory, we present two naïve implementations, and three of the most widely used alternatives.</p>
+
+  <h3 class="fm-head2" id="heading_id_7"><a id="pgfId-1003148"></a>4.4.1 Unsorted array: Fast insertion, slow search</h3>
+
+  <p class="body"><a id="pgfId-1003174"></a>Even <a id="marker-1003551"></a><a id="marker-1003555"></a><a id="marker-1003559"></a><a id="marker-1003563"></a><a id="marker-1003567"></a>if you have never seen one of those paper dinosaurs (a dictionary), you ought to at least be familiar with print books, like this one (unless, of course, you bought the e-book version!).</p>
+
+  <p class="body"><a id="pgfId-1003254"></a>Suppose you need to look for a specific word in this book—maybe a name—like Bloom, and note all the places where it occurs. One option you have is to go through the book starting from the first page, word by word, until you encounter it. If you need to find all the occurrences of the word Bloom, you will have to go through the book from cover to cover.</p>
+
+  <p class="body"><a id="pgfId-1003409"></a>A book taken as a collection of words, in the order they are printed, is like an unsorted array. Table 4.1 summarizes the performance of the main operations needed using this approach with unsorted arrays.</p>
+
+  <p class="fm-table-caption"><a id="pgfId-1041775"></a>Table 4.1 Using unsorted arrays as dictionaries</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1041781"></a>Operation</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1041783"></a>Running time</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1041785"></a>Extra memory</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041787"></a><code class="fm-code-in-text2">Creating the structure</code><a id="marker-1041810"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041789"></a>O(1)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041791"></a>No</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041793"></a><code class="fm-code-in-text2">Looking up an entry</code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041795"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041797"></a>No</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041799"></a><code class="fm-code-in-text2">Insert a new entry</code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041801"></a>O(1) <a href="#pgfId-1041837"><sup class="footnotenumber1">4</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041803"></a>No</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041805"></a><code class="fm-code-in-text2">Remove an entry</code><a id="marker-1041811"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041807"></a>O(1)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041809"></a>No</p>
+      </td>
+    </tr>
+  </table>
+
+  <p class="body"><a id="pgfId-1003796"></a>Unsorted arrays have the advantage of no extra work needed on creation, and adding a new entry is pretty easy, provided you have enough <a id="marker-1004853"></a><a id="marker-1004857"></a><a id="marker-1004861"></a><a id="marker-1004865"></a><a id="marker-1004869"></a>capacity.</p>
+
+  <h3 class="fm-head2" id="heading_id_8"><a id="pgfId-1003858"></a>4.4.2 Sorted arrays and binary search: Slow insertion, fast(-ish) search</h3>
+
+  <p class="body"><a id="pgfId-1003892"></a>That’s <a id="marker-1004873"></a><a id="marker-1004877"></a><a id="marker-1004881"></a><a id="marker-1004885"></a><a id="marker-1004889"></a><a id="marker-1004893"></a>not exactly practical, as you can imagine. If, after going through the whole book, you need to search a second word, like “filter,” you would have to start all over and do a second pass through the hundreds of thousands of words in the book. That’s why most books have what’s called an index, usually toward the end of the book; there you can find an alphabetically ordered list of the most uncommon words (and names) used in the book. Common words don’t make it onto this list because they are used too frequently (articles like “the” and “a” are probably used on every single page) to be worth being listed, since the value of finding places where they are used would be minimal. Conversely, the rarer a word is in English (and names are the perfect example here), the greater importance it has when it’s used in your text.<a href="#pgfId-1034684"><sup class="footnotenumber">5</sup></a></p>
+
+  <p class="body"><a id="pgfId-1004216"></a>So, you can check the index and look for the name Bloom. Being in lexicographical order, you could go through it from the start until you catch the word you are looking for; it shouldn’t be too long with Bloom. You wouldn’t be that lucky with terms like hashing or, even worse, tree, which will be toward the end of the index.</p>
+
+  <p class="body"><a id="pgfId-1004343"></a>That’s why, naturally, we do lookups in sorted lists by subconsciously using binary search:<a href="#pgfId-1034718"><sup class="footnotenumber">6</sup></a> with a phone book, you open it at a random page around the middle (or closer to the beginning or end, if you have an idea where the name you are looking for might be), then look at the first letter of the first word on that page, and jump either before or after the current page depending on what you are looking for. For example, if you are still looking for Bloom, and you open a phone book to a page where the first surname is Kurtz, then you know you can discard every page after that, and look only at the pages before. You randomly open another page (to the left of the one with Kurtz) and the last name on that page is Barrow; then you know Bloom will be on a page after the one with Barrow and before the one with Kurtz.</p>
+
+  <p class="body"><a id="pgfId-1004668"></a>Going back to our problem with the contact list, one approach could be sorting your contacts and searching them using binary search.</p>
+
+  <p class="body"><a id="pgfId-1004719"></a>As you can see from table 4.2, in terms of running time, both the initial cost (to sort the list) and the cost for adding a new entry are pretty high. Also, linear extra memory might be needed if we need to make a copy of the original list, to preserve the original <a id="marker-1004901"></a><a id="marker-1004905"></a><a id="marker-1004909"></a><a id="marker-1004913"></a><a id="marker-1004917"></a><a id="marker-1004921"></a>order.</p>
+
+  <p class="fm-table-caption"><a id="pgfId-1041893"></a>Table 4.2 Using sorted arrays as dictionaries</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1041899"></a>Operation</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1041901"></a>Running time</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1041903"></a>Extra memory</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041905"></a><code class="fm-code-in-text2">Creating the structure</code><a id="marker-1041928"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041907"></a>O(n*log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041909"></a>O(n)</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041911"></a><code class="fm-code-in-text2">Looking up an entry</code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041913"></a>O(log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041915"></a>No</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041917"></a><code class="fm-code-in-text2">Add a new entry</code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041919"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041921"></a>No</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041923"></a><code class="fm-code-in-text2">Remove an entry</code><a id="marker-1041929"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041925"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1041927"></a>No</p>
+      </td>
+    </tr>
+  </table>
+
+  <h3 class="fm-head2" id="heading_id_9"><a id="pgfId-1004922"></a>4.4.3 Hash table: Constant-time on average, unless you need ordering</h3>
+
+  <p class="body"><a id="pgfId-1005134"></a>We <a id="marker-1005823"></a><a id="marker-1005827"></a><a id="marker-1005831"></a><a id="marker-1005835"></a>introduced hash tables and hashing in appendix C. The main take away for hash tables is that they are used to implement associative arrays where the possible values to store come from a very large set (for instance, all possible strings or all integers), but normally we only need to store a limited number of them. If that’s the case, then we use a hashing function to map the set of possible values (the <i class="calibre17">domain</i>, or source set) to a smaller set of <code class="fm-code-in-text">M</code> elements (the <i class="calibre17">codomain</i>, or target set), the indices of a plain array where we store the values associated to each key. (As we explained in appendix C, we get to decide how big <code class="fm-code-in-text">M</code> is depending on some considerations on the expected performance.) Typically, the set of values in the domain is referred to as <i class="calibre17">keys</i>, and the values in the codomain are indices from <code class="fm-code-in-text">0</code> to <code class="fm-code-in-text">M-1</code>.</p>
+
+  <p class="body"><a id="pgfId-1005462"></a>Since the target set of a hashing function is typically smaller than the source set, there will be collisions: at least two values will be mapped to the same index. Hash tables, as we have seen in chapter 2, use a few strategies to resolve conflicts, such as <i class="fm-italics">chaining</i><a id="marker-1005839"></a> or <i class="fm-italics">open addressing</i><a id="marker-1005843"></a>.</p>
+
+  <p class="body"><a id="pgfId-1005573"></a>The other important thing to keep in mind is that we distinguish hash maps and hash sets. The former allows us to associate a value<a href="#pgfId-1034732"><sup class="footnotenumber">7</sup></a> to a key; the latter only to record the presence or absence of a key in a set. Hash sets implement a special case of <i class="fm-italics">dictionary</i><a id="marker-1005847"></a>, the <code class="fm-code-in-text">Set</code><a id="marker-1005851"></a>. With respect to our definition of <i class="fm-italics">dictionary</i> as an abstract data structure, given at the beginning of this section, a <i class="fm-italics">set</i> is<a id="marker-1005855"></a> a specialization of a dictionary, where the <code class="fm-code-in-text">value</code> type<a id="marker-1005859"></a> is set to <code class="fm-code-in-text">Boolean</code>; the second parameter to <code class="fm-code-in-text">insert</code><a id="marker-1005863"></a> becomes redundant, as the value associated with a key in the hash set will be implicitly assumed to be <code class="fm-code-in-text">true</code><a id="marker-1005867"></a>.</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="2" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1042004"></a>Abstract data structure: Set</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042008"></a>API</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <pre class="programlisting">class Set {
+  insert(key)
+  remove(key)
+  contains(key) <span class="cambria">→</span> true/ false
+}</pre>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042012"></a>Contract with client</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042014"></a>A set maintains a set of keys. If a key K was added to the set (and not removed afterward), then <code class="fm-code-in-text2">contains(K)</code> will return <code class="fm-code-in-text2">true</code><a id="marker-1042015"></a>; otherwise it will return <code class="fm-code-in-text2">false</code><a id="marker-1042016"></a>.</p>
+      </td>
+    </tr>
+  </table>
+
+  <p class="body"><a id="pgfId-1005868"></a>As we explain in appendix C, all operations in a hash table (and hash set) can be performed in amortized <code class="fm-code-in-text">O(1)</code> <a id="marker-1007266"></a><a id="marker-1007270"></a><a id="marker-1007274"></a><a id="marker-1007278"></a>time.</p>
+
+  <h3 class="fm-head2" id="heading_id_10"><a id="pgfId-1006132"></a>4.4.4 Binary search tree: Every operation is logarithmic</h3>
+
+  <p class="body"><a id="pgfId-1006161"></a>Binary <a id="marker-1007282"></a><a id="marker-1007286"></a><a id="marker-1007290"></a><a id="marker-1007294"></a><a id="marker-1007298"></a>search trees (<i class="fm-italics">BSTs</i><a id="marker-1007302"></a>) are another old acquaintance of ours; we met them in chapters 2 and 3, and they are also discussed in appendix C.</p>
+
+  <p class="body"><a id="pgfId-1006228"></a>A BST is a special kind of binary tree that can store keys on which it defined a total ordering: this means that for each pair of keys, it must be possible to compare them and decide which one is smaller, or if they are equal. A total ordering benefits from <i class="fm-italics">reflexive</i><a id="marker-1007306"></a>, <i class="fm-italics">symmetric</i><a id="marker-1007310"></a><i class="fm-italics">,</i> and <i class="fm-italics">transitive</i><a id="marker-1007314"></a> properties.</p>
+
+  <div class="fm-sidebar-block">
+    <p class="fm-sidebar-title"><a class="calibre14" id="pgfId-1055082"></a>Ordering relations</p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1055083"></a>Given a set <code class="fm-code-in-text2">S</code> on which we defined an ordering relation <span class="cambria">≤</span>, this relation is a total ordering if, for any three keys <code class="fm-code-in-text2">x, y, z</code>, the following properties hold:</p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1055084"></a>Reflexive: <code class="fm-code-in-text2">x</code> <span class="cambria">≤</span> <code class="fm-code-in-text2">x</code></p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1055085"></a>Symmetric: if <code class="fm-code-in-text2">x</code> <span class="cambria">≤</span> <code class="fm-code-in-text2">y</code>, then <code class="fm-code-in-text2">y</code> <span class="cambria">≤</span> <code class="fm-code-in-text2">x</code></p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1055086"></a>Transitive: if <code class="fm-code-in-text2">x</code> <span class="cambria">≤</span> <code class="fm-code-in-text2">y</code> and <code class="fm-code-in-text2">y</code> <span class="cambria">≤</span> <code class="fm-code-in-text2">z</code> then <code class="fm-code-in-text2">x</code> <span class="cambria">≤</span> <code class="fm-code-in-text2">z</code></p>
+  </div>
+
+  <p class="body"><a id="pgfId-1006514"></a>BSTs use these properties to make sure that the position of a key in the tree can be determined just by looking at a single path from the root to a leaf.</p>
+
+  <p class="body"><a id="pgfId-1006585"></a>When we insert a new key, in fact, we compare it to the tree’s root. If it’s smaller, we take a left turn, traversing the root’s left subtree; otherwise, we go on the right subtree. At the next step, we repeat the comparison with the subtree’s root, and so on until we get to a leaf, and that’s exactly the position where we need to insert the key.</p>
+
+  <p class="body"><a id="pgfId-1006731"></a>If you remember what we saw in chapter 2 regarding heaps (or if you had a chance to refresh your memory, in appendix C), all operations in a BST take time proportional to the height of the tree (the longest path from root to a leaf). In particular for balanced BSTs, all operations take <code class="fm-code-in-text">O(ln(n))</code> time, where <code class="fm-code-in-text">n</code> is the number of keys added to the tree.</p>
+
+  <p class="body"><a id="pgfId-1006874"></a>Of course, compared to the <code class="fm-code-in-text">O(1)</code> amortized running time of hash tables, even balanced BSTs don’t seem like a good choice for implementing an associative array. The catch is that while their performance on the core methods is slightly slower, BSTs allow a substantial improvement for methods like finding the predecessor and successor <code class="fm-code-in-text">o</code> key, and finding minimum and maximum: they all run in <code class="fm-code-in-text">O(ln(n))</code> asymptotic time for BSTs, while the same operations on a hash table all require <code class="fm-code-in-text">O(n)</code> time.</p>
+
+  <p class="body"><a id="pgfId-1007044"></a>Moreover, BSTs can return all keys (or values) stored, sorted by key, in linear time, while for hash tables you need to sort the set of keys after retrieving it, so it takes <code class="fm-code-in-text">O(M + n*ln(n))</code> comparisons.</p>
+
+  <p class="body"><a id="pgfId-1007127"></a>Now that we have described the basic data structures most commonly used to implement dictionaries, it feels like a good time to recap what we have described so far. Table 4.3 gathers the running times of the main operations on the possible implementations of dictionaries we mentioned.</p>
+
+  <p class="fm-table-caption"><a id="pgfId-1042319"></a>Table 4.3 Running time of operations on dictionaries for different implementations</p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1042329"></a>Operation</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1042331"></a>Unsorted arrays</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1042333"></a>Sorted arrays</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1042335"></a>BST</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1042337"></a>Hash table</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042339"></a><code class="fm-code-in-text2">Create the DS</code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042341"></a>O(1)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042343"></a>O(n*log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042345"></a>O(n*log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042347"></a>O(n)</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042349"></a><code class="fm-code-in-text2">Look-up an entry</code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042351"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042353"></a>O(log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042355"></a>O(log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042357"></a>O(n/M) <a href="#pgfId-1042436"><sup class="footnotenumber1">8</sup></a></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042359"></a><code class="fm-code-in-text2">Add a new entry</code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042361"></a>O(1) <a href="#pgfId-1042436"><sup class="footnotenumber1">8</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042363"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042365"></a>O(log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042367"></a>O(n/M) <a href="#pgfId-1042436"><sup class="footnotenumber1">8</sup></a></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042369"></a><code class="fm-code-in-text2">Remove an entry</code><a id="marker-1042408"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042371"></a>O(1)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042373"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042375"></a>O(log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042377"></a>O(n/M) <a href="#pgfId-1042436"><sup class="footnotenumber1">8</sup></a></p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042379"></a><code class="fm-code-in-text2">Sorted List</code><a id="marker-1042409"></a><a id="marker-1042410"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042381"></a>O(n*log(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042383"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042385"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042387"></a>O(M+n*log(n))</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042389"></a><code class="fm-code-in-text2">Min/Max</code><a id="marker-1042411"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042391"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042393"></a>O(1)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042395"></a>O(1) <a href="#pgfId-1042466"><sup class="footnotenumber1">9</sup></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042397"></a>O(M+n)</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042399"></a><code class="fm-code-in-text2">Prev/Next</code><a id="marker-1042412"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042401"></a>O(n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042403"></a>O(1)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042405"></a>O(log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1042407"></a>O(M+n)</p>
+      </td>
+    </tr>
+  </table>
+
+  <p class="body"><a id="pgfId-1007879"></a>Looking at table 4.3, it’s evident that if we don’t have to worry about any operation that involves the order of the element, or the order they were inserted, then the amortized time of hash tables is the best. If <code class="fm-code-in-text">n~=M</code> (and there are approximately as many buckets as elements), then a hash table can perform insertion, removal, and look-up in amortized constant <a id="marker-1033868"></a><a id="marker-1033872"></a><a id="marker-1033876"></a><a id="marker-1033880"></a><a id="marker-1033884"></a>time.</p>
+
+  <h3 class="fm-head2" id="heading_id_11"><a id="pgfId-1008022"></a>4.4.5 Bloom filter: As fast as hash tables, but saves memory (with a catch)</h3>
+
+  <p class="body"><a id="pgfId-1008067"></a>We <a id="marker-1033888"></a><a id="marker-1033892"></a><a id="marker-1033896"></a>haven’t officially met this data structure yet in the book, but there is a good chance you have already heard of <i class="fm-italics">Bloom filters</i><a id="marker-1033900"></a>. They are a data structure named after Burton Howard Bloom, who invented them in the 1970s.</p>
+
+  <p class="body"><a id="pgfId-1008160"></a>There are three notable differences between hash tables and Bloom filters:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1008190"></a>Basic Bloom filters<a class="calibre14" id="marker-1033904"></a> don’t store data; they just answer the question, is a datum in the set? In other words, they implement a hash set’s<a class="calibre14" id="marker-1033908"></a> API, not a <i class="calibre15">hash table</i>’s<a class="calibre14" id="marker-1033912"></a> API.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008271"></a>Bloom filters require less memory in comparison to hash tables; this is the main reason for their use.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1008319"></a>While a negative answer is 100% accurate, there might be false positives. We will explain this in detail in a few sections. For now, just keep in mind that sometimes a Bloom filter might answer that a value was added to it when it was not.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1008424"></a>It is not possible to delete a value from a Bloom filter.<a class="calibre14" href="#pgfId-1034748"><sup class="footnotenumber">10</sup></a></p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1008460"></a>There is a tradeoff between the accuracy of a Bloom filter and the memory it uses. The less memory, the more false positives it returns. Luckily, there is an exact formula that, given the number of values we need to store, can output the amount of memory needed to keep the rate of false positives within a certain threshold. We’ll go into the details for this formula in the advanced sections toward the end of <a id="marker-1033916"></a><a id="marker-1033920"></a><a id="marker-1033924"></a>the <a id="marker-1033928"></a><a id="marker-1033932"></a><a id="marker-1033936"></a>chapter.</p>
+
+  <h2 class="fm-head" id="heading_id_12"><a id="pgfId-1008632"></a>4.5 Under the hood: How do Bloom filters work?</h2>
+
+  <p class="body"><a id="pgfId-1008664"></a>Let’s <a id="marker-1033940"></a>now delve into the details of Bloom filter implementation. A Bloom filter is made of two elements:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1008710"></a>An array of <code class="fm-code-in-text">m</code> elements</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1008731"></a>A set of <code class="fm-code-in-text">k</code> hash functions</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1008754"></a>The array is (conceptually) an array of bits, each of which is initially set to <code class="fm-code-in-text">0</code>; each hash function outputs an index between <code class="fm-code-in-text">0</code> and <code class="fm-code-in-text">m-1</code>.</p>
+
+  <p class="body"><a id="pgfId-1008816"></a>It is crucial to clarify as soon as possible that there is not a 1-to-1 correspondence between the elements of the array and the keys we add to the Bloom filter. Rather, we will use <code class="fm-code-in-text">k</code> bits (and so <code class="fm-code-in-text">k</code> array’s elements) to store each entry for the Bloom filter; <code class="fm-code-in-text">k</code> here is typically much smaller than <code class="fm-code-in-text">m</code>.</p>
+
+  <p class="body"><a id="pgfId-1008943"></a>Note that <code class="fm-code-in-text">k</code> is a constant that we pick when we create the data structure, so each and every entry we add is stored using the same amount of memory, exactly <code class="fm-code-in-text">k</code> bits. With string values, this is pretty amazing, because it means we can add arbitrarily long strings to our filter using a constant amount of memory, just <code class="fm-code-in-text">k</code> bits.</p>
+
+  <p class="body"><a id="pgfId-1009073"></a>When we insert a new element key into the filter, we compute <code class="fm-code-in-text">k</code> indices for the array, given by the values <code class="fm-code-in-text">h<sub class="subscript1">0</sub>(key)</code> up to <code class="fm-code-in-text">h(k-1)(key)</code>, and set those bits to <code class="fm-code-in-text">1</code>.</p>
+
+  <p class="body"><a id="pgfId-1009153"></a>When we look up an entry, we also need to compute the <code class="fm-code-in-text">k</code> hashes for it as described for <code class="fm-code-in-text">insert</code><a id="marker-1044287"></a>, but this time we check the <code class="fm-code-in-text">k</code> bits at the indices returned by the hash functions and return <code class="fm-code-in-text">true</code><a id="marker-1044288"></a> if and only if all bits at those positions are set to <code class="fm-code-in-text">1</code>.</p>
+
+  <p class="body"><a id="pgfId-1009268"></a>Figure 4.3 shows both operations in action.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F223.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1055117"></a>Figure 4.3 An example of a Bloom filter. (A) Initially the filter is an array of zeroes. (B) To store an item <code class="fm-code-in-text">X<sub class="subscript1">i</sub></code>, it is hashed <code class="fm-code-in-text">k</code> times (in the example, <code class="fm-code-in-text">k=3</code>), with each hash yielding the index of a bit; then these <code class="fm-code-in-text">k</code> bits are all set to <code class="fm-code-in-text">1</code>. Notice how the two triplets of indices generated by <code class="fm-code-in-text">X<sub class="subscript1">1</sub></code> and <code class="fm-code-in-text">X<sub class="subscript1">2</sub></code> partially overlap (they both point to the sixth element). For a more detailed example of how insertion works, see figure 4.5. (C) Likewise, to check if an element <code class="fm-code-in-text">Yi</code> is in the set, it’s hashed k times, obtaining just as many indices; then we read the corresponding bits, and if and only if all of them are set to <code class="fm-code-in-text">1</code>, we return <code class="fm-code-in-text">true</code><a id="marker-1055118"></a>. In the bottom drawing, element <code class="fm-code-in-text">Y<sub class="subscript1">1</sub></code> appears to be in the set (but we can’t exclude that the filter is returning a false positive), while element <code class="fm-code-in-text">Y<sub class="subscript1">2</sub></code> can’t be in the set because one of the indices generated from its hashing holds a <code class="fm-code-in-text">0</code>. Check figure 4.4 for further insight into how lookup works.</p>
+
+  <p class="body"><a id="pgfId-1009678"></a>Ideally, we would need <code class="fm-code-in-text">k</code> different independent hash functions, so that no two indices are duplicated for the same value. It is not easy to design a large number of independent hash functions, but we can get good approximations. There are a few solutions commonly used:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1009777"></a>Use a parametric hash function <code class="fm-code-in-text">H(i)</code>. This meta-function, which is a generator of hash functions, takes in as input an initial value <code class="fm-code-in-text">i</code> and outputs a hash function <code class="fm-code-in-text">H<sub class="subscript1">i</sub>=H(i)</code>. During the Bloom filter’s initialization, we can create <code class="fm-code-in-text">k</code> of this functions, <code class="fm-code-in-text">H<sub class="subscript1">0</sub></code> to <code class="fm-code-in-text">H<sub class="subscript1">k-1</sub></code>, by calling the generator <code class="fm-code-in-text">H</code> on <code class="fm-code-in-text">k</code> different (and usually random) values.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1009914"></a>Use a single hash <code class="fm-code-in-text">H</code> function<a class="calibre14" id="marker-1044282"></a> but initialize a list <code class="fm-code-in-text">L</code> of <code class="fm-code-in-text">k</code> random (and unique) values. For each entry <code class="fm-code-in-text">key</code> that is inserted/searched, create <code class="fm-code-in-text">k</code> values by adding or appending <code class="fm-code-in-text">L[i]</code> to <code class="fm-code-in-text">key</code>, and then hash them using <code class="fm-code-in-text">H</code>. (Remember that well-designed hash functions will produce very different results for small changes in the input.)</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1010047"></a>Use double or triple hashing.<a class="calibre14" href="#pgfId-1034762"><sup class="footnotenumber">11</sup></a></p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1010069"></a>While the latter won’t guarantee independence among the hash functions generated, it has been proven<a href="#pgfId-1034781"><sup class="footnotenumber">12</sup></a> that we can relax this constraint with a minimal increase in the false positive rate. To keep things simple, in our implementation we use double hashing with two independent hash functions: Murmur hashing<a id="marker-1033964"></a><a href="#pgfId-1034797"><sup class="footnotenumber">13</sup></a> and <a id="id_Hlk55799592"></a>Fowler-Noll-Vo<a href="#pgfId-1034811"><sup class="footnotenumber">14</sup></a><a id="marker-1033968"></a> (fnv1) hashing.</p>
+
+  <p class="body"><a id="pgfId-1010186"></a>The general format of our <code class="fm-code-in-text">i-th</code> hash function, for <code class="fm-code-in-text">i</code> between <code class="fm-code-in-text">0</code> and <code class="fm-code-in-text">k-1</code>, will be</p>
+  <pre class="programlisting">H<sub class="calibre25">i</sub>(key) = murmurhash(key) + i * fnv1(key) + i * i</pre>
+
+  <h2 class="fm-head" id="heading_id_13"><a id="pgfId-1010266"></a>4.6 Implementation</h2>
+
+  <p class="body"><a id="pgfId-1010278"></a>Enough <a id="marker-1033976"></a>with the theory; now it’s time to once again get our hands dirty! As usual, in the next sections we’ll show pseudo-code snippets and comment the key sections. Trivial methods will be omitted. On the book’s <span class="fm-hyperlink">repo</span> on GitHub,<a href="#pgfId-1034825"><sup class="footnotenumber">15</sup></a> you can also find an <span class="fm-hyperlink">implementation</span> with the full code along with <span class="fm-hyperlink">unit tests</span>.</p>
+
+  <h3 class="fm-head2" id="heading_id_14"><a id="pgfId-1010404"></a>4.6.1 Using a Bloom filter</h3>
+
+  <p class="body"><a id="pgfId-1010423"></a>Back <a id="marker-1033980"></a>to our contacts application: How would we use a Bloom filter to make it faster? Well, as mentioned, we need to use it as a dictionary, so we are going to create a new Bloom filter when our email application starts, retrieve all the contacts from the server, and add them to the Bloom filter. Listing 4.1 summarizes this initialization process.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1042543"></a>Listing 4.1 Starting up an email application</p>
+  <pre class="programlisting"><b class="calibre21">function</b> initBloomFilter(server, minSize)     <span class="fm-combinumeral">❶ </span>
+  contactsList ← server.loadContacts()        <span class="fm-combinumeral">❷</span>
+  size ← <b class="calibre21">max</b>(2 * |contactsList|, minSize)     <span class="fm-combinumeral">❸</span>
+  bloomFilter ← <b class="calibre21">new</b> BloomFilter(size)         <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">for</b> contact <b class="calibre21">in</b> contactsList <b class="calibre21">do</b>              <span class="fm-combinumeral">❺</span>
+    bloomFilter.insert(contact)               <span class="fm-combinumeral">❻</span>
+  <b class="calibre21">return</b> bloomFilter</pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1053541"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">initBloomFilter</code><a id="marker-1053545"></a> takes an interface to a server (a façade object) and the minimum size that should be used to initialize the Bloom filter; it returns the newly created Bloom filter.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1053563"></a><span class="fm-combinumeral">❷</span> On startup, it optionally loads the list of contacts from a server that takes care of durable storage.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1053580"></a><span class="fm-combinumeral">❸</span> The size of the Bloom filter should be at least twice the current contact list’s, but at least equal to <code class="fm-code-in-text2">minSize</code>, a minimum value that can be passed as an argument.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1053597"></a><span class="fm-combinumeral">❹</span> Creates an empty Bloom filter with the right size</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1053614"></a><span class="fm-combinumeral">❺</span> Cycles through the list of contacts</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1053631"></a><span class="fm-combinumeral">❻</span> For each contact, adds it to the Bloom filter</p>
+
+  <p class="body"><a id="pgfId-1010979"></a>Once we set up our directory application, we have two operations that we are mainly interested in: checking if a contact is on the list and adding a new contact to the directory.</p>
+
+  <p class="body"><a id="pgfId-1011052"></a>For the former operation, shown in listing 4.2, we can check the Bloom filter, and if it says the contact has never been added, then we have our answer; the contact is not in the system. If, however, the Bloom filter returns <code class="fm-code-in-text">true</code><a id="marker-1033988"></a>, then it might be a false positive, so we need to contact the server to double-check.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1042859"></a>Listing 4.2 Checking an email</p>
+  <pre class="programlisting"><b class="calibre21">function</b> checkContact(bloomFilter, server, contact)   <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> bloomFilter.contains(contact) <b class="calibre21">then</b>               <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return</b> server.contains(contact)                   <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">else</b>
+    <b class="calibre21">return false</b>                                      <span class="fm-combinumeral">❹</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1053276"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">checkContact</code> verifies if an email contact is stored in the application. It takes a Bloom filter, a server façade, and the contact to check. It returns <code class="fm-code-in-text2">true</code> if <code class="fm-code-in-text2">contact</code> is already in our contacts book.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1053297"></a><span class="fm-combinumeral">❷</span> Checks the Bloom filter for the contact passed to the method</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1053314"></a><span class="fm-combinumeral">❸</span> If the Bloom filter returned <code class="fm-code-in-text2">true</code>, we need to check if the server actually stores the contact, because it could be a false positive.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1053331"></a><span class="fm-combinumeral">❹</span> Otherwise, since Bloom filters don’t have false negatives (but only false positives), we can return <code class="fm-code-in-text2">false</code>.</p>
+
+  <p class="body"><a id="pgfId-1011494"></a>For adding new contacts, we always have to sync to our permanent storage,<a href="#pgfId-1034841"><sup class="footnotenumber">16</sup></a> as shown in listing 4.3. Since this likely implies a remote connection through a network, there is a non-negligible probability that the call to the server fails; therefore, we need to handle possible failures and make sure the remote call succeeds before also updating the Bloom filter.</p>
+
+  <p class="body"><a id="pgfId-1011628"></a>To be thorough, in real implementations we should also synchronize the access to the server and Bloom filter, using a locking mechanism (see chapter 7), and using a try-catch around the whole operation, rolling back (or retrying) if the call on the Bloom filter <a id="marker-1033992"></a>fails.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1042890"></a>Listing 4.3 Adding a new contact</p>
+  <pre class="programlisting"><b class="calibre21">function</b> addContact(bloomFilter, server, contact)    <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> server.storeContact(contact) <b class="calibre21">then</b>               <span class="fm-combinumeral">❷</span>
+    bloomFilter.insert(contact)                      <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return true</b>                                      <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">else</b> 
+    <b class="calibre21">return false</b>                                     <span class="fm-combinumeral">❺</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052964"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">addContact</code><a id="marker-1052968"></a> adds a new contact to the system; it takes a Bloom filter and a server object, in addition to the new contact to add. It returns <code class="fm-code-in-text2">true</code> if and only if the operation succeeds.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052986"></a><span class="fm-combinumeral">❷</span> Try to add the contact to the server, and if it succeeds . . .</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1053003"></a><span class="fm-combinumeral">❸</span> . . . then add it to the Bloom filter as well...</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1053020"></a><span class="fm-combinumeral">❹</span> . . . and return <code class="fm-code-in-text2">true</code><a id="marker-1053024"></a>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1053038"></a><span class="fm-combinumeral">❺</span> Otherwise, the insertion failed, so return <code class="fm-code-in-text2">false</code><a id="marker-1053042"></a>.</p>
+
+  <h3 class="fm-head2" id="heading_id_15"><a id="pgfId-1012033"></a>4.6.2 Reading and writing bits</h3>
+
+  <p class="body"><a id="pgfId-1012053"></a>Now, <a id="marker-1034008"></a>let’s move to the implementation of a Bloom filter, starting, as usual, with the helper methods that will give us the basic blocks to build the implementation of our API.</p>
+
+  <p class="body"><a id="pgfId-1012125"></a>In particular, we need</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1012140"></a>Some way to read and write bits at any location in our filter’s buffer</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1012181"></a>A mapping between a key in input and the bits’ indices in the buffer</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1012220"></a>A set of deterministically generated hash functions that will be used to transform keys into a list of indices</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1012266"></a>If we are using Bloom filters to save memory, it wouldn’t make sense to store bits inefficiently. We will need to pack bits into the smallest integer type available in the programming language we choose; therefore, both reading and writing a bit forces us to map the index of the bit to be accessed into a couple of integers.</p>
+
+  <p class="body"><a id="pgfId-1012396"></a>In modern programming languages, in fact, you can typically speed up these operations by using fixed-size numerical arrays of primitive types and vector algebra. The price to pay is that when we get a request to access the <code class="fm-code-in-text">i</code>-th bit in the filter, we need to extract two coordinates from index <code class="fm-code-in-text">i</code>: the array element that is storing the <code class="fm-code-in-text">i</code>-th bit and the offset of the bit we need to extract with respect to that element.</p>
+
+  <p class="body"><a id="pgfId-1012562"></a>Listing 4.4 shows what this means and how it can be computed.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1042920"></a>Listing 4.4 <code class="fm-code-in-text">findBitCoordinates</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> findBitCoordinates(index)           <span class="fm-combinumeral">❶</span>
+  byteIndex ← <b class="calibre21">floor</b>(index / BITS_PER_INT)    <span class="fm-combinumeral">❷</span>
+  bitOffset ← index <b class="calibre21">mod</b> BITS_PER_INT         <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">return</b> (byteIndex, bitOffset)              <span class="fm-combinumeral">❹</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052708"></a><span class="fm-combinumeral">❶</span> Function <code class="fm-code-in-text2">findBitCoordinates</code><a id="marker-1052712"></a> is a utility method that, given the index of a bit in a bit array, returns the index of the array and the offset of the bit with respect to the array’s element at that index.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052730"></a><span class="fm-combinumeral">❷</span> Given the index of the bit to retrieve, we extract the byte index; that is, which element of the array buffer contains the bit to extract. <code class="fm-code-in-text2">BITS_PER_INT</code> is a (system) constant whose value is the number of bits used to store an <code class="fm-code-in-text2">int</code> in the programming language used (for most languages it’s 32).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052750"></a><span class="fm-combinumeral">❸</span> Extract the bit offset inside the <code class="fm-code-in-text2">buffer</code>’s byte. In other words, to extract the local index of the bit by performing a modulo operation, we need the rest of the division performed at line #2.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052767"></a><span class="fm-combinumeral">❹</span> Returns the byte index and bit offset as a couple of values. Note that some programming languages allow native structures for tuples; in other languages, you can make do by returning an array with two elements.</p>
+
+  <p class="body"><a id="pgfId-1012755"></a>Once we have those two indices, we can easily read or write any bit; it just becomes a matter of bitwise arithmetic. For instance, listing 4.5 shows the <code class="fm-code-in-text">readBit</code> method<a id="marker-1034016"></a> taking care of the reading part.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1042948"></a>Listing 4.5 Method <code class="fm-code-in-text">readBit</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> readBit(bitsArray, index)                         <span class="fm-combinumeral">❶</span>
+  (element, bit) ← findBitCoordinates(bitsArray, index)    <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">return</b> (bitsArray[element] &amp; (1 &lt;&lt; bit)) &gt;&gt; bit          <span class="fm-combinumeral">❸</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052512"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">readBit</code><a id="marker-1052516"></a> extracts the index-th bit from the bits array passed as first argument. It returns the value of the bit, so either 0 or 1.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052537"></a><span class="fm-combinumeral">❷</span> Retrieves the element index and offset for the bit in the bits array</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052554"></a><span class="fm-combinumeral">❸</span> Some bitwise algebra to return the value. First retrieve the buffer element, then put it in <code class="fm-code-in-text2">AND</code> with a mask that extracts a single bit (at the right position); finally, it shifts the extracted value back so that the result will either be a 0 or a 1. We could save a left shift by preparing a constant array of <code class="fm-code-in-text2">BITS_PER_INT</code> masks, and use <code class="fm-code-in-text2">bit</code> as an index to decide which mask should be applied.</p>
+
+  <p class="body"><a id="pgfId-1013183"></a>Listing 4.6 shows the writing counterpart, method <code class="fm-code-in-text">writeBit</code><a id="marker-1034024"></a>. You might be surprised to see that we don’t pass the value to write, but since (this version of) Bloom filter doesn’t support deleting elements, we can only write a 1; we never write zeros.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1042976"></a>Listing 4.6 Method <code class="fm-code-in-text">writeBit</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> writeBit(bitsArray, index)                        <span class="fm-combinumeral">❶</span>
+  (element, bit) ← findBitCoordinates(bitsArray, index)    <span class="fm-combinumeral">❷</span>
+  bitsArray[element] ← bitsArray[element] | (1 &lt;&lt; bit)     <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">return</b> bitsArray</pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052324"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">writeBit</code><a id="marker-1052328"></a> takes the bits arrays and the index of the bit where a 1 should be written; it returns the bits array after modifying it.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052349"></a><span class="fm-combinumeral">❷</span> Retrieves the element index and offset for the bit in the bits array</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052366"></a><span class="fm-combinumeral">❸</span> Some more bitwise algebra to store the value. Put the current buffer’s byte in <code class="fm-code-in-text2">OR</code> with a mask having a single 1 in the position where we need to write, and then store the result back on the buffer. If the buffer already had a 1 at the index-th bit, then it won’t change; otherwise, only that bit will be updated. We are assuming, here, that we only write ones, never zeroes (because our version of Bloom filter does not support the delete<a id="marker-1052371"></a> operation).</p>
+
+  <p class="body"><a id="pgfId-1013663"></a>Let’s go through an example for <code class="fm-code-in-text">readBit</code><a id="marker-1034036"></a> and <code class="fm-code-in-text">writeBit</code><a id="marker-1034040"></a>. Suppose we have this buffer: <code class="fm-code-in-text">B=[157, 25, 44, 204]</code>, with <code class="fm-code-in-text">BITS_PER_INT=8</code>.</p>
+
+  <p class="body"><a id="pgfId-1013717"></a>We call <code class="fm-code-in-text">readBit(B, 19)</code>; then we have: <code class="fm-code-in-text">element==2, bit==3</code>.</p>
+
+  <p class="body"><a id="pgfId-1013745"></a>Therefore</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1013754"></a><code class="fm-code-in-text">bitsArray[element]              (evaluates to 44)</code></p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1013785"></a><code class="fm-code-in-text">(1 &lt;&lt; bit)                      (8)</code></p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1013806"></a><code class="fm-code-in-text">bitsArray[element] &amp; (1 &lt;&lt; bit) (8)</code></p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1013829"></a>And the returned value will be <code class="fm-code-in-text">1</code>.</p>
+
+  <p class="body"><a id="pgfId-1013851"></a>If, instead, we call <code class="fm-code-in-text">writeBit(B, 15)</code>, then we have: <code class="fm-code-in-text">(element==1, bit==7)</code>.</p>
+
+  <p class="body"><a id="pgfId-1013883"></a>Therefore</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1013892"></a><code class="fm-code-in-text">bitsArray[element]              (evaluates to 25)</code></p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1013914"></a><code class="fm-code-in-text">(1 &lt;&lt; bit)                      (128)</code></p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1013935"></a><code class="fm-code-in-text">bitsArray[element] | (1 &lt;&lt; bit) (153)</code></p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1013968"></a>And the buffer will be updated to <a id="marker-1034044"></a><code class="fm-code-in-text">B=[157, 153, 44, 204]</code>.</p>
+
+  <h3 class="fm-head2" id="heading_id_16"><a id="pgfId-1013999"></a>4.6.3 Find where a key is stored</h3>
+
+  <p class="body"><a id="pgfId-1014024"></a>To <a id="marker-1034048"></a>generate all the indices for the bits used to store a key, we go through a two-step process, described in listing 4.7.</p>
+
+  <p class="body"><a id="pgfId-1014073"></a>Keep in mind that our ultimate goal is to transform a string into <code class="fm-code-in-text">k</code> positions, between <code class="fm-code-in-text">0</code> and <code class="fm-code-in-text">m - 1</code>.</p>
+
+  <p class="body"><a id="pgfId-1014123"></a>First, we use two hash functions on strings very different from each other: <i class="calibre17">murmur hashing</i><a id="marker-1034052"></a> and <i class="calibre17">fnv1 hashing</i><a id="marker-1034056"></a>. The chances that, for a given string, both of them produce the same result are beyond slim.</p>
+
+  <p class="body"><a id="pgfId-1014205"></a>Then, for each of the <code class="fm-code-in-text">k</code> bits we have to store, we retrieve the corresponding hash function in our pool. For each position <code class="fm-code-in-text">i</code> between <code class="fm-code-in-text">0</code> and <code class="fm-code-in-text">k-1</code> we have generated (on initialization) a <i class="calibre17">double hashing</i> function<a id="marker-1034060"></a> <code class="fm-code-in-text">h<sub class="subscript1">i</sub></code>. The <code class="fm-code-in-text">i</code>-th bit will therefore be returned by <code class="fm-code-in-text">h<sub class="subscript1">i</sub>(h<sub class="subscript1">M</sub>, h<sub class="subscript1">F</sub>)</code>, where h<sub class="subscript">M</sub> is the result of murmur hashing on the input key and h<sub class="subscript">F</sub> the result of fnv1 hashing.</p>
+
+  <p class="body"><a id="pgfId-1014361"></a>Although the highest level of randomization would be obtained with a random seed for each run, we need to have a way to force a deterministic behavior both for tests and to recreate a Bloom filter that can make sense of a given buffer, in case the filter is serialized, or to support quick restart over failure. Therefore, we should also leave the option to pass the seed to the Bloom filter’s <a id="marker-1034064"></a>constructor.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1043010"></a>Listing 4.7 Method <code class="fm-code-in-text">key2Positions</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> key2Positions(hashFunctions, seed, key)   <span class="fm-combinumeral">❶</span>
+  hM ← murmurHash32(key, seed)                     <span class="fm-combinumeral">❷</span>
+  hF ← fnv1Hash32(key)                             <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">return</b> hashFunctions.map(h =&gt; h(hM, hF))         <span class="fm-combinumeral">❹</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052076"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">key2Positions</code><a id="marker-1052080"></a> takes an array of hash functions as input, together with a seed to initialize these functions and the key that will be hashed. It returns the set of bit indices that needs to be updated in the Bloom filter to read/write key.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052098"></a><span class="fm-combinumeral">❷</span> Applies murmur hashing to the key, with a given seed</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052118"></a><span class="fm-combinumeral">❸</span> Applies fnv1 hashing to the key</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1052135"></a><span class="fm-combinumeral">❹</span> We use a functional programming notation here. We create a lambda function taking a hash function <code class="fm-code-in-text2">h</code> as input and applying <code class="fm-code-in-text2">h</code> to the two values generated by murmur and fnv1 hashing. Then we map this lambda function to every element of the <code class="fm-code-in-text2">hashFunctions</code> array<a id="marker-1052140"></a>. This operation transforms an array of hash functions (taking two integers as arguments and producing an integer as result) into an array of integers.</p>
+
+  <h3 class="fm-head2" id="heading_id_17"><a id="pgfId-1014923"></a>4.6.4 Generating hash functions</h3>
+
+  <p class="body"><a id="pgfId-1014941"></a>In <a id="marker-1034076"></a>listing 4.7 we described how, in the <code class="fm-code-in-text">key2Positions</code> method<a id="marker-1034080"></a>, we pass an array of hash functions and use it to transform a key into a list of indices: the positions in the filter’s bits array where we store the key. Now it’s time to see in listing 4.8 how we initialize these <code class="fm-code-in-text">k</code> hash functions needed to map each key (already transformed into a string) into a set of <code class="fm-code-in-text">k</code> indices, pointing to the bits that will hold the information about a key (stored vs not stored).</p>
+
+  <p class="body"><a id="pgfId-1015130"></a>The set of functions will be created by using double hashing to combine the two arguments in <code class="fm-code-in-text">k</code> different ways. With respect to linear or quadratic hashing, double hashing will increase the number of possible hashing functions that we can obtain, from <code class="fm-code-in-text">O(k)</code> to <code class="fm-code-in-text">O(k2)</code>. Still, this is far from the ideal <code class="fm-code-in-text">O(k!)</code> guaranteed by uniform hashing, but in practice it is close enough to have good performance <a id="marker-1052013"></a>(meaning a low collision rate).</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1043038"></a>Listing 4.8 Method <code class="fm-code-in-text">initHashFunctions</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> initHashFunctions(numHashFunctions, numBits)      <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">return range</b>(0, numHashFunctions).map(i <b class="calibre21">=&gt;</b> ((h1, h2) 
+  <span class="fm-code-continuation-arrow">➥</span> =&gt; (h1 + i * h2 + i * i) <b class="calibre21">mod</b> numBits))                <span class="fm-combinumeral">❷</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1051931"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">initHashFunctions</code> takes the number of desired functions and the number of bits held by the Bloom filter and creates and returns a list of double hashing functions, taking two values and returning their hash.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1051952"></a><span class="fm-combinumeral">❷</span> We again use functional notation, applying a lambda function to an array. For convenience, we map from integers <code class="fm-code-in-text2">0</code> to <code class="fm-code-in-text2">numHashes-1</code> (included) into a list of equally many double hashing functions.</p>
+
+  <h3 class="fm-head2" id="heading_id_18"><a id="pgfId-1015541"></a>4.6.5 Constructor</h3>
+
+  <p class="body"><a id="pgfId-1015553"></a>Let’s <a id="marker-1034088"></a>move on to the public API, which will mirror the API for <code class="fm-code-in-text">set</code><a id="marker-1034092"></a> that we defined in section 4.3.3. Let’s start from the constructor method.</p>
+
+  <p class="body"><a id="pgfId-1015617"></a>As it happens most of the times, the task for our constructor is mostly boilerplate code to set up all the internal state of a Bloom filter. In this case, however, there is also some non-trivial math to work out in order to compute the resources to allocate in order for the container to live up to the accuracy required by the client.</p>
+
+  <p class="body"><a id="pgfId-1015754"></a>Listing 4.9 describes the code for a possible constructor. Notice, in particular, at lines #5 and #8 how we compute respectively the number of bits and the number of hash functions needed to have a ratio of false positives within the tolerance specified by <code class="fm-code-in-text">maxTolerance</code><a id="marker-1034096"></a> (and consequently, at line #9, the number of array elements needed to store the filter). Here we assume that we use an array whose elements are <i class="calibre17">integers</i><a id="marker-1034100"></a>, and <code class="fm-code-in-text">BITS_PER_INT</code> is a system variable that gives us the size, in bits, of integers. Clearly, for those languages supporting multiple numerical types, we can also choose to have arrays of <i class="calibre17">bytes</i>, when available.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1043069"></a>Listing 4.9 Bloom filter’s constructor</p>
+  <pre class="programlisting"><b class="calibre21">function</b> BloomFilter(maxSize, maxTolerance=0.01, seed=random())        <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">this</b>.size ← 0                                                        <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">this</b>.maxSize ← maxSize                                               <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">this</b>.seed ← seed                                                     <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">this</b>.numBits ← -<b class="calibre21">ceil</b>(maxS * ln(maxTolerance) / <b class="calibre21">ln</b>(2) / <b class="calibre21">ln</b>(2))        <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">if</b> numBits &gt; MAX_SIZE <b class="calibre21">then</b>                                           <span class="fm-combinumeral">❺</span>
+    <b class="calibre21">throw new</b>  Error(“Overflow”)                                       <span class="fm-combinumeral">❻</span>
+  <b class="calibre21">this</b>.numHashFunctions ← -<b class="calibre21">ceil</b>(<b class="calibre21">ln</b>(maxTolerance) / <b class="calibre21">ln</b>(2))              <span class="fm-combinumeral">❼</span>
+  numElements ← <b class="calibre21">ceil</b>(numBits / BITS_PER_INT)                           <span class="fm-combinumeral">❽</span>
+  <b class="calibre21">this</b>.bitsArray ← 0 (<span class="cambria">∀</span> i <span class="cambria">ϵ</span> {0, ..., numElements-1})                   <span class="fm-combinumeral">❾</span>
+  <b class="calibre21">this</b>.hashFunctions ← initHashFunctions(numHashFunctions, maxSize)    <span class="fm-combinumeral">❿</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1051136"></a><span class="fm-combinumeral">❶</span> Signature of the constructor method. Argument <code class="fm-code-in-text2">maxTolerance</code><a id="marker-1051140"></a> has a default value of 0.01; <code class="fm-code-in-text2">seed</code> is by default initialized to a random integer. Not all programming languages provide an explicit syntax for default values in function signatures, but there are workarounds to cope with those that don’t.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1051158"></a><span class="fm-combinumeral">❷</span> Initially no element is stored in the filter, so the size is initialized to 0.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1051175"></a><span class="fm-combinumeral">❸</span> We store in class variables the (local) arguments for the constructor.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1051195"></a><span class="fm-combinumeral">❹</span> Computes the optimal number of bits needed: <code class="fm-code-in-text2">m = - n * ln(p) / ln(2)2; ceil(x)</code> is the standard ceiling function returning the smallest integer larger or equal to <code class="fm-code-in-text2">x</code></p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1051212"></a><span class="fm-combinumeral">❺</span> Checks that the size will fit in memory without issues</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1051229"></a><span class="fm-combinumeral">❻</span> We throw an error that can be handled by the client.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1051246"></a><span class="fm-combinumeral">❼</span> Computes the optimal number of hash functions needed. Equivalently, as we’ll see, this can be written in terms of size of the array versus the maximum size of the Bloom filter as: <code class="fm-code-in-text2">k = m/n * ln(2)</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1051263"></a><span class="fm-combinumeral">❽</span> The number of elements for the (integer) buffer is computed by dividing the number of total bits needed by the number of bits per int. Notice how we use the ceiling function here.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1051280"></a><span class="fm-combinumeral">❾</span> Creates the buffer that will store the filter’s bits, all initialized to 0</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1051297"></a><span class="fm-combinumeral">❿</span> Creates and stores the hash functions that will be used to get the bit indices for a key</p>
+
+  <p class="body"><a id="pgfId-1016813"></a>On creation, we need to provide only the maximum number of elements that the filter will be expected to contain. If at any time we realize that we stored in the filter more than <code class="fm-code-in-text">maxSize</code><a id="marker-1034108"></a> elements, the good news is that we won’t run out of space, but the bad news is that we can no longer guarantee the expected precision.</p>
+
+  <p class="body"><a id="pgfId-1016946"></a>Speaking of which, we can pass an optional second parameter to set the expected accuracy. By default, the threshold for the probability of a false positive (<code class="fm-code-in-text">maxTolerance</code><a id="marker-1034112"></a>) is set to 1%, but we can aim for better accuracy by passing a smaller value, or settle for worse accuracy as a tradeoff for a lower amount of memory needed by passing a higher value.</p>
+
+  <p class="body"><a id="pgfId-1017086"></a>The last optional parameter is needed, as explained in the previous section, to force a deterministic behavior for the filter. When omitted by the caller, a random value is generated for the seed.</p>
+
+  <p class="body"><a id="pgfId-1017160"></a>After validating the arguments received (omitted in listing 4.9), we can start setting a few base fields. Then comes the trickiest part; given the number of elements and the expected precision, compute how large our buffer needs to be. We use the formula described in section 4.10, but we need to verify that the size of the buffer is still safe to be held in memory.</p>
+
+  <p class="body"><a id="pgfId-1017310"></a>Once we have the size of the buffer, we can compute the optimal number of hashes needed to keep the rate of false positives as low as <a id="marker-1034116"></a>possible.</p>
+
+  <h3 class="fm-head2" id="heading_id_19"><a id="pgfId-1017374"></a>4.6.6 Checking a key</h3>
+
+  <p class="body"><a id="pgfId-1017391"></a>We <a id="marker-1034120"></a>can now start composing the helper methods presented so far to build the Bloom filter’s API methods. One note of caution: we assume keys are going to be strings, but they can also be serializable objects. If that’s the case, you will need a consistent serialization function that turns equivalent objects (for instance, two sets containing the same elements) into the same string; otherwise, no matter how good your implementation of the Bloom filter (or any other dictionary you might use) is, your application won’t work properly.</p>
+
+  <p class="fm-callout"><a id="pgfId-1017578"></a><span class="fm-callout-head">NOTE</span> Data massaging and preprocessing are often as important, or more important, than the actual algorithms run on it.</p>
+
+  <p class="body"><a id="pgfId-1017626"></a>With all the helper functions we already defined, checking the Bloom filter for a key becomes a piece of cake. We just need to retrieve the positions where the bits for the key would be stored, and check that those bits are all 1. To review the whole process, you can take a look at figure 4.4, and find the pseudo-code for the method in listing 4.10.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F224.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1055242"></a>Figure 4.4 Checking if an entry is in a Bloom filter, step by step. (A) We start with the email we would like to check, <code class="fm-code-in-text">“duffy@acme.com”</code>. (B) The key (our email) is processed through our set of hash functions. In our example, we assume <code class="fm-code-in-text">k=3</code>, so we’ll have three different hash functions, <code class="fm-code-in-text">H<sub class="subscript1">0</sub></code>, <code class="fm-code-in-text">H<sub class="subscript1">1</sub></code>, and <code class="fm-code-in-text">H<sub class="subscript1">2</sub></code>. (C) Each hash function produces an index for our binary array. In this case, the three indices might be, for instance, <code class="fm-code-in-text">&lt;9, 6, 2&gt;</code>. (D) We access the elements of the binary array at those indices. (E) The first element, at index <code class="fm-code-in-text">2</code>, is <code class="fm-code-in-text">0</code>. The other bits are <code class="fm-code-in-text">0</code> and <code class="fm-code-in-text">1</code> respectively. (F) Since not all the bits we checked were equal to <code class="fm-code-in-text">1</code>, it means that <code class="fm-code-in-text">“duffy@acme.com”</code> is not stored in the Bloom filter, and we will return <code class="fm-code-in-text">false</code>. The same workflow is followed for <code class="fm-code-in-text">“roger@acme.com”</code>, on the right. Because all three bits checked are set to <code class="fm-code-in-text">1</code>, we return <code class="fm-code-in-text">true</code>: this means that <code class="fm-code-in-text">“roger@acme.com”</code> might have been stored in the Bloom filter, with a certain degree of confidence.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1043098"></a>Listing 4.10 Method <code class="fm-code-in-text">contains</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> contains(key, positions=<b class="calibre21">null</b>)                               <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> positions == <b class="calibre21">null then</b>                                          <span class="fm-combinumeral">❷</span>
+    positions ← key2Positions(<b class="calibre21">this</b>.hashFunctions, <b class="calibre21">this</b>.seed, key)    <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">return</b> positions.all((i) <b class="calibre21">=&gt;</b> readBit(<b class="calibre21">this</b>.bitsArray, i) <b class="calibre21">!=</b> 0)       <span class="fm-combinumeral">❹</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1050859"></a><span class="fm-combinumeral">❶</span> Function <code class="fm-code-in-text2">contains</code><a id="marker-1050863"></a> takes a key and returns <code class="fm-code-in-text2">true</code> if and only if all bits corresponding to the key are set to 1. It is possible to pass explicitly the array of positions. Some operations on the filter require multiple accesses to a location, and this allows saving some computations. In languages allowing private methods and overloading, passing the second parameter should only be allowed for internal methods.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1050881"></a><span class="fm-combinumeral">❷</span> Checks if the array of positions has been passed. If so, avoids computing it again.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1050901"></a><span class="fm-combinumeral">❸</span> Retrieves the bit indices corresponding to current key</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1050918"></a><span class="fm-combinumeral">❹</span> Returns <code class="fm-code-in-text2">true</code> if and only if all bits read are not 0. This line also uses a functional notation, with the <code class="fm-code-in-text2">all</code> method<a id="marker-1050923"></a> that is similar to <code class="fm-code-in-text2">map</code><a id="marker-1050924"></a>, except it takes a predicate (a particular lambda function that returns a <code class="fm-code-in-text2">Boolean</code>), applies it to every element in the list, and its result is <code class="fm-code-in-text2">true</code> only if the predicate is <code class="fm-code-in-text2">true</code> for all elements.</p>
+
+  <p class="body"><a id="pgfId-1018259"></a>You might have noticed that in <code class="fm-code-in-text">contains</code> we check that the value returned by <code class="fm-code-in-text">readBit</code><a id="marker-1034136"></a> isn’t <code class="fm-code-in-text">0</code>. While it would technically suffice to check that the bit we read is equal to <code class="fm-code-in-text">1</code>, this would force us to use an extra right-shift bitwise operation. If our bit is stored in the <code class="fm-code-in-text">i</code>-th element of the array as its <code class="fm-code-in-text">j</code>-th bit (from the right), in fact, we should in theory shift the result of our bitwise extraction process <code class="fm-code-in-text">j</code> bits to the right, or compare it with a mask made of a single <code class="fm-code-in-text">1</code> shifted <code class="fm-code-in-text">j</code> positions to the left. This way we don’t need to, and we can trim off a few milliseconds (per operation) from our implementation.</p>
+
+  <p class="body"><a id="pgfId-1018512"></a>Also notice that the method takes an optional second parameter. The reason will become clear in the next <a id="marker-1034140"></a>section.</p>
+
+  <h3 class="fm-head2" id="heading_id_20"><a id="pgfId-1018560"></a>4.6.7 Storing a key</h3>
+
+  <p class="body"><a id="pgfId-1018577"></a>Storing <a id="marker-1034144"></a>a key is pretty similar to checking it, only we need a little extra effort to keep track of the number of elements added to the filter and to use <code class="fm-code-in-text">write</code> instead of <code class="fm-code-in-text">read</code>. Figure 4.5 shows a step-by-step example, putting together all the little pieces we have coded so far.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F1.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1055284"></a>Figure 4.5 Adding a new entry to a Bloom filter, step by step. (A) We start with the email we would like to store, <code class="fm-code-in-text">“duffy@acme.com”</code>. (B) The key (our email) is processed through our set of hash functions: in our example we assume <code class="fm-code-in-text">k=3</code>, so we’ll have three different hash functions, <code class="fm-code-in-text">H<sub class="subscript1">0</sub></code>, <code class="fm-code-in-text">H<sub class="subscript1">1</sub></code>, and <code class="fm-code-in-text">H<sub class="subscript1">2</sub></code>. (C) Each hash function produces an index for our binary array. In this case the three indices might be, for instance, <code class="fm-code-in-text">&lt;9, 6, 2&gt;</code>. Notice how these indices are the same as in figure 4.4: hash functions are deterministic, though their results might seem random. (D) We access the elements of the binary array at those indices. The first element, at index <code class="fm-code-in-text">2</code>, is <code class="fm-code-in-text">0</code>. The other bits are <code class="fm-code-in-text">0</code> and <code class="fm-code-in-text">1</code> respectively. (E) We flip the bits that were still set to <code class="fm-code-in-text">0:</code> (in this example, the ones at indices <code class="fm-code-in-text">2</code> and <code class="fm-code-in-text">9</code>). Now all the bits to which <code class="fm-code-in-text">“duffy@acme.com”</code> hashes to are set to <code class="fm-code-in-text">1</code>, so any future lookup will return <code class="fm-code-in-text">true</code>.</p>
+
+  <p class="body"><a id="pgfId-1018795"></a>Note that in this implementation for <code class="fm-code-in-text">insert</code><a id="marker-1034148"></a>, shown in listing 4.11, when we compute the size of the filter, we keep track of the number of unique elements added to the filter, rather than the total number of times the <code class="fm-code-in-text">add</code> method<a id="marker-1034152"></a> is called.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1043126"></a>Listing 4.11 Method <code class="fm-code-in-text">insert</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> insert(key)                                     <span class="fm-combinumeral">❶</span>
+  positions ← key2Positions(key)                         <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">if not</b> contains(key, positions) <b class="calibre21">then</b>                   <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">this</b>.size ← <b class="calibre21">this</b>.size + 1      
+    positions.map((i) =&gt; writeBit(<b class="calibre21">this</b>.bitsArray, i));   <span class="fm-combinumeral">❹</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1050532"></a><span class="fm-combinumeral">❶</span> Function <code class="fm-code-in-text2">insert</code><a id="marker-1050587"></a> takes a key and stores it in the Bloom filter</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1050601"></a><span class="fm-combinumeral">❷</span> Transforms the string representation of the key to add into a sequence of <code class="fm-code-in-text2">k</code> bit indices</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1050618"></a><span class="fm-combinumeral">❸</span> Before incrementing the size of the filter and storing 1 in each of the bits corresponding to the bits, we check that the key is not already contained by the filter. This is more than just optimization: <code class="fm-code-in-text2">size</code> is crucial to estimating the filter’s false positive ratio, so we need to accurately count the elements actually stored. Notice how we pass the <code class="fm-code-in-text2">positions</code> array as a second argument to <code class="fm-code-in-text2">contains</code>. As mentioned in the previous section, this allows us to avoid computing it again in <code class="fm-code-in-text2">contains</code><a id="marker-1050657"></a>, and to perform this expensive operation only once for each call to <code class="fm-code-in-text2">insert</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1050533"></a><span class="fm-combinumeral">❹</span> For each index, we need to write a 1 in our buffer (here, using functional notation, we can leverage <code class="fm-code-in-text2">map</code>, just ignoring its result, or use a more appropriate functional operator like <code class="fm-code-in-text2">reduce</code><a id="marker-1050665"></a> or <code class="fm-code-in-text2">forEach</code>).</p>
+
+  <p class="body"><a id="pgfId-1019386"></a>This is because the precision of the filter would not be altered by adding the same key twice, thrice, or an infinite number of times. To all extents, it would count as if the key was added once.</p>
+
+  <p class="body"><a id="pgfId-1019472"></a>There is a twist, though. If we add a new unique key <code class="fm-code-in-text">x</code> for which all bits’ indices clash with locations already set to <code class="fm-code-in-text">1</code>, it will be treated as a duplicate key and the data structure’s size won’t be incremented. Again, this makes perfect sense if you consider that in that situation and before actually adding the new colliding key, a call to <code class="fm-code-in-text">contains(x</code><a id="marker-1034172"></a><code class="fm-code-in-text">)</code> would have returned a false positive anyway.</p>
+
+  <p class="body"><a id="pgfId-1019633"></a>In listing 4.11 you can see the reason why, when we wrote method <code class="fm-code-in-text">contains</code><a id="marker-1034176"></a>, we added the possibility to pass it an array with the pre-computed bit indices for the current key. Inside <code class="fm-code-in-text">insert</code>, we perform a read closely followed by a write. The operation to compute all the indices for the bits of a key can be expensive, so to avoid repeating this operation twice at a short distance, we need a way to pass its result to <code class="fm-code-in-text">contains</code>. At the same time, we don’t want to add this option to our API, since this is internal magic that clients don’t need to know about. If your programming language supports polymorphism and private methods, restricting the optional parameter to a private version of <code class="fm-code-in-text">contains</code> (internally called by the public one) would be wise.</p>
+
+  <p class="body"><a id="pgfId-1019915"></a>Another possible approach to save this duplicated effort could be having <code class="fm-code-in-text">writeBit</code><a id="marker-1034180"></a> check whether the bit overridden was already set to <code class="fm-code-in-text">1</code> and return a Boolean to state if the bit’s value has changed. Then <code class="fm-code-in-text">insert</code> could check to see if at least one bit was flipped. This alternative implementation will be provided in our <span class="fm-hyperlink">repo</span>.<span class="fm-hyperlink"><a href="#pgfId-1034855"><sup class="footnotenumber">17</sup></a></span> It’s up to you to decide which one you consider the cleanest.</p>
+
+  <p class="body"><a id="pgfId-1020061"></a>Either way, striving to count unique keys added to the filter is going to be costly. Will the overhead be justified? That depends: if you don’t expect many duplicate keys added to your filter, then it’s probably not worth it. But just know that you need it to have an accurate estimate of the current probability to get a false <a id="marker-1034184"></a>positive.</p>
+
+  <h3 class="fm-head2" id="heading_id_21"><a id="pgfId-1020197"></a>4.6.8 Estimating accuracy</h3>
+
+  <p class="body"><a id="pgfId-1020212"></a>In <a id="marker-1034188"></a>fact, our last task is to provide a method to estimate the probability of a false positive based on the current status of the filter; that is, on the number of elements currently stored in the filter, compared to its maximum capacity.</p>
+
+  <p class="body"><a id="pgfId-1020304"></a>As we will see in section 4.10, this probability is roughly<a href="#pgfId-1034869"><sup class="footnotenumber">18</sup></a></p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ1.png"/></p>
+
+  <p class="body"><a id="pgfId-1020345"></a>Listing 4.12 briefly illustrates the pseudo-code that computes this method.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1043180"></a>Listing 4.12 Method <code class="fm-code-in-text">falsePositiveProbability</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> falsePositiveProbability()
+    <b class="calibre21">return pow</b>((1 - pow(E, <b class="calibre21">this</b>.numHashes * <b class="calibre21">this</b>.size / <b class="calibre21">this</b>.numBits)), 
+    <span class="fm-code-continuation-arrow">➥</span> <b class="calibre21">this</b>.numHashes)</pre>
+
+  <p class="body"><a id="pgfId-1020440"></a>This concludes the current section about how to implement a Bloom filter. Before we delve into the theoretical part explaining the mathematical basis of this data structure, let’s first review some of the many applications for <a id="marker-1034192"></a>Bloom <a id="marker-1034196"></a>filters.</p>
+
+  <h2 class="fm-head" id="heading_id_22"><a id="pgfId-1020527"></a>4.7 Applications</h2>
+
+  <p class="body"><a id="pgfId-1020539"></a>I’d <a id="marker-1034200"></a>like to let you think about this consideration: it is pretty likely that some software you are using right now is leveraging Bloom filters. In fact, if you are reading the digital version of this book, then it’s 100% sure that its download leveraged Bloom filters, because it’s common for internet nodes to use them for their routing tables.<a href="#pgfId-1034887"><sup class="footnotenumber">19</sup></a></p>
+
+  <h3 class="fm-head2" id="heading_id_23"><a id="pgfId-1020674"></a>4.7.1 Cache</h3>
+
+  <p class="body"><a id="pgfId-1020686"></a>With <a id="marker-1034204"></a><a id="marker-1034208"></a><i class="calibre17">caching</i> we refer to the process of storing some information retrieved on a fast storage system <code class="fm-code-in-text">A</code>, in order to have it ready in case we need to read it again in the near future. The data might have been previously retrieved from a slow(er) storage system <code class="fm-code-in-text">B</code> or be the result of a CPU-intensive computation.</p>
+
+  <p class="body"><a id="pgfId-1020810"></a>For web applications, scalability is a major concern, probably the one aspect that is most debated in design reviews for any product that aspires to become viral.</p>
+
+  <p class="body"><a id="pgfId-1020872"></a>One of my favorite books tackling design and scalability, <i class="calibre17">Scalability Rules</i> (by Martin L. Abbot and Michael T. Fisher, Addison-Wesley Professional, 2016), has a chapter titled “Use Caching Aggressively,” where it is shown how caching at all levels of a web app is fundamental to allowing its scaling.</p>
+
+  <p class="body"><a id="pgfId-1020957"></a>Cache is often the only thing saving databases from literally catching fire—or at least crashing. But even your laptop has several levels of caching, from fast L1-cache inside its CPU to in-memory cache used to process big files. Your very operating system<a id="marker-1034212"></a> caches memory pages in and out of RAM, swapping them to disk, in order to have a larger virtual address space and give you the impression that it has more memory available than is actually installed on your machine.</p>
+
+  <p class="body"><a id="pgfId-1021137"></a>In other words, caches are one of the foundations of modern IT systems. Of course, since fast storage is costlier, there is only a limited amount of it, and the majority of the data will have to be left out of the cache.</p>
+
+  <p class="body"><a id="pgfId-1021230"></a>The algorithm used to decide what data stays in the cache determines the behavior of the cache and the rate of cache hit (when the data searched for is already in the cache) and miss. Some of the most used algorithms are <i class="fm-italics">LRU</i> (Least Recently Used), <i class="fm-italics">MRU</i> (Most Recently Used<a id="marker-1034216"></a>), and <i class="fm-italics">LFU</i> (Least Frequently Used<a id="marker-1034220"></a>). Chapter 7 gets into the details of these algorithms, but for now it is enough to note that they, as well as many other cache replacement policies, all suffer from “one-hit wonders.” In other words, they struggle with objects, memory locations, or web pages requested just once, and never again (in the average lifetime of the cache). This is particularly common for routers and <i class="calibre17">Content Delivery Networks</i><a id="id_Hlk55813209"></a><a id="marker-1034224"></a> (CDNs), where an average of 75% of the requests for a node are one-hit wonders.</p>
+
+  <p class="body"><a id="pgfId-1021537"></a>Using a dictionary to keep track of requests allows us to only store an object in cache when it’s requested for the second time, filtering out one-hit wonders and improving the cache <i class="calibre17">hit ratio</i><a id="marker-1034228"></a>. Bloom filters allow performing such lookups using amortized constant time operations and with limited space, at the cost of accepting some painless false positives. For this application, the only result of false positives, however, would be a tiny reduction of the cache performance gain we get by using the Bloom filter in the first place <a id="marker-1034232"></a><a id="marker-1034236"></a>(so, no harm done).</p>
+
+  <h3 class="fm-head2" id="heading_id_24"><a id="pgfId-1021743"></a>4.7.2 Routers</h3>
+
+  <p class="body"><a id="pgfId-1021756"></a>Modern <a id="marker-1034240"></a><a id="marker-1034244"></a>routers have limited space and, with the volume of packets they process per second, they need extremely fast algorithms. They are thus the perfect recipient for Bloom filters, for all those operations that can cope with a small rate of errors.</p>
+
+  <p class="body"><a id="pgfId-1021849"></a>Besides caching, routers often employ Bloom filters to keep track of forbidden IPs and to maintain statistics that will be used to reveal DoS (Denial of Service<a id="marker-1034248"></a>) <a id="marker-1034252"></a><a id="marker-1034256"></a>attacks.<a href="#pgfId-1034903"><sup class="footnotenumber">20</sup></a></p>
+
+  <h3 class="fm-head2" id="heading_id_25"><a id="pgfId-1021913"></a>4.7.3 Crawler</h3>
+
+  <p class="body"><a id="pgfId-1021925"></a>Crawlers <a id="marker-1034260"></a><a id="marker-1034264"></a>are automated software agents scanning a network (or even the entire web) and looking for content, parsing, and indexing anything they find.</p>
+
+  <p class="body"><a id="pgfId-1021982"></a>When a crawler finds links in a page or document, it is usually programmed to follow them and recursively crawl the link’s destination. There are some exceptions: for instance, most file types will be ignored by crawlers, as will links created using <code class="fm-code-in-text">&lt;a&gt;</code> tags with an attribute <code class="fm-code-in-text">rel="nofollow"</code>.</p>
+
+  <p class="fm-callout"><a id="pgfId-1022089"></a><span class="fm-callout-head">Tip</span> It is actually recommended that you mark in this way any anchor with a link to an action having side effects. Otherwise, search engines’ crawlers, even if they respect this policy, will cause unpredictable behavior.</p>
+
+  <p class="body"><a id="pgfId-1022171"></a>What can happen is that if you write your own crawler and you are not careful, it might end up in an endless loop between two or more pages with mutual links (or chain of links) to each other.</p>
+
+  <p class="body"><a id="pgfId-1022256"></a>To avoid such loops, crawlers need to keep track of pages they already visited. Bloom filters, again, are the best way to do so, because they can store URLs in a compact way and perform checking and saving of the URLs in constant time.</p>
+
+  <p class="body"><a id="pgfId-1022350"></a>The price you pay here for false positives is a bit higher than for the previous examples, because the immediate result will be that the crawler will never visit a URL that caused a false positive.</p>
+
+  <p class="body"><a id="pgfId-1022429"></a>To overcome this issue, it is possible to keep a complete list of the URLs visited in a proper dictionary (or another kind of collection) stored on disk, and if and only if the Bloom filter returns <code class="fm-code-in-text">true</code><a id="marker-1034268"></a>, double-check the answer in the dictionary. This approach doesn’t allow any space saving, but it provides some savings on the execution time if there is a high percentage of one-hit wonders among the <a id="marker-1034272"></a><a id="marker-1034276"></a>URLs.</p>
+
+  <h3 class="fm-head2" id="heading_id_26"><a id="pgfId-1022591"></a>4.7.4 IO fetcher</h3>
+
+  <p class="body"><a id="pgfId-1022606"></a>Another <a id="marker-1034280"></a><a id="marker-1034284"></a>area where Bloom filter-based caching helps is reducing the unnecessary fetching/storage of expensive IO resources. The mechanism is the same as with crawling: the operation is only performed when we have a “miss,” while “hits” usually trigger a more in-depth comparison (for instance, on a hit, retrieving from disk just the first few lines or the first block of a document, and comparing <a id="marker-1034288"></a><a id="marker-1034292"></a>them).</p>
+
+  <h3 class="fm-head2" id="heading_id_27"><a id="pgfId-1022757"></a>4.7.5 Spell checker</h3>
+
+  <p class="body"><a id="pgfId-1022771"></a>Simpler <a id="marker-1034296"></a><a id="marker-1034300"></a>versions of spell checkers used to employ Bloom filters as dictionaries. For every word of the text examined, a lookup on a Bloom filter would validate the word as correct or mark it as a spelling error. Of course, the false positive occurrences would cause some spelling error to go undetected, but the odds of this happening could be controlled in advance. Today, however, spell checkers mostly take advantage of tries: these data structures provide good performance on text searches without the false <a id="marker-1034304"></a><a id="marker-1034308"></a>positives.</p>
+
+  <h3 class="fm-head2" id="heading_id_28"><a id="pgfId-1022955"></a>4.7.6 Distributed databases and file systems</h3>
+
+  <p class="body"><a id="pgfId-1022978"></a>Cassandra<a id="marker-1034312"></a> <a id="marker-1034316"></a><a id="marker-1034320"></a>uses Bloom filters for index scans to determine whether an SSTable<a id="marker-1034324"></a> has data for a particular row.</p>
+
+  <p class="body"><a id="pgfId-1023026"></a>Likewise, Apache HBase<a id="marker-1034328"></a> uses Bloom filters as an efficient mechanism to test whether a StoreFile<a id="marker-1034332"></a> contains a specific row or row-col cell. This in turn boosts the overall read speed, by filtering out unnecessary disk reads of HFile<a id="marker-1034336"></a> blocks that don’t contain a particular row or row-column.</p>
+
+  <p class="body"><a id="pgfId-1023136"></a>We are at the end of our excursus on practical ways to use Bloom filters. It’s worth mentioning that other applications of Bloom filters include rate limiters, blacklists, synchronization speedup, and estimating the size of joins <a id="marker-1034340"></a><a id="marker-1034344"></a>in <a id="marker-1034348"></a>DBs.</p>
+
+  <h2 class="fm-head" id="heading_id_29"><a id="pgfId-1023224"></a>4.8 Why Bloom filters work<a href="#pgfId-1034919"><sup class="footnotenumber3">21</sup></a></h2>
+
+  <p class="body"><a id="pgfId-1023246"></a>So far, we have asked you to take for granted that Bloom filters do work as we described. Now it’s time to look more closely and explain why a Bloom filter actually works. Although this section is not strictly needed to implement or use Bloom filters, reading it might help you understand this data structure in more depth.</p>
+
+  <p class="body"><a id="pgfId-1023370"></a>As already mentioned, Bloom filters are a tradeoff between memory and accuracy. If you are going to create an instance of a Bloom filter with a storage capacity of 8 bits and then try to store 1 million objects in it, chances are that you won’t get great performance. On the contrary, considering a Bloom filter with an 8-bit buffer, its whole buffer would be set to <code class="fm-code-in-text">1</code> after approximately 10-20 hashes. At that point, all calls to <code class="fm-code-in-text">contains</code><a id="marker-1034352"></a> will just return <code class="fm-code-in-text">true</code><a id="marker-1034356"></a>, and you will not be able to understand whether or not an object was actually stored in the container. Figure 4.6 shows an example of such a situation.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F2.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1055330"></a>Figure 4.6 Bloom filter saturation. In the example, <code class="fm-code-in-text">m=10</code>, so the bloom filter has 10 bits, and <code class="fm-code-in-text">k=4</code>, so each element is stored with 4 bits. We can saturate the filter by adding three elements, setting all bits to <code class="fm-code-in-text">1</code>. Then even if we look up <code class="fm-code-in-text">Y<sub class="subscript1">1</sub></code> and <code class="fm-code-in-text">Y<sub class="subscript1">2</sub></code>, which were not added to the filter, we still get a false positive. Although the example is an extremization (with <code class="fm-code-in-text">k</code> unrealistically too large for the value of <code class="fm-code-in-text">m</code>), it illustrates the mechanism that leads to saturation or to degraded precision.</p>
+
+  <p class="body"><a id="pgfId-1023625"></a>If, instead, we allocate sufficient space and choose our hash functions well, then the indices generated for each key won’t clash, and for any two different keys the overlap between the lists of indices generated will be minimal, if any.</p>
+
+  <p class="body"><a id="pgfId-1023716"></a>But how much space is sufficient? Internally a Bloom filter translates each key into a sequence of <code class="fm-code-in-text">k</code> indices chosen out of <code class="fm-code-in-text">m</code> possible alternatives:<a href="#pgfId-1034937"><sup class="footnotenumber">22</sup></a> the trick is that we store keys efficiently by flipping these <code class="fm-code-in-text">k</code> bits in the filter’s buffer, a bit-array.</p>
+
+  <p class="body"><a id="pgfId-1023817"></a>If you have brushed up on your school algebra recently, you might have guessed that we can only represent <code class="fm-code-in-text">m<sup class="superscript1">k</sup></code> different sequences of <code class="fm-code-in-text">k</code> elements drawn from <code class="fm-code-in-text">m</code> values; we need, however, to make two considerations:</p>
+
+  <ol class="calibre18">
+    <li class="fm-list-numbered">
+      <p class="list"><a class="calibre14" id="pgfId-1023897"></a>We actually can’t even use all these sequences. We would like all indices associated to a key to be different (otherwise, we would actually store less than <code class="fm-code-in-text">k</code> bits per key), so we strive for all lists of <code class="fm-code-in-text">k</code> indices to be duplicate-free.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1024004"></a>We are not really interested in the order of these <code class="fm-code-in-text">k</code> indices. It’s completely irrelevant if we first write the bit at index <code class="fm-code-in-text">0</code> and then the bit at index <code class="fm-code-in-text">3</code>, or vice versa. We can thus consider sets instead of sequences.</p>
+    </li>
+  </ol>
+
+  <p class="body"><a id="pgfId-1024103"></a>All considered, we only (at least in theory) allow a fraction of all the possible sets of exactly <code class="fm-code-in-text">k</code> (distinct) indices drawn from the range <code class="fm-code-in-text">0..m-1</code>, and the number of all these possible (valid) sets is given by</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ2.png"/></p>
+
+  <p class="body"><a id="pgfId-1024199"></a>The binomial coefficient<a href="#pgfId-1034953"><sup class="footnotenumber">23</sup></a> in this formula expresses the number of ways we can extract <code class="fm-code-in-text">k</code> (unique) elements from a set of size <code class="fm-code-in-text">m</code>, and hence it tells us how many sets with exactly <code class="fm-code-in-text">k</code> distinct indices our <code class="fm-code-in-text">k</code> hash functions can return.</p>
+
+  <p class="body"><a id="pgfId-1024293"></a>If we want each key to map to a different set of <code class="fm-code-in-text">k</code> indices, then given <code class="fm-code-in-text">k</code> and <code class="fm-code-in-text">n</code>, the number of keys to store, we can compute a lower bound for <code class="fm-code-in-text">m</code>, the size of the buffer, by using the formula above.</p>
+
+  <p class="body"><a id="pgfId-1024386"></a>Another way to look at the question is that given a sequence of <code class="fm-code-in-text">m</code> bits (the buffer), we can only represent <code class="fm-code-in-text">2<sup class="superscript1">m</sup></code> different values, so at a given time the Bloom filter can only be in one of <code class="fm-code-in-text">2<sup class="superscript1">m</sup></code> possible states; however, this only gives us a loose (although easier to compute) bound on <code class="fm-code-in-text">n</code>, because we would not take into consideration that we will store <code class="fm-code-in-text">k</code> bits per key (<code class="fm-code-in-text">2<sup class="superscript1">m</sup></code> becomes an exact bound only for <code class="fm-code-in-text">k==1</code>).</p>
+
+  <p class="body"><a id="pgfId-1024555"></a>We’ll see in section 4.10 how to choose the number of hash functions and the size of the array in order to optimize the ratio of false positives for a Bloom filter capable of storing a given number of keys.</p>
+
+  <h3 class="fm-head2" id="heading_id_30"><a id="pgfId-1024647"></a>4.8.1 Why there are no false negatives . . .</h3>
+
+  <p class="body"><a id="pgfId-1024680"></a>In <a id="marker-1034360"></a>the simplest version of Bloom filters, deletion is not allowed. This means that if a bit is flipped when a key is stored, it will never ever be set to <code class="fm-code-in-text">0</code> again.</p>
+
+  <p class="body"><a id="pgfId-1024757"></a>At the same time, the output of the hash functions is deterministic and constant in time.</p>
+
+  <p class="fm-callout"><a id="pgfId-1024796"></a><span class="fm-callout-head">Tip</span> Remember to pay attention and abide by these properties in your implementation if you need to serialize Bloom filters and deserialize them later.</p>
+
+  <p class="body"><a id="pgfId-1024855"></a>So, if a lookup finds out that one of the bits associated with a key <code class="fm-code-in-text">X</code> is set to <code class="fm-code-in-text">0</code>, then we know for sure that <code class="fm-code-in-text">X</code> was never added to the filter; otherwise, all the bits to which <code class="fm-code-in-text">X</code> is hashed would be <code class="fm-code-in-text">1</code>.</p>
+
+  <h3 class="fm-head2" id="heading_id_31"><a id="pgfId-1024956"></a>4.8.2 . . . But there are false positives</h3>
+
+  <p class="body"><a id="pgfId-1024986"></a>The reverse, though, doesn’t hold up, unfortunately! An example will help you understand why. Suppose we have a simple Bloom filter with 4 bits and 2 hash functions. Initially our buffer is empty:</p>
+  <pre class="programlisting">B = [0, 0, 0, 0]</pre>
+
+  <p class="body"><a id="pgfId-1025096"></a>First, we insert the value <code class="fm-code-in-text">1</code> into the Bloom filter. Assume we had chosen our hash functions such that <code class="fm-code-in-text">h<sub class="subscript1">0</sub>(1) = 0</code> and <code class="fm-code-in-text">h<sub class="subscript1">1</sub>(1) = 2</code>, so the key <code class="fm-code-in-text">1</code> maps to indices <code class="fm-code-in-text">{0,2}</code>. After updating it, our buffer now looks like this:</p>
+  <pre class="programlisting">B = [1, 0, 1, 0]</pre>
+
+  <p class="body"><a id="pgfId-1025222"></a>Now we insert the value <code class="fm-code-in-text">2</code>, and it turns out that <code class="fm-code-in-text">h<sub class="subscript1">0</sub>(2) = 1</code> and <code class="fm-code-in-text">h<sub class="subscript1">1</sub>(2) = 2</code>. Therefore, we now have:</p>
+  <pre class="programlisting">B = [1, 1, 1, 0]</pre>
+
+  <p class="body"><a id="pgfId-1025302"></a>Finally, suppose that <code class="fm-code-in-text">h<sub class="subscript1">0</sub>(3) = 1</code> and <code class="fm-code-in-text">h<sub class="subscript1">1</sub>(3) = 0</code>. If we perform a lookup for the value <code class="fm-code-in-text">3</code> after those two insertions, both bits at indices <code class="fm-code-in-text">1</code> and <code class="fm-code-in-text">0</code> will have been set to <code class="fm-code-in-text">1</code> even if we never stored <code class="fm-code-in-text">3</code> in our instance of the filter! Therefore, <code class="fm-code-in-text">3</code> would give us a false positive.</p>
+
+  <p class="body"><a id="pgfId-1025423"></a>On the other hand, if we had a different mapping from the hash functions, for instance, <code class="fm-code-in-text">h<sub class="subscript1">0</sub>(3) = 3</code> and <code class="fm-code-in-text">h<sub class="subscript1">1</sub>(3) = 0</code>, since the fourth bit hadn’t been set yet <code class="fm-code-in-text">(B[0]==0)</code>, a lookup would have returned <code class="fm-code-in-text">false</code><a id="marker-1034364"></a>.</p>
+
+  <p class="body"><a id="pgfId-1025516"></a>Of course, this is a simplistic example intentionally crafted to prove a point: false positives are possible, and they are more likely to happen if we don’t choose the parameters of our Bloom filter carefully. In section 4.10, we’ll learn how to tune these parameters, based on the number of elements we anticipate we will store and on the precision we <a id="marker-1034368"></a>need.</p>
+
+  <h3 class="fm-head2" id="heading_id_32"><a id="pgfId-1025655"></a>4.8.3 Bloom filters as randomized algorithms</h3>
+
+  <p class="body"><a id="pgfId-1025678"></a>Appendix F <a id="marker-1034372"></a>introduces the taxonomy of randomized algorithms, and in particular the dichotomy between <i class="calibre17">Las Vegas</i><a id="marker-1034376"></a> and <i class="calibre17">Monte Carlo</i> algorithms<a id="marker-1034380"></a>.</p>
+
+  <p class="body"><a id="pgfId-1025730"></a>If you don’t have a clear idea of the difference between these two classes or what randomized algorithms are, this would be a good time to check appendix F.</p>
+
+  <p class="body"><a id="pgfId-1025797"></a>Once those definitions are clear to you, it should not be hard to make an educated guess: Which category do our Bloom filters belong to?</p>
+
+  <p class="body"><a id="pgfId-1025855"></a>As you might have already figured out, Bloom filters are an example of a Monte Carlo data structure. Method <code class="fm-code-in-text">contains</code><a id="marker-1034384"></a>, the algorithm that checks if a key is stored in a Bloom filter, in particular, is a <i class="calibre17">false-biased</i> algorithm<a id="marker-1034388"></a>. In fact, it might return <code class="fm-code-in-text">true</code> for some keys never added to the filter, but it always correctly returns <code class="fm-code-in-text">true</code> when a key was previously added, so there are no <a id="marker-1034392"></a>false-negatives (that is, every time it answers <code class="fm-code-in-text">false</code>, we are sure the answer is correct).</p>
+
+  <p class="fm-callout"><a id="pgfId-1026044"></a><span class="fm-callout-head">NOTE</span> Bloom filters are also a tradeoff between memory and accuracy. The deterministic version of a Bloom filter is a <i class="calibre17">hash set</i><a id="marker-1034396"></a>.</p>
+
+  <h2 class="fm-head" id="heading_id_33"><a id="pgfId-1026100"></a>4.9 Performance analysis</h2>
+
+  <p class="body"><a id="pgfId-1026115"></a>Before <a id="marker-1048551"></a>starting on Bloom filter analysis, I suggest a deep dive into metrics for classification algorithms in appendix F.</p>
+
+  <p class="body"><a id="pgfId-1026162"></a>We have seen how and why Bloom filters work; now let’s see how efficient they are. First, we’ll examine the running time for the most important operations provided by a Bloom filter. Next, in section 4.10, we will tackle the challenge of predicting the precision of method <code class="fm-code-in-text">contains</code><a id="marker-1048554"></a>, given a Bloom filter with a certain structure (in particular, its size and the number of hash functions used will matter).</p>
+
+  <h3 class="fm-head2" id="heading_id_34"><a id="pgfId-1026317"></a>4.9.1 Running time</h3>
+
+  <p class="body"><a id="pgfId-1026332"></a>We <a id="marker-1034408"></a>have already hinted at the fact that Bloom filters can store and look up a key in constant time. Technically, this is only true for constant-length inputs; here we will examine the most generic case, when keys stored are strings of arbitrary length.<a href="#pgfId-1034975"><sup class="footnotenumber">24</sup></a></p>
+
+  <p class="body"><a id="pgfId-1026436"></a>But let’s start from the beginning: the very construction of a Bloom filter. Afterwards we’ll examine in detail <code class="fm-code-in-text">insert</code><a id="marker-1034412"></a> and <a id="marker-1034416"></a><code class="fm-code-in-text">contains</code><a id="marker-1034420"></a>.</p>
+
+  <h3 class="fm-head2" id="heading_id_35"><a id="pgfId-1026495"></a>4.9.2 Constructor</h3>
+
+  <p class="body"><a id="pgfId-1026507"></a>Construction <a id="marker-1034424"></a>of a Bloom filter is pretty easy; we just have to initialize an array of bits, with all its elements set to <code class="fm-code-in-text">0</code>, and generate the set of <code class="fm-code-in-text">k</code> hash functions. We have seen that the implementation also involves some computation, but it’s safe to mark that part as constant time.</p>
+
+  <p class="body"><a id="pgfId-1026626"></a>Creating and initializing the array requires, obviously, <code class="fm-code-in-text">O(m)</code> time, while generating each of the hash functions typically requires constant time; hence <code class="fm-code-in-text">O(k)</code> time overall is needed to generate the whole set.</p>
+
+  <p class="body"><a id="pgfId-1026697"></a>The whole construction can be ultimately finished in <code class="fm-code-in-text">O(m+k)</code> <a id="marker-1034428"></a>steps.</p>
+
+  <h3 class="fm-head2" id="heading_id_36"><a id="pgfId-1026725"></a>4.9.3 Storing an element</h3>
+
+  <p class="body"><a id="pgfId-1026742"></a>For <a id="marker-1034432"></a>each key to store, we need to produce <code class="fm-code-in-text">k</code> hash values, and flip a bit in each of the elements of the array indexed by those results.</p>
+
+  <p class="body"><a id="pgfId-1026806"></a>We’ll make the following assumptions:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1026825"></a>Storing a single bit requires constant time (possibly including the time needed for bitwise operations in case we use compressed buffers to save space).</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1026883"></a>Hashing a key <code class="fm-code-in-text">X</code> requires <code class="fm-code-in-text">T(X)</code> time.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1026909"></a>The number of bits used to store a key doesn’t depend on the key’s size, or on the number of elements already added to the container.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1026973"></a>Given these assumptions, the running time for <code class="fm-code-in-text">insert(X)</code> is <code class="fm-code-in-text">O(k*T(|X|))</code>. For each of the <code class="fm-code-in-text">k</code> hash functions we need, in fact, to generate a hash value from the key and store a single bit. If keys are numbers—for instance, integers or doubles—then <code class="fm-code-in-text">|X|=1</code> and <code class="fm-code-in-text">T(|X|) = O(1)</code>, meaning that we can typically generate a hash value in constant time.</p>
+
+  <p class="body"><a id="pgfId-1027104"></a>If, however, our keys are of variable length—for example, strings—then computing each hash value requires linear time in the length of the string. In this case, <code class="fm-code-in-text">T(|X|) = O(|X|)</code>, and the running time will depend on the length of the keys we add.</p>
+
+  <p class="body"><a id="pgfId-1027207"></a>Now, suppose we know that the longest key will have at most <code class="fm-code-in-text">z</code> characters, where <code class="fm-code-in-text">z</code> is a constant. Remembering our assumption about the length of keys being independent of anything else, we can then still argue that running time for <code class="fm-code-in-text">insert(X</code><a id="marker-1034436"></a><code class="fm-code-in-text">)</code> is <code class="fm-code-in-text">O(k*(1+z)) = O(k)</code>. Thus, this is a constant time operation, no matter how many elements have been already added to the <a id="marker-1034440"></a>container.</p>
+
+  <h3 class="fm-head2" id="heading_id_37"><a id="pgfId-1027350"></a>4.9.4 Looking up an element</h3>
+
+  <p class="body"><a id="pgfId-1027372"></a>The <a id="marker-1054480"></a>same considerations hold true for the lookup of a key: we need to transform keys into a set of indices (done in time <code class="fm-code-in-text">O(z*k)</code>), and then check each bit at those indices (<code class="fm-code-in-text">O(k)</code> time for all of them). So, lookup is also a constant time operation, under the assumption that keys’ lengths are bounded by <a id="marker-1054482"></a>a <a id="marker-1054483"></a>constant.</p>
+
+  <h2 class="fm-head" id="heading_id_38"><a id="pgfId-1027502"></a>4.10 Estimating Bloom filter precision<a href="#pgfId-1034991"><sup class="footnotenumber3">25</sup></a></h2>
+
+  <p class="body"><a id="pgfId-1027523"></a>Before <a id="marker-1054488"></a>we start, we need to fix some notations and make a few more assumptions:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1027565"></a><code class="fm-code-in-text">m</code> is the number of bits in our array.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1027593"></a><code class="fm-code-in-text">k</code> is the number of hash functions we use to map a key to <code class="fm-code-in-text">k</code> different positions in the array.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1027643"></a>Each of the <code class="fm-code-in-text">k</code> hash functions we use is independent from the others.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1027679"></a>The pool of hash functions from which we extract our <code class="fm-code-in-text">k</code> functions is a universal hashing set.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1027723"></a>If these assumptions hold, then it can be proven that a good approximation for the false positive probability after <code class="fm-code-in-text">n</code> insertions is given by</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ3.png"/></p>
+
+  <p class="body"><a id="pgfId-1027789"></a>where <code class="fm-code-in-text">e</code> is Euler’s number, the base of natural logarithms.</p>
+
+  <p class="body"><a id="pgfId-1027816"></a>Now we have a formula to estimate the probability of a false positive! That’s nice per se, but what’s even better is that it allows us to tune <code class="fm-code-in-text">m</code> and <code class="fm-code-in-text">k</code>, our Bloom filter parameters. This way we can decide the size of the Bloom filter’s buffer and the number of hash functions needed to have optimal precision.</p>
+
+  <p class="body"><a id="pgfId-1027949"></a>There are three variables in the formula for <code class="fm-code-in-text">p(n, m, k)</code>:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1027980"></a><code class="fm-code-in-text">m</code>, the number of bits in the buffer</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1028007"></a><code class="fm-code-in-text">n</code>, the number of elements that will be stored in the container</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1028042"></a><code class="fm-code-in-text">k</code>, the number of hash functions</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1028065"></a>Of those three, <code class="fm-code-in-text">k</code> is the one that seems less meaningful to us. Or, from another point of view, it is the one less coupled with our problem. In fact, <code class="fm-code-in-text">n</code> is probably going to be a variable that can we can estimate, but we can’t fully control. We might need to store as many elements as we get requests for, but most of the time we can anticipate the volume of requests and make estimates pessimistic, to be on the safe side.</p>
+
+  <p class="body"><a id="pgfId-1028241"></a>We might be limited in the choice of <code class="fm-code-in-text">m</code> as well, since we could have memory constraints; maybe we can’t use more than <code class="fm-code-in-text">m</code> bits.</p>
+
+  <p class="body"><a id="pgfId-1028302"></a>For <code class="fm-code-in-text">k</code>, instead, we have no constraint on it, and we can tune it to get optimal precision, meaning, as we explained in appendix F, minimal probability of false positives.</p>
+
+  <p class="body"><a id="pgfId-1028371"></a>Luckily finding the optimal value for <code class="fm-code-in-text">k</code>, given <code class="fm-code-in-text">m</code> and <code class="fm-code-in-text">n</code>, isn’t even that hard—it’s just a matter of finding the minimum for the function:</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ4.png"/></p>
+
+  <p class="body"><a id="pgfId-1028444"></a>Note that <code class="fm-code-in-text">n</code> and <code class="fm-code-in-text">m</code> are constants in the formula.</p>
+
+  <p class="body"><a id="pgfId-1028472"></a>We will go into the details of finding the minimum for <code class="fm-code-in-text">f(k)</code> in the next section; for now (or if you are more interested in the result), just know that the optimal value is</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ5.png"/></p>
+
+  <p class="body"><a id="pgfId-1028556"></a>Now that we have a formula for <code class="fm-code-in-text">k<sup class="calibre27">*</sup></code>, we can substitute it in our previous formula, the one for <code class="fm-code-in-text">p(n, m, k)</code>, and after a some algebraic manipulation, we obtain an expression for the optimal value for <code class="fm-code-in-text">m</code> (let’s call it <code class="fm-code-in-text">m<sup class="calibre27">*</sup></code>):</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ6.png"/></p>
+
+  <p class="body"><a id="pgfId-1028662"></a>This means that if we know in advance the total number <code class="fm-code-in-text">n</code> of unique elements that we will insert in the container, and we set the probability <code class="fm-code-in-text">p</code> of a false positive to the largest value that is acceptable, then we can compute the optimal size of the buffer (and the number of bits per key we need to use) in order to guarantee the desired precision.</p>
+
+  <p class="body"><a id="pgfId-1028803"></a>Two aspects are significant when looking at the formulas we derived:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1028832"></a>The size of the Bloom filter’s buffer is proportional to the number of elements being inserted.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1028876"></a>At the same time, the required number of hash functions only depends on the target false positive probability <code class="fm-code-in-text">p</code> (you can see this by substituting <code class="fm-code-in-text">m<sup class="calibre27">*</sup></code> into the formula for <code class="fm-code-in-text">k<sup class="calibre27">*</sup></code>, but don’t worry, we’ll discuss the math in the next section).</p>
+    </li>
+  </ul>
+
+  <h3 class="fm-head2" id="heading_id_39"><a id="pgfId-1028974"></a>4.10.1 Explanation of the false-positive ratio formula</h3>
+
+  <p class="body"><a id="pgfId-1029001"></a>In this section we’ll explain in more detail how the formulas to estimate a Bloom filter’s precision are derived; first, let’s see how we obtain the estimate for the false probability ratio.</p>
+
+  <p class="body"><a id="pgfId-1029072"></a>After a single bit has been stored in a Bloom filter with a capacity of <code class="fm-code-in-text">m</code> bits, the probability that a specific bit is set to <code class="fm-code-in-text">1</code> is <code class="fm-code-in-text">1/m</code>; then the probability that the same bit is set to <code class="fm-code-in-text">0</code> after all <code class="fm-code-in-text">k</code> bits used to store an element have been flipped (assuming the hash functions will always output <code class="fm-code-in-text">k</code> different values for the same input<a href="#pgfId-1035005"><sup class="footnotenumber">26</sup></a>) is therefore</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ7.png"/></p>
+
+  <p class="body"><a id="pgfId-1029225"></a>If we consider the events of flipping any specific bit to <code class="fm-code-in-text">1</code> as independent events, then after inserting <code class="fm-code-in-text">n</code> elements, for each individual bit in the buffer the probability that the bit is still 0 is given by</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ8.png"/></p>
+
+  <p class="body"><a id="pgfId-1029312"></a>To have a false positive, all the <code class="fm-code-in-text">k</code> bits corresponding to an element <code class="fm-code-in-text">V</code> must have been set to <code class="fm-code-in-text">1</code> independently, and the probability that all of those <code class="fm-code-in-text">k</code> bits are <code class="fm-code-in-text">1</code> is given by</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ9.png"/></p>
+
+  <p class="body"><a id="pgfId-1029398"></a>Which is, lo and behold, the probability formula we gave at the beginning of this section.</p>
+
+  <p class="body"><a id="pgfId-1029437"></a>At this stage, as we mentioned in the last section, we can consider <code class="fm-code-in-text">n</code> and <code class="fm-code-in-text">m</code> as constants. It makes sense because in many cases we know how many elements we need to add to the Bloom filter (<code class="fm-code-in-text">n</code>) and how many bits of storage we can afford (<code class="fm-code-in-text">m</code>); what we would like to do is trade performance for accuracy by tuning <code class="fm-code-in-text">k</code>, the number of (universal) hash functions we use.</p>
+
+  <p class="body"><a id="pgfId-1029596"></a>This is equivalent to finding the global minimum of function <code class="fm-code-in-text">f</code>, defined as</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ10.png"/></p>
+
+  <p class="body"><a id="pgfId-1029640"></a>If you know some calculus, you probably have already guessed that we need to compute the derivatives of <code class="fm-code-in-text">f</code> with respect to <code class="fm-code-in-text">k</code>. (If you don’t know calculus, don’t worry; you can skip the next few lines and resume on the next page, where we will be using the result of this computation.)</p>
+
+  <p class="body"><a id="pgfId-1029758"></a>To make our job easier, we can rewrite <code class="fm-code-in-text">f</code> by applying natural logarithm and exponentiation,<a href="#pgfId-1035019"><sup class="footnotenumber">27</sup></a> so that we get</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ11.png"/></p>
+
+  <p class="body"><a id="pgfId-1029814"></a>This function is minimal when its exponent is minimal, so we can define function <code class="fm-code-in-text">g</code></p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ12.png"/></p>
+
+  <p class="body"><a id="pgfId-1029861"></a>and compute the derivatives of <code class="fm-code-in-text">g</code> instead, which is easier to work with.</p>
+
+  <p class="body"><a id="pgfId-1029894"></a>The first order derivative of <code class="fm-code-in-text">g(k)</code> is</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ13.png"/></p>
+
+  <p class="body"><a id="pgfId-1029927"></a>and it becomes equal to <code class="fm-code-in-text">0</code> for <code class="fm-code-in-text">k=ln(2)*m/n</code>.</p>
+
+  <p class="body"><a id="pgfId-1029953"></a>To make sure this is a minimum for the function, we still need to compute the second order derivative and check that it returns a negative value when computed on the <i class="fm-italics">zero</i> of <code class="fm-code-in-text">g’</code>:</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ14.png"/></p>
+
+  <p class="body"><a id="pgfId-1030039"></a>We’ll skip this step for the sake of space, but you can double check that it’s indeed true.</p>
+
+  <p class="body"><a id="pgfId-1030082"></a>It’s worth noting that</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1030099"></a>The formula for <code class="fm-code-in-text">k</code> gives us a single, exact value for the optimal choice of the number of hash functions.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1030150"></a><code class="fm-code-in-text">k</code> must obviously be an integer, so the result needs to be rounded.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1030187"></a>Larger values for <code class="fm-code-in-text">k</code> mean worst performance for insert and lookup (because more hash functions need to be computed for each element), so a compromise with slightly smaller values of <code class="fm-code-in-text">k</code> can be preferred.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1030265"></a>If we use the best value for <code class="fm-code-in-text">k</code> as computed previously, this means that the rate of false positives <code class="fm-code-in-text">f</code> becomes</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ15.png"/></p>
+
+  <p class="body"><a id="pgfId-1030325"></a>By replacing the value <code class="fm-code-in-text">k</code> in the formula for <code class="fm-code-in-text">p(n,m,k)</code>, we can get a new formula that links the number of storage bits to the (maximum) number of elements that can be stored, independently of <code class="fm-code-in-text">k</code> (the value for <code class="fm-code-in-text">k</code> can be computed later) to guarantee a false-positive probability smaller than a certain value <code class="fm-code-in-text">p</code>:</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ16.png"/></p>
+
+  <p class="body"><a id="pgfId-1030455"></a>Taking the base 2 logarithm of both sides</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ17.png"/></p>
+
+  <p class="body"><a id="pgfId-1030488"></a>and then solving for <code class="fm-code-in-text">m</code> finally gives us</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ18.png"/></p>
+
+  <p class="body"><a id="pgfId-1030520"></a>This means that if we know in advance the total number <code class="fm-code-in-text">n</code> of unique elements that we will insert in the Bloom filter, and we set the false positive probability <code class="fm-code-in-text">p</code> to the largest value that is acceptable, then we can compute the optimal size of the buffer that guarantees the desired precision. We will also have to set <code class="fm-code-in-text">k</code> accordingly, using the formula we derived for it:</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ19.png"/></p>
+
+  <p class="body"><a id="pgfId-1030674"></a>For instance, if we would like to have a precision of 90%, and so at most 10% false positives, we can plug in the numbers and <a id="marker-1034460"></a>get</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch04_F_EQ20.png"/></p>
+
+  <h2 class="fm-head" id="heading_id_40"><a id="pgfId-1030745"></a>4.11 Improved variants</h2>
+
+  <p class="body"><a id="pgfId-1030760"></a>Bloom <a id="marker-1034464"></a>filters have been around for almost 50 years, so it’s natural that many variations and improvements have been proposed in the meantime. Let’s examine some of them, with a focus on those that improve accuracy.</p>
+
+  <h3 class="fm-head2" id="heading_id_41"><a id="pgfId-1030853"></a>4.11.1 Bloomier filter</h3>
+
+  <p class="body"><a id="pgfId-1030868"></a>As we hinted at, Bloom filters corresponds to faster, lighter versions of <i class="calibre17">HashSets</i><a id="marker-1034472"></a>, since they can only store whether a key is present/absent.</p>
+
+  <p class="body"><a id="pgfId-1030923"></a>The leaner counterpart of <i class="calibre17">HashTables</i><a id="marker-1034476"></a> has been introduced only recently: <i class="calibre17">Bloomier filters</i> <a id="marker-1034480"></a><a href="#pgfId-1035051"><sup class="footnotenumber">28</sup></a> allow associating values to keys. When the key/value pair has actually been stored in the Bloomier filter, then the value returned is always correct. There are still false positives<a id="marker-1034484"></a>; that is, keys that were not actually stored in the data structure but for which a value is <a id="marker-1034488"></a>returned.</p>
+
+  <h3 class="fm-head2" id="heading_id_42"><a id="pgfId-1031056"></a>4.11.2 Combining Bloom filters</h3>
+
+  <p class="body"><a id="pgfId-1031073"></a>By <a id="marker-1034496"></a>storing the same key in two or more different Bloom filters, possibly with different buffer sizes, but most importantly with a different set of hash functions for each one, we can arbitrarily lower the probability of false positives.</p>
+
+  <p class="body"><a id="pgfId-1031159"></a>Of course, this is not for free, so the space needed grows proportionally, and the time needed to store or check for a key in theory would double as well.</p>
+
+  <p class="body"><a id="pgfId-1031229"></a>At least for the running time, though, there is a silver lining: each of the component filters can actually be queried in parallel on a multicore hardware! So, besides maintaining the <code class="fm-code-in-text">O(k)</code> constant time bound, even actual implementations could possibly be as fast as regular Bloom filters (in other words, the constant factor remains approximately the same).</p>
+
+  <p class="body"><a id="pgfId-1031353"></a>The way this structure works is the following: for <code class="fm-code-in-text">insert</code><a id="marker-1034500"></a>, each of the components stores the key independently. For calls to <code class="fm-code-in-text">contains</code><a id="marker-1034504"></a>, the answer is the combination of all answers: <code class="fm-code-in-text">true</code><a id="marker-1034508"></a> is returned only if all the components return <code class="fm-code-in-text">true</code>.</p>
+
+  <p class="body"><a id="pgfId-1031447"></a>What’s the accuracy of such an array of filters? It can be proven that the precision of a single Bloom filter using <code class="fm-code-in-text">m</code> bits is the same as the precision of <code class="fm-code-in-text">j</code> Bloom filters using <code class="fm-code-in-text">m/j</code> bits each.</p>
+
+  <p class="body"><a id="pgfId-1031532"></a>However, when using a parallel version of the ensemble algorithm, the running time can be just a fraction of the original one, <a id="marker-1034512"></a><code class="fm-code-in-text">1/j</code>.</p>
+
+  <h3 class="fm-head2" id="heading_id_43"><a id="pgfId-1031589"></a>4.11.3 Layered Bloom filter</h3>
+
+  <p class="body"><a id="pgfId-1031606"></a>A <a id="marker-1034516"></a><a id="marker-1034520"></a>layered Bloom filter<a href="#pgfId-1035068"><sup class="footnotenumber">29</sup></a> (<i class="fm-italics">LBF</i>) also uses multiple Bloom filters, but organized in layers. Each layer is updated for a key only after the previous layer has already stored the same key. Layered Bloom filters are normally used to implement a counting filter: an LBF with <code class="fm-code-in-text">R</code> levels can count up to <code class="fm-code-in-text">R</code> insertions of the same key. Often deletion is also supported.</p>
+
+  <p class="body"><a id="pgfId-1031748"></a>Each call to <code class="fm-code-in-text">contains</code><a id="marker-1034524"></a> starts by checking the layers, from the closest to the deepest, and returns the index of the last layer where the key was found, or <code class="fm-code-in-text">-1</code> (or, equivalently, <code class="fm-code-in-text">false</code>) if the key is not stored in the first layer.</p>
+
+  <p class="body"><a id="pgfId-1031848"></a>When storing a key, the <code class="fm-code-in-text">insert</code> method<a id="marker-1034528"></a> stores it in the first layer for which <code class="fm-code-in-text">contains</code> returns <code class="fm-code-in-text">false</code><a id="marker-1034532"></a>.</p>
+
+  <p class="body"><a id="pgfId-1031899"></a>Assuming that each layer has a false-positive ratio equal to <code class="fm-code-in-text">P<sub class="subscript1">F</sub></code>, and that all layers use different sets of hash functions, then if an element has been stored <code class="fm-code-in-text">c</code> times on the filter</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1031976"></a>The probability that <code class="fm-code-in-text">contains</code> returns <code class="fm-code-in-text">c+1</code>, a counter 1 unit larger than the real number of times a key was stored, is approximately <code class="fm-code-in-text">P<sub class="subscript1">F</sub></code>.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1032039"></a>The probability of returning <code class="fm-code-in-text">c+2</code> is <code class="fm-code-in-text">P<sub class="subscript1">F</sub><sup class="superscript1">2</sup></code>.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1032066"></a>Similarly, for <code class="fm-code-in-text">c+d</code>, the probability becomes <code class="fm-code-in-text">P<sub class="subscript1">F</sub><sup class="superscript1">d</sup></code>.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1032097"></a>Those, however, are approximate (optimistic) estimates, because the assumptions about the universality and independence of the hash functions are hard to guarantee. To compute the exact probabilities, we would need to take into account the depth and the number of layers.</p>
+
+  <p class="body"><a id="pgfId-1032191"></a>On an LBF with <code class="fm-code-in-text">L</code> layers, each using <code class="fm-code-in-text">k</code> bits per key, the running time for both <code class="fm-code-in-text">insert</code> and <code class="fm-code-in-text">contains</code> becomes <code class="fm-code-in-text">O(L*k)</code>, but since both <code class="fm-code-in-text">L</code> and <code class="fm-code-in-text">k</code> are predetermined constants, it’s still equivalent to <code class="fm-code-in-text">O(1)</code> and independent of the number of items added to the <a id="marker-1048780"></a><a id="marker-1048781"></a>container.</p>
+
+  <h3 class="fm-head2" id="heading_id_44"><a id="pgfId-1032299"></a>4.11.4 Compressed Bloom filter</h3>
+
+  <p class="body"><a id="pgfId-1032316"></a>When <a id="marker-1034544"></a><a id="marker-1034548"></a>used in web caches, the main issue with Bloom filters is not with the RAM they use, but rather, since these filters need to be transferred between proxies, it’s the size of data transmitted on the network.</p>
+
+  <p class="body"><a id="pgfId-1032401"></a>While at first you might think that’s a moot point, if we plan to compress the Bloom filters before transmitting them through a network, then it does actually have practical relevance. It turns out we can optimize the values of the filter’s parameters, which in turn regulate the size of the bit array, and as a result get a larger uncompressed Bloom filter that could be compressed more efficiently.</p>
+
+  <p class="body"><a id="pgfId-1032545"></a>That’s the idea behind compressed Bloom filters,<a href="#pgfId-1035082"><sup class="footnotenumber">30</sup></a> where the number of hash functions <code class="fm-code-in-text">k</code> is chosen in such a way that the number of bits with value <code class="fm-code-in-text">1</code> in the bits array is kept below <code class="fm-code-in-text">m/3</code>, where <code class="fm-code-in-text">m</code> is the size of the array. As a consequence, at least <code class="fm-code-in-text">2/3</code> of the buffer’s bits will always be set to <code class="fm-code-in-text">0</code>, and we can take advantage of this fact to compress the bit array more efficiently.</p>
+
+  <p class="body"><a id="pgfId-1048801"></a>Each proxy would then have to decompress the Bloom filter before looking up elements. Clearly now we have another target to optimize. We need to find a compromise between the uncompressed size of the bits array, <code class="fm-code-in-text">m</code>, and its compressed size, which we want to keep as small as possible.</p>
+
+  <p class="body"><a id="pgfId-1032707"></a>The uncompressed size, in fact, determines the running time of lookups (through the formulas we developed in section 4.10), while the compressed size determines the transfer ratio.</p>
+
+  <p class="body"><a id="pgfId-1032856"></a>Since router tables will be updated periodically, decompressing the whole filter could be a heavy overhead for nodes. A good compromise is breaking the filter into pieces and compressing each piece independently. This makes the overall compression rates slightly worse, but when updates are frequent (compared to lookups), it reduces the overhead for decompression even more, since each proxy, between two updates, won’t decompress the whole bits array, but only the chunks it <a id="marker-1034552"></a><a id="marker-1034556"></a>needs.</p>
+
+  <h3 class="fm-head2" id="heading_id_45"><a id="pgfId-1033016"></a>4.11.5 Scalable Bloom filter</h3>
+
+  <p class="body"><a id="pgfId-1033033"></a>A scalable Bloom filter is yet <a id="marker-1034560"></a><a id="marker-1034564"></a>another combination of several Bloom filters, working similarly to a layered Bloom filter. Only this time the different layers have increasing capacity (and hence smaller false positives ratio). This allows the container to adapt dynamically to the number of elements stored and keeps the probability of false <a id="marker-1034568"></a><a id="marker-1034572"></a>positives <a id="marker-1034576"></a>low.</p>
+
+  <h2 class="fm-head" id="heading_id_46"><a id="pgfId-1033145"></a>Summary</h2>
+
+  <ul class="calibre19">
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1033157"></a>We can choose the best <i class="fm-italics1">abstract data structure</i><a class="calibre14" id="marker-1034580"></a> (<i class="fm-italics1">ADT</i>) to perform certain operations, but we can also choose among different implementations, or concrete data structures<a class="calibre14" id="marker-1034584"></a> (CDT) of an ADT, and that choice also makes a difference.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1033245"></a>Many common problems in computer science revolve around keeping track of values. It might be URLs browsed by a crawler, documents examined by an indexer, or values to store in a cache, just to name a few.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1033331"></a>Depending on the context, there are different additional constraints for the implementation of a <i class="calibre15">set</i> that we might want to use.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1033384"></a>Randomized algorithms are a subset of algorithms whose execution might depend on randomization, and therefore running a randomized algorithm twice on the same input does not always return the same result.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1033455"></a>Randomized algorithms are divided into Monte Carlo<a class="calibre14" id="marker-1034588"></a> and Las Vegas algorithms<a class="calibre14" id="marker-1034592"></a>, depending on where the uncertainty lies.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1033502"></a>For Bloom filters, we use the <i class="calibre15">precision metric</i> to estimate the ratio of false positives.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1033605"></a>If we know in advance the maximum number of items that will be stored in a Bloom filter at the same time, we have an exact formula for computing the total amount of memory needed to achieve an arbitrarily low ratio of false positives.</p>
+    </li>
+  </ul>
+  <hr class="calibre22"/>
+
+  <p class="fm-footnote"><sup class="footnotenumber">1.</sup> <a id="pgfId-1034617"></a>Chief Technology Officer.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">2.</sup> <a id="pgfId-1034632"></a><i class="calibre17">Scale up</i><a id="marker-1034651"></a> means moving your application to a more powerful, more expensive machine, while with scale out we usually refer to redesigning an application to run in a distributed architecture over several cheaper machines. While there is an upper limit to the possibility of scaling up (the most powerful machine that can be bought by your company—and price grows exponentially in the higher end), with proper design it is possible, in theory, to scale out indefinitely.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">3.</sup> <a id="pgfId-1034656"></a>We used the term associative array here to avoid confusion between the d<i class="calibre17">ictionary problem</i> and the <i class="calibre17">dictionary</i><a id="marker-1034679"></a> abstract data type. Though the two terms are connected, they are not the same thing.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">4.</sup> <a id="pgfId-1041837"></a>Amortized time.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">5.</sup> <a id="pgfId-1034684"></a>This reasoning is also the basis for the TF-IDF metric used in text search and text analysis. Short <a id="id_Hlk55737372"></a>for <i class="calibre17">term frequency–inverse document frequency</i><a id="marker-1034711"></a>, TF-IDF is computed as the ratio of raw occurrences of a term in a document (TF), over the logarithm of another fraction, the total number of documents in a <i class="calibre17">corpus</i> divided by the number of corpus documents in which the term appears (IDF). This means that TF-IDF will be large when a term appears often in a document but rarely in the corpus, and small when, conversely, the term is used frequently in many documents.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">6.</sup> <a id="pgfId-1034718"></a>Binary search takes its name from the fact that you always search the middle of a list, splitting it into two parts: one before the search location, and one after it. Depending on how the element you are looking for compares to the one in the search location, you then might recursively check the first half or the second half of your list (or neither, if you just found what you were looking for).</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">7.</sup> <a id="pgfId-1034732"></a>Not to be confused with the index generated by the hashing function.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">8.</sup> <a id="pgfId-1042436"></a>Amortized time.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">9.</sup> <a id="pgfId-1042466"></a>By storing max/min separately and amortizing the time to replace them on insert/delete.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">10.</sup> <a id="pgfId-1034748"></a>At least not from their basic version, but we’ll see that some variants have been developed to also handle element removal.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">11.</sup> <a id="pgfId-1034762"></a>Double hashing is a technique used to resolve hash collisions (see appendix C, sections C.2.2-C.2.3). When a collision occurs, it adds an offset to the initial position computed by using a secondary hash of the key. Triple hashing computes the offset by using a linear combination of two auxiliary hash functions.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">12.</sup> <a id="pgfId-1034781"></a>Dillinger, Peter C., and Panagiotis Manolios. “Fast and accurate bitstate verification for SPIN.” International SPIN Workshop on Model Checking of Software. Springer, Berlin, Heidelberg, 2004.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">13.</sup> <a id="pgfId-1034797"></a>See <span class="fm-hyperlink"><a href="https://sites.google.com/site/murmurhash/">https://sites.google.com/site/murmurhash/</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">14.</sup> <a id="pgfId-1034811"></a>See <span class="fm-hyperlink"><a href="http://www.isthe.com/chongo/tech/comp/fnv/index.html">http://www.isthe.com/chongo/tech/comp/fnv/index.html</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">15.</sup> <a id="pgfId-1034825"></a>See <span class="fm-hyperlink"><a href="https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction#bloom-filter">https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction#bloom-filter</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">16.</sup> <a id="pgfId-1034841"></a>We could, of course, check our local Bloom filter for the contact, but even when it returns <code class="fm-code-in-text1">true</code>, without checking the server we have no way to know if it’s a false positive!</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">17.</sup> <a id="pgfId-1034855"></a><span class="fm-hyperlink"><a href="https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction/blob/master/JavaScript/src/bloom_filter/bloom_filter.js">https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction/blob/master/JavaScript/src/bloom_filter/bloom_filter.js</a></span></p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">18.</sup> <a id="pgfId-1034869"></a>Here <code class="fm-code-in-text1">e</code> is Euler’s number; we’ll see it again in section 4.10.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">19.</sup> <a id="pgfId-1034887"></a>Bloom filters also are or have been used for a long time in browsers for “safe browsing,” basically keeping a blacklist of malicious sites. Chromium engine, for instance, replaced it with compressed <code class="fm-code-in-text1">PrefixSet</code>s only a few years ago.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">20.</sup> <a id="pgfId-1034903"></a>“Utilizing Bloom filters for detecting flooding attacks against SIP based services.”, Geneiatakis, Dimitris, Nikos Vrakas, and Costas Lambrinoudakis, Computers &amp; Security 28.7 (2009): 578-591.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">21.</sup> <a id="pgfId-1034919"></a>This section, as well as the following ones, are theory-intensive and feature advanced concepts.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">22.</sup> <a id="pgfId-1034937"></a>Assuming <code class="fm-code-in-text1">m</code> is the size of the filter’s buffer.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">23.</sup> <a id="pgfId-1034953"></a><code class="fm-code-in-text1">m</code> <i class="calibre17">choose</i> <code class="fm-code-in-text1">k</code> is a binomial coefficient; see <span class="fm-hyperlink"><a href="https://en.wikipedia.org/wiki/Binomial_coefficient">https://en.wikipedia.org/wiki/Binomial_coefficient</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">24.</sup> <a id="pgfId-1034975"></a>Any object or value can be serialized to a string (for instance, a binary string).</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">25.</sup> <a id="pgfId-1034991"></a>This section includes advanced, math-intensive content.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">26.</sup> <a id="pgfId-1035005"></a>In other words, as we have seen in the previous sections, we assume the hash functions are drawn from a set of universal hash functions.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">27.</sup> <a id="pgfId-1035019"></a><code class="fm-code-in-text1">e<sup class="calibre28">x</sup></code> and <code class="fm-code-in-text1">ln(x)</code> are inverse functions, so that for <code class="fm-code-in-text1">x&gt;0</code>, <code class="fm-code-in-text1">ln(e<sup class="calibre28">x</sup>) = e<sup class="calibre28">ln(x) = x</sup></code>; that holds true even if <code class="fm-code-in-text1">x</code> is a function (as long as it’s always positive).</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">28.</sup> <a id="pgfId-1035051"></a>Chazelle, Bernard; Kilian, Joe; Rubinfeld, Ronitt; Tal, Ayellet (2004), “The Bloomier filter: An efficient data structure for static support lookup tables,” Proceedings of the Fifteenth Annual ACM-SIAM Symposium on Discrete Algorithms (PDF), pp. 30–39.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">29.</sup> <a id="pgfId-1035068"></a>Zhiwang, Cen; Jungang, Xu; Jian, Sun (2010), “A multi-layer Bloom filter for duplicated URL detection”, Proc. 3rd International Conference on Advanced Computer Theory and Engineering (ICACTE 2010), 1, pp. V1–586–V1–591, doi:10.1109/ICACTE.2010.5578947</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">30.</sup> <a id="pgfId-1035082"></a>Mitzenmacher, Michael. “Compressed Bloom filters.” IEEE/ACM Transactions on Networking (TON) 10.5 (2002): 604-612.</p>
+</body>
+</html>

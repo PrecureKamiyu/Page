@@ -1,0 +1,1528 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <title>6</title>
+    
+  <link href="../../stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="../../page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+  <div class="tocheadb">
+    <h1 class="tochead" id="heading_id_2"><a id="pgfId-998553"></a><a id="pgfId-998565"></a>6 Trie, radix trie: Efficient string search</h1>
+  </div>
+
+  <p class="co-summary-head"><a id="pgfId-1018624"></a>This chapter covers</p>
+
+  <ul class="calibre19">
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1018754"></a>Understanding why working with strings is different</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1018755"></a>Introducing trie<a href="#pgfId-1010928"><sup class="footnotenumber">1</sup></a> for efficient string search and indexing</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1018756"></a>Introducing radix tree<a href="#pgfId-1010942"><sup class="footnotenumber">2</sup></a> as a memory-efficient evolution of trie</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1018757"></a>Using prefix trees to solve string-related problems</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1018645"></a>Leveraging tries to implement an efficient spell-checker</li>
+  </ul>
+
+  <p class="body"><a id="pgfId-998670"></a>How many times have you sent a text or an email or tweeted in a hurry, only to realize a second later that you made a typo? For me, it was too many times! Lately, however, we’ve had a precious ally on our side in email clients and browsers in general: spell-checkers! If you’d like to know more about how they work and how to implement them efficiently, this chapter is the right place to start.</p>
+
+  <p class="body"><a id="pgfId-998683"></a>In chapter 3 we described balanced trees, which offer the best compromise when it comes to containers and are ideal for efficiently storing dynamically changing data on which we need to perform frequent searches. In appendix C we discussed and compared the options we have for containers providing fast lookup, fast insertion, or fast removal, and trees offer the best tradeoff between all the operations.</p>
+
+  <p class="body"><a id="pgfId-998700"></a>Balanced trees, in particular, guarantee logarithmic running time in the worst-case for all the main operations. In the general case, when we don’t know anything about the data we need to store and (later) search, this is really the best we can hope.</p>
+
+  <p class="body"><a id="pgfId-998718"></a>But what happens when we know that we will only store certain types of data in a container? Turns out there are several cases where if we have more information on the kind of data we need to handle, we can leverage better algorithms than the general-purpose ones.</p>
+
+  <p class="body"><a id="pgfId-998729"></a>Take, for instance, sorting: if we know that keys are integers in a limited range, we can use <i class="calibre17">RadixSort</i><a id="marker-999293"></a>, which means achieving better-than-linearithmic performance, defying the lower bound for sorting by comparison.<a href="#pgfId-1010956"><sup class="footnotenumber">3</sup></a></p>
+
+  <p class="body"><a id="pgfId-998743"></a>Likewise, if we know that we need to sort strings, there are several specialized algorithms, <a id="id_Hlk56070729"></a>such as the <i class="calibre17">3-way string quicksort</i>, that are optimized for this kind of data and perform better than plain, general-purpose quicksort (or any comparison-based sorting algorithm).</p>
+
+  <p class="body"><a id="pgfId-998755"></a>In this chapter, we will analyze a particular sub-class of containers, string containers, and investigate how we can optimize them both with respect to memory and running time by introducing new, specialized data structures: tries and radix tries. Then we’ll use those containers to implement an efficient spell-checker.</p>
+
+  <h2 class="fm-head" id="heading_id_3"><a id="pgfId-998770"></a>6.1 Spell-check</h2>
+
+  <p class="body"><a id="pgfId-998784"></a>But <a id="marker-999297"></a><a id="marker-999301"></a>first, let’s introduce the problem that we will solve in this chapter: spell-checking.</p>
+
+  <p class="body"><a id="pgfId-998796"></a>Not that the problem really needs any introduction, right? We would like to have a piece of software that can take words as inputs and return <code class="fm-code-in-text">true</code><a id="marker-999305"></a> or <code class="fm-code-in-text">false</code><a id="marker-999309"></a>, respectively, whether the input is a valid English word<a href="#pgfId-1010988"><sup class="footnotenumber">4</sup></a> or not.</p>
+
+  <p class="body"><a id="pgfId-998819"></a>That’s a bit of a vague description that leaves the door open to many possible (and possibly inefficient) solutions; we need more context to clarify our requirements. Let’s assume that we are developing a new client for a social network on a client with low resources (for instance, on a mobile OS) and we need to add a live spell-checker that produces the classic red wavy underline below a misspelled word. Every time we type a word (and every time we type a word separator, like a space, commas, and so on) we need to check whether there is a typo.</p>
+
+  <p class="body"><a id="pgfId-998842"></a>Due to scarce resources, we need our spell-checker to be fast and lightweight; we need to reduce its impact as much as possible, both in terms of CPU and memory usage.</p>
+
+  <p class="body"><a id="pgfId-998853"></a>But we would also like our spell-checker to be able to learn—for instance, so users can add their names or the name of their town/club/favorite artists and so on.</p>
+
+  <h3 class="fm-head2" id="heading_id_4"><a id="pgfId-998869"></a><a id="id_Hlk28455713"></a>6.1.1 A <span class="calibre31">prncess</span>, a <span class="calibre31">Damon</span>, and an elf w<span class="calibre31">alkz</span> into a bar</h3>
+
+  <p class="body"><a id="pgfId-998893"></a>Have you noticed the typos in this section’s title?<a href="#pgfId-1011004"><sup class="footnotenumber">5</sup></a> Typos are always around the corner when you need to send a message in a hurry (regardless of the medium used) and unfortunately, once these messages are sent out, there is no going back—you can’t edit them anymore.<a href="#pgfId-1011018"><sup class="footnotenumber">6</sup></a></p>
+
+  <p class="body"><a id="pgfId-998908"></a>That’s why a spell-checker that clearly highlights typos comes in handy, and today it’s often included natively in browsers.</p>
+
+  <p class="body"><a id="pgfId-998917"></a>In the end, the design of our spell-checker is pretty simple: it is a wrapper around a <i class="calibre17">dictionary</i>,<a id="marker-999313"></a><a href="#pgfId-1011033"><sup class="footnotenumber">7</sup></a> and the client’s method that checks spelling just calls the container <code class="fm-code-in-text">contains</code> method<a id="marker-999317"></a>, and if the result is a miss, adds the visual feedback to show the error.</p>
+
+  <p class="body"><a id="pgfId-998934"></a>In turn, the design of our container’s API is also simple. It’s a generic container supporting search, like the API of binary search trees or Randomized Treaps (described in section 3.4).</p>
+
+  <p class="body"><a id="pgfId-998952"></a>We can already think about how to implement this container with the tools that we learned. For instance, if we knew that we had to support fast lookups on a static set, then we would have chosen a hash table or, if we could trade saving some memory for a certain loss of precision, we could even resort to a Bloom filter. Since the requirement is maintaining an open, dynamic set, however, the one data structure providing the best compromise for all the operations would be a tree.</p>
+
+  <p class="body"><a id="pgfId-998970"></a>A simple binary tree could, of course, be enough to support all the operations provided by dictionaries. Figure 6.1 shows a possible representation of what these trees could look like, where we chose to show only a small part of the subtree containing a few similar words (we’ll see why this is relevant in a few lines).</p>
+
+  <p class="body"><a id="pgfId-998985"></a>How fast can operations on such a tree be? Assuming the tree is balanced, its height will be logarithmic in the number of words it contains, so for each call to <code class="fm-code-in-text">contains</code>, <code class="fm-code-in-text">insert</code><a id="marker-999321"></a>, <code class="fm-code-in-text">remove</code><a id="marker-999325"></a><code class="fm-code-in-text">,</code> and so on, we’ll need to traverse on average (and at most) <code class="fm-code-in-text">O(log(n))</code> nodes.</p>
+
+  <p class="body"><a id="pgfId-999038"></a>So far, however, when we’ve analyzed trees, we’ve assumed their keys were either integers or could be checked in constant time and require a constant space.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F1.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1042777"></a>Figure 6.1 A BST storing (part of) a dictionary, and the steps to search the word <code class="fm-code-in-text">“antic”</code>. In this example, it’s a miss because the word was not stored in the tree shown.</p>
+
+  <p class="body"><a id="pgfId-999047"></a>For generic strings, this assumption is not realistic anymore. Each node will need to store a string of unbounded length, so the total memory needed to store the tree will be the sum, for each node, of all the keys’ lengths:</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F1_E01.png"/></p>
+
+  <p class="body"><a id="pgfId-999071"></a>If we assume that the average length of the strings held by the tree is <code class="fm-code-in-text">L</code>, the expected value for <code class="fm-code-in-text">S(n)</code>, the space needed to store the tree, is proportional to <code class="fm-code-in-text">n*L</code>. If the maximum length for strings is denoted with <code class="fm-code-in-text">m</code>, then <code class="fm-code-in-text">S(n) = O(n*m)</code> is a strict upper bound for the worst case.</p>
+
+  <p class="body"><a id="pgfId-999093"></a>Likewise, if we look at the running time of the <code class="fm-code-in-text">search</code> method, we see that we can’t ignore the strings’ lengths anymore. For instance, a call to <code class="fm-code-in-text">search(“antic”)</code> on the tree in figure 6.1 would start from the root and compare <code class="fm-code-in-text">“antic”</code> to <code class="fm-code-in-text">“anthem”</code>, which would require at least four characters to be compared before verifying the two words are not the same. Then we would move to the right branch and again compare the two strings, <code class="fm-code-in-text">“antic”</code> and <code class="fm-code-in-text">“antique”</code> (five more character-to-character comparisons), and since they don’t match, traverse the left subtree now, and so on.</p>
+
+  <p class="body"><a id="pgfId-999125"></a>Therefore, a call to search would require, worst case, <code class="fm-code-in-text">T(n) = O(log(n)*m)</code> comparisons.</p>
+
+  <h3 class="fm-head2" id="heading_id_5"><a id="pgfId-999137"></a>6.1.2 Compression is the key</h3>
+
+  <p class="body"><a id="pgfId-999151"></a>This <a id="marker-999329"></a><a id="marker-999333"></a>quick analysis shows that using a tree is not ideal, either space-wise or performance-wise. If we look more closely at the tree in figure 6.1, we can see that there seems to be a lot of overhead: all words start with the character <code class="fm-code-in-text">“a”</code>, but this is stored once for every node of the subtree in the illustration, and for each step in the traversal of the tree, it will be compared with the text that is being searched (or inserted).</p>
+
+  <p class="body"><a id="pgfId-999169"></a>Looking at the path to search for the word <code class="fm-code-in-text">“antic”</code>, all the four nodes shown and traversed share the same prefix, <code class="fm-code-in-text">“ant”</code>. Wouldn’t it be nice if we could somehow compress these nodes and only store the common prefix once with the deltas for each <a id="marker-999337"></a><a id="marker-999341"></a>node?</p>
+
+  <h3 class="fm-head2" id="heading_id_6"><a id="pgfId-999190"></a>6.1.3 Description and API</h3>
+
+  <p class="body"><a id="pgfId-999202"></a>The <a id="marker-999345"></a><a id="marker-999349"></a>data structure that we are going to introduce in the next section was created to answer these needs, and also to offer an efficient way to solve another operation: find all the keys in the container that start with the same prefix.</p>
+
+  <p class="body"><a id="pgfId-999214"></a>From our example in the previous sub-section, you can already see that if we were able to somehow store the common prefixes of strings only once, we should be able to quickly access all strings starting with those prefixes.</p>
+
+  <p class="body"><a id="pgfId-999225"></a>Table 6.1 shows the public API for an abstract data structure<a id="marker-1027993"></a> (<i class="calibre17">ADT</i>) that supports the usual container basic operations, plus two new ones: retrieving all the strings starting with a certain prefix and finding the longest prefix of a string stored in the container.</p>
+
+  <p class="body"><a id="pgfId-999239"></a>From what we saw in the previous example, <code class="fm-code-in-text">PrefixTree</code> could be a good name for this data structure, although <code class="fm-code-in-text">StringContainer</code> is more generic (as an abstract data structure, we don’t care if it’s implemented using a tree or some other concrete counterpart.) It conveys the gist of this container: being specific for strings. The fact that prefix search is supported is almost a natural consequence of designing a container for strings.</p>
+
+  <p class="fm-table-caption"><a id="pgfId-1018917"></a>Table 6.1 API and contract for <code class="fm-code-in-text">StringContainer</code></p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="2" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1018901"></a>Abstract Data Structure: <code class="fm-code-in-text">StringContainer</code></p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1018905"></a>API</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <pre class="programlisting">class StringContainer {
+  insert(key)
+  remove(key)
+  contains(key)
+  longestPrefix(key)
+  keysStartingWith(prefix)
+}</pre>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1018909"></a>Contract with client</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1018911"></a>Besides all the operations of a regular, plain container, this structure allows us to search for the longest prefix of a string that is stored in it and return all the stored strings that start with a certain prefix.</p>
+      </td>
+    </tr>
+  </table>
+
+  <p class="body"><a id="pgfId-999358"></a>Now that we have fixed an API and described the ADT that we will use to solve our spell-check problem, we are ready to delve into more details and see a few concrete data structures that could implement <a id="marker-1004530"></a><a id="marker-1004534"></a>this <a id="marker-1004538"></a><a id="marker-1004542"></a>ADT.</p>
+
+  <h2 class="fm-head" id="heading_id_7"><a id="pgfId-999506"></a>6.2 Trie</h2>
+
+  <p class="body"><a id="pgfId-999518"></a>The <a id="marker-1004546"></a><a id="marker-1004550"></a>first implementation of <code class="fm-code-in-text">StringContainer</code> that we will illustrate is the <i class="calibre17">trie</i>; incidentally, all the other data structures that we will show in the next sections are based on tries, so we couldn’t choose to start anywhere else.</p>
+
+  <p class="body"><a id="pgfId-999532"></a>The first thing you should know about trie is that it’s actually pronounced “try.” Its author,<a href="#pgfId-1011048"><sup class="footnotenumber">8</sup></a> René de la Briandais, chose this term because it was similar to tree, but also because it’s part of the word re<i class="calibre17">trie</i>val, which is the main purpose of this container; its peculiar pronunciation is partly meant as an indented pun, and partly meant to avoid confusion with “tree.”</p>
+
+  <p class="body"><a id="pgfId-999550"></a>Tries were originally developed as a compact, efficient way to search strings in files; the idea behind this data structure is, as we saw in the previous section, providing a way to reduce redundancy by storing common prefixes of strings just once.</p>
+
+  <p class="body"><a id="pgfId-999561"></a>This couldn’t be achieved using a plain binary search tree, or with just a binary tree, so a paradigm shift was needed: de la Briandais then used <code class="fm-code-in-text">n</code>-ary trees, where edges are marked with all the characters in an alphabet, and nodes just connect paths.</p>
+
+  <p class="body"><a id="pgfId-999574"></a>Nodes also have a small but crucial function: they store a tiny bit of information stating if the path from root to current node corresponds to a key stored in the trie.</p>
+
+  <p class="body"><a id="pgfId-999583"></a>Let’s take a look at figure 6.2 before moving to a more formal description. It shows the structure of a typical trie, containing the words <code class="fm-code-in-text">“a”</code>, <code class="fm-code-in-text">“an”</code>, <code class="fm-code-in-text">“at”,</code> and <code class="fm-code-in-text">“I”</code>.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F2.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1042819"></a>Figure 6.2 The structure of a trie. Words are encoded in the tree using edges, each edge corresponds to a single character, and each node <code class="fm-code-in-text">n</code> is associated with a single word, the one obtained by joining the characters associated with the edges in the path from the root to <code class="fm-code-in-text">n</code>. The root node corresponds to the empty string (because no edge is traversed), the leftmost leaf corresponds to <code class="fm-code-in-text">“aa”</code>, and so on. Not all the paths make meaningful words, and not all the nodes store the word associated with them. Only filled, black nodes (called “key nodes”) mark words stored in the trie, while hollow nodes, aka “intermediate nodes,” correspond to prefixes of words stored in the trie. Notice that all leaves should be key nodes.<a id="marker-1042820"></a></p>
+
+  <p class="body"><a id="pgfId-999632"></a>If you feel that figure 6.2 is a bit confusing, you are right. In their classic implementation, a trie’s nodes have one edge for each possible character in the alphabet used: some of these edges point to other nodes, but most of them (especially in the lower levels of the tree) are <code class="fm-code-in-text">null</code> references.<a href="#pgfId-1011064"><sup class="footnotenumber">9</sup></a></p>
+
+  <p class="body"><a id="pgfId-999649"></a>Nevertheless, this specific representation of tries looks terrible on paper: too many links and too many nodes that result in chaos.</p>
+
+  <p class="body"><a id="pgfId-999667"></a>That’s why we will use an alternative representation, shown in figure 6.3. We’ll only show links to actual trie nodes, omitting links to <code class="fm-code-in-text">null</code>.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F3.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1042862"></a>Figure 6.3 A more compact representation of a trie. This example trie contains the same elements as the binary search tree in figure 6.1.<a id="marker-1042863"></a></p>
+
+  <p class="body"><a id="pgfId-999705"></a>Formally, given an alphabet <code class="fm-code-in-text">∑</code> with <code class="fm-code-in-text">|∑|=k</code> symbols, a trie is a <code class="fm-code-in-text">k</code>-ary<a href="#pgfId-1011086"><sup class="footnotenumber">10</sup></a> tree where each node has (at most) <code class="fm-code-in-text">k</code> children, each one marked with a different character in <code class="fm-code-in-text">∑</code>; links to children can point to another node, or to <code class="fm-code-in-text">null</code>.</p>
+
+  <p class="body"><a id="pgfId-999728"></a>Unlike <code class="fm-code-in-text">k</code>-ary search trees, though, no node in the tree actually stores the key associated with it. Instead, the characters held in the trie are actually stored in the edges between a node and its children.</p>
+
+  <p class="body"><a id="pgfId-999739"></a>Listing 6.1 illustrates a possible implementation of a <code class="fm-code-in-text">Trie</code> class<a id="marker-1004562"></a> (in object-oriented pseudo-code); <a id="id_Hlk29318157"></a>you can also take a look at a full implementation on the book’s <span class="fm-hyperlink">repo</span> on GitHub.<a href="#pgfId-1011103"><sup class="footnotenumber">11</sup></a></p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1018957"></a>Listing 6.1 Class <code class="fm-code-in-text">Trie</code></p>
+  <pre class="programlisting">#type Char[]
+Alphabet
+ 
+<b class="calibre21">class</b> Node
+  <b class="calibre21">#type</b> boolean
+  keyNode
+  
+  <b class="calibre21">#type</b> HashMap&lt;Char, Node&gt;
+  children
+ 
+  <b class="calibre21">function</b> Node(storesKey)
+    <b class="calibre21">for</b> char <b class="calibre21">in</b> Alphabet <b class="calibre21">do</b>
+      <b class="calibre21">this</b>.children[char] ← <b class="calibre21">null</b>
+    <b class="calibre21">this</b>.keyNode ← storesKey
+ 
+<b class="calibre21">class</b> Trie
+  <b class="calibre21">#type</b> Node
+  root
+ 
+  <b class="calibre21">function</b> Trie()
+    root ← <b class="calibre21">new</b> Node(<b class="calibre21">false</b>)</pre>
+
+  <p class="body"><a id="pgfId-1000007"></a>In the simplest version, trie’s nodes can only hold a tiny piece of information, just <code class="fm-code-in-text">true</code><a id="marker-1004566"></a> or <code class="fm-code-in-text">false</code><a id="marker-1004570"></a>. When marked with <code class="fm-code-in-text">true</code>, a node <code class="fm-code-in-text">N</code> is called a <i class="calibre17">key node</i><a id="marker-1004574"></a> because it means that the sequence of characters in the edges of the path from the root to <code class="fm-code-in-text">N</code> corresponds to a word that is actually stored in the trie. Nodes holding <code class="fm-code-in-text">false</code> are called <i class="calibre17">intermediate nodes</i><a id="marker-1004578"></a> because they correspond to intermediate characters of one or more words stored in the trie.</p>
+
+  <p class="body"><a id="pgfId-1000049"></a>As you can see, tries go beyond the usual duality between leaves and inner nodes, introducing another (orthogonal) distinction. It turns out, though, that all leaves in a well-formed, minimal trie are key nodes: a leaf would make no sense as an intermediate node, as we will see.</p>
+
+  <p class="body"><a id="pgfId-1000058"></a>The fact that words are stored in paths means that all the descendants of a node share a common prefix: the path from the root to their common parent. For instance, if we look at figure 6.3, we can see that all nodes share the prefix <code class="fm-code-in-text">“an”</code>, and all but one node share <code class="fm-code-in-text">“ant”</code>. These two words, incidentally, are also stored in the trie, because the nodes at the end of their path are <i class="calibre17">key nodes</i>.</p>
+
+  <p class="body"><a id="pgfId-1000078"></a>The root is, to all extents, an intermediate node associated with the empty string; it would be a key node only if the empty string belonged to the corpus contained in the trie.</p>
+
+  <p class="body"><a id="pgfId-1000087"></a>While for spell checkers storing a Boolean in each node could be enough (after all, we only need to know whether a word is in a dictionary), tries are often used to store or index words in texts. If that’s the case, we often need to know either how many occurrences of a word appear in the text or the positions where they appear. In the former situation we can store a counter in each node and only key nodes will have a positive value. In the latter we will instead use a list of positions, storing the index in the text where each occurrence starts.</p>
+
+  <h3 class="fm-head2" id="heading_id_8"><a id="pgfId-1000110"></a>6.2.1 Why is it better again?</h3>
+
+  <p class="body"><a id="pgfId-1000126"></a>Let’s <a id="marker-1004582"></a><a id="marker-1004586"></a>address space first: why is the trie in figure 6.3 better than the binary search tree in figure 6.1?</p>
+
+  <p class="body"><a id="pgfId-1000138"></a>Let’s do some quick math! But first, we need to make some assumptions:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1000149"></a>We only consider ASCII strings and characters, so we have to account for 1 byte for each char (Unicode wouldn’t change much; rather, it would make the savings obtained by using the cheapest option even greater) plus, in BSTs, 1 byte for each string’s terminator.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1000163"></a>We only explicitly store links to actual nodes in tries and account for a fixed number of bytes for null-pointers in BSTs (the same space taken by non-null references).</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1000179"></a>As we mentioned, each node in a trie has <code class="fm-code-in-text">|∑|</code> links, where <code class="fm-code-in-text">|∑|</code> is the alphabet size. This means that in tries, and especially in nodes in the lower levels, most links are <code class="fm-code-in-text">null</code>, and indeed in listing 6.1 it’s also possible to see how all those links are initialized in <code class="fm-code-in-text">Node’s</code><a class="calibre14" id="marker-1004590"></a> constructor.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1000214"></a>For each node in a trie, we account for a fixed amount of space to store the children list (we can imagine that we use a hash table to store the link to children), plus a variable amount depending on the number of actual children.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1000228"></a>Each link in a tree will require 8 bytes (64 bit references), and each link in a trie will require 9 bytes (8 for the reference plus 1 for the character to which it’s associated).</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1000242"></a>Each node in the BST will require as many bytes as the number of characters in its key, plus 4 bytes<a class="calibre14" href="#pgfId-1011119"><sup class="footnotenumber">12</sup></a> for the Node object itself.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1000256"></a>Each node in the trie requires 1 bit (to hold the Boolean) plus the same constant amount as for the BST; let’s round up to 5 bytes.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1000270"></a>Given these premises, we note that the BST in figure 6.1 has 9 nodes (whose keys are strings) and consequently <code class="fm-code-in-text">2*9=18</code> links, while the trie in figure 6.3 has 19 nodes and 18 links. For the BST, the root node contains the key <code class="fm-code-in-text">“anthem”</code> and requires 27 bytes (4 for the Node itself, 7 for the string, 2*8 for the links). Likewise, its left child, with key <code class="fm-code-in-text">“an”</code>, requires 23 bytes. You see how it’s computed; it’s 21 bytes per node, plus the length of the string. For the whole tree, considering it has 9 nodes and requires a total of 47 bytes for the keys, we need 227 bytes.</p>
+
+  <p class="body"><a id="pgfId-1000295"></a>Let’s now check the trie: each node requires 5 bytes, and each link 9 bytes—a total of 257 bytes.</p>
+
+  <p class="body"><a id="pgfId-1000310"></a>So, in practice, this trie might require a little more memory than the corresponding BST. These quantities depend on many factors; first of all, the overhead for objects. Since this trie has more nodes, the more this overhead is, the larger the delta will be.</p>
+
+  <p class="body"><a id="pgfId-1000323"></a>Obviously, however, the shape of the tree and the actual number of nodes also play a big role. In the example in figure 6.3, only a short prefix is shared among the keys. It turns out that tries are more efficient when holding keys with a large shared prefix. The example in figure 6.4 shows how the balance can be in favor of tries in these cases. As you can see, in figure 6.4 most trie nodes are black (key nodes), and when the ratio of key nodes versus intermediate nodes is higher, intuitively it means that the efficiency of the trie is also higher, because when a path has more than one key node, we are storing at least two words in a single path (one of which is a prefix of the other). In a <i class="calibre17">BST</i> they would require two <i class="calibre17">BST</i><a id="marker-1004594"></a> nodes storing both of the strings separately.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F4.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1042912"></a>Figure 6.4 Comparing BST and trie approaches on a different example. When the keys in the trie have a larger ratio of shared characters (that is, a longer common prefix), tries are more efficient in storing strings</p>
+
+  <p class="body"><a id="pgfId-1000377"></a>Another sign of more-efficient storage is when there are deep nodes branching out. In that case, the trie is “compressing” the space needed for two strings with a common prefix by storing the common prefix only once.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F5.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1042954"></a>Figure 6.5 A degenerate trie, where no string shares a prefix with another string</p>
+
+  <p class="body"><a id="pgfId-1000394"></a>In the end, with just nine words stored in this second example, using the same assumptions as shown previously, the difference becomes 220 bytes versus 134 bytes, with tries saving almost 40% of the space. If we consider an 8-byte overhead for nodes, the difference would be 256 versus 178 bytes, and the savings would be around 30%, which is still impressive. For large trees containing dictionaries or indexing large texts, we would be talking about hundreds of megabytes.</p>
+
+  <p class="body"><a id="pgfId-1000424"></a>Figure 6.4 shows the best-case scenario for tries, but obviously things are not always looking this good. Figure 6.5 shows a different edge case, close to the worst-case scenario, where the longest prefix in a (degenerate) trie is the empty string. In cases like this, information ends up being stored very inefficiently; luckily, however, these edge cases are incredibly unlikely in real-world applications.</p>
+
+  <p class="body"><a id="pgfId-1000462"></a>So much for space consumption. At worst, tries can be considered comparable to binary search trees. What about their running time? We will answer this question while looking at the individual methods in order to develop an understanding of how these results are <a id="marker-1004598"></a><a id="marker-1004602"></a>derived.</p>
+
+  <h3 class="fm-head2" id="heading_id_9"><a id="pgfId-1000478"></a>6.2.2 Search</h3>
+
+  <p class="body"><a id="pgfId-1000490"></a>Let’s <a id="marker-1004606"></a><a id="marker-1004610"></a><a id="marker-1004614"></a>start with search. Assuming we have built a proper trie, how do we check whether it contains a certain key?</p>
+
+  <p class="body"><a id="pgfId-1000507"></a>Turns out, it’s not too difficult, compared to a BST. The main difference is that we need to walk the tree one character (of the searched key) at a time, following the link that is marked precisely with that character.</p>
+
+  <p class="body"><a id="pgfId-1000522"></a>Both strings and tries are recursive structures, whose unit of iteration is the single character; each string, in fact, can be described as either</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1000531"></a>The empty string, <code class="fm-code-in-text">“”</code></p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1000544"></a>The concatenation of a character <code class="fm-code-in-text">c</code> and a string <code class="fm-code-in-text">s’</code>: <code class="fm-code-in-text">s=c+s’</code>, where <code class="fm-code-in-text">s’</code> is a string one character shorter than <code class="fm-code-in-text">s</code> and can possibly be the empty string</p>
+    </li>
+  </ul>
+
+  <p class="fm-callout"><a id="pgfId-1000566"></a><span class="fm-callout-head">Note</span> In most programming languages single quote characters wouldn’t be allowed in variable names, so we use <code class="fm-code-in-text2">tail</code> in listing 6.2 as a substitute name for <code class="fm-code-in-text2">s’</code>, which denotes the tail of current string <code class="fm-code-in-text2">s</code> in the figures.</p>
+
+  <p class="body"><a id="pgfId-1000581"></a>For instance, the string <code class="fm-code-in-text">“home”</code> is made of the character <code class="fm-code-in-text">‘h’</code> concatenated to the string <code class="fm-code-in-text">“ome”</code>, which in turn is <code class="fm-code-in-text">‘o’ + “me”,</code> and so on, until we get to <code class="fm-code-in-text">“e”</code>, which can be written as the character <code class="fm-code-in-text">‘e’</code> concatenated to the empty string <code class="fm-code-in-text">“”</code>.</p>
+
+  <p class="body"><a id="pgfId-1000609"></a>A trie, on the other end, stores strings as paths from the root to key nodes. We can describe a trie <code class="fm-code-in-text">T</code> as a root node connected to (at most) <code class="fm-code-in-text">|∑|</code> shorter tries. If a sub-trie <code class="fm-code-in-text">T’</code> is connected to the root by an edge marked with character <code class="fm-code-in-text">c (c <span class="cambria">ϵ</span> ∑)</code>, then for all strings <code class="fm-code-in-text">s</code> in <code class="fm-code-in-text">T’, c + s</code> belongs to <code class="fm-code-in-text">T</code>.</p>
+
+  <p class="body"><a id="pgfId-1000641"></a>For instance, in figure 6.3, the root has only one outgoing edge, marked with <code class="fm-code-in-text">‘a’</code>; considering <code class="fm-code-in-text">T’</code> as the only sub-trie of the root, <code class="fm-code-in-text">T’</code> contains the word <code class="fm-code-in-text">“n”</code>, and this means that <code class="fm-code-in-text">T</code> contains <code class="fm-code-in-text">‘a’ + “n” = “an”</code>.</p>
+
+  <p class="body"><a id="pgfId-1000663"></a>Since both strings and tries are recursive, it’s natural to define the search method recursively. We can consider just the case where we search the first character of a string <code class="fm-code-in-text">s=c+s’</code> starting from the root <code class="fm-code-in-text">R</code> of the trie <code class="fm-code-in-text">T</code>. If <code class="fm-code-in-text">c</code>, the first character of <code class="fm-code-in-text">s</code>, matches an outgoing of <code class="fm-code-in-text">R</code>, then we can search <code class="fm-code-in-text">s’</code> in the (sub)trie <code class="fm-code-in-text">T’</code>. We assume the root of the sub-trie is not <code class="fm-code-in-text">null</code> (as we’ll see shortly, it’s a reasonable assumption).</p>
+
+  <p class="body"><a id="pgfId-1000697"></a>If at any point <code class="fm-code-in-text">s</code> is the empty string, then we have traversed the whole path in the trie corresponding to <code class="fm-code-in-text">s</code>. We then need to check the current node to verify whether our string <code class="fm-code-in-text">s</code> is stored in the tree.</p>
+
+  <p class="body"><a id="pgfId-1000715"></a>If, instead, at some point the current node doesn’t have an outgoing edge matching current character <code class="fm-code-in-text">c</code>, then we are sure string <code class="fm-code-in-text">s</code> is not stored in the trie.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F6.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1042999"></a>Figure 6.6 An unsuccessful search in a trie. At each step, we break the key to search, the string <code class="fm-code-in-text">s</code>, into <code class="fm-code-in-text">c+s’</code>: the concatenation of its first character and the rest of the string. Then we compare <code class="fm-code-in-text">c</code> to the current node’s outgoing edges, and if we find a match, we go ahead traversing the tree. In this example, the search fails because the last character in the string doesn’t match any outgoing edge.</p>
+
+  <p class="body"><a id="pgfId-1000730"></a>We’ll illustrate these examples in figures 6.6 and 6.7, but first, let’s take a look at the implementation of the search method that we will then use as a reference while describing these examples.</p>
+
+  <p class="body"><a id="pgfId-1000766"></a>In listing 6.2 we show a recursive implementation of the search method. At each call, we need to check if the first character in the substring searched matches an outgoing edge of the current node, and then recursively search the tail of the current string in the subtree referenced by that edge. Figures 6.6 and 6.7 shows the parallel between moving “right” in the string searched and traversing down the trie.</p>
+
+  <p class="body"><a id="pgfId-1000781"></a>The same method can obviously be implemented using explicit loops. This implementation of the search method is likely suitable for a compiler’s tail-call optimization,<a href="#pgfId-1011134"><sup class="footnotenumber">13</sup></a> but as discussed in appendix E and chapter 3, if you are not comfortable with recursion or are not sure that your compiler will apply tail-call optimization, my advice is to write the iterative version of these methods to avoid stack overflow.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020123"></a>Listing 6.2 Method <code class="fm-code-in-text">search</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> search(node, s)                    <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> s == “” <b class="calibre21">then</b>                           <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return</b> node.keyNode                     <span class="fm-combinumeral">❸</span>
+  c, tail ← s.splitAt(0)                    <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">if</b> node.children[c] == <b class="calibre21">null then</b>          <span class="fm-combinumeral">❺</span>
+    <b class="calibre21">return false</b>
+  <b class="calibre21">else</b>
+    <b class="calibre21">return</b> search(node.children[c], tail)   <span class="fm-combinumeral">❻</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1041185"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">search</code>, a standalone function, takes a trie node and the string key <code class="fm-code-in-text2">s</code> to be searched. It returns <code class="fm-code-in-text2">true</code> if<a id="marker-1041190"></a> <code class="fm-code-in-text2">s</code> is stored in the trie, and <code class="fm-code-in-text2">false</code><a id="marker-1041191"></a> otherwise. We assume that node<a id="marker-1041192"></a> is never <code class="fm-code-in-text2">null</code>, which is a reasonable assumption if this method is implemented as a private method internally called by the trie’s API search method.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1041212"></a><span class="fm-combinumeral">❷</span> Checks if the string searched is empty. If it is, since this method is implemented using recursion, we know it has traversed the whole path in the trie.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1041229"></a><span class="fm-combinumeral">❸</span> We are at the target node for the target key; the trie stores it only if the current node is a key node.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1041246"></a><span class="fm-combinumeral">❹</span> Since <code class="fm-code-in-text2">s</code> is not the empty string, it can be broken into a <i class="calibre17">head</i> character, <code class="fm-code-in-text2">c</code> (the first character of <code class="fm-code-in-text2">s</code>) and a <i class="calibre17">tail</i>, the rest of the string.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1041271"></a><span class="fm-combinumeral">❺</span> If there is no outgoing edge in <code class="fm-code-in-text2">node</code> for the character <code class="fm-code-in-text2">c</code>, it means that we cannot traverse the trie any further, so that <code class="fm-code-in-text2">s</code> is not stored in the subtree rooted at <code class="fm-code-in-text2">node</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1041292"></a><span class="fm-combinumeral">❻</span> Otherwise, we recursively search <code class="fm-code-in-text2">tail</code><a id="marker-1041297"></a> into the subtree referenced by <code class="fm-code-in-text2">children[c]</code>.</p>
+
+  <p class="body"><a id="pgfId-1001039"></a>Listing 6.3 shows the trie’s API counterpart, which in turn will call the method in listing 6.2. We will omit these wrapper methods for the other operations when they are as trivial as for <code class="fm-code-in-text">search</code>.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020155"></a>Listing 6.3 Method <code class="fm-code-in-text">Trie::search</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> Trie::search(s)         <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> <b class="calibre21">this</b>.root == <b class="calibre21">null then</b>      <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return false</b>
+  <b class="calibre21">else</b>
+    <b class="calibre21">return</b> search(<b class="calibre21">this</b>.root, s)  <span class="fm-combinumeral">❸</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1041006"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">search</code> (for class Trie<a id="marker-1041017"></a>) takes a string key <code class="fm-code-in-text2">s</code> to be searched; it returns <code class="fm-code-in-text2">true</code><a id="marker-1041019"></a> if <code class="fm-code-in-text2">s</code> is stored in the trie, and <code class="fm-code-in-text2">false</code><a id="marker-1041020"></a> otherwise.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1041037"></a><span class="fm-combinumeral">❷</span> Checks if the trie’s root is <code class="fm-code-in-text2">null</code>. If so, no string is stored in the trie, and we can return <code class="fm-code-in-text2">false</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1041054"></a><span class="fm-combinumeral">❸</span> Otherwise, we forward the call to the root’s search method.</p>
+
+  <p class="body"><a id="pgfId-1001191"></a>As already mentioned, there are two possible cases of unsuccessful search in tries: in the first one, shown in figure 6.6, we traverse the trie until we get to a node that doesn’t have an outgoing edge for the next character. In the example, a call to <code class="fm-code-in-text">trie.search(“any”)</code>, this happens when we get to the key’s last character, <code class="fm-code-in-text">‘y’</code> (as shown in the right diagram in figure 6.6). In listing 6.2, this corresponds to the condition in the <code class="fm-code-in-text">if</code> at line #5 returning <code class="fm-code-in-text">true</code>.</p>
+
+  <p class="body"><a id="pgfId-1001213"></a>The other possible case for an unsuccessful search is that we always find a suitable outgoing edge until we recursively call search on the empty string. When this happens, it means we’ve reached the trie’s node whose path from the root spells out the searched key. For instance, in figure 6.7 we traverse the tree link by link and check the string key character by character, until the condition at line #2 of listing 6.2 returns <code class="fm-code-in-text">true</code> and we go to line #3.</p>
+
+  <p class="body"><a id="pgfId-1001233"></a>The result of line #3 is the only difference between a successful and an unsuccessful search. Looking at the example in figure 6.7, a successful search for the word <code class="fm-code-in-text">“ant”</code> would follow the exact same steps, with the only difference being that the final node (denoted with <code class="fm-code-in-text">T</code> in the rightmost diagram) would have to be a key node.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F7.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043041"></a>Figure 6.7 Another example of an unsuccessful search in a trie. In this example, the search fails because the path corresponding to the string searched ends in an <i class="calibre17">intermediate node</i><a id="marker-1043042"></a><i class="calibre17">.</i></p>
+
+  <p class="body"><a id="pgfId-1001276"></a>Notice that in listing 6.3, we can avoid checking for empty tries or handling the root as a special case, because in the trie constructor in listing 6.1, we create the root as an empty node. This (together with careful implementation of all the methods) will also support our assumption that the <code class="fm-code-in-text">node</code><a id="marker-1004650"></a> argument in <code class="fm-code-in-text">search</code> (and all the other methods) is never <code class="fm-code-in-text">null</code>.</p>
+
+  <p class="body"><a id="pgfId-1001296"></a>The <code class="fm-code-in-text">search</code> method is the most important method for tries, because all the other methods will be based on it. Search is so crucial to those implementations that we provide (in listing 6.4) a variant, <code class="fm-code-in-text">searchNode</code><a id="marker-1004654"></a>, that returns the node found, rather than just <code class="fm-code-in-text">true</code><a id="marker-1004658"></a> or <code class="fm-code-in-text">false</code><a id="marker-1004662"></a>. We’ll see in the next sections how this can be used to implement <code class="fm-code-in-text">remove</code><a id="marker-1004666"></a>.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020186"></a>Listing 6.4 Method <code class="fm-code-in-text">searchNode</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> searchNode(node, s)
+  <b class="calibre21">if</b> s == “” <b class="calibre21">then</b>
+      <b class="calibre21">return</b> node
+  c, tail ← s.splitAt(0)  
+  <b class="calibre21">if</b> node.children[c] == <b class="calibre21">null then</b>
+    <b class="calibre21">return null</b>
+  <b class="calibre21">else</b>
+    <b class="calibre21">return</b> search(node.children[c], tail)</pre>
+
+  <p class="body"><a id="pgfId-1001439"></a>Performance-wise, how fast is <code class="fm-code-in-text">search</code>? The number of recursive calls we make is limited by the smaller of two values: the maximum height of the trie and the length of the search string. The latter is usually shorter than the former, but either way, for a string of length <code class="fm-code-in-text">m</code> we can be sure that no more than <code class="fm-code-in-text">O(m)</code> calls are going to be made, regardless of the number of keys stored in the trie.</p>
+
+  <p class="body"><a id="pgfId-1001455"></a>The key is, then, how long each step takes. It turns out there are three factors influencing this cost:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1001468"></a>The cost of comparing two characters: this can be assumed to be <code class="fm-code-in-text">O(1)</code>.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1001485"></a>The cost of finding the next node: for an alphabet <code class="fm-code-in-text">∑</code> of size <code class="fm-code-in-text">k</code>, this can be, depending on the implementation:</p>
+
+      <ul class="calibre20">
+        <li class="fm-list-bullet1">
+          <p class="list"><a class="calibre14" id="pgfId-1001501"></a>Constant (amortized or worst-case<a class="calibre14" href="#pgfId-1011149"><sup class="footnotenumber">14</sup></a>), <code class="fm-code-in-text">O(1)</code>, using hash tables for edges</p>
+        </li>
+
+        <li class="fm-list-bullet1">
+          <p class="list"><a class="calibre14" id="pgfId-1001518"></a>Logarithmic worst-case <code class="fm-code-in-text">O(log(k))</code>, using a balanced tree</p>
+        </li>
+
+        <li class="fm-list-bullet1">
+          <p class="list"><a class="calibre14" id="pgfId-1001533"></a>Linear worst-case <code class="fm-code-in-text">O(k)</code>, using plain arrays</p>
+        </li>
+      </ul>
+
+      <p class="fm-list-body"><a class="calibre14" id="pgfId-1001547"></a>Amortized constant time can reasonably be assumed in most cases.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1001559"></a>The cost of following a link and of splitting a string into <code class="fm-code-in-text">head+tail</code>. This point is the one where we need to be really careful. The naïve approach of extracting a substring for each node would be a performance disaster in most programming languages. Strings are usually implemented as immutable objects, so extracting a substring would require linear time and extra space, <code class="fm-code-in-text">O(m)</code>, for each call. Luckily, the solution is simple: we can pass to the recursive call a reference to the beginning of the string and the index of the next character. This way, even this operation can be considered <code class="fm-code-in-text">O(1)</code>.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1001581"></a>Since each call can be implemented in such a way as to require amortized constant time, the whole search takes <code class="fm-code-in-text">O(m)</code> amortized running <a id="marker-1004670"></a><a id="marker-1004674"></a><a id="marker-1004678"></a>time.</p>
+
+  <h3 class="fm-head2" id="heading_id_10"><a id="pgfId-1001596"></a>6.2.3 Insert</h3>
+
+  <p class="body"><a id="pgfId-1001608"></a>Like <a id="marker-1004682"></a><a id="marker-1004686"></a><a id="marker-1004690"></a><code class="fm-code-in-text">search</code><a id="marker-1004694"></a>, <code class="fm-code-in-text">insert</code><a id="marker-1004698"></a> can be better defined recursively. We can identify two different scenarios for this method:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1001630"></a>The trie already has a path corresponding to the key to be inserted. If that’s the case, we only have to change the last node in the path, making it a key node<a class="calibre14" id="marker-1004702"></a> (or, if we are indexing a text, adding a new entry to the list of indices for the word).</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1001649"></a>The trie only has a path for a substring of the key. In this case, we will have to add new nodes to the trie.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1001665"></a>Figure 6.8 illustrates an example of the former situation, where a call to <code class="fm-code-in-text">insert(“anthem”)</code> on the trie in figure 6.7 will result in adding a new branch to one of the leaves of the tree.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F8.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043085"></a>Figure 6.8 An example of method <code class="fm-code-in-text">insert</code><a id="marker-1043084"></a>. In a call to <code class="fm-code-in-text">trie.insert(“anthem”)</code>, we first search the longest prefix of <code class="fm-code-in-text">s</code> in the trie (<code class="fm-code-in-text">“ant”</code>); then, as a second step, from the node corresponding to the longest common prefix we add a new path for the remainder of <code class="fm-code-in-text">s (“hem”)</code>.</p>
+
+  <p class="body"><a id="pgfId-1001713"></a>The method, as shown in listing 6.5, mainly consists of two steps. In the first step, we traverse the tree, following links corresponding to the next character in the key to add, until we either have consumed the whole input string, or we get to a node where there is no outgoing edge matching the key’s next character.</p>
+
+  <p class="body"><a id="pgfId-1001726"></a>Using listing 6.5 as a reference, we can see that the first step of the algorithm is implemented in lines #1 to #7, where we keep traversing the tree using the characters in the key to insert to choose the next branch to traverse. This is exactly the same as for <code class="fm-code-in-text">search</code><a id="marker-1004710"></a>, with one difference: if we consume all characters in the input string (meaning that we traversed the whole path from the root, and reached the target trie node) we just have to set the node at the end of the path to a key node. This corresponds to the first scenario described at the beginning of the section (not shown in figure 6.8).</p>
+
+  <p class="body"><a id="pgfId-1001745"></a>When we reach the status shown in the last diagram of the left half of figure 6.8, it means that the condition at line #6 of listing 6.5 has become <code class="fm-code-in-text">false</code>. If that’s the case, we need to jump to line #9 and add a brand new branch to the tree for the remaining characters in the string: by doing so, we are adding a suffix to the string matching the path from root to current node (in the example, we will add the suffix <code class="fm-code-in-text">“hem”</code> to the string <code class="fm-code-in-text">“ant”</code> already in the trie).</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020220"></a>Listing 6.5 Method <code class="fm-code-in-text">insert</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> insert(node, s)                     <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> s == “” <b class="calibre21">then</b>                            <span class="fm-combinumeral">❷</span>
+    node.keyNode ← <b class="calibre21">true</b>
+    <b class="calibre21">return</b>                                   <span class="fm-combinumeral">❸</span>
+  c, tail ← s.splitAt(0)                     <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">if</b> node.children[c] != <b class="calibre21">null then</b>           <span class="fm-combinumeral">❺</span>
+    <b class="calibre21">return</b> insert(node.children[c], tail)    <span class="fm-combinumeral">❻</span>
+  <b class="calibre21">else</b>
+    <b class="calibre21">return</b> addNewBranch(node, s)             <span class="fm-combinumeral">❼</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1040566"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">insert</code><a id="marker-1040570"></a> takes a trie node and the string key <code class="fm-code-in-text2">s</code> to be inserted. It returns nothing but has side effects on the trie. Again, we assume that <code class="fm-code-in-text2">node</code><a id="marker-1040572"></a> is never <code class="fm-code-in-text2">null</code>: this is a reasonable assumption if this method is implemented as a private method, internally called by the trie’s API <code class="fm-code-in-text2">insert</code> method<a id="marker-1040573"></a>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1040593"></a><span class="fm-combinumeral">❷</span> Checks if the string searched is empty. If it is, since this method is implemented using recursion, we know it has traversed the whole path in the trie.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1040610"></a><span class="fm-combinumeral">❸</span> We are at the target node for the target key. We set current node to a key node to ensure it will store <code class="fm-code-in-text2">s</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1040627"></a><span class="fm-combinumeral">❹</span> Since <code class="fm-code-in-text2">s</code> is not the empty string, it can be broken into a <i class="calibre17">head</i> character, <code class="fm-code-in-text2">c</code> (the first character of <code class="fm-code-in-text2">s</code>) and a <i class="calibre17">tail</i>, the rest of the string.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1040650"></a><span class="fm-combinumeral">❺</span> If there is an outgoing edge in <code class="fm-code-in-text2">node</code> for the character <code class="fm-code-in-text2">c</code>, we can keep recursively traversing the tree.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1040671"></a><span class="fm-combinumeral">❻</span> Following the recursive definition of this method, we need to insert <code class="fm-code-in-text2">tail</code> in the subtree referenced by the edge marked with character <code class="fm-code-in-text2">c</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1040688"></a><span class="fm-combinumeral">❼</span> Otherwise, it means that we cannot traverse the trie any further: now we have to add the remaining characters in <code class="fm-code-in-text2">s</code> as a new branch. (Be careful: not just the ones in tail! We also need to include character <code class="fm-code-in-text2">c</code>.)</p>
+
+  <p class="body"><a id="pgfId-1002037"></a>This last operation is implemented in a different utility method that is shown in listing 6.6 using (surprise!) recursion.</p>
+
+  <p class="body"><a id="pgfId-1002048"></a>The definition of the method is quite straightforward. As shown in the right half of figure 6.8, we just consume one character of the remaining string, create a new edge marked with this character and a brand new, empty node <code class="fm-code-in-text">N</code> at the other side of the edge, and then recursively add the tail of the string to the tree <code class="fm-code-in-text">T</code> rooted at <code class="fm-code-in-text">N</code>.<code class="fm-code-in-text"><a class="calibre14" href="#pgfId-1011164"><sup class="footnotenumber4">15</sup></a></code></p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020248"></a>Listing 6.6 Method <code class="fm-code-in-text">addNewBranch</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> addNewBranch(node, s)                    <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> s == “” <b class="calibre21">then</b>                                 <span class="fm-combinumeral">❷</span>
+    node.keyNode ← <b class="calibre21">true</b>                           <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return</b>         
+  c, tail ← s.splitAt(0)                          <span class="fm-combinumeral">❹</span>
+  node.children[c] ← <b class="calibre21">new</b> Node(<b class="calibre21">false</b>)              <span class="fm-combinumeral">❺</span>
+  <b class="calibre21">return</b> addNewBranch(node.children[c], tail)     <span class="fm-combinumeral">❻</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1040121"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">addNewBranch</code><a id="marker-1040535"></a> takes a trie node and the string key <code class="fm-code-in-text2">s</code> for the new branch. As always, we assume that node is never <code class="fm-code-in-text2">null</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1040143"></a><span class="fm-combinumeral">❷</span> Checks if the string to add is empty. If it is, we’ve added all the edges needed to the new branch, and current node is the last node in the path.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1040163"></a><span class="fm-combinumeral">❸</span> Therefore, to complete the insertion, we just need to set current node to a key node.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1040180"></a><span class="fm-combinumeral">❹</span> Since <code class="fm-code-in-text2">s</code> is not the empty string, it can be broken into a <i class="calibre17">head</i> character, <code class="fm-code-in-text2">c</code> (key first character of <code class="fm-code-in-text2">s</code>) and a <i class="calibre17">tail</i>, the rest of the string.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1040211"></a><span class="fm-combinumeral">❺</span> We add a new outgoing edge to current node, marked with character <code class="fm-code-in-text2">c</code>. At the other end of the edge, we create a new empty node.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1040232"></a><span class="fm-combinumeral">❻</span> We recursively add the characters in <code class="fm-code-in-text2">tail</code> as a new branch of <code class="fm-code-in-text2">children[c]</code>.</p>
+
+  <p class="body"><a id="pgfId-1002283"></a>Similarly to what we did for <code class="fm-code-in-text">search</code>, we can prove that <code class="fm-code-in-text">insert</code><a id="marker-1004734"></a> also takes <code class="fm-code-in-text">O(m)</code> amortized time, if the creation of a new node can be performed in constant time <a id="marker-1004738"></a><a id="marker-1004742"></a><a id="marker-1004746"></a>(which is the case if we use hash tables for edges, but not if we use plain arrays).</p>
+
+  <h3 class="fm-head2" id="heading_id_11"><a id="pgfId-1002301"></a>6.2.4 Remove</h3>
+
+  <p class="body"><a id="pgfId-1002313"></a>When <a id="marker-1004750"></a><a id="marker-1004754"></a><a id="marker-1004758"></a>it comes to removing a key from a trie, we are in the position to choose. We can go for an easier, cheaper algorithm that will cause the tree to grow beyond what’s necessary, or we can implement the full method, more complicated and possibly slower in practice, but with the lowest impact on memory.</p>
+
+  <p class="body"><a id="pgfId-1002334"></a>The difference between the two alternatives is that the first one simply unmarks a key node, making it an intermediate node, and doesn’t worry about the tree structure. This can be easily implemented reusing the <code class="fm-code-in-text">searchNode</code> method<a id="marker-1004762"></a> in listing 6.4, shown in listing 6.7.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020276"></a>Listing 6.7 Method <code class="fm-code-in-text">Trie::remove</code> (no pruning)</p>
+  <pre class="programlisting"><b class="calibre21">function</b> Trie::remove(s)                            <span class="fm-combinumeral">❶</span>
+  node ← searchNode(<b class="calibre21">this</b>.root, s)                   <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">if</b> node == null or node.keyNode == false <b class="calibre21">then</b>     <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return false</b>        
+  <b class="calibre21">else</b> 
+    node.keyNode ← <b class="calibre21">false</b>                            <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">return true</b></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1039871"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">remove</code> (for class <code class="fm-code-in-text2">Trie</code><a id="marker-1039875"></a>) can be implemented naively for the <code class="fm-code-in-text2">Trie</code><a id="marker-1039877"></a> class using <code class="fm-code-in-text2">search</code><a id="marker-1039878"></a>. Here it takes the key to remove and returns a <code class="fm-code-in-text2">Boolean</code> conveying the information about whether the key has been found and deleted.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1039895"></a><span class="fm-combinumeral">❷</span> Performs a search on the trie and gets the node for <code class="fm-code-in-text2">s</code> (if present)</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1039912"></a><span class="fm-combinumeral">❸</span> If <code class="fm-code-in-text2">node</code> is <code class="fm-code-in-text2">null</code>, or it’s not a key node, it means that the key was not stored in the trie, so we return <code class="fm-code-in-text2">false</code><a id="marker-1039917"></a>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1039930"></a><span class="fm-combinumeral">❹</span> Otherwise, we mark the node as an intermediate node, and return <code class="fm-code-in-text2">true</code><a id="marker-1039935"></a>.</p>
+
+  <p class="body"><a id="pgfId-1002524"></a>What’s the issue with this method? Take a look at figure 6.8. If we just transform a key node <code class="fm-code-in-text">N</code> into an intermediate node, we can have two possible situations:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1002539"></a><code class="fm-code-in-text">N</code> is an inner node, so it will have children storing keys that can only be reached by passing through <code class="fm-code-in-text">N</code> itself.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1002555"></a><code class="fm-code-in-text">N</code> is a leaf, which means that there is no key stored in the trie that can only be reached through <code class="fm-code-in-text">N</code>.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1002572"></a>The case where <code class="fm-code-in-text">N</code> is a leaf is illustrated in figure 6.9. After “unmarking” the key node at the end of the path, we can see that the trie has a “dangling” branch that contains no key. While it is perfectly fine to leave such a branch, because all the methods for manipulating tries will still work, if data is dynamic and there is a large ratio of deletions on the trie, the amount of memory wasted in dangling branches can become significant.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F9.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043130"></a>Figure 6.9 An example of method delete. (1) Find the key to delete. (2) Mark the node at the end of the path as “intermediate node.” (3) Prune the tree to remove dangling branches.</p>
+
+  <p class="body"><a id="pgfId-1002630"></a>The solution, in these cases, is implementing a pruning method that will remove dangling nodes while backtracking the path traversed during search. If we have the guarantee that the trie is “clean,” meaning there were no dangling branches before removing the current node, there are just two conditions for which we would stop pruning while backtracking:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1002643"></a>We reach a key node<a class="calibre14" id="marker-1004782"></a>. Obviously, we can’t remove a node holding a key.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1002663"></a>We reach an inner intermediate node. After removing the last edge in the path being backtracked, if the current node becomes a leaf, it can be removed; otherwise, if this node has other children, then all its sub-branches will hold at least a key (because of our premise) and therefore the current node corresponds to an intermediate character in one or more strings stored in the trie, and it can’t be deleted.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1002682"></a>Listing 6.8 shows the implementation of this method performing deletion + pruning. Using figure 6.9 as a reference, you can see that, after turning it to an intermediate node (line #4), the node at the end of the path <code class="fm-code-in-text">“anti”</code> becomes a worthless leaf. We backtrack to its parent and remove the edge marked with <code class="fm-code-in-text">‘i’</code> (lines #9 to #12 in listing 6.8), and then the node at the end of the path for <code class="fm-code-in-text">“ant”</code>, which also is an intermediate node, becomes a leaf too, and can thus be removed.</p>
+
+  <p class="body"><a id="pgfId-1002708"></a>When we backtrack once more, we can see that its parent is both a key node, and has another child, so we can’t prune the tree anymore.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020304"></a>Listing 6.8 Method <code class="fm-code-in-text">remove</code> (with pruning)</p>
+  <pre class="programlisting"><b class="calibre21">function</b> remove(node, s)                                         <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> s == “” <b class="calibre21">then</b>                                                <span class="fm-combinumeral">❷</span>
+    deleted ← node.keyNode
+    node.keyNode ← <b class="calibre21">false</b>                                         <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return</b> (deleted, node.children.size == 0)                    <span class="fm-combinumeral">❹</span>
+  c, tail ← s.splitAt(0)                                         <span class="fm-combinumeral">❺</span>
+  <b class="calibre21">if</b> node.children[c] != <b class="calibre21">null then</b>                               <span class="fm-combinumeral">❻</span>
+    (deleted, shouldPrune) ← remove(node.children[c], tail)      <span class="fm-combinumeral">❼</span>
+    <b class="calibre21">if</b> deleted and shouldPrune <b class="calibre21">then</b>                              <span class="fm-combinumeral">❽</span>
+      node.children[c] ← <b class="calibre21">null</b>                                    <span class="fm-combinumeral">❾</span>
+      <b class="calibre21">if</b> node.keyNode == true or node.children.size &gt; 0 <b class="calibre21">then</b>     <span class="fm-combinumeral">❿</span>
+        shouldPrune ← <b class="calibre21">false</b>                                      <span class="fm-combinumeral">⓫</span>
+    <b class="calibre21">return</b> (deleted, shouldPrune)
+  <b class="calibre21">else</b>
+    <b class="calibre21">return</b> (<b class="calibre21">false, false</b>)                                        <span class="fm-combinumeral">⓬</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038959"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">remove</code> (stand-alone version) takes a node and the string to delete from the sub-tree rooted at <code class="fm-code-in-text2">node</code><a id="marker-1039156"></a>. It returns a couple of <code class="fm-code-in-text2">Booleans</code>. The first one tells the caller if the key has been successfully deleted; the second one is <code class="fm-code-in-text2">true</code> if the last link followed becomes a dangling empty branch and should be pruned.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038981"></a><span class="fm-combinumeral">❷</span> Checks if the string searched is empty. If it is, we traversed the whole path till the final node for the string to delete.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038998"></a><span class="fm-combinumeral">❸</span> We make sure that <code class="fm-code-in-text2">current</code> node is marked as an intermediate node.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1039015"></a><span class="fm-combinumeral">❹</span> Search is over, so return to the caller, reporting if the operation was successful (we had saved the value deleted a couple of lines prior) and if this node is to be pruned (in case it’s a leaf).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1039032"></a><span class="fm-combinumeral">❺</span> Since <code class="fm-code-in-text2">s</code> is not the empty string, it can be broken into a <i class="calibre17">head</i> character, <code class="fm-code-in-text2">c</code> (key first character of <code class="fm-code-in-text2">s</code>) and a <i class="calibre17">tail</i>, the rest of the string. (Remember that, performance-wise, you should be careful about how you implement this operation.)</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1039052"></a><span class="fm-combinumeral">❻</span> If there is an outgoing edge in <code class="fm-code-in-text2">node</code> for the character <code class="fm-code-in-text2">c</code>, we can keep recursively traversing the tree.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1039075"></a><span class="fm-combinumeral">❼</span> Recursively call <code class="fm-code-in-text2">remove</code> on <code class="fm-code-in-text2">tail</code><a id="marker-1039080"></a> and save the result.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1039093"></a><span class="fm-combinumeral">❽</span> If the key was removed, and the next node in the path now can be pruned.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1039110"></a><span class="fm-combinumeral">❾</span> First, remove the edge for character <code class="fm-code-in-text2">c</code> . . .</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1039127"></a><span class="fm-combinumeral">❿</span> Then, if this node is either a key node or an inner node (that is, if it does have at least one other child left) . . .</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1039689"></a><span class="fm-combinumeral">⓫</span> . . . it means that this node can’t be pruned anymore, so we update the flag before returning.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1039710"></a><span class="fm-combinumeral">⓬</span> If execution gets here, it means we haven’t found the key in the trie, so it can’t be deleted.</p>
+
+  <p class="body"><a id="pgfId-1003136"></a>This version of removal obviously needs a different implementation of the trie method than the naïve one shown in listing 6.7. In this case, though, the API method is even simpler than the one shown in listing 6.7; basically, it just becomes a wrapper.</p>
+
+  <p class="body"><a id="pgfId-1003153"></a>Performance-wise, the same considerations made for <code class="fm-code-in-text">search</code><a id="marker-1004794"></a> and <code class="fm-code-in-text">insert</code><a id="marker-1004798"></a> apply for <code class="fm-code-in-text">remove</code>. If we implement the method with pruning, the number of operations on the tree is at worst <code class="fm-code-in-text">2*m</code>, twice as much as for the naïve version without pruning, for which at most <code class="fm-code-in-text">m</code> edges are traversed. Execution time is also probably going to be more than two-fold, because, as you can see from the code, the delta in code complexity is relevant.</p>
+
+  <p class="body"><a id="pgfId-1003183"></a>The tradeoff for faster running time, however, is that the tree can grow significantly if we don’t prune dangling branches; the best choice depends on your requirements and context. If you have a dynamic set and expect many calls to delete, you’d better use pruning. If, instead, the ratio of insertion/removal is low, or you expect to have to add back deleted strings frequently or shortly after, then you are better off with the faster (though messier) removal shown in <a id="marker-1004802"></a><a id="marker-1004806"></a><a id="marker-1004810"></a>listing 6.7.</p>
+
+  <h3 class="fm-head2" id="heading_id_12"><a id="pgfId-1003204"></a>6.2.5 Longest prefix</h3>
+
+  <p class="body"><a id="pgfId-1003218"></a>With <a id="marker-1004814"></a><a id="marker-1004818"></a><a id="marker-1004822"></a>remove, we completed our overview of the classic operations on containers. As we mentioned, though, tries can also provide two new kind of operations, which are the most exciting parts of this data structure.</p>
+
+  <p class="body"><a id="pgfId-1003235"></a>In this section we’ll focus on the method that returns the longest prefix of the searched string; given an input string <code class="fm-code-in-text">s</code>, we traverse the trie following the path corresponding to characters in <code class="fm-code-in-text">s</code> (as long as we can), and return the longest key we found.</p>
+
+  <p class="body"><a id="pgfId-1003250"></a>Sometimes, even if a key wasn’t stored in our trie, we are just interested in getting its longest prefix. We’ll see an example in the applications section.</p>
+
+  <p class="body"><a id="pgfId-1003265"></a>The search for the longest prefix is almost entirely the same as the <code class="fm-code-in-text">search</code> method<a id="marker-1004826"></a>. The only difference is that in a recursive implementation, when we backtrack we need to check whether we have already found a key, and if we haven’t and the current node is a key node, we’ll have to return the current node’s key. This also means that we have to return a string, not just <code class="fm-code-in-text">true</code> or <code class="fm-code-in-text">false</code>, and at each call keep track of the path traversed, because we need to know what we can return. Since backtracking walks the path backward, the first key node we find while backtracking will hold the longest prefix.</p>
+
+  <p class="body"><a id="pgfId-1003286"></a>Listing 6.9 clarifies these concepts by showing the implementation of this method. If you recall how <code class="fm-code-in-text">insert</code><a id="marker-1004830"></a> works, it can be rethought as a two-step operation: finding the longest common prefix of the key to be inserted already in the trie, and then adding a branch with the remaining characters. As an exercise, try to rewrite the pseudo-code for <code class="fm-code-in-text">insert</code> by leveraging method <code class="fm-code-in-text">longestPrefix</code><a id="marker-1004834"></a>.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020335"></a>Listing 6.9 Method <code class="fm-code-in-text">longestPrefix</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> longestPrefix(node, s, prefix)                             <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> s == “” <b class="calibre21">then</b>                                                   <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">if</b> node.keyNode <b class="calibre21">then</b>                                            <span class="fm-combinumeral">❸</span>
+      <b class="calibre21">return</b> prefix
+    <b class="calibre21">else</b>
+      <b class="calibre21">return null</b>                                                   <span class="fm-combinumeral">❹</span>
+  c, tail ← s.splitAt(0)                                            <span class="fm-combinumeral">❺</span>
+  <b class="calibre21">if</b> node.children[c] == <b class="calibre21">null then</b>                                  <span class="fm-combinumeral">❻</span>
+    <b class="calibre21">if</b> node.keyNode then return prefix <b class="calibre21">else return null</b>             <span class="fm-combinumeral">❼</span>
+  <b class="calibre21">else</b>
+    result ← longestPrefix (node.children[c], tail, prefix + c)     <span class="fm-combinumeral">❽</span>
+    <b class="calibre21">if</b> result != <b class="calibre21">null then</b>                                          <span class="fm-combinumeral">❾</span>
+      <b class="calibre21">return</b> result
+    <b class="calibre21">elsif</b> node.keyNode <b class="calibre21">then</b>                                         <span class="fm-combinumeral">❿</span>
+      <b class="calibre21">return</b> prefix
+    <b class="calibre21">else</b>
+      <b class="calibre21">return null</b>                                                   <span class="fm-combinumeral">⓫</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038062"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">longestPrefix</code><a id="marker-1038066"></a> takes a trie node, the string key <code class="fm-code-in-text2">s</code> to be searched, and a string with the path from root to <code class="fm-code-in-text2">node</code><a id="marker-1038068"></a>. It returns the longest prefix of <code class="fm-code-in-text2">s</code> stored in the trie.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038088"></a><span class="fm-combinumeral">❷</span> Checks if the string searched is empty. If it is, since this method is implemented using recursion, we know it has traversed the whole path in the trie.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038105"></a><span class="fm-combinumeral">❸</span> We are at the final node of the path for the searched string: if it’s a <i class="calibre17">key node</i><a id="marker-1038110"></a>, then the string itself (by now accumulated into prefix<a id="marker-1038111"></a>) is its longest prefix in the trie.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038124"></a><span class="fm-combinumeral">❹</span> Otherwise, we need to return <code class="fm-code-in-text2">null</code> to let the caller know we haven’t found any key yet.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038141"></a><span class="fm-combinumeral">❺</span> Since <code class="fm-code-in-text2">s</code> is not the empty string, it can be broken into a <i class="calibre17">head</i> character, <code class="fm-code-in-text2">c</code> (the first character of <code class="fm-code-in-text2">s</code>) and a <i class="calibre17">tail</i>, the rest of the string.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038164"></a><span class="fm-combinumeral">❻</span> If there is no outgoing edge in node for the character <code class="fm-code-in-text2">c</code>, it means that we cannot traverse the trie any further.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038181"></a><span class="fm-combinumeral">❼</span> We need to check if current node is a key node. If it is, it returns current prefix (which is the longest match); otherwise, it returns <code class="fm-code-in-text2">null</code> to let the caller know we haven’t found any result in this subtree.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038201"></a><span class="fm-combinumeral">❽</span> If there is an outgoing edge, we recursively search <code class="fm-code-in-text2">tail</code><a id="marker-1038206"></a> into the subtree referenced by <code class="fm-code-in-text2">children[c]</code>, and store the longest result found in this subtree into a temporary variable.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038219"></a><span class="fm-combinumeral">❾</span> If we have found a prefix of the searched string stored into the subtree, then it is going to be longer than any other prefix we can find backtracking. We can just propagate the result back.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038236"></a><span class="fm-combinumeral">❿</span> Otherwise, if we found nothing in the subtree for <code class="fm-code-in-text2">children[c]</code>, we can check if this node is a key node, meaning that the path to it is the longest prefix for the searched string.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1038253"></a><span class="fm-combinumeral">⓫</span> If the recursive call hasn’t found anything and this is not a key node, we return <code class="fm-code-in-text2">null</code> to let the caller know we don’t have our answer yet.</p>
+
+  <p class="body"><a id="pgfId-1003738"></a>As with the other methods we have described so far, this operation is also linear in the length of the searched string: <a id="marker-1004858"></a><a id="marker-1004862"></a><a id="marker-1004866"></a><code class="fm-code-in-text">O(m)</code>, if <code class="fm-code-in-text">|s|==m</code>.</p>
+
+  <h3 class="fm-head2" id="heading_id_13"><a id="pgfId-1003760"></a>6.2.6 Keys matching a prefix</h3>
+
+  <p class="body"><a id="pgfId-1003776"></a>The <a id="marker-1004870"></a><a id="marker-1004874"></a><a id="marker-1004878"></a>last method we are going to describe returns all the keys matching a certain prefix.</p>
+
+  <p class="body"><a id="pgfId-1003789"></a>If you stop and think about the definition of a trie, the implementation for this method will flow almost naturally. Even the alias for this data structure, <i class="calibre17">prefix tree</i>, suggests a solution. We have seen, in fact, that tries compactly store strings sharing the same prefix, because each string is translated in a path from the root to a <i class="calibre17">key node</i><a id="marker-1004886"></a>, and strings sharing the same prefix will result in sharing the same path in the trie.</p>
+
+  <p class="body"><a id="pgfId-1003808"></a>For instance, in figure 6.3, all the strings <code class="fm-code-in-text">“and”, “ant”, “anthem”</code> share a portion of their path, corresponding to the common prefix <code class="fm-code-in-text">“an”</code>.</p>
+
+  <p class="body"><a id="pgfId-1003821"></a>Listing 6.10 shows the implementation of this method. Not surprisingly, it’s one more method that leverages the <code class="fm-code-in-text">searchNode</code> method<a id="marker-1004890"></a> defined in listing 6.4.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020363"></a>Listing 6.10 Method Trie:: <code class="fm-code-in-text">keysStartingWith</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> Trie::keysStartingWith(prefix)    <span class="fm-combinumeral">❶</span>
+  node ← searchNode(<b class="calibre21">this</b>.root, prefix)     <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">if</b> node == <b class="calibre21">null then</b>                     <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return</b> []        
+  <b class="calibre21">else</b> 
+    <b class="calibre21">return</b> allKeys(node, prefix)           <span class="fm-combinumeral">❹</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1037835"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">keysStartingWith</code><a id="marker-1037839"></a> for the <code class="fm-code-in-text2">Trie</code> class<a id="marker-1037840"></a> takes a string <code class="fm-code-in-text2">prefix</code><a id="marker-1037842"></a>, <a id="marker-1037843"></a>and returns the list of all keys stored in the trie that starts with this prefix.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1037860"></a><span class="fm-combinumeral">❷</span> Performs a search on the trie and gets the node for <code class="fm-code-in-text2">prefix</code> (if present). Remember that <code class="fm-code-in-text2">searchNode</code><a id="marker-1037865"></a> will return the node at the end of the path, even if it’s an intermediate node, or <code class="fm-code-in-text2">null</code> if there isn’t any such path.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1037878"></a><span class="fm-combinumeral">❸</span> If node is <code class="fm-code-in-text2">null</code>, it means that there is no key stored in the trie that starts with <code class="fm-code-in-text2">prefix</code>, so we return an empty list.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1037895"></a><span class="fm-combinumeral">❹</span> Otherwise, we have to return all keys stored in the sub-tree rooted at node.</p>
+
+  <p class="body"><a id="pgfId-1004010"></a>Clearly, there is a new method that we still need to define: <code class="fm-code-in-text">allKeys</code><a id="marker-1004914"></a>, the method that traverses a (sub)trie and collect all its keys; this method, shown in listing 6.11, is a traversal of the whole subtree. We traverse all branches for each node, and we only stop following a path when we reach a leaf. We also need to pass the (string corresponding to the) path traversed so far, up to <code class="fm-code-in-text">node</code><a id="marker-1004918"></a>, as the second argument, because we will need that to know which key we should return.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020394"></a>Listing 6.11 Method <code class="fm-code-in-text">allKeys</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> allKeys(node, prefix)                             <span class="fm-combinumeral">❶</span>
+  keys ← []                                                <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">if</b> node.keyNode <b class="calibre21">then</b>       
+    keys.insert(prefix)                                    <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">for</b> c in node.children.keys() <b class="calibre21">do</b>                         <span class="fm-combinumeral">❹</span>
+    keys ← keys + allKeys(node.children[c], prefix + c)    <span class="fm-combinumeral">❺</span>
+  <b class="calibre21">return</b> keys                                              <span class="fm-combinumeral">❻</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1037368"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">allKeys</code><a id="marker-1037372"></a> takes a trie node and the string <code class="fm-code-in-text2">prefix</code> corresponding to the path from the trie’s root to <code class="fm-code-in-text2">node</code><a id="marker-1037374"></a>. It returns the list of strings s<sub class="calibre32">k</sub>=prefix+suffix<sub class="calibre32">k</sub>, where suffix<sub class="calibre32">k</sub> is the <code class="fm-code-in-text2">k</code>-th string contained in this subtree.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1037394"></a><span class="fm-combinumeral">❷</span> Initializes the list of strings to return</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1037411"></a><span class="fm-combinumeral">❸</span> If current node is a key node, then we need to add <code class="fm-code-in-text2">prefix</code><a id="marker-1037416"></a> to the list of strings contained in the subtree rooted at <code class="fm-code-in-text2">node</code>—assuming <code class="fm-code-in-text2">prefix</code> is the correct string for the path from root to current node.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1037429"></a><span class="fm-combinumeral">❹</span> Iterate over <code class="fm-code-in-text2">node</code>’s<a id="marker-1037433"></a> outgoing edges; in particular, we need the characters marking each edge.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1037447"></a><span class="fm-combinumeral">❺</span> Add to the list of keys for the subtree rooted at <code class="fm-code-in-text2">node</code> all the keys in the subtree referenced by the edge. For this subtree, the path from the root will be made by <code class="fm-code-in-text2">prefix + c</code>. Be careful about the implementation of this operation; it can be costly if not implemented properly.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1037464"></a><span class="fm-combinumeral">❻</span> Returns all keys gathered</p>
+
+  <p class="body"><a id="pgfId-1004241"></a>When we run the asymptotic analysis for this method, we need to be especially careful with line #6. Depending on the programming language and data type used, concatenating lists can be quite expensive, if it’s not done right.</p>
+
+  <p class="body"><a id="pgfId-1004254"></a>The most efficient way to accumulate the keys found would be to pass a third parameter to the method, an accumulator, to which we would add each key only once and in one place, line #4.</p>
+
+  <p class="body"><a id="pgfId-1004263"></a>Under this assumption, the running time for method <code class="fm-code-in-text">allKeys</code> is <code class="fm-code-in-text">O(j)</code>, for a trie with <code class="fm-code-in-text">j</code> nodes, and therefore the worst-case upper bound for the method <code class="fm-code-in-text">keysStartingWith</code><a id="marker-1029297"></a> is <code class="fm-code-in-text">O(m+j)</code>, for a trie with <code class="fm-code-in-text">j</code> nodes and a prefix with <code class="fm-code-in-text">m</code> characters.</p>
+
+  <p class="body"><a id="pgfId-1004287"></a>The caveat is that it’s hard to know or even estimate how many nodes a trie will have based on the number of keys it stores. If, however, we know it contains <code class="fm-code-in-text">n</code> keys whose maximum length is <code class="fm-code-in-text">M</code>, then the worst-case (loose) bound for a non-empty string is <code class="fm-code-in-text">O(m + n*(M-m))</code>, corresponding to a degenerate trie where all words share exactly the prefix searched, and no further character.</p>
+
+  <p class="body"><a id="pgfId-1004307"></a>In the example shown in figure 6.10, we search for all keys matching prefix <code class="fm-code-in-text">“ant”</code>, so <code class="fm-code-in-text">n=6, m=3</code> and <code class="fm-code-in-text">M=8</code> (the length of the longest key, <code class="fm-code-in-text">“antidote”</code>).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F10.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043173"></a>Figure 6.10 An example of method <code class="fm-code-in-text">keysWithPrefix</code><a id="marker-1043172"></a>. (1) Traverse the path corresponding to the common prefix. (2) Collect all keys found traversing the subtree at the end of the path for <code class="fm-code-in-text">prefix</code>.</p>
+
+  <p class="body"><a id="pgfId-1004326"></a>If, instead, we search all keys starting whose prefixes include the empty string, this will return all keys in the tree, and the running time will be <code class="fm-code-in-text">O(n*M)</code>, which would also be the worst-case upper bound for the <a id="marker-1004942"></a><a id="marker-1004946"></a><a id="marker-1004950"></a>method.</p>
+
+  <h3 class="fm-head2" id="heading_id_14"><a id="pgfId-1004367"></a>6.2.7 When should we use tries?</h3>
+
+  <p class="body"><a id="pgfId-1004387"></a>Now <a id="marker-1004958"></a><a id="marker-1004962"></a>that we have described all the main methods on tries, it feels like taking a moment to recap would be a good idea. Table 6.2 shows the performance of tries on these methods, compared to the equivalent methods for balanced BSTs.</p>
+
+  <p class="body"><a id="pgfId-1004403"></a>Table 6.2 helps answer the question about performance that we put on hold in section 6.2.1. We saw when a trie would require less memory than a BST; now we also know that it would almost always be faster.</p>
+
+  <p class="body"><a id="pgfId-1004414"></a>Remember that while in general we express the running time for BSTs in terms of <code class="fm-code-in-text">n</code>, the number of entries stored, in this case we can’t assume that the cost to compare two keys is <code class="fm-code-in-text">O(1)</code>, but it’s rather <code class="fm-code-in-text">O(m),</code> depending on the length <code class="fm-code-in-text">m</code> of the shortest of the two keys.</p>
+
+  <p class="fm-table-caption"><a id="pgfId-1020474"></a>Table 6.2 Running time for operations on tries vs balanced BSTs, assuming n keys with average length <code class="fm-code-in-text">m</code>; finally, as a simplification we assume for the size of the input keys <code class="fm-code-in-text">m</code>, that <code class="fm-code-in-text">m</code> <span class="cambria">ϵ</span> <code class="fm-code-in-text">O(M)</code></p>
+
+  <table border="1" class="contenttable" width="100%">
+    <tr class="calibre8">
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1020482"></a>Method</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1020484"></a>BST</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1020486"></a>BST + hash</p>
+      </th>
+
+      <th class="fm-contenttable" colspan="1" rowspan="1">
+        <p class="fm-table-head"><a id="pgfId-1020488"></a>Trie</p>
+      </th>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020490"></a><code class="fm-code-in-text2">Search</code><a id="marker-1020529"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020492"></a>O(m*log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020494"></a>O(m+log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020496"></a>O(m)</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020498"></a><code class="fm-code-in-text2">insert</code><a id="marker-1020530"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020500"></a>O(m*log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020502"></a>O(m+log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020504"></a>O(m)</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020506"></a><code class="fm-code-in-text2">remove</code></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020508"></a>O(m*log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020510"></a>O(m+log(n))</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020512"></a>O(m)</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020514"></a><code class="fm-code-in-text2">longestPrefix</code><a id="marker-1020531"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020516"></a>O(m*n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020518"></a>O(m+n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020520"></a>O(m)</p>
+      </td>
+    </tr>
+
+    <tr class="calibre8">
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020522"></a><code class="fm-code-in-text2">keysWithPrefix</code><a id="marker-1020532"></a></p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020524"></a>O(m*n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020526"></a>O(m+n)</p>
+      </td>
+
+      <td class="fm-contenttable1" colspan="1" rowspan="1">
+        <p class="fm-table-body"><a id="pgfId-1020528"></a>O(n+m) <a href="#pgfId-1020558"><sup class="footnotenumber1">a</sup></a></p>
+      </td>
+    </tr>
+  </table>
+
+  <p class="fm-footnote"><sup class="footnotenumber">a</sup> <a id="pgfId-1020558"></a>average</p>
+
+  <p class="body"><a id="pgfId-1005314"></a>The third column in table 6.2 shows the results for a particular variant of BSTs where we store a hash of the string, together with the key itself, in each node. This approach, which requires an extra <code class="fm-code-in-text">O(n)</code> memory to store these fields, allows for a fast two-pass comparison. Given a search string <code class="fm-code-in-text">w</code>, we compute <code class="fm-code-in-text">h(w)</code> before starting the search. Then for each node we first check whether <code class="fm-code-in-text">h(w)</code> matches the node’s hash (which requires constant time), and only when it does do we perform a proper strings comparison.</p>
+
+  <p class="body"><a id="pgfId-1005341"></a>Before moving on, let’s also recap the pros and cons of using tries, and when we should prefer a trie over a BST.</p>
+
+  <p class="body"><a id="pgfId-1005354"></a>On the pros side, compared to using BSTs or hash tables</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1005365"></a>The search time only depends on the length of the searched string.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1005377"></a>Search misses only involve examining a few characters (in particular, just the longest common prefix between the search string and the corpus stored in the tree).</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1005391"></a>There are no collisions of unique keys in a trie.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1005403"></a>There is no need to provide a hash function or to change hash functions as more keys are added to a trie.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1005415"></a>A trie can provide an alphabetical ordering of the entries by key.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1005427"></a>As appalling as this list looks, as we have repeated many times, unfortunately there is no perfect data structure. So even tries do have some downsides:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1005438"></a>Tries can be slower than hash tables at looking up data whenever a container is too big to fit in memory. Hash tables would need fewer disk accesses, even down to a single access, while a trie would require <code class="fm-code-in-text">O(m)</code> disk reads for a string of length <code class="fm-code-in-text">m</code>.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1005456"></a>Hash tables are usually allocated in a single big and contiguous chunk of memory, while trie nodes can span the whole heap. So, the former would better exploit the principle of locality.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1005468"></a>A trie’s ideal use case is storing text strings. We could, in theory, stringify any value, from numbers to objects, and store it. Yet, if we were to store floating point numbers, for instance, there are some edge cases that can produce long meaningless paths,<a class="calibre14" href="#pgfId-1011182"><sup class="footnotenumber">16</sup></a> such as periodic or transcendent numbers, or results of certain floating points operations such as 0.1+0.2, due to issues with double precision representation.<a class="calibre14" href="#pgfId-1011198"><sup class="footnotenumber">17</sup></a></p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1005491"></a>Tries have memory overhead for nodes and references. As we have seen, some implementations require each node to store an array of <code class="fm-code-in-text">|∑|</code> edges, where <code class="fm-code-in-text">∑</code> is the alphabet used—even if the node has few or no children at all.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1005509"></a>In summary, the advice could be to use tries when you have to frequently perform prefix searches (<code class="fm-code-in-text">longestPrefix</code><a id="marker-1010465"></a> or <code class="fm-code-in-text">keysWithPrefix</code><a id="marker-1010469"></a>). Use hash tables when data is stored on slow supports like disk or whenever memory locality is important. In all intermediate cases, profiling can help you make the best decision.</p>
+
+  <p class="body"><a id="pgfId-1005530"></a>Tries offer extremely good performance for many string-based operations. Due to their structure, though, they are meant to store an array of children for each node. This can quickly become expensive. The total number of edges for a trie with <code class="fm-code-in-text">n</code> elements can swing anywhere between <code class="fm-code-in-text">|∑|*n</code> and <code class="fm-code-in-text">|∑|*n*m</code>, where <code class="fm-code-in-text">m</code> is the average word length, depending on the degree of overlap of common prefixes.</p>
+
+  <p class="body"><a id="pgfId-1005549"></a>We have seen that we can use associative arrays, dictionaries in particular, to implement nodes, only storing edges that are not <code class="fm-code-in-text">null</code>. Of course, this solution comes at a cost: not only the cost to access each edge (that can be the cost of hashing the character plus the cost of resolving key conflicts), but also the cost of resizing the dictionary when new edges <a id="marker-1010473"></a><a id="marker-1010477"></a>are <a id="marker-1010481"></a><a id="marker-1010485"></a>added.</p>
+
+  <h2 class="fm-head" id="heading_id_15"><a id="pgfId-1005566"></a>6.3 Radix tries</h2>
+
+  <p class="body"><a id="pgfId-1005580"></a>To <a id="marker-1010489"></a><a id="marker-1010493"></a>overcome these issues with tries, a few alternatives have been developed: the <i class="calibre17">ternary search trie</i><a id="id_Hlk56079050"></a><a id="marker-1010497"></a> (TST), which trades off lower memory usage for worse running time, or the <i class="calibre17">radix trie</i>, just to name a few.</p>
+
+  <p class="body"><a id="pgfId-1005600"></a>While TSTs improve the space requirements to store links, and free us from worrying about platform-specific implementations to optimize how we store edges, the number of nodes we need to create is still on the order of magnitude of the number of characters contained in the whole corpus stored, <code class="fm-code-in-text">O(n*m)</code> for <code class="fm-code-in-text">n</code> words of average length <code class="fm-code-in-text">m</code>.</p>
+
+  <p class="body"><a id="pgfId-1005617"></a>In tries, most of the nodes don’t store keys and are just hops on a path between a key and the ones that extend it. Most of these hops are necessary, but when we store long words, they tend to produce long chains of internal nodes, each with just one child. As we saw in section 6.2.1, this is the main reason tries need too much space, sometimes more than BSTs.</p>
+
+  <p class="body"><a id="pgfId-1005631"></a>Figure 6.11 shows an example of a trie. Nothing special, just a small, regular trie. We can see that intermediate nodes always have children (assuming we prune dangling branches after deleting keys); sometimes just one child, sometimes more.</p>
+
+  <p class="body"><a id="pgfId-1005644"></a>When an intermediate node has more than one child, we have several branches that we can traverse from it. When, instead, there is just one child, those two nodes begin to resemble a linked list. For example, take the first three nodes from the root of figure 6.11: they encode the prefix <code class="fm-code-in-text">“an”</code>, and the search of any other string starting with <code class="fm-code-in-text">‘a’</code> but not followed by an <code class="fm-code-in-text">‘n’</code> couldn’t get anywhere in the tree.</p>
+
+  <p class="body"><a id="pgfId-1005672"></a>In fact, it turns out that an intermediate node is a branching point if it has more than one child: it means that the trie stores at least two keys sharing the common prefix corresponding to that node. If that’s the case, the node carries valuable information that we can’t compress in any way.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F11.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043215"></a>Figure 6.11 Intermediate nodes in tries have one or more outgoing edges (assuming we implemented pruning after <code class="fm-code-in-text">delete</code><a id="marker-1043216"></a>). Do you see any difference?</p>
+
+  <p class="body"><a id="pgfId-1005715"></a>Key nodes also store information, regardless of the number of children they have. They tell us that the path to reach them composes a string that is stored in the trie.</p>
+
+  <p class="body"><a id="pgfId-1005728"></a>If, however, an intermediate node stores no key and only has one child, then it carries no relevant information; it’s only a forced step in the path.</p>
+
+  <p class="body"><a id="pgfId-1005744"></a><i class="calibre17">Radix tries</i> (aka <i class="calibre17">radix trees</i>, aka <i class="calibre17">Patricia trees</i><a id="marker-1010505"></a><a href="#pgfId-1011214"><sup class="footnotenumber">18</sup></a>) are based on the idea that we can somehow compress the path that leads to this kind of nodes, that are called <i class="calibre17">pass-through nodes</i><a id="marker-1010509"></a>.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F12.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043258"></a>Figure 6.12 Path compression in tries, by merging together edges adjacent to pass-through nodes. Notice that edges in radix tries are labeled with strings, not just characters.</p>
+
+  <p class="body"><a id="pgfId-1005766"></a>How? Figure 6.12 gives a hint about the process to compress these paths. Every time a path has a pass-through node, we can squash the section of the path hinging on these nodes into a single edge, which will be labeled with the string made concatenating the labels of the original edges.</p>
+
+  <p class="body"><a id="pgfId-1005779"></a>How much can we save with this change? Let’s look at the two trees in figure 6.12 to get an idea.</p>
+
+  <p class="body"><a id="pgfId-1005814"></a>The original trie has 9 nodes and 8 edges, and with the assumptions made in section 6.2.1, with a 4-byte overhead per node, this means 9 * 4 + 8 * 9 = 108 bytes.</p>
+
+  <p class="body"><a id="pgfId-1005825"></a>The compressed trie on the right has 6 nodes and 5 edges, but in this case each edge carries a string, not just a character; however, we can simplify the operation by accounting for edge references and string labels separately. This way, we would still count 9 bytes per edge (because we would include the string terminator byte in the edge cost), but we could add the sum of string lengths as a third term in the final expression; the total number of bytes needed is given by 6 * 4 + 5 * 9 + 8 * 1 = 77 bytes.</p>
+
+  <p class="body"><a id="pgfId-1005838"></a>In other words, for this simple trie, the compressed version requires 30% less memory.</p>
+
+  <h3 class="fm-head2" id="heading_id_16"><a id="pgfId-1005847"></a>6.3.1 Nodes and edges</h3>
+
+  <p class="body"><a id="pgfId-1005861"></a>All <a id="marker-1010513"></a><a id="marker-1010517"></a>the operations that we have described for tries can be similarly implemented for radix trees, but instead of edges labeled by chars, we need to store and follow edges labeled by strings.</p>
+
+  <p class="body"><a id="pgfId-1005875"></a>While at a high level the logic of the methods is almost the same as for trie, to check which branch we should traverse, we can’t just check the next character in the key, because edges could be labeled with a substring that matches more than one character of our argument <code class="fm-code-in-text">s</code>.</p>
+
+  <p class="body"><a id="pgfId-1005892"></a>One important property in these trees is that no two outgoing edges of the same node share a common prefix. This is crucial and allows us to store and check edges more efficiently.</p>
+
+  <p class="body"><a id="pgfId-1005901"></a>A first solution is keeping edges in sorted order and using binary search to look for a link that starts with the next character <code class="fm-code-in-text">c</code> in the key. Because there can’t be two edges starting with <code class="fm-code-in-text">c</code>, if we find one, we can compare the rest of the characters in its label to the next characters in the string. Moreover, binary search allows us to find this edge in logarithmic time in the number of edges, and because there can’t be more than <code class="fm-code-in-text">k=|∑|</code> edges per node (because there can be at most one starting with each character in our alphabet <code class="fm-code-in-text">∑</code>), we know that the worst case running time for performing binary search and finding a candidate edge is <code class="fm-code-in-text">O(log(k))</code>.</p>
+
+  <p class="body"><a id="pgfId-1005932"></a>Because <code class="fm-code-in-text">k</code> is a constant that doesn’t depend either on the number of keys stored in the trie or on the length of the words searched/inserted/etc., we can consider <code class="fm-code-in-text">O(log(k))=O(1)</code> as far as asymptotic analysis is concerned. Moreover, no extra space<a href="#pgfId-1011229"><sup class="footnotenumber">19</sup></a> is required to store edges with this solution.</p>
+
+  <p class="body"><a id="pgfId-1005951"></a>This solution is illustrated in figure 6.13, where we also show how binary search works to find the possible edge matching.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F13.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043303"></a>Figure 6.13 An example of a radix trie node with edges stored as in sorted array. (Left) A failed binary search. (Right) A successful search. Comparisons are performed only on the first character of each string: in the successful search, though, the edge’s label is a prefix of the searched string.</p>
+
+  <p class="body"><a id="pgfId-1005990"></a>Notice that the match between the string searched and an edge’s label doesn’t have (and usually isn’t) full; we’ll see in a moment what this means for our algorithms and how to handle these situations.</p>
+
+  <p class="body"><a id="pgfId-1005999"></a>Of course, using sorted arrays, as we discussed in chapter 4 and appendix C, means logarithmic search, but linear (translated: slow!) insertion. Although the number of elements can be considered a constant, in asymptotic analysis, from a practical point of view this implementation can significantly slow down insertion of new keys in large tries.</p>
+
+  <p class="body"><a id="pgfId-1006012"></a>The alternative solutions to implement this dictionary for edges are the usual: balanced search trees, which would guarantee logarithm search <i class="calibre17">and</i> insertion, or hash tables. The latter is illustrated in figure 6.14. We can keep a dictionary whose keys are characters and whose values are the full string labels of the node’s edges, together with a reference to the children linked by the edge. This solution requires <code class="fm-code-in-text">O(k)</code> additional space for a node with <code class="fm-code-in-text">k</code> children, and worst-case it will require <code class="fm-code-in-text">O(|∑|)</code> extra space per node.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F14.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043345"></a>Figure 6.14 An example of a node where edges to children are stored in a dictionary. Dictionary's keys are characters, the first letter of each label, while values contain the full labels and the references to the destination node of the edge. The figure shows a simplification of the same searches in figure 6.13. As before, comparisons are based on the first character of the searched strings.</p>
+
+  <p class="body"><a id="pgfId-1006055"></a>Despite requiring more space and a little bookkeeping on insertion and deletion to update the hash table, this solution allows amortized constant-time lookup when searching the path for a key.</p>
+
+  <p class="body"><a id="pgfId-1006064"></a>Independently of the implementation, the first step will be comparing the first character of the input string to the first character of the edges’ label.</p>
+
+  <p class="body"><a id="pgfId-1006073"></a>Overall, we have four possible cases, illustrated in figure 6.15:</p>
+
+  <ol class="calibre18">
+    <li class="fm-list-numbered">
+      <p class="list"><a class="calibre14" id="pgfId-1006084"></a>The string <code class="fm-code-in-text">s<sub class="calibre33">E</sub></code> labeling an edge perfectly matches a substring of <code class="fm-code-in-text">s</code>, the input the string. This means <code class="fm-code-in-text">s</code> starts with <code class="fm-code-in-text">s<sub class="calibre33">E</sub></code>, so we can break it up as <code class="fm-code-in-text">s=s<sub class="calibre33">E</sub>+s’</code>. In this case, we can traverse the edge to the children, and recurse on the input string <code class="fm-code-in-text">s’</code>.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1006114"></a>There is an edge starting with the first character in <code class="fm-code-in-text">s</code>, but <code class="fm-code-in-text">s<sub class="calibre33">E</sub></code> is not a prefix of <code class="fm-code-in-text">s</code>; however, they must have a common prefix <code class="fm-code-in-text">s<sub class="calibre33">P</sub></code> (at least one character long). The action here depends on the operation we are running. For search, it’s a failure because it means there isn’t a path to the searched key. For insert, as we’ll see, it means we have to decompress that edge, breaking down <code class="fm-code-in-text">s<sub class="calibre33">E</sub></code>.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1006153"></a>The input string <code class="fm-code-in-text">s</code> is a prefix of the edge’s label <code class="fm-code-in-text">s<sub class="calibre33">E</sub></code>. This is a special case of point #2 and can be handled similarly.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1006173"></a>Finally, if we don’t find a match for the first character, then we are sure we can’t traverse the trie any longer.</p>
+    </li>
+  </ol>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F15.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043391"></a>Figure 6.15 Possible cases comparing a search string to a node's links. (1) An edge’s label completely matches part of the string. (2) An edge’s label and the search string have a common prefix that is shorter than both strings. (3) The search string is a prefix of one of the edge’s labels. (4) The search string has no common prefix with any of the edges.</p>
+
+  <p class="body"><a id="pgfId-1006206"></a>Now that we have clarified the high-level structure of radix trie’s nodes, let’s delve into the algorithms. Keeping in mind the considerations we just discussed, their behavior will flow naturally from trie’s methods.</p>
+
+  <p class="body"><a id="pgfId-1006221"></a>Listing 6.12 shows the pseudo-code for the <code class="fm-code-in-text">RadixTrie</code><a id="marker-1010521"></a> and <code class="fm-code-in-text">RTNode</code> classes<a id="marker-1010525"></a>, used to model this new data structure. We also added a class to model edges, to make code cleaner. I wonder if you have you noticed a tiny, but meaningful, detail: we don’t need to define a fixed alphabet beforehand, like for tries!</p>
+
+  <p class="body"><a id="pgfId-1006239"></a>You can also take a look at a full implementation on the book’s <span class="fm-hyperlink">repo</span> on <a id="marker-1010529"></a><a id="marker-1010533"></a>GitHub.<a href="#pgfId-1011242"><sup class="footnotenumber">20</sup></a></p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020616"></a>Listing 6.12 Class <code class="fm-code-in-text">RadixTrie</code></p>
+  <pre class="programlisting">class RTEdge
+  <b class="calibre21">#type</b> RTNode
+  destination
+ 
+  <b class="calibre21">#type</b> string
+  label
+ 
+<b class="calibre21">class</b> RTNode
+  <b class="calibre21">#type</b> boolean
+  keyNode
+  
+  <b class="calibre21">#type</b> HashMap&lt;Char, RTEdge&gt;
+  children
+ 
+  <b class="calibre21">function</b> RTNode(storesKey)
+    children ← <b class="calibre21">new</b> HashMap()
+    <b class="calibre21">this</b>.keyNode ← storesKey
+ 
+<b class="calibre21">class</b> RadixTrie
+  <b class="calibre21">#type</b> RTNode
+  root
+ 
+  <b class="calibre21">function</b> RadixTrie()
+    root ← <b class="calibre21">new</b> RTNode(<b class="calibre21">false</b>)</pre>
+
+  <h3 class="fm-head2" id="heading_id_17"><a id="pgfId-1006523"></a>6.3.2 Search</h3>
+
+  <p class="body"><a id="pgfId-1006535"></a>The <a id="marker-1010537"></a><a id="marker-1010541"></a><a id="marker-1010545"></a><code class="fm-code-in-text">search</code> method, shown in listing 6.13, is almost identical to the trie’s counterpart; the only difference is the way we get the next edge to traverse. Because we are going to reuse this operation over and again for the other methods, we extract its logic into a utility method, shown in listing 6.14.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020662"></a>Listing 6.13 Method <code class="fm-code-in-text">search</code> for radix tries</p>
+  <pre class="programlisting"><b class="calibre21">function</b> search(node, s)                                                 <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> s == “” <b class="calibre21">then</b>                                                        <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return</b> node.keyNode                                                  <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">else</b>
+    (edge, commonPrefix, sSuffix, edgeSuffix) ← matchEdge(node, s)       <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">if</b> edge != null and edgeSuffix == “” <b class="calibre21">then</b>                            <span class="fm-combinumeral">❺</span>
+      <b class="calibre21">return</b> search(node.children[commonPrefix].destination, sSuffix) 
+    <b class="calibre21">else</b>
+      <b class="calibre21">return false</b>                                                       <span class="fm-combinumeral">❻</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036881"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">search</code> takes an <code class="fm-code-in-text2">RTNode</code><a id="marker-1036885"></a> and the string key <code class="fm-code-in-text2">s</code> to be searched. It returns <code class="fm-code-in-text2">true</code><a id="marker-1036887"></a> if <code class="fm-code-in-text2">s</code> is stored in the trie, or <code class="fm-code-in-text2">false</code><a id="marker-1036888"></a> otherwise. We assume that <code class="fm-code-in-text2">node</code><a id="marker-1036889"></a> is never <code class="fm-code-in-text2">null</code>: this is a reasonable assumption if this method is implemented as a private method, internally called by the <code class="fm-code-in-text2">RadixTrie</code>’s<a id="marker-1036890"></a> API <code class="fm-code-in-text2">search</code> method.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036910"></a><span class="fm-combinumeral">❷</span> Checks if the string searched is empty. If it is, since this method is implemented using recursion, we know it has traversed the whole path in the tree and we reached the target node.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036927"></a><span class="fm-combinumeral">❸</span> We are at the target node for the target key: the tree stores it only if current node is a key node.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036944"></a><span class="fm-combinumeral">❹</span> Since <code class="fm-code-in-text2">s</code> is not the empty string, we can check if there is an edge matching it, even partially.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036961"></a><span class="fm-combinumeral">❺</span> If there is an edge sharing a common prefix with <code class="fm-code-in-text2">s</code>, and the whole edge’s label is a prefix to <code class="fm-code-in-text2">s</code>, then we recursively search the remaining characters of <code class="fm-code-in-text2">s</code> (stored in <code class="fm-code-in-text2">sSuffix</code><a id="marker-1036966"></a>) into the subtree linked by the edge. This is case <code class="fm-code-in-text2">1</code> of the four possible matches in figure 6.15.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036979"></a><span class="fm-combinumeral">❻</span> Otherwise, we are in one of cases #2–4. The key is certainly not stored in the tree, and we can return.</p>
+
+  <p class="body"><a id="pgfId-1006802"></a>This method just looks for an edge with a common prefix with the target string <code class="fm-code-in-text">s</code>, if any. Remember that all edges can’t have any prefix in common, so there can be at most one starting with the same character as <code class="fm-code-in-text">s</code>.</p>
+
+  <p class="body"><a id="pgfId-1006819"></a>It returns some useful information that the caller can use to decide the action to take: the longest common prefix between searched string and edge’s label, and the suffixes of these two strings (with respect to their common prefix).</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020690"></a>Listing 6.14 Method <code class="fm-code-in-text">matchEdge</code> for Radix Tries</p>
+  <pre class="programlisting"><b class="calibre21">function</b> matchEdge(node, s)                                            <span class="fm-combinumeral">❶</span>
+  c ← s[0]                                                             <span class="fm-combinumeral">❷</span>
+  <b class="calibre21">if</b> node.children[c] == <b class="calibre21">null then</b>                                     <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return</b> (null, “”, s, null)                                         <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">else</b>
+    edge ← node.children[c]                                            <span class="fm-combinumeral">❺</span>
+    prefix, suffixS, suffixEdge ← longestCommonPrefix(s, edge.label)   <span class="fm-combinumeral">❻</span>
+    <b class="calibre21">return</b> (edge, prefix, suffixS, suffixEdge)                         <span class="fm-combinumeral">❼</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036286"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">matchEdge</code><a id="marker-1036297"></a> takes an <code class="fm-code-in-text2">RTNode</code><a id="marker-1036298"></a> and the string key <code class="fm-code-in-text2">s</code> to be matched. It returns a tuple with the edge matched, if any, the common prefix between <code class="fm-code-in-text2">s</code> and the edge’s label, and the suffixes of those strings. We assume that <code class="fm-code-in-text2">node</code><a id="marker-1036300"></a> is never <code class="fm-code-in-text2">null</code> and that <code class="fm-code-in-text2">s</code> is not empty.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036320"></a><span class="fm-combinumeral">❷</span> Since <code class="fm-code-in-text2">s</code> is not the empty string, it will certainly have a first character <code class="fm-code-in-text2">c</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036337"></a><span class="fm-combinumeral">❸</span> Looks up in the hash table for <code class="fm-code-in-text2">children</code> if there is any edge whose label starts with <code class="fm-code-in-text2">c</code></p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036354"></a><span class="fm-combinumeral">❹</span> If there isn’t any, it means there is no edge with a common prefix to <code class="fm-code-in-text2">s</code>. Then, it returns <code class="fm-code-in-text2">null</code> for the edge and an empty string for the common prefix, and consequently computes the suffixes.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036371"></a><span class="fm-combinumeral">❺</span> Retrieves the outgoing edge in node starting with character <code class="fm-code-in-text2">c</code></p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036388"></a><span class="fm-combinumeral">❻</span> Computes the longest common prefix between <code class="fm-code-in-text2">s</code>, the edge’s label and the remaining suffixes</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1036405"></a><span class="fm-combinumeral">❼</span> Returns the computed values</p>
+
+  <p class="body"><a id="pgfId-1007070"></a>At line #6 of listing 6.13, we use this information to distinguish between the four match cases illustrated in figure 6.15. The only positive case for <code class="fm-code-in-text">search</code> is the first one, so we need to check that there is an edge whose label is a prefix of <code class="fm-code-in-text">s</code>.<a id="marker-1031358"></a></p>
+
+  <p class="body"><a id="pgfId-1007085"></a>The implementation of the utility method is straightforward, assuming we have a way to extract the longest common prefix of two strings. This can be done by comparing the characters at the same indices in the two strings, one by one, until we find a mismatch.</p>
+
+  <p class="body"><a id="pgfId-1007098"></a>We assume that this method is given, and it also returns the suffixes of the two strings, meaning two strings made of the remaining characters in each of the input strings, once stripped of their common prefix.</p>
+
+  <p class="body"><a id="pgfId-1007107"></a>Figure 6.16 shows an example of the search method on the radix tree resulting from compressing the trie in <a id="marker-1010585"></a><a id="marker-1010589"></a><a id="marker-1010593"></a>figure 6.3.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F16.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043433"></a>Figure 6.16 Unsuccessful search for the string <code class="fm-code-in-text">“antiquity”</code> in the radix tree corresponding to the trie in figure 6.3. The first two diagrams show the initial steps in the search; then we fast forward to the final step.</p>
+
+  <h3 class="fm-head2" id="heading_id_18"><a id="pgfId-1007141"></a>6.3.3 Insert</h3>
+
+  <p class="body"><a id="pgfId-1007153"></a>As <a id="marker-1010597"></a><a id="marker-1010601"></a><a id="marker-1010605"></a>mentioned, cases #2 and #3 are the most complicated to handle, especially for method <code class="fm-code-in-text">insert</code><a id="marker-1010609"></a>. When we find a partial match between a key and an edge, we will need to break the edge’s label down, split the edge into two new edges, and add a new node in the middle, corresponding to the longest common prefix <code class="fm-code-in-text">s<sub class="calibre33">P</sub></code>.</p>
+
+  <p class="body"><a id="pgfId-1007181"></a>This is illustrated in figure 6.17. Once the common prefix has been found, we need to add a new node in order to split the edge partially matching the string to insert, and then we can add a new branch to this new node.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F17.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043475"></a>Figure 6.17 Handling case #2 in edge matching while performing an insertion. In this example, we add the word <code class="fm-code-in-text">“annual”</code> to a node containing an edge labeled with <code class="fm-code-in-text">“anti”</code>. To do so, we insert a bridge node <code class="fm-code-in-text">B</code>, linked to <code class="fm-code-in-text">N</code> by an edge labeled with the common prefix <code class="fm-code-in-text">“an”</code>, and then two new edges leaving <code class="fm-code-in-text">B</code>.</p>
+
+  <p class="body"><a id="pgfId-1007225"></a>This node we add is called a <i class="calibre17">bridge node</i><a id="marker-1010613"></a>, because it will be a bridge between the existing node corresponding to the common prefix of the two strings, and the paths leading to the final nodes for these strings. Bridge nodes are, obviously, bifurcation points, where the path from root branches out.</p>
+
+  <p class="body"><a id="pgfId-1007237"></a>To better understand this operation, it might help you to imagine that we decompress the edge to the child into a path, going back to the trie representation with one char per link. Then we traverse this path until we get to the end of the common prefix (to, say, a node B), we add a new branch as a child of B, and finally we compress again the two sub-paths on the two sides of B.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020718"></a>Listing 6.15 Method <code class="fm-code-in-text">insert</code> for radix tries</p>
+  <pre class="programlisting"><b class="calibre21">function</b> insert(node, s)                                                <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> s == “” <b class="calibre21">then</b>                                                       <span class="fm-combinumeral">❷</span>
+    node.keyNode ← <b class="calibre21">true</b>                                                 <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">else</b>
+    (edge, commonPrefix, sSuffix, edgeSuffix) ← matchEdge(node, s)      <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">if</b> edge == <b class="calibre21">null then</b>                                                <span class="fm-combinumeral">❺</span>
+      <b class="calibre21">this</b>.children[s[0]] ← <b class="calibre21">new</b> RTEdge(s, new Node(true))   
+    elif edgeSuffix == “” <b class="calibre21">then</b>                                          <span class="fm-combinumeral">❻</span>
+      insert(edge.destination, sSuffix)
+    <b class="calibre21">else</b>
+      bridge ← <b class="calibre21">new</b> Node(false)                                          <span class="fm-combinumeral">❼</span>
+      <b class="calibre21">this</b>.children[s[0]] ← <b class="calibre21">new</b> RTEdge(commonPrefix, bridge)            <span class="fm-combinumeral">❽</span>
+      bridge.children[edgeSuffix[0]] ← 
+          new RTEdge(edgeSuffix, edge.destination)                      <span class="fm-combinumeral">❾</span>
+      insert(bridge, sSuffix)                                           <span class="fm-combinumeral">❿</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034885"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">insert</code><a id="marker-1034889"></a> takes a <code class="fm-code-in-text2">RTNode</code> and the string key <code class="fm-code-in-text2">s</code> to be inserted. It returns nothing but has side effects on the trie. Again, we assume that <code class="fm-code-in-text2">node</code><a id="marker-1034891"></a> is never <code class="fm-code-in-text2">null</code>. This is a reasonable assumption if this method is implemented as a private method, internally called by the trie’s API <code class="fm-code-in-text2">insert</code> method<a id="marker-1034892"></a>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034912"></a><span class="fm-combinumeral">❷</span> Checks if the string searched is empty. If it is, since this method is implemented using recursion, we know it has traversed the whole path in the trie.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034929"></a><span class="fm-combinumeral">❸</span> We are at the target node for the target key. We set the current node to a key node to ensure it will store <code class="fm-code-in-text2">s</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034946"></a><span class="fm-combinumeral">❹</span> Since <code class="fm-code-in-text2">s</code> is not the empty string, we can see if there is an edge matching it, even partially.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034963"></a><span class="fm-combinumeral">❺</span> Match case #4 (figure 6.15). If there isn’t any edge sharing a common prefix, not even the first character, with <code class="fm-code-in-text2">s</code>, then we need to add a new edge, with label <code class="fm-code-in-text2">s</code>, to a new key node.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034980"></a><span class="fm-combinumeral">❻</span> Match case #1. There is an edge whose label is a prefix to <code class="fm-code-in-text2">s</code>; we just need to traverse the edge.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1034997"></a><span class="fm-combinumeral">❼</span> Otherwise, we are in match case #2 or #3. There is a common prefix between the edge’s label and <code class="fm-code-in-text2">s</code>, but there are also characters in the edge’s label not matching <code class="fm-code-in-text2">s</code>. Therefore, we need to break down the edge and create a bridge node.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035016"></a><span class="fm-combinumeral">❽</span> Updates the outgoing edge for this node, with an edge pointing to the bridge node, and labeled with the common prefix</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035044"></a><span class="fm-combinumeral">❾</span> Adds an edge from the bridge node to the former children of the current node: the label will be the original edge’s label, stripped of <code class="fm-code-in-text2">commonPrefix</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1035061"></a><span class="fm-combinumeral">❿</span> Finally, we still need to recursively add the remaining part of the key to the bridge node. If <code class="fm-code-in-text2">sSuffix</code> is the empty string, this corresponds to match case #3, otherwise to match case #2.</p>
+
+  <p class="body"><a id="pgfId-1007620"></a>Listing 6.15 describes the pseudo-code for the <code class="fm-code-in-text">insert</code> method, and figures 6.18 and 6.19 show two examples of how this method works on a simplified tree.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F18.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043522"></a>Figure 6.18 An example of method <code class="fm-code-in-text">insert</code><a id="marker-1043521"></a></p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F19.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043558"></a>Figure 6.19 Another example of method <code class="fm-code-in-text">insert</code><a id="marker-1043557"></a> with path decompression explained step by step</p>
+
+  <p class="body"><a id="pgfId-1007653"></a>The method follows the same high-level logic as the trie’s version we saw in listing 6.5. We traverse the tree as far as we can (following the longest path covering a prefix of the string to insert), and then add a new branch for the new key.</p>
+
+  <p class="body"><a id="pgfId-1007692"></a>Traversing t<a id="Current"></a>he tree becomes more complicated because at each node we need to distinguish between the four different possible results of the edge label matching, and this complexity is reflected in the length of the method. Moreover, when we bump into case #2 or #3, we need to break down an edge and add a bridge node. Adding a new branch, however, becomes easier, because we just need to add a new edge and a single <a id="marker-1030682"></a><a id="marker-1030683"></a><a id="marker-1030684"></a>node.</p>
+
+  <h3 class="fm-head2" id="heading_id_19"><a id="pgfId-1007712"></a>6.3.4 Remove</h3>
+
+  <p class="body"><a id="pgfId-1007724"></a>Like <a id="marker-1030686"></a><a id="marker-1030687"></a><a id="marker-1030688"></a>for search, the only changes to the <code class="fm-code-in-text">remove</code> method, with respect to tries, revolve around the extraction of the common prefix. This is not surprising, because deleting a key can be thought of as a successful search followed by a clean-up of the deleted node.</p>
+
+  <p class="body"><a id="pgfId-1007748"></a>With <code class="fm-code-in-text">remove</code>, we don’t have to worry about splitting edges or adding bridge nodes. Because we need to find the key first, there must be a path perfectly matching the key to be deleted, in order to be able to complete the operation. We might, however, have the chance to compact the final part of the deleted path, because turning an existing key node into an intermediate node can change the tree structure, introducing a pass-through node (see 6.3.1).</p>
+
+  <p class="body"><a id="pgfId-1007765"></a>Figure 6.20 shows an example of <code class="fm-code-in-text">remove</code> in action on a radix tree.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F20.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043602"></a>Figure 6.20 Removing the word “atom” from an example radix trie. (1) Find the node at the end of the path for the key to delete. The path must entirely match the key. (2) Unmark the node, making it an intermediate node. If the node is a leaf, it will create a dangling branch. (3) Remove the dangling branch. If the parent of the node removed had only two children, it now became a pass-through node. (4) Compress the path by removing the pass-through node and merging edges.</p>
+
+  <p class="body"><a id="pgfId-1007804"></a>Besides that, we might have to perform the usual pruning when deleting a key in a leaf. The difference with tries, in this case, is that we will only have to remove a single edge in radix trees.</p>
+
+  <p class="body"><a id="pgfId-1007817"></a>The example in figure 6.20 shows both cases where we have to correct a node’s parent. We first remove the key from a leaf, and then, once the node is removed from the tree, its parent becomes a pass-through node, and hence can be removed, allowing us to compress the path from its parent to its only <a id="marker-1010661"></a><a id="marker-1010665"></a><a id="marker-1010669"></a>child.</p>
+
+  <p class="body"><a id="pgfId-1007836"></a>Listing 6.16 shows the pseudo-code for this method, where we use two utility functions.</p>
+
+  <p class="body"><a id="pgfId-1007851"></a><code class="fm-code-in-text">isPassThrough</code><a id="marker-1010673"></a> checks if a node is a pass-through node. This only happens when a node is not a key node, it has only one outgoing edge, and even its parent only has one outgoing edge (hence we need to pass the parent too). Implementation is left as an exercise.</p>
+
+  <p class="body"><a id="pgfId-1007869"></a>Since a pass-through node only has one outgoing edge, its children field will have exactly one entry; <code class="fm-code-in-text">getPassThroughEdge</code><a id="marker-1010677"></a> is a wrapper for retrieving this entry.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020748"></a>Listing 6.16 Method <code class="fm-code-in-text">remove</code> for radix tries</p>
+  <pre class="programlisting"><b class="calibre21">function</b> remove(node, s)                                                  <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> s == “” <b class="calibre21">then</b>                                                         <span class="fm-combinumeral">❷</span>
+    node.keyNode ← <b class="calibre21">false</b>                                                  <span class="fm-combinumeral">❸</span>
+    <b class="calibre21">return</b> (<b class="calibre21">true</b>, node.children == 0)                                     <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">else</b>
+    (edge, commonPrefix, sSuffix, edgeSuffix) ← matchEdge(node, s)        <span class="fm-combinumeral">❺</span>
+    <b class="calibre21">if</b> edge != <b class="calibre21">null and</b> edgeSuffix == “” <b class="calibre21">then</b>                             <span class="fm-combinumeral">❻</span>
+      dest ← edge.destination                                             <span class="fm-combinumeral">❼</span>
+      (deleted, shouldPrune) ← remove(dest, sSuffix)                      <span class="fm-combinumeral">❽</span>
+      <b class="calibre21">if</b> deleted then
+        <b class="calibre21">if</b> shouldPrune <b class="calibre21">then</b>                                               <span class="fm-combinumeral">❾</span>
+          node.children[s[0]] ← <b class="calibre21">null</b>
+        <b class="calibre21">elsif</b> isPassThrough(dest, node) <b class="calibre21">then</b>                              <span class="fm-combinumeral">❿</span>
+          nextEdge ← getPassThroughEdge(dest)                             <span class="fm-combinumeral">⓫</span>
+          <b class="calibre21">this</b>.children[s[0]] ← 
+            new RTEdge(nextEdge.destination, edge.label+nextEdge.label)   <span class="fm-combinumeral">⓬</span>
+      <b class="calibre21">return</b> (deleted, false)                                             <span class="fm-combinumeral">⓭</span>
+    <b class="calibre21">else</b>
+      <b class="calibre21">return</b> (<b class="calibre21">false</b>, false)                                               <span class="fm-combinumeral">⓮</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033632"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">remove</code><a id="marker-1033636"></a> takes a node and the string to delete from the sub-tree rooted at node<a id="marker-1033638"></a>. It returns a couple of <code class="fm-code-in-text2">Booleans</code>; the first one tells the caller if the key has been successfully deleted, and the second one is <code class="fm-code-in-text2">true</code> if the last link followed becames a dangling empty branch and should be pruned.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033658"></a><span class="fm-combinumeral">❷</span> Checks if the string searched is empty. If it is, we traversed the whole path to the final node for the string to delete.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033675"></a><span class="fm-combinumeral">❸</span> We make sure that the current node is marked as an intermediate node.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033692"></a><span class="fm-combinumeral">❹</span> Search is over, so returns to the caller, reporting that the operation was successful and if this node is to be pruned (in case it’s a leaf).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033709"></a><span class="fm-combinumeral">❺</span> Since <code class="fm-code-in-text2">s</code> is not the empty string, we can check if there is an edge matching it, even partially.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033726"></a><span class="fm-combinumeral">❻</span> Match case #1 (figure 6.15). There is an outgoing edge in <code class="fm-code-in-text2">node</code> whose label is a prefix of the search string, so we can traverse it.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033743"></a><span class="fm-combinumeral">❼</span> Saves in a temporary variable the node at the end of the edge</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033760"></a><span class="fm-combinumeral">❽</span> Recursively calls <code class="fm-code-in-text2">remove</code> on the remaining substring and saves the result</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033780"></a><span class="fm-combinumeral">❾</span> If the key was removed, and the next node in the path was a leaf that can now be pruned, we remove the edge to the former leaf.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033797"></a><span class="fm-combinumeral">❿</span> If, instead, the key was deleted and the next node is now a pass-through node, we can compress the path.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033814"></a><span class="fm-combinumeral">⓫</span> If node <code class="fm-code-in-text2">dest</code> is a pass-through node, it will only have one outgoing edge; we can retrieve it here.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033831"></a><span class="fm-combinumeral">⓬</span> <code class="fm-code-in-text2">dest</code><a id="marker-1033835"></a> is a pass-through node if and only if the node also has a single outgoing edge. To compress the path, we can short-circuit the path and compress it into a single node. With this implementation, if a path has several pass-through nodes, it will be compressed one node at the time.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033849"></a><span class="fm-combinumeral">⓭</span> Returns, letting caller know if we deleted the key. Since for radix tries there will only be dangling nodes, we know that pruning will certainly not be needed in this case.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1033873"></a><span class="fm-combinumeral">⓮</span> Match cases #2 to #4: the searched key is not in the tree, so it can’t be deleted</p>
+
+  <h3 class="fm-head2" id="heading_id_20"><a id="pgfId-1008329"></a>6.3.5 Longest common prefix</h3>
+
+  <p class="body"><a id="pgfId-1008345"></a>Porting <a id="marker-1010693"></a><a id="marker-1010697"></a><a id="marker-1010701"></a>this method from the trie’s version is straightforward. It’s just a matter of slightly modifying the search algorithm to take into account the different way we do edge matching. Listing 6.17 describes the pseudo-code for the radix trie’s <a id="marker-1010705"></a><a id="marker-1010709"></a><a id="marker-1010713"></a>version.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020776"></a>Listing 6.17 Method <code class="fm-code-in-text">longestPrefix</code> for radix trie</p>
+  <pre class="programlisting"><b class="calibre21">function</b> longestPrefix(node, s, prefix)                                    <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> s == “” <b class="calibre21">then</b>                                                          <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">if</b> node.keyNode <b class="calibre21">then</b>                                                   <span class="fm-combinumeral">❸</span>
+      <b class="calibre21">return</b> prefix
+    <b class="calibre21">else</b>
+      <b class="calibre21">return null</b>                                                          <span class="fm-combinumeral">❹</span>
+  (edge, commonPrefix, sSuffix, edgeSuffix) ← matchEdge(node, s)           <span class="fm-combinumeral">❺</span>
+  result ← <b class="calibre21">null</b>                                                            <span class="fm-combinumeral">❻</span>
+  <b class="calibre21">if</b> edge != null and edgeSuffix == “”  <b class="calibre21">then</b>                               <span class="fm-combinumeral">❼</span>
+    result ← longestPrefix(edge.destination, sSuffix, prefix+commonPrefix)  
+  <b class="calibre21">if</b> result != <b class="calibre21">null then</b>                                                   <span class="fm-combinumeral">❽</span>
+    <b class="calibre21">return</b> result
+  <b class="calibre21">elsif</b> node.keyNode <b class="calibre21">then</b>                                                  <span class="fm-combinumeral">❾</span>
+    <b class="calibre21">return</b> prefix
+  <b class="calibre21">else</b>
+    <b class="calibre21">return null</b>                                                            <span class="fm-combinumeral">❿</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032768"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">longestPrefix</code><a id="marker-1032772"></a> takes a <code class="fm-code-in-text2">RTNode</code>, the string key <code class="fm-code-in-text2">s</code> to be searched, and a string with the path from root to <code class="fm-code-in-text2">node</code><a id="marker-1032774"></a>; it returns the longest prefix of <code class="fm-code-in-text2">s</code> stored in the trie.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032794"></a><span class="fm-combinumeral">❷</span> Checks if the string searched is empty. If it is, since this method is implemented using recursion, we know it has traversed the whole path in the trie.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032811"></a><span class="fm-combinumeral">❸</span> We are at the final node of the path for the searched string. If it’s a key node<a id="marker-1032816"></a>, then the string itself (by now accumulated into prefix<a id="marker-1032817"></a>) is its longest prefix in the trie.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032830"></a><span class="fm-combinumeral">❹</span> Otherwise, we need to return <code class="fm-code-in-text2">null</code> to let the caller know we haven’t found any key yet.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032847"></a><span class="fm-combinumeral">❺</span> Since <code class="fm-code-in-text2">s</code> is not the empty string, we can check if there is an edge matching it, even partially.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032864"></a><span class="fm-combinumeral">❻</span> Initialize this temporary variable to <code class="fm-code-in-text2">null</code>. In case we can traverse another edge, it will hold the result of the recursive call.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032881"></a><span class="fm-combinumeral">❼</span> Match case #1 (figure 6.15). There is an edge whose label is a prefix to <code class="fm-code-in-text2">s</code>. We just need to traverse the edge and store the result. In all other cases, like for search<a id="marker-1032886"></a>, we simply know that we can’t get anywhere.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032899"></a><span class="fm-combinumeral">❽</span> Now checks the result of the (possible) recursive call. If it found something, just returns it.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032916"></a><span class="fm-combinumeral">❾</span> Or, if this is a key node, the longest possible prefix in the trie could be the path to current node (accumulated in prefix).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032933"></a><span class="fm-combinumeral">❿</span> Otherwise, we know that we haven’t find any result in this subtree and return <code class="fm-code-in-text2">null</code> to let the caller know.</p>
+
+  <h3 class="fm-head2" id="heading_id_21"><a id="pgfId-1008750"></a>6.3.6 Keys starting with a prefix</h3>
+
+  <p class="body"><a id="pgfId-1008766"></a>For <a id="marker-1010737"></a><a id="marker-1010741"></a><a id="marker-1010745"></a>tries, this method leverages <code class="fm-code-in-text">search</code> to find the starting point of a full-fledged traversal, retrieving all keys in the subtree rooted at the prefix.</p>
+
+  <p class="body"><a id="pgfId-1008779"></a>Unfortunately for radix tries, the situation is a bit more complicated, because prefixes that are not stored in the tree can partially match edges. Take, for instance, the tree in figure 6.20, where prefixes such as <code class="fm-code-in-text">“a”</code> or <code class="fm-code-in-text">“anth”</code> are not stored in the tree. The latter doesn’t even have a node at the end of the corresponding path, but still the radix trie contains several words starting with those prefixes.</p>
+
+  <p class="body"><a id="pgfId-1008801"></a>If we were just looking for nodes that lie at the end of the path for those strings, we would miss all those legit results. We need, instead, to rewrite a special version of the search method for this operation, where we distinguish the edge match case #2, where we have a no-go, and case #3, where, instead, since the string fragment searched is a proper prefix of the last edge in the path, the subtree referenced by the edge will indeed contain strings that match the searched prefix. The difference between the two cases is illustrated in figure 6.21.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F21.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043644"></a>Figure 6.21 The difference in facing match cases #2 and #3 while looking for the node matching the shorter string including a prefix. (Left) When we face case #2, it means that the next edge doesn’t match all the characters in the string fragment left; therefore, in the corresponding trie, <code class="fm-code-in-text">searchNode(s)</code> would return <code class="fm-code-in-text">null</code>. (Right) With case #3, we have a full match of the string fragment that ends in the middle of an edge. In the corresponding trie, the search would return an intermediate node, in particular a pass-through node; therefore, since no keys are stored in pass-through nodes, we can equivalently start enumerating keys from the first non-pass-through among its descendants.</p>
+
+  <p class="body"><a id="pgfId-1008848"></a>Listing 6.18 illustrates this new method, called <code class="fm-code-in-text">searchNodeWithPrefix</code><a id="marker-1010753"></a>, to distinguish it from an exact match search. The API method <code class="fm-code-in-text">keysStartingWith</code><a id="marker-1010757"></a> and the utility method <code class="fm-code-in-text">allKeysInBranch</code><a id="marker-1010761"></a> are, instead, basically identical to the equivalent method in tries, so we leave its pseudo-code as a useful exercise for the reader.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1020804"></a>Listing 6.18 Method <code class="fm-code-in-text">searchNodeWithPrefix</code> for radix trie</p>
+  <pre class="programlisting"><b class="calibre21">function</b> <code class="fm-code-in-text2">searchNodeWithPrefix</code>(node, s)                           <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">if</b> s == “” <b class="calibre21">then</b>                                                   <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">return</b> node
+  (edge, commonPrefix, sSuffix, edgeSuffix) ← matchEdge(node, s)    <span class="fm-combinumeral">❸</span>
+  <b class="calibre21">if</b> edge == <b class="calibre21">null then</b>                                              <span class="fm-combinumeral">❹</span>
+    <b class="calibre21">return null</b>
+  <b class="calibre21">elsif</b> edgeSuffix == “”  <b class="calibre21">then</b>                                      <span class="fm-combinumeral">❺</span>
+    <b class="calibre21">return</b> <code class="fm-code-in-text2">searchNodeWithPrefix</code>(edge.destination, sSuffix)  
+  <b class="calibre21">elsif</b> sSuffix == <b class="calibre21">null then</b>                                        <span class="fm-combinumeral">❻</span>
+    <b class="calibre21">return</b> edge.destination
+  <b class="calibre21">else</b>
+    <b class="calibre21">return null</b>                                                     <span class="fm-combinumeral">❼</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032208"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">searchNodeWithPrefix</code><a id="marker-1032235"></a> takes an <code class="fm-code-in-text2">RTNode</code> and a string key <code class="fm-code-in-text2">s</code> to be searched; returns the root of the subtree containing all the keys stored that have <code class="fm-code-in-text2">s</code> as a prefix.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032249"></a><span class="fm-combinumeral">❷</span> Checks if the string searched is empty. If it is, since this method is implemented using recursion, we know it has traversed the whole path in the trie: this is the node exactly matching <code class="fm-code-in-text2">s</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032266"></a><span class="fm-combinumeral">❸</span> Because <code class="fm-code-in-text2">s</code> is not the empty string, we can check if there is an edge matching it, even partially.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032283"></a><span class="fm-combinumeral">❹</span> Match case #4 (figure 6.15). The searched prefix is not stored in the tree.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032300"></a><span class="fm-combinumeral">❺</span> Match case #1. There is an edge whose label is a prefix to <code class="fm-code-in-text2">s</code>. We just need to traverse the edge and recurse on the remaining characters in the string.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032317"></a><span class="fm-combinumeral">❻</span> Match case #3. Although there is no node storing a key at the end of the path for the searched prefix, there would be a pass-through node for it in the uncompressed trie. This means that all prefixes stored in the subtree rooted at <code class="fm-code-in-text2">node</code><a id="marker-1032322"></a> will start with <code class="fm-code-in-text2">s+edgeSuffix</code>, and those will be the only strings stored having <code class="fm-code-in-text2">s</code> as a prefix.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1032209"></a><span class="fm-combinumeral">❼</span> Match case #4. There is no path starting with <code class="fm-code-in-text2">s</code> in the (sub)trie rooted at <code class="fm-code-in-text2">node</code>.</p>
+
+  <p class="body"><a id="pgfId-1009176"></a>This concludes our rundown of the main methods for radix tries, and the discussion on data structures for efficient strings search. To the interested reader who would like to delve further into this subject, we suggest taking a look at suffix trees and suffix arrays, two interesting data structures that are fundamental to fields like bioinformatics, and that are unfortunately out of scope for <a id="marker-1010773"></a><a id="marker-1010777"></a><a id="marker-1010781"></a>this <a id="marker-1010785"></a><a id="marker-1010789"></a>chapter.</p>
+
+  <h2 class="fm-head" id="heading_id_22"><a id="pgfId-1009204"></a>6.4 Applications</h2>
+
+  <p class="body"><a id="pgfId-1009216"></a>Now <a id="marker-1010793"></a>that we know two concrete data structures for implementing the <i class="calibre17">ADT</i><a id="marker-1010797"></a> <code class="fm-code-in-text">StringContainer</code>, we can confidently look at applications where they make a difference.</p>
+
+  <p class="body"><a id="pgfId-1009232"></a>As is usual with data structures, the difference is not about new things that couldn’t be done without tries, but rather about doing some operations better or faster than with other DSs.</p>
+
+  <p class="body"><a id="pgfId-1009243"></a>This is particularly true for tries, as they were specifically designed to improve the running time of string-based queries. As one of the main uses for tries is to implement text-based dictionaries, the touchstone will often be hash tables.</p>
+
+  <h3 class="fm-head2" id="heading_id_23"><a id="pgfId-1009252"></a>6.4.1 Spell-checker</h3>
+
+  <p class="body"><a id="pgfId-1009267"></a>Time <a id="marker-1010801"></a><a id="marker-1010805"></a>to go back to our main example! We saw in chapter 4 that Bloom filters were used for the first versions of spell-checkers, but after a while they were replaced with more efficient alternatives, such as tries.</p>
+
+  <p class="body"><a id="pgfId-1009292"></a>The first step to build a spell-checker is, obviously, inserting all the keys from our dictionary (here meant as “English dictionary,” not the data structure!) in a trie.</p>
+
+  <p class="body"><a id="pgfId-1009303"></a>Then, using the trie for spell check when the feedback we want is just highlighting typos is simple. We just need to perform a search, and if it’s a miss, we have a typo.</p>
+
+  <p class="body"><a id="pgfId-1009318"></a>But suppose, instead, that we would like to also provide suggestions about how we could correct the typo—how can we do that with a trie?</p>
+
+  <p class="body"><a id="pgfId-1009327"></a>Let’s say that the word <code class="fm-code-in-text">w</code> we are checking has <code class="fm-code-in-text">m</code> characters, and we can accept suggestions differing by at most <code class="fm-code-in-text">k</code> characters from <code class="fm-code-in-text">w</code>: in other words, we want words whose <i class="calibre17">Levenshtein distance</i><a id="id_Hlk56081881"></a><a id="marker-1010809"></a> (also known as edit distance) is at most <code class="fm-code-in-text">k</code>.</p>
+
+  <p class="body"><a id="pgfId-1009353"></a>To find those words in a trie, we start traversing the tree from the root, and while traversing it we keep an array of <code class="fm-code-in-text">m</code> elements, where the <code class="fm-code-in-text">i</code>-th element of this array is the smallest edit distance necessary to match the key corresponding to the current node to the first <code class="fm-code-in-text">i</code> characters in our search string.</p>
+
+  <p class="body"><a id="pgfId-1009368"></a>For each node <code class="fm-code-in-text">N</code>, we check the array holding the edit distances:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1009379"></a>If all distances in the array are greater than out maximum tolerance, then we can stop; there’s no need to traverse its subtree any further (because the distances can only grow).</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1009395"></a>Otherwise, we keep track of the last edit distance (the one for the whole search string), and if it’s the best we have found so far, we pair it with current node’s key and store it.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1009411"></a>When we finish traversing, we will have saved the closest key to our search string and its distance.</p>
+
+  <p class="body"><a id="pgfId-1009420"></a>Figure 6.22 shows how the algorithm works on a simplified example. It uses a trie, but the same algorithm, with minor changes, can easily be shown and implemented on radix trees. In fact, for this algorithm we are mostly interested in key nodes, not intermediate ones.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch06_F22.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1043686"></a>Figure 6.22 Searching spell suggestions for the word <code class="fm-code-in-text">s=”amt”</code> using a trie. Notice that for each node, we only compute the last row of each table, based on the previous row (from the node’s parent). While the path with the closest distance to <code class="fm-code-in-text">“amt”</code> would spell <code class="fm-code-in-text">“ant”</code>, in this trie the corresponding node is not a key node, so <code class="fm-code-in-text">“ant”</code> is not stored in the trie and can’t be returned as a result! Instead, there are three keys at distance 2: <code class="fm-code-in-text">“an”, “and”, “anti”</code>. They can all be returned.</p>
+
+  <p class="body"><a id="pgfId-1009437"></a>The algorithm starts at the root that corresponds to the empty string (because the path that leads to it is also empty). At each step, we have to compare the target word <code class="fm-code-in-text">s</code> (<code class="fm-code-in-text">“amt”</code>, in the example) to the word corresponding to the current node; in particular, we compute the distance between each prefix of s and the word associated to the current node.</p>
+
+  <p class="body"><a id="pgfId-1009450"></a>So, for the root, the distance between the empty string and the empty prefix of <code class="fm-code-in-text">“amt”</code> (which also is the empty string, obviously) is <code class="fm-code-in-text">0</code> (because they match). The distance between <code class="fm-code-in-text">“”</code> and <code class="fm-code-in-text">“a”</code> is <code class="fm-code-in-text">1</code>, because we need to add one character to the former to make the latter, and so on.</p>
+
+  <p class="body"><a id="pgfId-1009512"></a>After computing our vector of distances, we traverse any outgoing edge and repeat the process for the next nodes. In this case, there is only one, associated with the string <code class="fm-code-in-text">“a”</code>, the concatenation of the labels leading to it. We can build the next row in the table using only the previous row, and compare the last character (the one marking the last edge traversed) to each character in <code class="fm-code-in-text">s</code> (note that for the empty string column, the distance will always be the length of the path).</p>
+
+  <p class="body"><a id="pgfId-1009533"></a>Therefore, the second row in our table will start with a <code class="fm-code-in-text">1</code>, then have 0 in cell [1,1], because both strings start with an <code class="fm-code-in-text">‘a’</code>. For the next character in <code class="fm-code-in-text">s</code>, there isn’t a corresponding char in the node’s key (because it’s shorter), so we need to add 1 to have its distance, and the same for the last character. In fact, as a double-check, if we consider the prefix <code class="fm-code-in-text">“am”</code>, the distance to <code class="fm-code-in-text">“a”</code> is 1, while for <code class="fm-code-in-text">“amt”</code> is 2.</p>
+
+  <p class="body"><a id="pgfId-1009557"></a>Notice that the cost to compare two strings is always contained in the bottom-right cell, so for <code class="fm-code-in-text">“a”</code> and <code class="fm-code-in-text">“amt”</code> this distance is 2.</p>
+
+  <p class="body"><a id="pgfId-1009570"></a>The algorithm goes on traversing all branches, until we get to a point where the cost can’t decrease any more (when the path is already as long as the string <code class="fm-code-in-text">s</code> or longer, there is no point in going down a branch as soon as we find a key node) or all the distances in the last row are larger than a user-defined threshold, the max meaningful distance. This is particularly useful when searching long strings that would otherwise cause most of the tree to be traversed (while words within a distance of 2-3 characters are the most likely anyway).</p>
+
+  <p class="body"><a id="pgfId-1009589"></a>As you saw in figure 6.22, the smallest distance is obtained for the path <code class="fm-code-in-text">“ant”;</code> however, there is a catch! This trie, in fact, doesn’t contain <code class="fm-code-in-text">“ant”</code> as a key, and therefore we can’t take this value into consideration.</p>
+
+  <p class="body"><a id="pgfId-1009607"></a>Instead, there are several keys at distance 2, and any of them, or all of them, can be returned as a suggestion.</p>
+
+  <p class="body"><a id="pgfId-1009619"></a>How fast can we find a suggestion? As we know at this point, after the discussion in section 6.1, searching a string in a trie has a better worst-case running time than the alternatives: <code class="fm-code-in-text">O(m)</code> comparisons for a string of length <code class="fm-code-in-text">m</code>, while for hash tables or binary search trees it would be <code class="fm-code-in-text">O(m + log(n))</code> at <a id="marker-1010813"></a><a id="marker-1010817"></a>best.</p>
+
+  <h3 class="fm-head2" id="heading_id_24"><a id="pgfId-1009638"></a>6.4.2 String similarity</h3>
+
+  <p class="body"><a id="pgfId-1009652"></a>The <a id="marker-1010821"></a><a id="marker-1010825"></a>similarity between two strings is a measure of the distance that separates them. Usually, it’s some function of the number of changes needed to transform one string into the other.</p>
+
+  <p class="body"><a id="pgfId-1009666"></a>Two examples of these distances are</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1009675"></a>The <i class="calibre15">Levenshtein distance</i>, the number of single-character edits</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1009689"></a>The <i class="calibre15">Hamming distance</i><a class="calibre14" id="id_Hlk56082253"></a><a class="calibre14" id="marker-1010829"></a><a class="calibre14" id="marker-1010833"></a>, the number of positions in which the strings are different</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1009705"></a>As we have seen in the previous sub-section, string similarity is used by spell-checkers to decide the best suggestions to correct typos.</p>
+
+  <p class="body"><a id="pgfId-1009716"></a>But recently another even more important use case has become popular: bioinformatics, matching sequences of DNA. This is a computationally intensive task, so using the wrong data structures can make it impossible to solve.</p>
+
+  <p class="body"><a id="pgfId-1009729"></a>When we have to compare just two strings, directly computing the Levenshtein distance is the most effective way to go; however, if we have to compare a single string to <code class="fm-code-in-text">n</code> other strings to find the best match, computing <code class="fm-code-in-text">n</code> times the Levenshtein distance becomes impractical. The running time would be <code class="fm-code-in-text">O(n * m * M)</code>, where <code class="fm-code-in-text">m</code> is the length of our search string and <code class="fm-code-in-text">O(M)</code> is the average length of the <code class="fm-code-in-text">n</code> strings in the corpus.</p>
+
+  <p class="body"><a id="pgfId-1009753"></a>Turns out, we can do much better using a trie. By using the same algorithm shown for spell-checkers (without the threshold-based pruning), computing all the distances will only take time <code class="fm-code-in-text">O(m * N)</code>, where <code class="fm-code-in-text">N</code> is the total number of nodes in the trie, and while the trie construction could take up to <code class="fm-code-in-text">O(n * M)</code>, it would only happen once at the beginning, and if the rate of lookups is high enough, its cost would be amortized.</p>
+
+  <p class="body"><a id="pgfId-1009776"></a>In theory <code class="fm-code-in-text">N</code> can be <code class="fm-code-in-text">O(n * M)</code>, as we saw in section 6.2, if no two strings in the corpus share the same prefix. In practice, however, it is likely that <code class="fm-code-in-text">N</code> is order of magnitudes smaller than <code class="fm-code-in-text">n * M</code>, and closer to <code class="fm-code-in-text">O(M)</code>. Moreover, as we saw in the last sub-section, if we set a threshold for the max tolerance, that is, for the largest difference between two strings, and keep track of the best result we have found, we can prune even more the number of nodes we traverse during <a id="marker-1010837"></a><a id="marker-1010841"></a>search.</p>
+
+  <h3 class="fm-head2" id="heading_id_25"><a id="pgfId-1009807"></a>6.4.3 String sorting</h3>
+
+  <p class="body"><a id="pgfId-1009821"></a><i class="calibre17">Burstsort <a href="#pgfId-1011256"><sup class="footnotenumber">21</sup></a></i><a id="id_Hlk56082419"></a><a id="marker-1010845"></a> <a id="marker-1010849"></a><a id="marker-1010853"></a>is a cache-efficient sort algorithm that works similarly to MSD (Most Significant Digit<a id="marker-1010857"></a>) radix sort. However, <i class="calibre17">burstsort</i> is cache-efficient and even faster than radix sort!</p>
+
+  <p class="body"><a id="pgfId-1009843"></a>They both have the same asymptotic running time, <code class="fm-code-in-text">O(n * M)</code>, which is a theoretical lower bound for sorting <code class="fm-code-in-text">n</code> strings of length <code class="fm-code-in-text">M</code>, but burstsort creates results twice as fast by exploiting locality of reference<a id="marker-1010861"></a> and better memory distribution.</p>
+
+  <p class="body"><a id="pgfId-1009868"></a>Going into the details of this algorithm is out of the scope of this chapter, but to give you an idea of how b<i class="calibre17">urstsort</i> works, it dynamically constructs a trie while the strings are sorted, and uses it to partition them by assigning each string to a bucket (similar to radix sort). The asymptotic cost, as mentioned, is the same as MSD’s, because leading characters of each string are inspected once only. The pattern of memory accesses, however, makes better use of cache.</p>
+
+  <p class="body"><a id="pgfId-1009883"></a>While MSD, prior to the bucket-sorting phase, accesses each string once for each character, b<i class="calibre17">urstsort</i> accesses each string only once overall. The trie nodes, instead, are accessed randomly.</p>
+
+  <p class="body"><a id="pgfId-1009895"></a>However, the set of trie nodes is much smaller than the set of strings, so cache is used more wisely.</p>
+
+  <p class="body"><a id="pgfId-1009904"></a>If the set of string exceeds cache size, <i class="calibre17">burstsort</i> becomes considerably faster than any other string sorting <a id="marker-1010865"></a><a id="marker-1010869"></a>algorithms.</p>
+
+  <h3 class="fm-head2" id="heading_id_26"><a id="pgfId-1009919"></a>6.4.4 T9</h3>
+
+  <p class="body"><a id="pgfId-1009931"></a>T9 <a id="marker-1010873"></a><a id="marker-1010877"></a>was such a big milestone in mobile history that we still (mistakenly) address new mobiles’ spell-checkers as T9—though it was abandoned long ago with the advent of smartphones.</p>
+
+  <p class="body"><a id="pgfId-1009947"></a>The name comes as an abbreviation of “Text on 9 keys,” as the alphabet was (long before mobile phones) divided into groups of three to four characters that would fit into a digital phone numpad.</p>
+
+  <p class="body"><a id="pgfId-1009964"></a>In the original design for landline phones, every number had to be pressed one to four times to choose every single letter. For instance, 2 had to be pressed once for <code class="fm-code-in-text">'a'</code>, twice for <code class="fm-code-in-text">'b'</code>, and thrice for <code class="fm-code-in-text">'c'</code>.</p>
+
+  <p class="body"><a id="pgfId-1009988"></a>Instead, the idea with T9 was that the user would press each key once for each letter in the word, to state that the <code class="fm-code-in-text">i</code>-th letter belonged to the group of the <code class="fm-code-in-text">k</code>-th button. Then T9 would offer suggestions for possible words made out of those combinations of letters, or even directly provide the right word, if only one possible match was found.</p>
+
+  <p class="body"><a id="pgfId-1010004"></a>For instance, typing 2-6-3 would select all three letters combinations to form the Cartesian product <code class="fm-code-in-text">[a,b,c]x[m,n,o]x[d,e,f]</code>, and T9 would provide valid English words such as <code class="fm-code-in-text">[and, cod, con,...]</code>.</p>
+
+  <p class="body"><a id="pgfId-1010022"></a>This was made possible by keeping a trie, and for each key pressed refining the search:</p>
+
+  <ol class="calibre18">
+    <li class="fm-list-numbered">
+      <p class="list"><a class="calibre14" id="pgfId-1010033"></a>When keypad button 2 is pressed, we would start traversing the trie, going, in parallel, to the subtrees linked by edges marked with <code class="fm-code-in-text">'a'</code>, <code class="fm-code-in-text">'b'</code>, <code class="fm-code-in-text">'c'</code> (all three of them would likely be in the trie for any language using the Latin alphabet).</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1010047"></a>When the second keypad button is pressed, for each of the three paths that we are currently traversing, T9 checks to see if they have children labeled with <code class="fm-code-in-text">'m'</code>, <code class="fm-code-in-text">'n'</code> and <code class="fm-code-in-text">'o'</code>, and keeps track of the nodes reached at this second level. Each combination represents a path from the root to a level-2 node. Most likely, not all of the 9 combinations would have a path in the trie: for example, it’s unlikely any word will start with <code class="fm-code-in-text">“bn”</code>.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1010075"></a>The process continues with the next buttons pressed, until there is no node reachable through the possible paths traversed.</p>
+    </li>
+  </ol>
+
+  <p class="body"><a id="pgfId-1010096"></a>For this specific task, the trie nodes would likely store more than just a Boolean for each key. They would rather store the corpus frequency of that word (for instance, how likely it is that a word is used in English). This way, the most likely result would be returned when more than one result is available: for instance, you would somehow expect that <code class="fm-code-in-text">and</code> would be preferred over <a id="marker-1010881"></a><a id="marker-1010885"></a><code class="fm-code-in-text">cod</code>.</p>
+
+  <h3 class="fm-head2" id="heading_id_27"><a id="pgfId-1010115"></a>6.4.5 Autocomplete</h3>
+
+  <p class="body"><a id="pgfId-1010127"></a>In <a id="marker-1010889"></a><a id="marker-1010893"></a>the last 10 years or so, we have all become familiar with the autocomplete feature of search boxes. Today we even expect search boxes to provide it by default.</p>
+
+  <p class="body"><a id="pgfId-1010139"></a>The usual autocomplete workflow is the following: A user on the client side (typically a browser) starts typing in a few letters, and the autocomplete search box shows a few options that start with the characters already typed (Does this ring a bell? Sounds like “all keys with prefix”?). If the set of possible values that could be inserted in the search box was static and small, then it could be transmitted to the client together with the page, cached, and used directly on the client.</p>
+
+  <p class="body"><a id="pgfId-1010151"></a>This, however, is usually not the case, since the sets of possible values are normally large, and they might change over time, or even be dynamically queried.</p>
+
+  <p class="body"><a id="pgfId-1010160"></a>So, in real-world applications the client usually sends (asynchronously) a REST request to the server with the characters typed so far.</p>
+
+  <p class="body"><a id="pgfId-1010169"></a>The application server keeps a trie (or more likely a Patricia tree) with the valid entries, searches for the strings starting with what was inserted so far and a valid prefix, and returns a certain number of entries in this string’s subtree.</p>
+
+  <p class="body"><a id="pgfId-1010178"></a>When the response comes back to the client, it simply shows the list of results from the server <a id="marker-1010897"></a><a id="marker-1010901"></a>as <a id="marker-1010905"></a>suggestions.</p>
+
+  <div class="fm-sidebar-block">
+    <p class="fm-sidebar-title"><a class="calibre14" id="pgfId-1043726"></a>Autocomplete across the Net</p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1043727"></a>It's not strictly required that the request is performed through a REST endpoint or that it is sent asynchronously. However, the former indicates a clean design, and without the latter the autocomplete feature would make little sense.</p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1043728"></a>To avoid wasting net bandwidth and server computations, usually the requests to autocomplete are sent every few seconds or when a user stops typing. When a response comes back, the page updates the list of entries shown.</p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1043729"></a>This is still not ideal, because with HTTP/1.1 it is not possible to cancel requests that have already been sent and have reached the server. Moreover, we have no guarantee of the order in which responses come back. Therefore, if more characters are typed or erased before the previous response comes back, we’ll have to keep some kind of versioning for the responses and never replace the results shown if a stale response arrives.</p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1043730"></a>This will be mitigated with HTTP/2, since it introduces cancellable requests, among other cool things.</p>
+  </div>
+
+  <h2 class="fm-head" id="heading_id_28"><a id="pgfId-1010268"></a>Summary</h2>
+
+  <ul class="calibre19">
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1010280"></a>There is a fundamental difference between working with primitive data types like integers or floats and working with strings: while all integers will require the same amount of memory to be stored,<a class="calibre14" href="#pgfId-1011272"><sup class="footnotenumber">22</sup></a> strings can be of arbitrary length, and hence require arbitrarily many bytes.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1010295"></a>The length of the string on which a data structure works is an important factor in its asymptotic analysis; this leaves space for further optimizations that are not possible with the simplest data types.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1010307"></a>Tries allow us to more efficiently store and query large sets of strings, assuming many of them share some common prefixes.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1010322"></a>String prefixes are a key factor for this new data structure, which in turn allows us to efficiently perform queries to find strings with a common prefix or, vice versa, given a string find its longest prefix in the dataset.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1010335"></a>Radix tries compress paths, whenever possible, to provide a more compact representation of tries, without having to compromise in terms of complexity or performance.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1010347"></a>From spell-checkers to bioinformatics, many applications and fields manipulating strings can benefit from using <a class="calibre14" id="marker-1010909"></a>tries.</p>
+    </li>
+  </ul>
+  <hr class="calibre22"/>
+
+  <p class="fm-footnote"><sup class="footnotenumber">1.</sup> <a id="pgfId-1010928"></a>Also known as prefix tree.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">2.</sup> <a id="pgfId-1010942"></a>Also known as radix trie or compact prefix tree.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">3.</sup> <a id="pgfId-1010956"></a>It has been proven that it’s not possible to sort a list of <code class="fm-code-in-text1">n</code> elements with less than <code class="fm-code-in-text1">O(n*log(n))</code> operations if the method used is exclusively based on comparisons. RadixSort can get as low as <code class="fm-code-in-text1">O(n * log(k))</code> for sorting <code class="fm-code-in-text1">n</code> integers that can take any of <code class="fm-code-in-text1">k</code> possible values. For large values of <code class="fm-code-in-text1">k</code>, when <code class="fm-code-in-text1">k~=n</code>, the algorithm behaves no better than the generic linearithmic bound.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">4.</sup> <a id="pgfId-1010988"></a>Obviously, it’s possible to write spell checkers for any language; choosing English is just a matter of convenience.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">5.</sup> <a id="pgfId-1011004"></a>Ring a bell? It should . . .</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">6.</sup> <a id="pgfId-1011018"></a>With tweets, of course, you can now delete them—if you are fast enough—even before someone notices.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">7.</sup> <a id="pgfId-1011033"></a>Here the term refers to the abstract data structure called a dictionary that, incidentally but not surprisingly, is used to model the digital equivalent of actual dictionaries. See appendix C and chapter 4 for more details.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">8.</sup> <a id="pgfId-1011048"></a>De La Briandais, Rene. “File searching using variable length keys.” Papers presented at the March 3-5, 1959, western joint computer conference. ACM, 1959.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">9.</sup> <a id="pgfId-1011064"></a>As we’ll shortly see, this happens for all characters <code class="fm-code-in-text1">c</code> for which there is no suffix of the current node whose next character is <code class="fm-code-in-text1">c</code>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">10.</sup> <a id="pgfId-1011086"></a>Although we’d usually talk about n-ary trees, we also usually reserve <code class="fm-code-in-text1">n</code> to denote the number of entries in a container (or, in general, the input size for a problem). To avoid confusion, then, we will use <code class="fm-code-in-text1">k</code> for the size of the alphabet and, consequently, the term k-ary.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">11.</sup> <a id="pgfId-1011103"></a>See <span class="fm-hyperlink"><a href="https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction#trie">https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction#trie</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">12.</sup> <a id="pgfId-1011119"></a>This quantity is completely arbitrary; real objects in programming languages have an overhead, which can be way larger than 4 bytes (for instance, usually between 8 and 16 bytes in Java or C++).</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">13.</sup> <a id="pgfId-1011134"></a>As explained in appendix E, whenever in a method defined using recursion the recursive call is limited to the very last operation, compilers can optimize the target machine code by rewriting code using explicit loops instead of function calls. The caveat is that not all compilers provide this optimization.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">14.</sup> <a id="pgfId-1011149"></a>Since the set of keys for the hash table, that is, the alphabet, is static and known in advance, it is possible to use perfect hashing and obtain worst-case constant time lookup. See appendix C for more details.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">15.</sup> <a id="pgfId-1011164"></a>Notice that, since we just created this node <code class="fm-code-in-text1">N</code>, it will be the only node in its subtree.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">16.</sup> <a id="pgfId-1011182"></a>See <span class="fm-hyperlink"><a href="http://stackoverflow.com/questions/588004/is-floating-point-math-broken/27030789#27030789">http://stackoverflow.com/questions/588004/is-floating-point-math-broken/27030789#27030789</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">17.</sup> <a id="pgfId-1011198"></a>See <span class="fm-hyperlink"><a href="https://en.wikipedia.org/wiki/IEEE_floating_point#Basic_formats">https://en.wikipedia.org/wiki/IEEE_floating_point#Basic_formats</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">18.</sup> <a id="pgfId-1011214"></a>The original name for this DS, Patricia tree, is an acronym. Morrison, Donald R. “PATRICIA—practical algorithm to retrieve information coded in alphanumeric.” Journal of the ACM (JACM) 15.4 (1968): 514-534.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">19.</sup> <a id="pgfId-1011229"></a>Except a constant overhead for the array object, in most languages.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">20.</sup> <a id="pgfId-1011242"></a>See <span class="fm-hyperlink"><a href="https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction#radix-trie-aka-patricia-tree">https://github.com/mlarocca/AlgorithmsAndDataStructuresInAction#radix-trie-aka-patricia-tree</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">21.</sup> <a id="pgfId-1011256"></a>Sinha, Ranjan, and Justin Zobel. “Efficient trie-based sorting of large sets of strings.” Proceedings of the 26th Australasian computer science conference-Volume 16. Australian Computer Society, Inc., 2003.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">22.</sup> <a id="pgfId-1011272"></a>With exceptions; for instance, the <i class="calibre17">bignum</i> integer type in Python can represent arbitrarily large numbers, using a variable number of bytes.</p>
+</body>
+</html>

@@ -1,0 +1,837 @@
+<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <title>13</title>
+    
+  <link href="../../stylesheet.css" rel="stylesheet" type="text/css"/>
+<link href="../../page_styles.css" rel="stylesheet" type="text/css"/>
+</head>
+  <body class="calibre">
+  <div class="tocheadb">
+    <h1 class="tochead" id="heading_id_2"><a id="pgfId-998769"></a><a id="pgfId-998781"></a>13 Parallel clustering: MapReduce and canopy clustering</h1>
+  </div>
+
+  <p class="co-summary-head"><a id="pgfId-1009945"></a>This chapter covers</p>
+
+  <ul class="calibre19">
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1009985"></a>Understanding parallel and distributed computing</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1009986"></a>Canopy clustering</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1009987"></a>Parallelizing k-means by leveraging canopy clustering</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1009988"></a>Using the MapReduce computational model</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1009989"></a>Using MapReduce to write a distributed version of k-means</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1009990"></a>Leveraging MapReduce canopy clustering</li>
+
+    <li class="co-summary-bullet"><a class="calibre14" id="pgfId-1009973"></a>Working with MR-DBSCAN</li>
+  </ul>
+
+  <p class="body"><a id="pgfId-998898"></a>In the previous chapter we introduced clustering and described three different approaches to data partitioning: k-means, DBSCAN, and OPTICS.</p>
+
+  <p class="body"><a id="pgfId-998907"></a>All these algorithms use a single-thread approach, where all the operations are executed sequentially in the same thread.<a href="#pgfId-1005025"><sup class="footnotenumber">1</sup></a> This is the point where we should question our design: Is it really necessary to run these algorithms sequentially?</p>
+
+  <p class="body"><a id="pgfId-998918"></a>During the course of this chapter, we will answer this question, and present you with alternatives, design patterns, and examples that will give you the tools to spot opportunities for code parallelization and use the best practices in the industry to easily achieve major speedups.</p>
+
+  <p class="body"><a id="pgfId-998929"></a>After going through this chapter, readers will understand the difference between parallel and distributed computing, discover <i class="calibre17">canopy clustering</i><a id="marker-1004534"></a>, learn about Map-Reduce, a computational model for distributed computing, and finally be able to rewrite the clustering we saw in the previous chapter to operate in a distributed environment.</p>
+
+  <h2 class="fm-head" id="heading_id_3"><a id="pgfId-998941"></a>13.1 Parallelization</h2>
+
+  <p class="body"><a id="pgfId-998953"></a>Although <a id="marker-1004538"></a><a id="marker-1004542"></a><a id="marker-1004546"></a>the RAM model (presented in appendix B) is traditionally single-threaded and algorithm analysis usually focuses on sequential execution and improving the running time of single-process applications, parallelization, when applicable, can allow for tremendous speed-ups, and it should be in the tool belt of every software engineer.</p>
+
+  <div class="fm-sidebar-block">
+    <p class="fm-sidebar-title"><a class="calibre14" id="pgfId-1022959"></a>Multi-threading in coding interviews</p>
+
+    <p class="fm-sidebar-text"><a id="pgfId-1022960"></a>When it comes to algorithm analysis in coding interviews, you might find that there are diverging opinions on this point. As a personal anecdote, during a round of interviews, I found two interviewers with opposite positions, one considering parallelization “cheating” to solve the problem we were discussing, and another expecting the interviewee to suggest parallelization to solve it. Keep this in mind during your next interview. Of course, it also depends on the specific problems and on where the interviewer wants to lead you, but asking the interviewer about your options for multi-threading and parallelization is often a good idea (provided you know what you are talking about!)</p>
+  </div>
+
+  <p class="body"><a id="pgfId-999013"></a>To give you an idea of the kind of speed-up we are talking about, I saw an application’s running time go down from 2 hours to less than 5 minutes by leveraging <i class="calibre17">Kubernetes</i><a id="marker-1004550"></a> and <i class="calibre17">Airflow</i><a id="marker-1004554"></a> to distribute data download and processing into small chunks, instead of processing the same data sequentially. Of course, splitting data and processing each chunk separately is not always possible; it depends on the domain and on the algorithm.</p>
+
+  <p class="body"><a id="pgfId-999030"></a>So, this is the point where we ask ourselves, is clustering a domain where we can parallelize execution and get away with it?</p>
+
+  <p class="body"><a id="pgfId-999039"></a>Can we break down our datasets and apply the algorithms we discussed in chapter 12 to each partition independently?</p>
+
+  <h3 class="fm-head2" id="heading_id_4"><a id="pgfId-999048"></a><a id="id_Hlk29898167"></a>13.1.1 Parallel vs distributed</h3>
+
+  <p class="body"><a id="pgfId-999062"></a>Before <a id="marker-1023577"></a><a id="marker-1023578"></a>we get to the point, a disclaimer is due: usually with the term <i class="calibre17">parallel computing</i><a id="marker-1023579"></a> we only address computations that run on multiple CPUs on the same system—multi-threading, in synthesis. When we think about using multiple CPUs across several machines communicating through a network, then we are instead referring to what’s called <i class="calibre17">distributed computing</i><a id="marker-1023581"></a>. Figure 13.1 shows a diagram that illustrates this difference.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F1.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1023611"></a>Figure 13.1 A schematic view of the difference between parallel and distributed computing models</p>
+
+  <p class="body"><a id="pgfId-999107"></a>Parallel computing is limited by the number of CPUs on a single machine, while distributed computing is a better approach for scaling out systems and processing huge datasets. On the other hand, if a dataset can fit into a single machine’s memory, the parallel computing approach results are sensibly faster, since the processes can communicate through shared memory, while nodes in distributed systems need to exchange information through a network (at the time of writing, the latency<a href="#pgfId-1005040"><sup class="footnotenumber">2</sup></a> is 100ns vs 150ms,<a href="#pgfId-1005062"><sup class="footnotenumber">3</sup></a> so a factor of 10<sup class="superscript">6</sup>).</p>
+
+  <p class="body"><a id="pgfId-999127"></a>In this chapter, we’ll often use the term parallel computer to refer to both. The computational models we present are software abstractions that could run seamlessly on threads on a single machine or on a distributed system, and the only discriminant would be the size of the input and the resources needed, not the algorithms we <a id="marker-1004574"></a><a id="marker-1004578"></a>use.</p>
+
+  <h3 class="fm-head2" id="heading_id_5"><a id="pgfId-999143"></a>13.1.2 Parallelizing k-means</h3>
+
+  <p class="body"><a id="pgfId-999155"></a>Let’s <a id="marker-1004582"></a><a id="marker-1004586"></a><a id="marker-1004590"></a>now get more specific in order to answer this question: Can we make k-means a parallel algorithm?</p>
+
+  <p class="body"><a id="pgfId-999168"></a>Looking at each step of the algorithm separately will help us “divide and conquer” the problem. Please refer to section 12.2 for the description and implementation of k-means.</p>
+
+  <p class="body"><a id="pgfId-999177"></a>The first step is <i class="calibre17">initialization</i><a id="marker-1004594"></a>, creating an initial guess for the centroids. If this is done completely at random, this step is independent of the dataset and its running time is only proportional to the number <code class="fm-code-in-text">k</code> of clusters; therefore, the fully randomized version is not worth parallelizing. Parallelization could be necessary when points are drawn independently from a distribution without replacement. We’ll see how to distribute this step in section 13.3.2.</p>
+
+  <p class="body"><a id="pgfId-999200"></a>Step 3, <i class="calibre17">re-centering</i><a id="marker-1004598"></a>, computes the center of mass for each cluster. We will tackle this first because each cluster is processed independently and computing the center of mass for a cluster only needs the points in it. We can definitely parallelize this step, with one process for each cluster, so that the execution time will be one of the longest running threads. If the sequential version needs <code class="fm-code-in-text">n*d</code> sums and <code class="fm-code-in-text">k*d</code> divisions, where <code class="fm-code-in-text">n</code> is the number of points in the dataset and <code class="fm-code-in-text">d</code> its dimension (the cardinality of each point), assuming a uniform split to clusters (best-case scenario, of course) each process will perform <code class="fm-code-in-text">d*n/k</code> additions and <code class="fm-code-in-text">d</code> divisions. If all threads finished at the same time and ran at the same speed as the original sequential algorithm, we would obtain a <code class="fm-code-in-text">k</code>-fold speed-up.</p>
+
+  <p class="body"><a id="pgfId-999239"></a>Step 2, <i class="calibre17">classification</i><a id="marker-1004602"></a>, is more complicated to parallelize. In theory, we would need to check all points’ distances in order to assign them to the right centroid. Thinking about this more carefully, though, do we really need all points? If you refer to figure 12.3 in chapter 12, it seems apparent that a point will only switch to a cluster adjacent to its current assignment, and never to one far away. Also, if a centroid <code class="fm-code-in-text">c’</code> moved further away from a second cluster <code class="fm-code-in-text">C</code> (assuming the centroid of the second cluster didn’t move), it would be impossible for a point in C to be assigned to <code class="fm-code-in-text">c’</code>. We would need to be very careful, though, with the assumptions we made, so this step would be somewhat more complicated to parallelize.</p>
+
+  <p class="body"><a id="pgfId-999260"></a>Even by just parallelizing step 3 of the k-means algorithm, we can obtain a nice speed-up with respect to the sequential version.</p>
+
+  <p class="body"><a id="pgfId-999269"></a>Can we do better? Yes, we can, in at least two different ways; to see how, we will need first to introduce a new algorithm and then a game-changing programming <a id="marker-1004606"></a><a id="marker-1004610"></a><a id="marker-1004614"></a>model.</p>
+
+  <h3 class="fm-head2" id="heading_id_6"><a id="pgfId-999284"></a>13.1.3 Canopy clustering</h3>
+
+  <p class="body"><a id="pgfId-999298"></a>What <a id="marker-1004618"></a><a id="marker-1004622"></a><a id="marker-1004626"></a>if we could run a quick, coarse-grained pseudo-clustering, before running any real clustering algorithm, to get an idea of the distribution of data?</p>
+
+  <p class="body"><a id="pgfId-999311"></a>Canopy clustering is normally used for this purpose. It groups points into spherical regions (circles in our 2-D examples), like k-means, but unlike it, these regions can overlap, and most points are assigned to more than one region.</p>
+
+  <p class="body"><a id="pgfId-999327"></a>The canopy clustering algorithm is faster and simpler than k-means, because it runs in a single pass, doesn’t have to compute the centroids for the canopies (spherical pseudo-clusters), and doesn’t compare each point to each centroid; instead, it elects one point in the dataset as the center of each canopy and adds points around it to the canopy.</p>
+
+  <p class="body"><a id="pgfId-999338"></a>The algorithm can be made even faster if, instead of the exact distance metric for points in <code class="fm-code-in-text">k</code>-dimensional space, a fast approximate metric is used. This gives a less precise result that can be refined by using a proper clustering algorithm as a next step. As we’ll see in the next section, using canopy clustering to bootstrap other algorithms can both speed up convergence and reduce the running time.<a href="#pgfId-1005076"><sup class="footnotenumber">4</sup></a></p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F2.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1023656"></a>Figure 13.2 An example of canopy clustering running on a dataset. The first three sub-figures show the creation of tree canopies, starting from randomly chosen points. Circles filled with a solid color other than the lightest shading are points removed from the list of possible centroids, while pentagons are the centroids of canopies. The solid-color points are removed from the list because they lie within the inner radius (<code class="fm-code-in-text">T<sub class="subscript1">2</sub></code>) from the centroids (as shown in the first three steps). The last sub-figure shows the clusters created after a few more steps. Note that there are still some lightly shaded points, so at least three more canopies (that will partially overlap the five shown) will be created to include those points.</p>
+
+  <p class="body"><a id="pgfId-999360"></a>Figure 13.2 shows how canopy clustering works through an example, while listing 13.1 describes its pseudo-code.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1010185"></a><a id="id_Hlk20930425"></a>Listing 13.1 Canopy clustering</p>
+  <pre class="programlisting"><b class="calibre21">function</b> canopyClustering(points, T1, T2)   <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">throw-if</b> T1 &lt;= T2                         <span class="fm-combinumeral">❷</span>
+  centroids ← points                        <span class="fm-combinumeral">❸</span>
+  canopies ← []                             <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">while</b>  not centroids.isEmpty() <b class="calibre21">do</b>         <span class="fm-combinumeral">❺</span>
+    p ← centroids.drawRandomElement()       <span class="fm-combinumeral">❻</span>
+    canopy ← {p}                            <span class="fm-combinumeral">❼</span>
+ <code class="fm-code-in-text2"> </code>  for q in points <b class="calibre21">do</b>                      <span class="fm-combinumeral">❽</span>
+      dist ← distance(p, q)                 <span class="fm-combinumeral">❾</span>
+      <b class="calibre21">if</b> dist &lt; T1 <b class="calibre21">then</b>                     <span class="fm-combinumeral">❿</span>
+        canopy.insert(q)                    <span class="fm-combinumeral">⓫</span>
+        <b class="calibre21">if</b> dist &lt; T2 <b class="calibre21">then</b>                   <span class="fm-combinumeral">⓬</span>
+          centroids.remove(q)               <span class="fm-combinumeral">⓬</span>
+    canopies.add(canopy)                    <span class="fm-combinumeral">⓭</span>
+  <b class="calibre21">return</b> (canopies, centroids)              <span class="fm-combinumeral">⓮</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021817"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">canopyClustering</code><a id="marker-1021821"></a> takes a list of points and two thresholds, <code class="fm-code-in-text2">T1</code> and <code class="fm-code-in-text2">T1</code>, and returns a list of canopies, that is, sets of points with overlap.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021839"></a><span class="fm-combinumeral">❷</span> Checks that <code class="fm-code-in-text2">T<sub class="subscript">2</sub></code> is a smaller radius than <code class="fm-code-in-text2">T1</code>; otherwise, throws an error</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021859"></a><span class="fm-combinumeral">❸</span> Initializes the set of potential canopy centers to the whole dataset</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021876"></a><span class="fm-combinumeral">❹</span> Initializes the output (a list of canopies) to an empty list</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021893"></a><span class="fm-combinumeral">❺</span> While there are still points in the list of possible canopy centroids . . .</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021910"></a><span class="fm-combinumeral">❻</span> . . . extracts one point at random from the list of centroids and removes it from the list</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021927"></a><span class="fm-combinumeral">❼</span> Initializes current canopy to a singleton with just point <code class="fm-code-in-text2">p</code></p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021944"></a><span class="fm-combinumeral">❽</span> Cycles through all points in the dataset (technically we could already skip <code class="fm-code-in-text2">p</code>)</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021961"></a><span class="fm-combinumeral">❾</span> Computes the distance between <code class="fm-code-in-text2">p</code> and <code class="fm-code-in-text2">q</code></p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021978"></a><span class="fm-combinumeral">❿</span> Checks if <code class="fm-code-in-text2">q</code> is closer to <code class="fm-code-in-text2">p</code> than threshold <code class="fm-code-in-text2">T1</code></p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021995"></a><span class="fm-combinumeral">⓫</span> If it is, adds <code class="fm-code-in-text2">q</code> to current canopy</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022012"></a><span class="fm-combinumeral">⓬</span> If <code class="fm-code-in-text2">q</code> is also closer than <code class="fm-code-in-text2">T2</code>, then removes it from the list of possible centroids, so that it won’t be the centroid of a new canopy</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022029"></a><span class="fm-combinumeral">⓭</span> Adds the current canopy to the method result</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1022046"></a><span class="fm-combinumeral">⓮</span> Returns the list of canopies created and the list of their centroids</p>
+
+  <p class="body"><a id="pgfId-999805"></a>At a high level, the algorithm can be described by a few simple steps:</p>
+
+  <ol class="calibre18">
+    <li class="fm-list-numbered">
+      <p class="list"><a class="calibre14" id="pgfId-999814"></a>Select and remove a random point <code class="fm-code-in-text">p</code> from the dataset and initialize a new canopy with it (lines #6 –7).</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-999829"></a>For each remaining point <code class="fm-code-in-text">q</code>, check if the distance between <code class="fm-code-in-text">p</code> and <code class="fm-code-in-text">q</code> is smaller than a threshold <code class="fm-code-in-text">T<sub class="subscript1">1</sub></code> (lines #8 –10); if it is, add <code class="fm-code-in-text">q</code> to current canopy (line #11).</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-999853"></a>If said distance is also smaller than a second threshold <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code>, remove <code class="fm-code-in-text">q</code> from the list of possible canopy centroids (lines #12–13) so it won’t be the center of a new canopy.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-999871"></a>Repeat steps 1–3 until no point is left (line #5).</p>
+    </li>
+  </ol>
+
+  <p class="body"><a id="pgfId-999883"></a>This process produces spherical agglomerates with radius (at most) <code class="fm-code-in-text">T<sub class="subscript1">1</sub></code>; the inner radius <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code> identifies the critical distance within which points can be confidently considered to be related to each other (or equivalently, in same cluster). While a point <code class="fm-code-in-text">q</code> (at steps 2–3) could have already been added to a different canopy, if it’s within the inner radius of current canopy’s centroid <code class="fm-code-in-text">c</code>, we are confident the pair (<code class="fm-code-in-text">q, c</code>), is maximally correlated, and even if we chose <code class="fm-code-in-text">q</code> as a centroid, we couldn’t form a canopy that better fits <code class="fm-code-in-text">q</code>.</p>
+
+  <p class="body"><a id="pgfId-999914"></a>If you are wondering why we can rely on these distances and how we can come up with a good value for <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code> (and <code class="fm-code-in-text">T<sub class="subscript1">1</sub></code>), you are on top of the main issue: these parameters usually need to be tuned (trying a few different ones and checking the number/quality of the canopies), and sometimes good initial estimates for these distances come from experience and domain knowledge. For instance, if you were clustering geographical data about cellphone cells and you knew that no two cells are further away than a few kilometers, you would have a hint about <code class="fm-code-in-text">T<sub class="subscript1">1</sub></code>.</p>
+
+  <p class="body"><a id="pgfId-999937"></a>Deciding these values is not as big deal as it may seem; it is not important to come up with the best possible value, but rather to find an acceptable one for both parameters. As we mentioned, this algorithm only provides a coarse-grain <a id="marker-1004634"></a>clustering.</p>
+
+  <h3 class="fm-head2" id="heading_id_7"><a id="pgfId-999952"></a>13.1.4 Applying canopy clustering</h3>
+
+  <p class="body"><a id="pgfId-999968"></a>Canopy <a id="marker-1004638"></a><a id="marker-1004642"></a>clustering is often used as a pre-processing step for k-means, but it can also be used for DBSCAN and OPTICS. As a matter of fact, for those algorithms it has one further advantage. But we’ll get to that in a moment. First, let’s talk about how to combine canopy clustering and k-means.</p>
+
+  <p class="body"><a id="pgfId-999988"></a>The easiest way is quite intuitive. We can take the coarse-grained clusters (with overlap) output by canopy clustering, and for each of them compute their center of mass. Because these clusters can overlap each other, some points will belong to more than one of them; therefore, we can’t just treat these canopies as the result of an iteration of k-means! However, we can use their centroids to bootstrap k-means, replacing the default (random) initialization step with a more balanced choice.</p>
+
+  <p class="body"><a id="pgfId-1000009"></a>Alternatively, we could run canopy clustering with coarse values of <code class="fm-code-in-text">T<sub class="subscript1">1</sub></code> and <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code>, and improve the initialization step by making sure to draw a fraction of the initial centroids from each of these areas. If the canopy clustering returned <code class="fm-code-in-text">m&lt;=k</code> pseudo-clusters, draw <code class="fm-code-in-text">k/m</code> centroids from each of them. In practical experiments, this bootstrapping provided a relevant speed-up in convergence for k-means.</p>
+
+  <p class="body"><a id="pgfId-1000032"></a>If you remember what we discussed in chapter 12, DBSCAN (section 12.3) has a weak spot when applied to datasets with non-uniform density, and OPTICS (section 12.4) can partially remedy this issue, at the cost of a heavier computational load and some experimenting with its parameters. Ideally, what we would need is to run DBSCAN independently on areas with different density and tune its parameters (or just the value for <span class="cambria">ϵ</span>) for each of these areas separately.</p>
+
+  <p class="body"><a id="pgfId-1000045"></a>Using canopy clustering as a first step can help us with this issue. If we run DBSCAN on each pseudo-cluster separately, we can expect smaller regions to have a more uniform density, and regions with different density to be—likely—assigned to different pre-clusters.</p>
+
+  <p class="body"><a id="pgfId-1000062"></a>After computing all the clusters for these areas, however, we still aren’t done. Because the pseudo-clusters were (possibly) overlapping, the local clusters might also overlap. Besides checking to see if we should merge clusters that overlap, there is a more subtle effect: as shown in figure 13.3, two non-overlapping clusters could have points that are in each other’s <span class="cambria">ϵ</span>-neighborhood! So, we need to also check those pseudo-clusters whose hyperspheres are closer to each other than the larger of the values of <span class="cambria">ϵ</span> used for those areas (in case DBSCAN was called on them with different values for its hyper-parameters).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F3.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1023701"></a>Figure 13.3 Non-overlapping canopy pseudo-clusters could still be considered as belonging to the same cluster by DBSCAN, if both have points close to their border, and the closest points are within each other’s <span class="cambria">ϵ</span>-distance.</p>
+
+  <p class="body"><a id="pgfId-1000105"></a>The good news is that for such canopies, we don’t have to check every combination of points drawn from their Cartesian product,<a href="#pgfId-1005090"><sup class="footnotenumber">5</sup></a> but only the points in the external ring of each of them, at a distance from the canopy’s center greater or equal to <code class="fm-code-in-text">T<sub class="subscript1">2</sub>-<span class="cambria">ϵ</span></code>.</p>
+
+  <p class="body"><a id="pgfId-1000120"></a>Now the issue is that we can parallelize the execution of DBSCAN on each pseudo- cluster, but to put together all the results, we need to check all the pairs of clusters produced by each parallel run, and all the (filtered) pairs of points in the Cartesian product between the external rings of these clusters. Do we need to run these checks in a single thread on a single machine, hence going back to <a id="marker-1004646"></a><a id="marker-1004650"></a><a id="marker-1004654"></a><a id="marker-1004658"></a>sequential <a id="marker-1004662"></a><a id="marker-1004666"></a><a id="marker-1004670"></a>execution?</p>
+
+  <h2 class="fm-head" id="heading_id_8"><a id="pgfId-1000142"></a>13.2 MapReduce</h2>
+
+  <p class="body"><a id="pgfId-1000154"></a>For <a id="marker-1004674"></a><a id="marker-1004678"></a><a id="marker-1004682"></a>a long time, engineers have struggled to efficiently parallelize execution of algorithms like DBSCAN, at least from a practical point of view, because of both hardware limits and lack of software infrastructure. The most used distributed programming model was GRID computing, until it was realized that a different approach would make computation not just faster, but potentially more robust. That’s when the MapReduce programming model was adopted on a large scale, after being patented and used by Google in the early 2000s.</p>
+
+  <p class="body"><a id="pgfId-1000175"></a>Although there are several implementations of MapReduce, (or we should say there are several products leveraging MapReduce to provide tools that orchestrate distributed resources to solve tasks, such as Apache Hadoop, Hive, or CloudDB), I believe its main value is in the model it provides, which can be applied to a plethora of tasks.</p>
+
+  <p class="body"><a id="pgfId-1000192"></a>For this reason, we’ll try to explain how it works through an example.</p>
+
+  <h3 class="fm-head2" id="heading_id_9"><a id="pgfId-1000201"></a>13.2.1 Imagine you are Donald Duck . . .</h3>
+
+  <p class="body"><a id="pgfId-1000218"></a>Imagine <a id="marker-1004686"></a><a id="marker-1004690"></a>Donald Duck dozing on his hammock—as always—on a lazy afternoon, when suddenly a phone ringing louder than normal <a id="id_Hlk29896494"></a>(and more annoyingly than normal!) wakes him up. He knows before even answering that he is being gently summoned by his lovely uncle Scrooge McDuck, and he needs to rush to the Money Bin—a kind request to which he gladly responds, in order to avoid being disowned (and overwhelmed by debt).</p>
+
+  <p class="body"><a id="pgfId-1000250"></a>Long story short: as always, his good old Uncle Scrooge has a long, boring task for Donald to attend to. This time, since he is securing the Money Bin main room and has to move all the coins to a different, giant, safe, he wants to take advantage of the situation (surprise, surprise!) and count and catalog all the coins in his Money Bin . . . by the next morning.</p>
+
+  <p class="body"><a id="pgfId-1000271"></a>We are talking about millions of coins, so it would be humanly impossible to do this on one’s own. When Donald Duck regains his senses (he understandably fainted when Uncle Scrooge broke the news), he figures out that he’ll need all the help he can get, so he runs to <a id="id_Hlk56521293"></a>Gyro Gearloose’s and convinces him to create a hoard of robo-clones that will be able to learn how to recognize different coins and catalog them.</p>
+
+  <p class="body"><a id="pgfId-1000290"></a>This step is the “classical” parallelization step: you break the work down (into piles of coins) to several copies of your software (the counting/catalogue routine), and write down, for each pile, what coins you found and how many of them there are. For instance, a machine could produce a list like this:</p>
+  <pre class="programlisting">£1: 1034 pieces
+50<span class="cambria">¢</span>: 53982 pieces
+20p: 679 pieces
+$1: 11823 pieces
+1<span class="cambria">¢</span>: 321 pieces</pre>
+
+  <p class="body"><a id="pgfId-1000349"></a>So, problem solved? Well . . . not really. Robo-clones are expensive and take time to build, so even a genius like Gyro could only provide a hundred of them by quickly rewiring some not-so-well-behaved robo-waiters he created in one of his experiments. Now they became quite fast at counting money, but each of them has a huge pile of coins, resulting in a long list of coin types with their quantities. Figure 13.4 illustrates the situation: once they’re finished, it’s up to Donald to add up the hundreds of entries in all those hundreds of lists.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F4.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1023758"></a>Figure 13.4 A first attempt to parallelize coin counting. In this configuration, poor Donald still has to sum hundreds of lists with hundreds of entries each.</p>
+
+  <p class="body"><a id="pgfId-1000389"></a>After fainting again and being woken up using Uncle Scrooge’s ammonia (he’ll be charged for it, it goes without saying), good old Donald crawls to Gyro’s lab with a desperate cry for more help.</p>
+
+  <p class="body"><a id="pgfId-1000400"></a>Unfortunately, Gyro can’t afford to build more counting machines! But he wouldn’t be a genius if he couldn’t solve this problem.</p>
+
+  <p class="body"><a id="pgfId-1000410"></a>And to do so, he won’t have to build anything; just getting some help and using a different algorithm will do. After doing a quick computation in his head, he estimates that there are about two hundred different types of coins. So he rounds up the whole family and gives a task to each of them: they will have to handle five types of coins each, but they won’t have to count them. They will receive a few lists (well, a hundred of them) from the counting machines, but each list will only have five entries for the same five types of coins, together with how many of them the individual counting machine found.</p>
+
+  <p class="body"><a id="pgfId-1000433"></a>To achieve this, he provides each counting machine with an address to locate each member of the McDuck family—for instance, an email address such as <span class="fm-hyperlink"><a href="mailto:huey.mcduck@duckmail.com">huey.mcduck@duckmail.com</a></span>—and a dictionary that is the same for each machine and that lists the types of coins handled by each member of the family. To simplify things, we can imagine that each member is assigned all the coins from a single country. For instance, as shown in figure 13.5, Huey could get all US dollars, Dewey all UK sterling pounds, Louie all Euros, and so on. But in a real application, each of them could get any combination of coin denominations.</p>
+
+  <p class="body"><a id="pgfId-1000460"></a>Once a machine is done counting, it goes through the members of the family and sends them each an email with the total number of coins found for each of the types they are responsible for. Then each family member will have to sum the values in each list, for each type of coin, and send the final result to Uncle Scrooge—just a few hundred integer additions per duck; a tedious job, maybe, but one that shouldn’t take too long (just make sure not to let Fethry anywhere near a computer!).</p>
+
+  <p class="body"><a id="pgfId-1000477"></a>For instance, if Daisy Duck is assigned the $1, 50<span class="cambria">¢</span>, 25<span class="cambria">¢</span>, and 1<span class="cambria">¢</span> coins, then all the machines will send her a short list that looks like this:</p>
+  <pre class="programlisting">25<span class="cambria">¢</span>: 1.034 pieces
+$1: 11823 pieces
+50<span class="cambria">¢</span>: 53982 pieces
+1<span class="cambria">¢</span>: 321 pieces</pre>
+
+  <p class="body"><a id="pgfId-1000530"></a>Figure 13.5 shows the shift in paradigm. While before the person who had to make sense of all the lists was the bottleneck of the computation, now, introducing a new intermediate level in the workflow, and breaking down the work so that each entity at this level has a limited amount of work to do makes the difference.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F5.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1023842"></a>Figure 13.5 Revised coin counting process, using MapReduce and a little help. Now, each counting machine produces several lists, one for each member of the McDuck family at level 2. They, in turn, will have to check a hundred lists, but each with just a few entries, and sum up the values in each list by entry.</p>
+
+  <p class="body"><a id="pgfId-1000545"></a>The key, though, is that the results outputted at level 1 can be partitioned in groups and each of these groups can then be handled separately at <a id="marker-1004694"></a><a id="marker-1004698"></a>level 2.</p>
+
+  <h3 class="fm-head2" id="heading_id_10"><a id="pgfId-1000578"></a>13.2.2 First map, then reduce</h3>
+
+  <p class="body"><a id="pgfId-1000596"></a>Time <a id="marker-1004702"></a><a id="marker-1004706"></a>to abandon our cartoon heroes for a more life-like example, where both levels of this parallel computation would be performed by machines. The operation at level 1 is called <i class="calibre17">Map</i>, because it <i class="calibre17">maps</i> each entry in the input dataset (more precisely, in the portion of the dataset handled by a machine) into something else, extracting the information that’s relevant for computing the final result. The mappers in our example could likely just run a “coin-recognition” software, without keeping a count,<a href="#pgfId-1005125"><sup class="footnotenumber">6</sup></a> and send lists containing unsorted occurrences of coins to the machines at level 2. Something like this:</p>
+  <pre class="programlisting">$100: 1
+50<span class="cambria">¢</span>: 1
+$100: 1
+$1: 1
+25<span class="cambria">¢</span>: 1
+...</pre>
+
+  <p class="body"><a id="pgfId-1000680"></a>Here, the info extracted by mappers is just the presence of a coin.</p>
+
+  <p class="body"><a id="pgfId-1000689"></a>Then the machines at level 2 would specialize in counting. Every machine at level 2 would receive all the entries for occurrences of a certain group of coins, and do something with them (counting them, for example, but it could also sum up their values or filter them). This step is therefore called <i class="calibre17">Reduce</i>, because it takes info limited to a homogeneous group of entries and combines (aka <i class="calibre17">reduces</i>) them to get our final result.</p>
+
+  <p class="body"><a id="pgfId-1000704"></a>As mentioned, the key disadvantage of the classic, “flat” parallel computation is that composing the results of all the parallel threads/processes/machines would be the bottleneck of the whole process. If a single process has to spawn the threads and then get their results and combine them, it will still have to sequentially access the entire dataset at least once, and even if it also parallelizes the process that combines the intermediate results, it still remains a bottleneck, as shown in figure 13.6. On the left half, you can see that for basic parallelism, the “intermediate output” is all sent to the orchestrator that has to gather it and sort it to the machines in layer 2.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F6.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1023905"></a>Figure 13.6A Comparing the classical approach to parallel computing to MapReduce. We assume that in both cases, data is already broken down into chunks and can be passed by location, that is, by providing something like a file handle without the need for the orchestrator to read the data. In the basic parallel approach, using processes (either running on threads or on different machines), the orchestrator needs to spin up the threads and make sense of their results. It can either combine these results itself, or spawn more processes to combine them (as shown in the figure), but it will be the bottleneck either way.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F6B.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1023959"></a>Figure 13.6B Continues from figure 13.6A</p>
+
+  <p class="body"><a id="pgfId-1000744"></a>In MapReduce, however, every step is intrinsically parallel. Data is already broken down into pieces that can be processed independently and results are routed to the reducers by each mapper on its own, without passing through a central orchestrator.</p>
+
+  <p class="body"><a id="pgfId-1000761"></a>Technically, the reducers are the ones that read the information from each mapper, while the mappers’ task is to create temporary files for each reducer in a specific location (different for each reducer—imagine, for instance, that each mapper creates a different folder or a dedicated virtual disk for each reducer).</p>
+
+  <p class="body"><a id="pgfId-1000776"></a>Besides speed, the MapReduce approach has another advantage: if a machine crashes, that single machine can be replaced without having to restart the whole computation. This, in turn, can help us increase availability and reduce latency by allocating redundant resources to preventively cope with malfunctions.</p>
+
+  <p class="body"><a id="pgfId-1000785"></a>One thing needs to be clear. In MapReduce there is also an orchestrator, a leader node that controls the computation (spinning up the computational nodes, or requesting existing resources, assigning the input chunks to the mappers, planning how to route intermediate results to reducers, and handling/recovering from errors). The difference from canonical parallelism, though, is that this special node doesn’t actually read the input or compute it, and that intermediate results don’t have to pass through it, so it’s not a bottleneck for computation. An objection could be that the primary node is still a bottleneck for availability, because if the leader node crashes, the computation can’t be completed; however, using replicas (either live copies or primary-replica), we could get availability guarantees through (limited) redundancy.</p>
+
+  <p class="body"><a id="pgfId-1000802"></a>There are catches, of course. The first one is that not all computations are suitable for the MapReduce model (or for parallel execution altogether). In general, if data entries are somehow connected, and scattered pieces of data influence each other’s contribution to the final result, then parallelization could be impossible: time series are a good example of data that normally needs to be processed sequentially, because the final result depends on the sequence of adjacent data.</p>
+
+  <p class="body"><a id="pgfId-1000819"></a>For MapReduce, requirements are even higher. In order to gain an advantage from applying it, we need data that can be grouped by some attributes/fields, and that can be reduced for each of these groups separately.</p>
+
+  <p class="body"><a id="pgfId-1000832"></a>The operation performed in reducers, moreover, must be <i class="calibre17">associative</i>, so that the order in which the intermediate sub-lists are outputted by mappers must not matter.</p>
+
+  <p class="body"><a id="pgfId-1000845"></a>It’s worth noting that if, instead of cataloging all the coins, we would like to just count how many of them there are (without distinguishing their type) or compute the total value, we wouldn’t need reducers. Each parallel process would just output its total, and then they could be added by a single central process.</p>
+
+  <p class="body"><a id="pgfId-1000860"></a>The second catch is that there is no centralized entity that splits the work and distributes it evenly to the reducers, so one can get very busy while another waits without anything to do. Going back to our story, for instance, while Daisy Duck will have to worry about US currency, <a id="id_Hlk56522129"></a>Gladstone Gander is assigned all rare coins from small countries (lucky him), and thus the lists he gets are almost all empty, and he has to perform just a few <a id="marker-1004710"></a><a id="marker-1004714"></a>additions.</p>
+
+  <h3 class="fm-head2" id="heading_id_11"><a id="pgfId-1000885"></a>13.2.3 There is more under the hood</h3>
+
+  <p class="body"><a id="pgfId-1000903"></a>We have seen a few advantages of the MapReduce model, but there is also more to its success that can’t be seen at a high level. In chapter 7, when talking about caches and multi-threading, we discussed locks and synchronization. Every parallel computation with a shared state will need synchronization, be it to aggregate results, break down data, and assign it to computing units (threads or machines), or just check that the processing is complete.</p>
+
+  <p class="body"><a id="pgfId-1000922"></a>The key advantage of MapReduce is that it intrinsically limits shared state to a minimum (by embracing functional programming concepts such as immutability<a href="#pgfId-1005140"><sup class="footnotenumber">7</sup></a> and pure functions<a href="#pgfId-1005170"><sup class="footnotenumber">8</sup></a>), providing a programming paradigm, a way to specify the problem, that forces us to state a problem in such a way so as to eliminate shared state<a href="#pgfId-1005185"><sup class="footnotenumber">9</sup></a> and handle the synchronization still needed under the <a id="marker-1004718"></a><a id="marker-1004722"></a><a id="marker-1004726"></a>hood.</p>
+
+  <h2 class="fm-head" id="heading_id_12"><a id="pgfId-1000943"></a>13.3 MapReduce k-means</h2>
+
+  <p class="body"><a id="pgfId-1000955"></a>To <a id="marker-1004730"></a><a id="marker-1004734"></a><a id="marker-1004738"></a>efficiently parallelize any algorithm, we first need to answer two questions: How do datapoints influence computation, and what data do we really need at any time to perform a certain step?</p>
+
+  <p class="body"><a id="pgfId-1000970"></a>In the case of both k-means and canopy clustering, the way we compute the various steps dictates a MapReduce implementation. Let’s examine each step of k-means separately:<a href="#pgfId-1005200"><sup class="footnotenumber">10</sup></a></p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1000985"></a>In the <i class="calibre15">classification step</i>, when we assign points to canopies/clusters, for each point the operation is computed independently, and the only thing that matters is the list of centroids. So, we can shard the data however we like, as long as we pass all the centroids to each mapper.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1001000"></a>In the <i class="calibre15">re-centering</i><a class="calibre14" id="marker-1004742"></a> step, to update k-means<i class="calibre15">’</i> centroids, for each centroid we only need the data assigned to it, and each point is assigned to a single centroid, so we can partition the dataset and process each group separately.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1001018"></a><i class="calibre15">Initialization</i><a class="calibre14" id="marker-1004746"></a> is trickier for k-means; we would need to draw points randomly from the full dataset, and this would seem to hinder parallelization. We can, however, employ a few possible strategies to distribute the computational load:</p>
+
+      <ul class="calibre20">
+        <li class="fm-list-bullet1">
+          <p class="list"><a class="calibre14" id="pgfId-1001038"></a>Randomly shard the dataset and then independently draw centroids at random from each shard (although it can be tricky to obtain an overall uniform distribution of samples).</p>
+        </li>
+
+        <li class="fm-list-bullet1">
+          <p class="list"><a class="calibre14" id="pgfId-1001051"></a>Run canopy clustering first and feed those canopy centroids to k-means as the initial choice of centroids. Then the question becomes, can we also distribute canopy clustering? Although a little trickier, it turns out that we can do that.</p>
+        </li>
+      </ul>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1001064"></a>It follows that parallelizing canopy clustering is the key step here, and also the trickiest part. We’ll worry about it later in this chapter. Before delving into this step, let’s give a high-level description of the full algorithm for distributed k-means:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1001081"></a>Initialize the centroids using canopy clustering.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1001094"></a>Iterate (at most <code class="fm-code-in-text">m</code> times).</p>
+
+      <ul class="calibre20">
+        <li class="fm-list-bullet1">
+          <p class="list"><a class="calibre14" id="pgfId-1001109"></a>Points classification:</p>
+
+          <ul class="calibre37">
+            <li class="fm-list-bullet1"><a class="calibre14" id="pgfId-1001122"></a>Shard the dataset and send the shards, together with the list of centroids, to mappers.</li>
+
+            <li class="fm-list-bullet1"><a class="calibre14" id="pgfId-1001135"></a>Each mapper assigns points to one of the centroids. Send the data to the reducers, aggregated by the centroid chosen (ideally there will be one reducer per centroid).</li>
+          </ul>
+        </li>
+
+        <li class="fm-list-bullet1">
+          <p class="list"><a class="calibre14" id="pgfId-1001148"></a>Centroids update:</p>
+
+          <ul class="calibre37">
+            <li class="fm-list-bullet1"><a class="calibre14" id="pgfId-1001161"></a>Each reducer will compute the center of mass of its cluster and return the new centroid.</li>
+          </ul>
+        </li>
+      </ul>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1001173"></a>This is also summarized<a href="#pgfId-1005214"><sup class="footnotenumber">11</sup></a> in listing 13.2 and shown in the example in figure 13.7.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1010486"></a>Listing 13.2 MapReduce k-means</p>
+  <pre class="programlisting"><b class="calibre21">function</b> MRkmeans(points, numShards, numClusters, maxIter, T1, T2)   <span class="fm-combinumeral">❶</span>
+  shards ← randomShard(points, numShards)                            <span class="fm-combinumeral">❷</span>
+  centroids ← MRcanopyCentroids(points, numClusters, T1, T2)         <span class="fm-combinumeral">❸</span>
+  mappers ← initMappers(numShards, classifyPoints, shards)           <span class="fm-combinumeral">❹</span>
+  reducers ← initReducers(numClusters, centerOfMass)                 <span class="fm-combinumeral">❺</span>
+  <b class="calibre21">for</b> i <b class="calibre21">in</b> {0, .., maxIter-1} <b class="calibre21">do</b>                                     <span class="fm-combinumeral">❻</span>
+    newCentroids ← mapReduce(centroids, mappers, reducers)           <span class="fm-combinumeral">❼</span>
+    <b class="calibre21">if</b> centroids == newCentroids <b class="calibre21">then</b>                                <span class="fm-combinumeral">❽</span>
+      break 
+    <b class="calibre21">else</b> 
+      centroids ← <b class="calibre21">new</b>Centroids                                      <span class="fm-combinumeral">❾</span>
+  <b class="calibre21">return</b> combine(mappers, centroids)                                 <span class="fm-combinumeral">❿</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021111"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">MRkmeans</code><a id="marker-1021115"></a> takes a list of points, the number of desired chunks in which the dataset should be sharded, the number of desired clusters, and two thresholds, <code class="fm-code-in-text2">T<sub class="subscript">1</sub></code> and <code class="fm-code-in-text2">T<sub class="subscript">2</sub></code>, to be used for the canopy clustering initialization step.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021136"></a><span class="fm-combinumeral">❷</span> Breaks down the dataset into <code class="fm-code-in-text2">numShards</code><a id="marker-1021140"></a> random shards. This is usually done automatically by the primary node of MapReduce, but in this case, we will use a customized version.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021154"></a><span class="fm-combinumeral">❸</span> Initializes the centroids by using a distributed version of canopy clustering</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021171"></a><span class="fm-combinumeral">❹</span> Initializes <code class="fm-code-in-text2">numShards</code> mappers; each will run the <code class="fm-code-in-text2">classifyPoints</code> method<a id="marker-1021176"></a> and will hold a copy of one of the dataset’s shards. The mappers will be alive (and hold the same copy of the input) for the whole lifetime of this method.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021189"></a><span class="fm-combinumeral">❺</span> Initializes <code class="fm-code-in-text2">numClusters</code><a id="marker-1021193"></a> reducers, one per centroid. The reducers will run the <code class="fm-code-in-text2">centerOfMass</code> method<a id="marker-1021195"></a> (computing the center of mass of a set of points) and will be alive for the whole method’s lifetime, but they won’t hold any data.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021208"></a><span class="fm-combinumeral">❻</span> Repeats the main cycle at most <code class="fm-code-in-text2">maxIter</code><a id="marker-1021213"></a> times</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021226"></a><span class="fm-combinumeral">❼</span> Runs one iteration of MapReduce, using the mappers and reducers already created. Mappers will receive the current list of centroids as input (in addition, each mapper already holds one shard of the dataset points). Reducers will read their input (points in one of the clusters) from the mappers. Each reducer will output the coordinates of a centroid, and the results produced by all reducers will be combined in a list, assigned to a temporary variable.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021243"></a><span class="fm-combinumeral">❽</span> If no centroid has changed, the algorithm converged so it can exit the main cycle</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021260"></a><span class="fm-combinumeral">❾</span> Otherwise, copies over the assignments from the temporary variable</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1021277"></a><span class="fm-combinumeral">❿</span> Uses combiners or run mappers a last time to get the final classification of points, given current centroids</p>
+
+  <p class="body"><a id="pgfId-1001505"></a>The first thing you should know is that we are not talking about good old plain MapReduce in this case. The base model of computation is MapReduce, but since the k-means heuristic consists of repeating some steps <code class="fm-code-in-text">m</code> times, we will need to start the computation several times. This is illustrated by the workflow in figure 13.7: the output of each MapReduce job, a list of centroids, is also the input of the next job, and moreover sharding the dataset and distributing it to the mappers is a step that doesn’t need to be repeated for each job, because there is no reason why the shard assigned to a mapper should change.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F7.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1024008"></a>Figure 13.7 A flowchart describing the workflow of k-means, implemented with iterative MapReduce</p>
+
+  <p class="body"><a id="pgfId-1001547"></a>For these reasons, rather than running <code class="fm-code-in-text">m</code> times MapReduce separately, we can use a more efficient (in this context) evolution of this programming model, <i class="calibre17">Iterative MapReduce</i><a id="marker-1004774"></a>.<a href="#pgfId-1005228"><sup class="footnotenumber">12</sup></a></p>
+
+  <p class="body"><a id="pgfId-1001562"></a>The idea is that we spin up mappers and reducers once, sharding data during the configuration of the mappers and assigning point shards to each mapper only once. Then we iterate the classic MapReduce cycle until needed, passing only the current list of centroids as input to <i class="calibre17">all</i> the mappers. Thus, the amount of data per job to be passed to each mapper is going to be several orders of magnitude smaller than the dataset size, and ideally it will also be significantly smaller than the size of each shard. We can pass the number of mappers to create an argument to our enhanced k-means method, and tune this parameter based on the size of the dataset and the capacity of each mapper.</p>
+
+  <p class="body"><a id="pgfId-1001577"></a>Figure 13.8 illustrates well how the computation proceeds from this point. Each mapper performs the classification step on the fraction of points assigned to it. Then reducers (ideally one per cluster) will read data from each mapper: the <code class="fm-code-in-text">i</code>-th reducer will only get the points assigned to the <code class="fm-code-in-text">i</code>-th centroid (or to the centroids assigned to the reducer, if more than one).</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F8.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1024053"></a>Figure 13.8 An iteration of k-means main cycle implemented with iterative MapReduce. With respect to figure 13.7, the first step shown here is the sharding + configuration, while the rest of the figure shows a single iteration of “Iterative MapReduce.”</p>
+
+  <p class="body"><a id="pgfId-1001621"></a>Notice how reducers don’t get any information about current centroids (in the illustration, in fact, in the reducer steps old centroids are shown as semi-transparent polygons) because each reducer only needs all the points<a href="#pgfId-1005244"><sup class="footnotenumber">13</sup></a> that belong to a cluster, in order to compute its center of mass.</p>
+
+  <p class="body"><a id="pgfId-1001633"></a>Each reducer eventually outputs the centroid computed (and just that; no points returned, to save bandwidth and ultimately time) and the MapReduce primary will combine the <code class="fm-code-in-text">k</code> results (where <code class="fm-code-in-text">k</code> is the number of centroids/reducers) into a single list, that will be fed again to the mappers in the next iteration of the cycle!</p>
+
+  <p class="body"><a id="pgfId-1001646"></a>Once the cycle is over, we only get centroids as result. We can run the mappers one last time outside of the cycle to get the points assigned to each cluster (in this step, at line #12 of listing 13.2, we can imagine a new set of reducers will be used: dummy pass-through nodes, just returning their input).</p>
+
+  <p class="body"><a id="pgfId-1001659"></a>This implementation of k-means only uses canopy clustering to bootstrap convergence with a better-than-random initial choice of centroids. Distributing the classification and re-centering steps is already a great improvement, and there is a good chance that the improvement you get is already enough to satisfy your requirements.</p>
+
+  <p class="body"><a id="pgfId-1001672"></a>Still, even if canopy clustering is faster than an iteration of k-means and can be made even faster by using a cheap approximated metric instead of Euclidean distance, for huge datasets the risk is that you can waste most of the gain obtained by distributing the implementation of k-means through MapReduce if you run canopy clustering on a single machine. Moreover, sometimes this option isn’t even available for huge datasets that won’t fit on any machine.</p>
+
+  <p class="body"><a id="pgfId-1001687"></a>Luckily for us, we can apply MapReduce to canopy clustering as well!</p>
+
+  <h3 class="fm-head2" id="heading_id_13"><a id="pgfId-1001696"></a>13.3.1 Parallelizing canopy clustering</h3>
+
+  <p class="body"><a id="pgfId-1001712"></a>Canopy <a id="marker-1004778"></a><a id="marker-1004782"></a><a id="marker-1004786"></a><a id="marker-1004790"></a>clustering is a bit trickier to redesign as a distributed algorithm because it has only one step: drawing canopy centroids from the dataset and filtering out points within a certain distance from them so that they won’t later be selected as centroids. The issue is that in this step, for each centroid drawn from the dataset, we need to go through the whole dataset for the filtering part. In theory, for each centroid we would just need to process those points in its canopy, but we can’t identify them in advance!</p>
+
+  <p class="body"><a id="pgfId-1001734"></a>To get to a good solution, it can be useful to think about the real goal for canopy clustering: we want to get a set of canopy centroids that are no closer to each other than some distance <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code>. The key point is that between any two of these canopy’s centers, the distance <i class="calibre17">must</i> be above a minimum value, so that the canopies won’t overlap too much. As we mentioned, this distance is similar to the “core distance” in DBSCAN, and points within a radius <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code> can be assumed to belong to the same cluster with high probability.</p>
+
+  <p class="body"><a id="pgfId-1001758"></a>Suppose we shard our initial dataset, as shown in the top step of figure 13.9. If we then apply canopy clustering to each shard independently, we’ll get a certain number of centroids, probably different from mapper to mapper. If we recombine these centroids together, however, we have no guarantee that they will respect the requirement of being not closer than <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code> from each other, because centroids from different shards haven’t been compared to each other.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F9.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1024098"></a>Figure 13.9 Canopy clustering implemented with MapReduce</p>
+
+  <p class="body"><a id="pgfId-1001800"></a>It’s not time to give up yet, though! Luckily, there is an easy solution to this issue, and the solution is still . . . canopy clustering!</p>
+
+  <p class="body"><a id="pgfId-1001815"></a>In fact, if we gather all the centroids from each mapper together, we can apply the canopy clustering algorithm again to this new (smaller) dataset, refining the selection, and this time guaranteeing that no two points in the output from this second pass will be at a closer distance than <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code>. Check the last row in figure 13.9 to get an idea of how this second pass works. The solution is also efficient because the size of the new dataset (containing only the centroids produced by the mappers) is orders of magnitude smaller than the original dataset (assuming the distances <code class="fm-code-in-text">T<sub class="subscript1">1</sub></code> and <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code> have been chosen properly), and therefore in step 2 we can spin up a single reducer and run canopy clustering on a single machine and on all the centroids from step 1.</p>
+
+  <p class="body"><a id="pgfId-1001846"></a>At this point, we need to make a consideration. When used as a preliminary step for k-means, the algorithm has a slightly different goal (and different output) than when used as a standalone coarse-grained clustering algorithm:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1001859"></a>To k-means, we only have to return a list of centroids.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1001872"></a>The standalone algorithm will also need to return, for each canopy, the points belonging to it.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1001884"></a>Therefore, we need to treat these two cases <a id="marker-1004794"></a><a id="marker-1004798"></a><a id="marker-1004802"></a><a id="marker-1004806"></a>separately.</p>
+
+  <h3 class="fm-head2" id="heading_id_14"><a id="pgfId-1001898"></a>13.3.2 Centroid initialization with canopy clustering</h3>
+
+  <p class="body"><a id="pgfId-1001916"></a>Let’s <a id="marker-1004810"></a><a id="marker-1004814"></a><a id="marker-1004818"></a><a id="marker-1004822"></a>start with canopy clustering as the initialization step for k-means. Listing 13.3 summarizes a possible implementation for the MR job performing this task. At first glance, we don’t need to do anything other than what we have shown in the previous section: we just return the output of the reducer, the list of centroids.</p>
+
+  <p class="body"><a id="pgfId-1001934"></a>But there is a catch (there always is!): How do we decide how many centroids should be returned by canopy clustering?</p>
+
+  <p class="body"><a id="pgfId-1001945"></a>The answer is that we can’t control it directly, but only through the values of the two distance thresholds passed to the algorithm, and only to some extent. In the end, the algorithm is a randomized heuristic and the number of canopies created can vary at each run, even with the same values for the hyper-parameters.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1010528"></a>Listing 13.3 MapReduce canopy centroids generation</p>
+  <pre class="programlisting"><b class="calibre21">function</b> MRcanopyCentroids(points, numCentroids, T1, T2, numShards)  <span class="fm-combinumeral">❶</span>
+  shards ← randomShard(points, numShards)                            <span class="fm-combinumeral">❷</span>
+  mappers ← initMappers(numShards, canopyClustering, shards)         <span class="fm-combinumeral">❸</span>
+  reducers ← initReducers(1, canopyClustering)                       <span class="fm-combinumeral">❹</span>
+  <b class="calibre21">while</b>  true <b class="calibre21">do</b>                                                     <span class="fm-combinumeral">❺</span>
+    centroids ← mapReduce(T1, T2, mappers, reducers)                 <span class="fm-combinumeral">❻</span>
+    <b class="calibre21">if</b> |centroids| == numCentroids <b class="calibre21">then</b>                              <span class="fm-combinumeral">❼</span>
+      break
+    <b class="calibre21">elsif</b> |centroids| &gt; numCentroids <b class="calibre21">then</b>                            <span class="fm-combinumeral">❽</span>
+      delta ← random(T2)                                             <span class="fm-combinumeral">❾</span>
+      T2 ← T2 + delta                                                <span class="fm-combinumeral">❾</span>
+      T1 ← T1 + delta                                                <span class="fm-combinumeral">❾</span>
+    <b class="calibre21">else</b>    
+      T2 ← T2 – random(T2)                                           <span class="fm-combinumeral">❿</span>
+  <b class="calibre21">return</b> addRandomNoise(centroids)                                   <span class="fm-combinumeral">⓫</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1020154"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">MRcanopyCentroids</code><a id="marker-1020158"></a> takes a list of points, the number of desired centroids, and two thresholds, <code class="fm-code-in-text2">T<sub class="subscript">1</sub></code> and <code class="fm-code-in-text2">T<sub class="subscript">2</sub></code>, to be used for the canopy clustering initialization step. It also takes the number of shards.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1020179"></a><span class="fm-combinumeral">❷</span> Breaks down the dataset into <code class="fm-code-in-text2">numShards</code><a id="marker-1020183"></a> random shards. This is usually done automatically by the primary node of MapReduce, but in this case, we will use a customized version.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1020197"></a><span class="fm-combinumeral">❸</span> Initializes <code class="fm-code-in-text2">numShards</code> mappers; each will run the <code class="fm-code-in-text2">canopyClustering</code> method<a id="marker-1020201"></a> and will hold a copy of one of the dataset’s shards. The mappers will be alive (and hold the same copy of the input) for the whole lifetime of this method.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1020215"></a><span class="fm-combinumeral">❹</span> Initializes a single reducer that will run <code class="fm-code-in-text2">canopyClustering</code> on the set of all centroids returned by all mappers. This node also will be alive for the whole method’s lifetime, but it won’t hold any data.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1020232"></a><span class="fm-combinumeral">❺</span> Repeats until convergence (it might be a good idea to set a max number of iterations, and also save the closest result found)</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1020249"></a><span class="fm-combinumeral">❻</span> Runs MapReduce, using the mappers and reducers already created. Mappers will receive the current values for the thresholds (in addition, each mapper already hold one shard of the dataset points). The single reducer will read their input (the canopy centroids selected for each shard) from the mappers and return a refined list of centroids.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1020266"></a><span class="fm-combinumeral">❼</span> If the number of centroids matches the desired result, breaks out of the cycle</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1020283"></a><span class="fm-combinumeral">❽</span> Otherwise, checks if the algorithm returned more centroids than needed</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1020300"></a><span class="fm-combinumeral">❾</span> We need to get fewer centroids, so we can try raising the threshold so canopies will be larger and each will hold more points in their inner perimeter. Since <code class="fm-code-in-text2">T1</code> must be larger than <code class="fm-code-in-text2">T2</code>, we need to increment that value as well to be sure. The random value added needs to be some function of <code class="fm-code-in-text2">T2</code>, to be sure that the delta is meaningful.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1020317"></a><span class="fm-combinumeral">❿</span> If, instead, we need more centroids, we can try making the inner threshold smaller.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1020334"></a><span class="fm-combinumeral">⓫</span> Returns the centroids after adding some random noise to them (as described in chapter 12, for k-means we might want to select centroids close to the dataset points, but not exactly the ones in the dataset)</p>
+
+  <p class="body"><a id="pgfId-1002322"></a>So, we need to think outside the box to handle this. Because there is a strong random component that influences the result of each run, we can run canopy clustering several times and take the result that is closer to our expectation. This might not be enough, though, because the variance between different runs is limited, and if we start with the “wrong” values for the thresholds, the algorithm could always output too many (or too few) centroids.</p>
+
+  <p class="body"><a id="pgfId-1002337"></a>To solve this issue, we have two options: either manually tuning these thresholds after each run, or, alternatively, performing some kind of search in the domain of the thresholds, trying different values for them, either by adding at each run a random value to our initial choice for <code class="fm-code-in-text">T<sub class="subscript1">1</sub></code> and <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code>, or by tuning the thresholds depending on the number of canopies returned (lowering <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code> when too few centroids are selected in the last run, and raising it when we get too many). If we’d like to get really fancy, we can even use ML to find the best values.</p>
+
+  <p class="body"><a id="pgfId-1002360"></a>While the former idea is a brute-force, fully randomized search, a better targeted solution seems more promising, because we could direct the search toward values that should work better for our goal. We can use the same idea behind <i class="calibre17">gradient descent</i>,<a id="marker-1004838"></a><a href="#pgfId-1005261"><sup class="footnotenumber">14</sup></a> although with a simpler algorithm that just decides the direction of the update, without worrying about slopes and gradients. For instance, we could run a cycle where we adjust the value for the inner threshold (and, when needed, also the one for the outer threshold) depending on the difference between the result we get from canopy clustering and the number of centroids we need.</p>
+
+  <p class="body"><a id="pgfId-1002386"></a>Considering the random factor in this algorithm, however, this is clearly still a naïve search over the possible values of <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code>, and it could possibly lead to an infinite loop. To correct this situation, we could add a stop condition (and an argument) checking that a maximum number of iterations is not exceeded. At the same time, we could also store the result that is closest to our request in a temporary variable that we update at each run, and return this result whenever the maximum number of iterations is reached without finding a set of canopies with exactly <code class="fm-code-in-text">numCentroids</code> entries. Most of the time it can be acceptable if we return, for instance, 101 centroids instead of 100 (the point being, the caller will have the chance to check the result and decide).</p>
+
+  <p class="body"><a id="pgfId-1002414"></a>We leave it to the readers, as an exercise, to extend listing 13.3 in order to handle the thresholds choice automatically, and we’ll instead move on to describe the distributed version of the full canopy clustering distributed algorithm, the one returning not only the canopy centroids, but also the overlapping sets of points that are associated with each <a id="marker-1004842"></a><a id="marker-1004846"></a><a id="marker-1004850"></a><a id="marker-1004854"></a>canopy.</p>
+
+  <h3 class="fm-head2" id="heading_id_15"><a id="pgfId-1002430"></a>13.3.3 MapReduce canopy clustering</h3>
+
+  <p class="body"><a id="pgfId-1002446"></a>The <a id="marker-1004858"></a><a id="marker-1004862"></a><a id="marker-1004866"></a><a id="marker-1004870"></a><i class="calibre17">classification</i> step, assigning each point to one or more canopies, can be implemented in a few different ways:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1002461"></a>As a follow-up of the method described in listing 13.3. However, because classification will involve all points, if we don’t distribute this step, we will lose most of the advantage of running the algorithm to choose centroids in parallel.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1002480"></a>In the same method as centroids initialization, but with a different MapReduce job.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1002493"></a>In the same MapReduce job we described in the previous section, with the reducer that is in charge of also performing classification at the same time that it chooses which centroids should be kept. In particular, the reducer would get from mappers all the lists of points assigned to each centroid, so rather than cycling through all dataset points again, it could reuse these lists (we’ll see later in this section how it will need to combine them).</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1002508"></a>The first option is rather easier, but naïve. Implementing the classification step at least in the same method as the choice of centroids gives us two main advantages:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1002521"></a>We can, in theory, reuse the same mappers, which already hold onto their shards of data, by just passing them the list of canopy centroids.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1002534"></a>When we perform classification, there is an issue with the centroids filtering we perform in the reducers. So far, we have been able to ignore it, but running centroid filtering and classification together allows us to solve this issue efficiently.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1002546"></a>Figure 13.10 shows what might happen when we filter out one or more centroids during the reduce step in our previous algorithm. We haven’t mentioned this issue until now because it only affects the algorithm when we assign points to canopies, while it is irrelevant when we only care about centroids, as in the k-means initialization steps.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F10.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1024146"></a>Figure 13.10 How filtering out centroids in the reducer step of MapReduce canopy clustering influences the dataset coverage by canopies. (Left) When a centroid C is discarded because it is too close to one that has been chosen, part of the area covered by C’s canopy becomes uncovered. (Right) This can result in some points lying outside of any canopy.</p>
+
+  <p class="body"><a id="pgfId-1002596"></a>The problem is that when we filter out any one of the centroids selected during the map step, a fraction of the points in its canopy might not be covered anymore, not even by the centroid that was chosen in its place. See the left side of figure 13.10, where the centroid marked as a star is drawn from the list of centroids, and as a result, the other centroid within the inner radius <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code> from the selected one is filtered out; however, the shaded area (highlighted by shading) is not covered by the canopy centered at the other centroid (the star).</p>
+
+  <p class="body"><a id="pgfId-1002621"></a>While sometimes the lost coverage is made up for by other canopies, this isn’t always the case: the right side of the same figure shows an example where a few points remain uncovered after a specific choice of centroids to keep.</p>
+
+  <p class="body"><a id="pgfId-1002630"></a>There are several options for solving this issue:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1002639"></a>Consider the “lost” points as outliers (this is not really reliable, though, because they might lie in the middle of some big cluster that can’t be covered by a single canopy).</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1002655"></a>Enlarge canopies: the discarded centroids can be appropriately marked during a run of canopy clustering every time one of the centroids is chosen. During this phase, it is possible to keep track of the outer radius associated with each canopy, and make it large enough to cover all points in the canopy of the removed point. The cheapest way to do so is to set the radius of all canopies to <code class="fm-code-in-text">T<sub class="subscript1">1</sub>+T<sub class="subscript1">2</sub></code>, but this would obviously be increasing the overlapping between canopies.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1002681"></a>Go through unassigned points (those that are not within a distance <code class="fm-code-in-text">T<sub class="subscript1">1</sub></code> from any of the survived centroids) at the end of the classification step and assign them to the closest centroid. This solution will limit to the minimum the overlapping of canopies (each canopy’s radius will be at most <code class="fm-code-in-text">T<sub class="subscript1">1</sub>+T<sub class="subscript1">2</sub></code>, but as small as the distance to the furthest of these new points), but it will be more costly.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1002702"></a>If we perform classification in the same MapReduce job as the choice of centroids, we can find an efficient solution. Mappers will also have to produce a list with the <i class="calibre15">sets</i> of points associated to each centroid and pass these sets to the reducer along with the list of centroids for each shard. In the reducer, an ad hoc variant of canopy clustering is run, and when a centroid <code class="fm-code-in-text">c</code> is drawn, the sets assigned to all centroids within a radius <code class="fm-code-in-text">T<sub class="subscript1">2</sub></code> from <code class="fm-code-in-text">c</code> are merged and assigned to <code class="fm-code-in-text">c</code>’s canopy. This is the best solution in terms of performance, because it saves one iteration over all points in all shards and only requires a single reducer. The downside is that it needs many lists of canopies to be transferred to the reducer, and a custom version of the canopy clustering algorithm that handles merging centroids.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1002741"></a>Listing 13.4 summarizes a high-level implementation of canopy clustering leveraging MapReduce, with classification performed in the same method, but in a second MapReduce job with respect to the choice of centroids. Lines #2–5 run the same algorithm that in listing 13.3 performs the distributed computation of canopy’s centroids. Lines #6–9, on the other hand, run the code specific to this version, performing the assignment of each point <code class="fm-code-in-text">p</code> to all the canopies for which <code class="fm-code-in-text">p</code> is within a distance <code class="fm-code-in-text">T<sub class="subscript1">1</sub>+T<sub class="subscript1">2</sub></code> from the canopy’s center. As we have mentioned, choosing a larger radius ensures that no points will remain uncovered.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1010577"></a>Listing 13.4 MapReduce canopy clustering</p>
+  <pre class="programlisting"><b class="calibre21">function</b> MRcanopyClustering(points, T1, T2, numShards)           <span class="fm-combinumeral">❶</span>
+  shards ← randomShard(points, numShards)                       <span class="fm-combinumeral">❷</span>
+  mappers ← initMappers(numShards, canopyClustering, shards)    <span class="fm-combinumeral">❸</span>
+  reducers ← initReducers(1, canopyClustering)                  <span class="fm-combinumeral">❹</span>
+  centroids ← mapReduce(T1, T2, mappers, reducers)              <span class="fm-combinumeral">❺</span>
+  mappers.setMethod(classifyPoints)                              <span class="fm-combinumeral">❻</span>
+  reducers ← initReducers(|centroids|, join)                    <span class="fm-combinumeral">❼</span>
+  canopies ← mapReduce(T<sub class="calibre25">1</sub>+T<sub class="calibre25">2</sub>, mappers, reducers)                <span class="fm-combinumeral">❽</span>
+  <b class="calibre21">return</b> (canopies, centroids)                                   <span class="fm-combinumeral">❾</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019565"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">MRcanopyCentroids</code><a id="marker-1019569"></a> takes a list of points, the number of desired centroids, and two thresholds, <code class="fm-code-in-text2">T<sub class="subscript">1</sub></code> and <code class="fm-code-in-text2">T<sub class="subscript">2</sub></code>, to be used for the canopy clustering initialization step. It also takes the number of shards.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019590"></a><span class="fm-combinumeral">❷</span> Breaks down the dataset into <code class="fm-code-in-text2">numShards</code><a id="marker-1019594"></a> random shards. This is usually done automatically by the primary node of MapReduce, but in this case, we will use a customized version.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019608"></a><span class="fm-combinumeral">❸</span> Initializes <code class="fm-code-in-text2">numShards</code> mappers; each will run the <code class="fm-code-in-text2">canopyClustering</code> method<a id="marker-1019612"></a> and will hold a copy of one of the dataset’s shards. The mappers will be alive (and hold the same copy of the input) for the whole lifetime of this method.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019626"></a><span class="fm-combinumeral">❹</span> Initializes a single reducer that will run <code class="fm-code-in-text2">canopyClustering</code> on the set of all centroids returned by all mappers. This node will also be alive for the whole method’s lifetime, but it won’t hold any data.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019643"></a><span class="fm-combinumeral">❺</span> Runs MapReduce, using the mappers and reducers already created. Mappers will receive the current values for the thresholds (in addition, each mapper already holds one shard of the dataset points). The single reducer will read their input (the canopy centroids selected for each shard) from the mappers and return a refined list of centroids.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019660"></a><span class="fm-combinumeral">❻</span> Updates the method run in the mapper nodes. Ideally, the same machines can be reused, so we don’t need to shard the dataset again or transfer the shards to new machines (this, however, might not be possible in all MapReduce implementations). The new method to run is a simple classification step going through all points, and for each point checking which centroids are within distance <code class="fm-code-in-text2">T<sub class="subscript">1</sub>+T<sub class="subscript">2</sub></code>. Each mapper will take the list of canopy centroids as input (plus its shard of the initial dataset).</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019677"></a><span class="fm-combinumeral">❼</span> Initializes a set of reducers, one for each canopy created from the first MapReduce job. Each reducer will get the points assigned to a single specific canopy (centroid) and will return the list of all points assigned to that canopy.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019694"></a><span class="fm-combinumeral">❽</span> Runs the new MapReduce job and gets the final list of canopies (following the same order as <code class="fm-code-in-text2">centroids</code><a id="marker-1019699"></a>)</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019712"></a><span class="fm-combinumeral">❾</span> Returns both the list of centroids and the list of canopies</p>
+
+  <p class="body"><a id="pgfId-1003027"></a>The method performing these assignments, <code class="fm-code-in-text">classifyPoints</code>,<a id="marker-1004890"></a><a href="#pgfId-1005298"><sup class="footnotenumber">15</sup></a> is run in the mappers for each shard separately. As for k-means, this step can be performed independently on each point, as long as the mapper has the full list of centroids.</p>
+
+  <p class="body"><a id="pgfId-1003044"></a>The output of each mapper will be a list of lists with one entry per centroid: the list of points associated with that centroid. Notice that each point can be associated with at least one, but potentially many centroids. Each mapper will have entries for several centroids, and each centroid will have points assigned to it across several mappers: that’s why in this MR job we also need one reducer per canopy (that is, per centroid).</p>
+
+  <p class="body"><a id="pgfId-1003063"></a>Each reducer will then work on a single canopy, merging the lists for that canopy produced by each mapper; the final result will be the list of canopies produced by each reducer.</p>
+
+  <p class="body"><a id="pgfId-1003072"></a>This subroutine described in lines #6–8 is also illustrated in figure 13.11.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F11.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1024188"></a>Figure 13.11 An example of a MapReduce job to classify points into canopies, given a list of centroids</p>
+
+  <p class="body"><a id="pgfId-1003103"></a>This concludes our discussion on canopy clustering, and we encourage the reader to try to write down a job for this algorithm with one of the open source implementations of MapReduce, for instance, Hadoop, or check out Mahout, a distributed linear algebra framework by Apache foundation, that does implement a distributed version of <a id="marker-1004894"></a><a id="marker-1004898"></a><a id="marker-1004902"></a><a id="marker-1004906"></a>canopy <a id="marker-1004910"></a><a id="marker-1004914"></a><a id="marker-1004918"></a>clustering.<a href="#pgfId-1005319"><sup class="footnotenumber">16</sup></a></p>
+
+  <h2 class="fm-head" id="heading_id_16"><a id="pgfId-1003124"></a>13.4 MapReduce DBSCAN</h2>
+
+  <p class="body"><a id="pgfId-1003136"></a>So <a id="marker-1004922"></a><a id="marker-1004926"></a><a id="marker-1004930"></a>far, so good. Our first attempt at distributed clustering was with k-means and we were in luck: we discovered that it can be easily rewritten as a distributed algorithm because its steps can be performed independently for each point (classification) or each cluster (re-centering). We applied MapReduce to canopy clustering as well, even if its first step, drawing the canopies centroids, was not immediately parallelizable and required a deeper reasoning to obtain the best clustering.</p>
+
+  <p class="body"><a id="pgfId-1003149"></a>To close the circle and complete the topic, in this section we are going to discuss how to apply the MapReduce paradigm to a clustering algorithm that is intrinsically non-parallelizable, at least at first glance: DBSCAN.</p>
+
+  <p class="body"><a id="pgfId-1003158"></a>As we saw in section 12.3, in DBSCAN the clustering is computed by exploring and leveraging the relations between points that are therefore interconnected. Sharding a dataset would change the <span class="cambria">ε</span>-neighborhood of most points, and some of the core points might not be recognized as such because their <span class="cambria">ε</span>-neighborhoods are scattered across several shards.</p>
+
+  <p class="body"><a id="pgfId-1003179"></a>Although it is possible to think about a MapReduce job computing the size of the <span class="cambria">ε</span>-neighborhood of each point with a distributed computing model, the core of DBSCAN relies on sequentially going through points and their neighbors, and thus it seems it would make more sense to explore different options.</p>
+
+  <p class="body"><a id="pgfId-1003191"></a>We already discovered in section 13.1.4 that we could use canopy clustering as a first step, apply DBSCAN to each canopy separately, and then iteratively merge clusters in neighboring canopies when points close to their borders or in the overlapping regions are within each other’s <span class="cambria">ε</span>-neighborhood.</p>
+
+  <p class="body"><a id="pgfId-1003203"></a>This approach becomes problematic for a few reasons:</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1003212"></a>It’s hard to keep track of the canopies that needs to be checked, and of the points inside the canopies to compare. All pairs of canopies need to be compared to check whether they overlap or their distance is smaller than <span class="cambria">ϵ</span>, and then for each pair of canopies all points need to be compared to the other canopy.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003233"></a>Given the shape of the envelopes (hyperspheres), it is complicated to compute the distance between points in a canopy’s external rings and the other canopy (see section 10.4.3 and figure 10.23 to get an idea of the complicated geometric implication for the 2-D case, which gets even more complicated for hyperspheres in higher dimensions).</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003247"></a>Getting the thresholds passed to canopy clustering right is complicated; because of the spherical shape of canopies, we will have to use a larger-than-needed <code class="fm-code-in-text">T<sub class="subscript1">1</sub></code> radius and a significant overlapping between canopies to capture the relations between clusters in different canopies.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1003265"></a>When the overlapping between canopies is large, points get assigned to several canopies, and thus they will need to be processed several times for each pair of canopies. This easily becomes a computational nightmare, making vain all the effort we did to parallelize.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1003281"></a>This solution can therefore work limitedly in certain specific cases, in specific configurations, but doesn’t work in high-dimensional datasets.</p>
+
+  <p class="body"><a id="pgfId-1003290"></a>Nevertheless, the basic idea is valid, and we can make it work by simply changing the way we shard the dataset. Instead of relying on random sharding or spherical canopies, we can break the dataset into a regular grid, where each cell is of the same size. Cells are hyper-rectangles instead of hyper-spheres, and for each coordinate the domain can be split differently, causing the cells’ (rectangles’) sides to each be of a different length.</p>
+
+  <p class="body"><a id="pgfId-1003303"></a>This is an improvement over dealing with canopies, because identifying points close to the borders becomes easy. We can just check that the absolute value of the difference between the point and the border along some coordinate is smaller than a threshold, instead of computing the distance between a point and a hyper-sphere; moreover, it’s also easier and cheaper to shard the dataset into grid cells.</p>
+
+  <p class="body"><a id="pgfId-1003318"></a>But it gets even better! Instead of having to compare points close to the borders of adjacent cells, we can define the cells to be slightly overlapping, and precisely to be overlapping, for each coordinate, over a rectangular area of side <span class="cambria">ϵ</span>, as shown in figure 13.12.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F12.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1024233"></a>Figure 13.12 Sharding data for MapReduce DBSCAN (MR-DBSCAN). After dividing the domain into equally sized cells, for each shard we need to include all points in one cell, plus all the points within a distance equal to <span class="cambria">ϵ</span> from its borders. In practice, instead of the cells, we take a rectangle obtained by stretching the cell further in all directions, and each of the sides will measure like the corresponding cell’s side plus 2<span class="cambria">ϵ</span>. This way, core points close to the cells’ borders will have their <span class="cambria">ϵ</span>-neighborhood contained in either shard.</p>
+
+  <p class="body"><a id="pgfId-1003360"></a>This way each adjacent cell overlaps the next one over a length of 2<span class="cambria">ϵ</span>, and the <span class="cambria">ϵ</span>-neighborhood of each point in the overlapping section will be part of at least one of the two adjacent cells (for instance, point <code class="fm-code-in-text">p</code> in the figure has its <span class="cambria">ϵ</span>-neighborhood completely contained in <code class="fm-code-in-text">S<sub class="subscript1">1</sub></code>). The trick, therefore, is that if <code class="fm-code-in-text">p</code> is a core point in one of the shards, it will also be a core point in the union of the shards, and hence its neighbors on both sides of the cells’ border should be directly-reachable<a href="#pgfId-1005335"><sup class="footnotenumber">17</sup></a> from <code class="fm-code-in-text">p</code>, and in turn end up in the same cluster. Therefore, if <code class="fm-code-in-text">p</code> is assigned to cluster <code class="fm-code-in-text">C<sub class="subscript1">3</sub></code> for shard <code class="fm-code-in-text">S<sub class="subscript1">1</sub></code>, and to cluster <code class="fm-code-in-text">C<sub class="subscript1">2</sub></code> for shard <code class="fm-code-in-text">S<sub class="subscript1">2</sub></code>, it follows that clusters <code class="fm-code-in-text">C<sub class="subscript1">3</sub></code> and <code class="fm-code-in-text">C<sub class="subscript1">2</sub></code> should be merged.</p>
+
+  <p class="body"><a id="pgfId-1003416"></a>Vice versa, if we consider any point that is outside the shard’s border, like <code class="fm-code-in-text">r</code> in figure 13.12, which is on the left of <code class="fm-code-in-text">S<sub class="subscript1">1</sub></code>’s inner margin, then we know for sure that</p>
+
+  <ul class="calibre19">
+    <li class="fm-list-bullet">
+      <p class="list"><a class="calibre14" id="pgfId-1003431"></a>Its distance from the shard’s border is larger than <span class="cambria">ϵ</span>, and therefore its <span class="cambria">ϵ</span>-neighborhood doesn’t intersect <code class="fm-code-in-text">S<sub class="subscript1">1</sub></code>’s outer margin.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1003448"></a>If there is a point <code class="fm-code-in-text">z</code> in <code class="fm-code-in-text">S<sub class="subscript1">2</sub></code> that is reachable from <code class="fm-code-in-text">r</code>, then there must be a chain of core points that are directly reachable from <code class="fm-code-in-text">z</code> and <code class="fm-code-in-text">r</code> (for the definition of reachability, see section 12.3.1), and at least one of these points—call it <code class="fm-code-in-text">w</code>—must be in either <code class="fm-code-in-text">S<sub class="subscript1">1</sub></code>’s inner or outer margin, because these areas extend exactly for a length equal to 2<span class="cambria">ϵ</span>, which is exactly the diameter of the core points’ <span class="cambria">ϵ</span>-neighborhood.</p>
+    </li>
+
+    <li class="fm-list-numbered-last">
+      <p class="list"><a class="calibre14" id="pgfId-1003488"></a>Therefore, we can ignore <code class="fm-code-in-text">r</code>, because we’ll join its cluster to <code class="fm-code-in-text">z</code>’s when we examine point <code class="fm-code-in-text">w</code>.</p>
+    </li>
+  </ul>
+
+  <p class="body"><a id="pgfId-1003504"></a>The consequence of what we informally proved<a href="#pgfId-1005352"><sup class="footnotenumber">18</sup></a> here is that, instead of comparing each point in a cell to all the points close to the border of the adjacent cells, we can just keep track of the core points within a distance <span class="cambria">ϵ</span> from a cell’s border (or 2<span class="cambria">ϵ</span> from a shard’s border), and merge those clusters that have a point in either that inner or outer margin that is a core point in either of the adjacent cells.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F13.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1024275"></a>Figure 13.13 An example of MapReduce DBSCAN running with four cells. We’ll need one mapper for each (extended) cell, and one reducer for each pair of adjacent cells. Because the dataset in the example is small, and we use just four cells with a large value for <span class="cambria">ϵ</span>, the fraction of points in the margin is unrealistically high. In real situations, there are relatively fewer points in the borders, and the savings obtained by distributing the algorithm is orders of magnitude higher.</p>
+
+  <p class="body"><a id="pgfId-1003524"></a>Figure 13.13 shows an example of how a MapReduce job would perform a distributed clustering of a 2D dataset using DBSCAN, and the reduction described in this section and listing 13.5 uses pseudocode to describe the step needed.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1010766"></a>Listing 13.5 MapReduce DBSCAN</p>
+  <pre class="programlisting"><b class="calibre21">function</b> MRdbscan(points, numShards, eps, minPts)                     <span class="fm-combinumeral">❶</span>
+  shards, adjList, marginPoints ← gridShard(points, numShards, eps)   <span class="fm-combinumeral">❷</span>
+  mappers ← initMappers(numShards, dbscan, shards, eps, minPts)       <span class="fm-combinumeral">❸</span>
+  reducers ← initReducers(adjList, mergeClusters, marginPoints)       <span class="fm-combinumeral">❹</span>
+  clusters, noise, mergeList ← mapReduce(mappers, reducers)           <span class="fm-combinumeral">❺</span>
+  <b class="calibre21">return</b> combine(clusters, noise, mergeList)                          <span class="fm-combinumeral">❻</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019150"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">MRdbscan</code><a id="marker-1019154"></a> takes a list of points, the number of desired cells in which the dataset should be sharded, and the parameters for DBSCAN algorithm, the radius and minimum number of points that define a dense zone.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019175"></a><span class="fm-combinumeral">❷</span> Breaks down the dataset into <code class="fm-code-in-text2">numShards</code><a id="marker-1019179"></a> regular cells; each cell will be extended for a length <code class="fm-code-in-text2">eps</code> in all directions to define a shard, and all of these are saved into <code class="fm-code-in-text2">shards</code>. Since we need grid-based sharding, we do need a customized sharding function. This method also needs to return the list of adjacent shards (better if a list of pairs of adjacent shards, without duplicates), and the list of points in the margin regions for each pair of adjacent shards.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019193"></a><span class="fm-combinumeral">❸</span> Initializes <code class="fm-code-in-text2">numShards</code> mappers; each will run the DBSCAN clustering method and will hold a copy of one of the dataset’s shards. The mappers will be alive (and hold the same copy of the input) for the whole lifetime of this method.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019210"></a><span class="fm-combinumeral">❹</span> Initializes one reducer for each pair of shards in the adjacency list. The reducers will run the <code class="fm-code-in-text2">mergeClusters</code> method<a id="marker-1019321"></a> and will be alive for the whole method’s lifetime, and they will hold data about the adjacent shards they operate on, and the margin points between those two shards.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019228"></a><span class="fm-combinumeral">❺</span> Runs MapReduce using the mappers and reducers already created. Mappers will use the shards of data they already hold as input. Reducers will read their input (clusters and outliers local to shards) from the mappers (plus, they already hold info about which points are in the margin area between each pair of adjacent shards). Each reducer will output a list of clusters to merge, and a list of outlier points to keep for each pair of shards.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1019245"></a><span class="fm-combinumeral">❻</span> Before returning, we need to combine the results from reducers by merging clusters (possibly re-indexing clusters in a global way) and fixing the list of outliers.</p>
+
+  <p class="body"><a id="pgfId-1003753"></a>The first step is sharding the dataset according to a regular grid. Each grid cell is then expanded in all directions with a further area of side <span class="cambria">ϵ</span>, and shards are formed by filtering all points within these expanded rectangles (which, it’s important to remember, overlap along their common edges with adjacent cells).</p>
+
+  <p class="body"><a id="pgfId-1003769"></a>Each mapper performs DBSCAN clustering on its shard, and at the next step, a reducer is spun up for each pair of adjacent shards (in this example, we used a 2x2 grid, so there are four pairs of adjacent grid cells).</p>
+
+  <p class="body"><a id="pgfId-1003780"></a>Reducers need to receive, from each mapper, the list of clusters found, the list of noise points (if any), and the list of points in the margin region between the two shards that the reducer will process.</p>
+
+  <p class="body"><a id="pgfId-1003789"></a>The reducer then checks to see if there is a core point in the shared margin region, and if so, it merges the two clusters to which the points belong. In the example in figure 13.13, we deliberately used a global incremental indexing for clusters at this stage, but in reality, this global indexing is not easily achievable with a single pass! That’s because we don’t know in advance how many clusters a mapper will find. Merging clusters can also be handled locally, but at some point, an extra step will be needed to re-index all clusters globally.</p>
+
+  <p class="body"><a id="pgfId-1003806"></a>If we suppose that clusters have global indexing, however, we can handle merging clusters using a data structure with which you should already be familiar: the <i class="calibre17">disjoint set</i><a id="marker-1004946"></a><a id="marker-1004950"></a>, which we described in chapter 5.</p>
+
+  <p class="body"><a id="pgfId-1003821"></a>You might have noticed that there are some edge cases we should keep in mind. Clusters in one shard, for instance, can be subsets of a bigger cluster in another shard. In the example, reducer 2 gets clusters <code class="fm-code-in-text">C<sub class="subscript1">3</sub></code> and <code class="fm-code-in-text">C<sub class="subscript1">6</sub></code>, with the latter completely included in the former; in this case, even if no point in the margin regions is a core point, obviously<a href="#pgfId-1005372"><sup class="footnotenumber">19</sup></a> we need to merge the two clusters (or, equivalently, get rid of <code class="fm-code-in-text">C<sub class="subscript1">6</sub></code>).</p>
+
+  <p class="body"><a id="pgfId-1003851"></a>Likewise, if a point <code class="fm-code-in-text">p</code> is classified as a core point in one shard and noise in the other, there won’t be clusters to merge: <code class="fm-code-in-text">p</code> will already be in the right cluster, but we also need to be careful, because it should be removed from the list of outliers.</p>
+
+  <p class="body"><a id="pgfId-1003866"></a>The output of each reducer will be a list of local clusters to merge, or, alternatively, the disjoint set keeping track of the merges. A further brief composition step can take care of producing the list with the point assignments to the final clusters and the list of outliers, based on reducers’ output.</p>
+
+  <p class="body"><a id="pgfId-1003875"></a>The pseudo-code for this MapReduce job is simpler than any other job in this chapter, but don’t be fooled—most of the complexity is hidden in the methods <code class="fm-code-in-text">gridShard</code><a id="marker-1004954"></a>, <code class="fm-code-in-text">dbscan</code><a id="marker-1004958"></a><code class="fm-code-in-text">,</code> and <code class="fm-code-in-text">mergeClusters</code><a id="marker-1004962"></a>.</p>
+
+  <p class="body"><a id="pgfId-1003898"></a>Method <code class="fm-code-in-text">dbscan</code> is exactly the same method that we described in section 12.3. In most languages, we will be able to reuse it without any modification. <code class="fm-code-in-text">gridShard</code>, in its most naïve version, just iterates over points and computes the index of the cell by performing a modulo division (plus a few checks to see if the point is in the margin of adjacent cells). We’ll address some problems connected to this method later in this section, but we won’t get into the details of its implementation.</p>
+
+  <p class="body"><a id="pgfId-1003922"></a>Finally, method <code class="fm-code-in-text">mergeClusters</code><a id="marker-1022896"></a> is a nice application of disjoint set, the data structure we described in chapter 5. Listing 13.6 shows a possible implementation of this method that treats argument <code class="fm-code-in-text">clustersSet</code><a id="marker-1022898"></a> like an instance of disjoint set shared among all reducers. While this is not practically possible,<a href="#pgfId-1005396"><sup class="footnotenumber">20</sup></a> it is conceptually equivalent to having the reducers emitting a list of clusters to merge and perform the operations on the disjoint set in the combiner stage, after reducers finish their job. For this reason, we can consider <code class="fm-code-in-text">clustersSet</code> like a facade<a href="#pgfId-1005414"><sup class="footnotenumber">21</sup></a> simplifying the process of emitting a pair of clusters to merge and sending the pair to the combiner, where the actual disjoint set is created and merge operations are performed.</p>
+
+  <p class="fm-code-listing-caption"><a id="pgfId-1010812"></a>Listing 13.6 Method <code class="fm-code-in-text">mergeClusters</code></p>
+  <pre class="programlisting"><b class="calibre21">function</b> mergeClusters(shard1, shard2, marginPoints, clustersSet)      <span class="fm-combinumeral">❶</span>
+  <b class="calibre21">for</b> p in marginPoints.intersection(shard1, shard2) <b class="calibre21">do</b>                <span class="fm-combinumeral">❷</span>
+    <b class="calibre21">if</b> shard1.isCorePoint(p) or shard2.isCorePoint(p) <b class="calibre21">then</b>             <span class="fm-combinumeral">❸</span>
+      <b class="calibre21">if</b> shard1.isNoise(p) <b class="calibre21">then</b>                                        <span class="fm-combinumeral">❹</span>
+        shard1.markNoise(p, false)                                     <span class="fm-combinumeral">❺</span>
+      <b class="calibre21">elsif</b> shard2.isNoise(p) <b class="calibre21">then</b>                                     <span class="fm-combinumeral">❻</span>
+        shard2.markNoise(p, false)
+      <b class="calibre21">else</b>
+        clustersSet.merge(shard1.getCluster(p), shard2.getCluster(p))  <span class="fm-combinumeral">❼</span>
+  <b class="calibre21">return</b> clustersSet, shard1, shard2                                   <span class="fm-combinumeral">❽</span></pre>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018508"></a><span class="fm-combinumeral">❶</span> Method <code class="fm-code-in-text2">mergeClusters</code><a id="marker-1018512"></a> takes two shards, extending two adjacent cells, a set of margin points, and a disjoint set on the list of clusters. We assume that clusters have already been re-indexed globally, and that <code class="fm-code-in-text2">clustersSet</code><a id="marker-1018514"></a> is a facade emitting a pair of clusters to merge.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018567"></a><span class="fm-combinumeral">❷</span> For each margin point in the intersection between the two shards, assume <code class="fm-code-in-text2">marginPoints</code><a id="marker-1018572"></a> is an instance of a class handling these kinds of operations, abstracting away the complexity that is not relevant to this method.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018585"></a><span class="fm-combinumeral">❸</span> Checks if <code class="fm-code-in-text2">p</code> is a core point in at least one of the two shards (also, we assume the shard objects created by mappers handle this kind of method). If it is not, we can ignore it.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018602"></a><span class="fm-combinumeral">❹</span> Checks if <code class="fm-code-in-text2">p</code> is classified as noise, as an outlier, in the first shard</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018619"></a><span class="fm-combinumeral">❺</span> If it is so, it will be in a cluster in <code class="fm-code-in-text2">shard2</code>, and we only need to remove it from the list of outliers in <code class="fm-code-in-text2">shard1</code>.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018636"></a><span class="fm-combinumeral">❻</span> Same thing if it is an outlier in <code class="fm-code-in-text2">shard2</code> (also, remember it can only be an outlier in one of the shards, as it’s a core point in at least one)</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018653"></a><span class="fm-combinumeral">❼</span> If <code class="fm-code-in-text2">p</code> is not an outlier in either shard, it means it is assigned to a cluster in both; hence, we need to merge those clusters.</p>
+
+  <p class="fm-code-annotation"><a id="pgfId-1018670"></a><span class="fm-combinumeral">❽</span> The relevant information we updated is all in the set of clusters and the two shards. Assuming we pass these structures by value (at least the shards), we can return them at the end of the method.</p>
+
+  <p class="body"><a id="pgfId-1004192"></a>The implementation goes through all points in the margin region between the two shards (use figure 13.12 as a reference) and checks if any of these points is a core point in at least one of the shards. Then we just need to make sure it’s not a noise point in the other shard (handled as an edge case) and merge the two clusters (<code class="fm-code-in-text">C1</code> will be in <code class="fm-code-in-text">shard1</code> and <code class="fm-code-in-text">C2</code> will be in <code class="fm-code-in-text">shard2</code>). Optionally, we can check that <code class="fm-code-in-text">C1</code> and <code class="fm-code-in-text">C2</code> are not one subset of the other and handle that case differently.</p>
+
+  <p class="body"><a id="pgfId-1004221"></a>There is one final detail we need to address before wrapping up the discussion on MapReduce DBSCAN: the sharding step. Before continuing reading, stop for a minute and think about how this case is different from what we have seen before, and what issues we could face in this step.</p>
+
+  <p class="body"><a id="pgfId-1004230"></a>Do you see the problem? Deterministically sharding points according to a rectangular grid will not be as cheap as the random sharding we have seen so far! Before running and even configuring the MapReduce job to perform this sharding, in fact, we would need to run a single-thread process creating the grid and assigning each point to a shard, depending on the point’s position. If the grid has <code class="fm-code-in-text">m</code> cells, and the dataset holds <code class="fm-code-in-text">n</code> points with <code class="fm-code-in-text">d</code> coordinates each, then this step will require, in the worst case, <code class="fm-code-in-text">O(n*d*m)</code> comparisons.</p>
+
+  <p class="body"><a id="pgfId-1004252"></a>To speed things up, we can use an R-tree. As mentioned in chapter 10, R-trees can hold non-zero-measure objects, and in particular shapes like rectangles (see figure 10.5). We can therefore create an R-tree whose items are the grid cells, and for each point find the closest cell. Since R-trees have linear-time worst-case running time, however, we don’t improve our asymptotic result (but in most cases R-trees will result, in practice, in faster than naïve search).</p>
+
+  <p class="body"><a id="pgfId-1004269"></a>To seriously speed things up, however, what we really need is to distribute even the sharding step with a new MapReduce job. We know that each point can be compared to cells independently; therefore, if we split the dataset into random shards, each shard can be processed by a battery of mappers. Reducers, at the same time, will just group points by extended cell(s),<a href="#pgfId-1005430"><sup class="footnotenumber">22</sup></a> and finally produce (not randomly, this time) new shards that can then be used in the first step of the MR-DBSCAN job (the one illustrated in figure 13.13). As a further optimization, since reducers for this job (sharding) will already have all the data for a cell, we can repurpose the same machines to be the mappers in the MR-DBSCAN job.</p>
+
+  <p class="body"><a id="pgfId-1004284"></a>It’s also worth mentioning that the number of adjacent cells grows linearly with the dimension of the space, since the number of faces of a <code class="fm-code-in-text">d</code>-dimensional hypercube is equal to <code class="fm-code-in-text">2*d</code>. This means that the sharding algorithm can scale out to higher dimensions.</p>
+
+  <p class="body"><a id="pgfId-1004300"></a>Finally, it’s worth mentioning that because we are performing this sharding step as an independent MapReduce job, we are forced to use a regular grid. On the contrary, the article by <i class="calibre17">He et al</i>. presenting MR-DBSCAN<a href="#pgfId-1017383"><sup class="footnotenumber">23</sup></a> uses a different, more sophisticated approach, where statistics on the dataset are collected in a first pass through the dataset, splitting the domain into an irregular collection of parallel rectangles (see figure 13.14) each with ideally uniform density. Then, leveraging the statistics collected, we can also tune the parameters for DBSCAN to adapt to the different density found in different <a id="marker-1004986"></a><a id="marker-1004990"></a><a id="marker-1004994"></a>cells.</p>
+
+  <p class="fm-figure"><img alt="" class="calibre23" src="../Images/ch13_F14.png"/></p>
+
+  <p class="fm-figure-caption"><a id="pgfId-1024323"></a>Figure 13.14 An example of an irregularly shaped grid for sharding a dataset in MR-DBSCAN. Notice that shards (dashed-lines rectangles) are built by expanding cells in each direction for a distance equal to <span class="cambria">ϵ</span>, the dense region’s radius.</p>
+
+  <h2 class="fm-head" id="heading_id_17"><a id="pgfId-1004348"></a>Summary</h2>
+
+  <ul class="calibre19">
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1004360"></a>Canopy clustering<a class="calibre14" id="marker-1004998"></a> is an algorithm for computing a coarse-grained pseudo-clustering of a dataset, with the advantage of being very inexpensive compared to more accurate clustering algorithms such as k-means or DBSCAN.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1004376"></a>We distinguish between parallel computing, running some software in several threads on the same machine, and distributed computing, where several machines and possibly resources on the cloud are used to run software in a joint effort.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1004389"></a>MapReduce is a computational model that leverages the cloud to scale out processing of large datasets.</p>
+    </li>
+
+    <li class="fm-list-numbered1">
+      <p class="list"><a class="calibre14" id="pgfId-1004404"></a>k-means, canopy clustering, and DBSCAN can all be rewritten as distributed algorithms by using the MapReduce <a class="calibre14" id="marker-1005002"></a><a class="calibre14" id="marker-1005006"></a>model.</p>
+    </li>
+  </ul>
+  <hr class="calibre22"/>
+
+  <p class="fm-footnote"><sup class="footnotenumber">1.</sup> <a id="pgfId-1005025"></a>Multi-processor machines can, however, apply optimizations where some operations are executed in parallel across different cores. This level of parallelization, however, is limited by the number of cores on a chip—currently at most in the order of a hundred, for the most powerful servers.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">2.</sup> <a id="pgfId-1005040"></a>References: <span class="fm-hyperlink"><a href="http://mng.bz/Wdql">http://mng.bz/Wdql</a></span> and <span class="fm-hyperlink"><a href="http://norvig.com/21-days.html#answers">http://norvig.com/21-days.html#answers</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">3.</sup> <a id="pgfId-1005062"></a>Considering a WAN or high-performance cloud service. Local clusters in datacenters, when properly configured, can lower this latency by two orders of magnitude, down to 1ms.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">4.</sup> <a id="pgfId-1005076"></a>It can both reduce the number of iterations needed and reduce the number of operations performed in each iteration.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">5.</sup> <a id="pgfId-1005090"></a>The Cartesian Product between two sets is the multiplication of the two sets to form a new set, containing all the ordered pairs such that the first element belongs to the first set and the second element belongs to the second set.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">6.</sup> <a id="pgfId-1005125"></a>Typically a per-key count on mappers’ output would be done by a third abstraction, the combiners, that are sort of like mini-reducers operating on the same machines as mappers, and only on the output of individual mappers. Instead of a list with a ton of entries with value 1, the mapper would send out a list with just a few entries, reducing both bandwidth and the workload for reducers.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">7.</sup> <a id="pgfId-1005140"></a>Methods of an immutable data structure, rather than changing the object A on which they are called, create a new object B whose state is the result of applying the called method to A. For instance, the method that appends an element to a list L1 would create a brand-new list L2 with |L1| + 1 elements and leave L1 unchanged.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">8.</sup> <a id="pgfId-1005170"></a>A pure function is any function that doesn’t have a side effect: it takes 0, 1, or more inputs, and returns an output (possibly in the form of a tuple), without relying on any change to the input or to the global state. In a sense, a pure function is exactly like a mathematical function.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">9.</sup> <a id="pgfId-1005185"></a>That’s also the reason why, as discussed in the previous sub-sections, it can’t be applied to all those problems that cannot be formulated in a way that eliminates shared state.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">10.</sup> <a id="pgfId-1005200"></a>Notice that here we will list k-means steps from the easiest to the hardest to parallelize.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">11.</sup> <a id="pgfId-1005214"></a>Keep in mind that this is not a real implementation, so we can take some shortcuts to try and explain the fundamental ideas more clearly. A Hadoop MapReduce job, for instance, would look different.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">12.</sup> <a id="pgfId-1005228"></a>A good starting point to delve into Iterative MapReduce is <span class="fm-hyperlink"><a href="http://mng.bz/8NG5">http://mng.bz/8NG5</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">13.</sup> <a id="pgfId-1005244"></a>Technically, computing the mean of a set of values could also be distributed: a combiner would need to take as input the shards’ centroids and the number of points in each shard to compute the overall center of mass.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">14.</sup> <a id="pgfId-1005261"></a>Gradient descent is an optimization algorithm for finding local minimums of a function F. It explores the function’s domain in a systematic way, taking steps proportional to the gradient of F at current point X, which (simplifying) can be geometrically interpreted as the direction of greatest change for F at X.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">15.</sup> <a id="pgfId-1005298"></a>The implementation of <code class="fm-code-in-text1">classifyPoints</code> is omitted. It can be derived from listing 12.3 by changing the condition checked, remembering that we don’t look for the closest centroid in this case, but need all centroids within a certain distance. Also, this function would be the right point where the issue with unassigned points could be addressed; remember that the easiest, one-size-fits-all solution can be using a threshold distance equal to <code class="fm-code-in-text1">T<sub class="subscript2">1</sub>+T<sub class="subscript2">2</sub></code>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">16.</sup> <a id="pgfId-1005319"></a>See <span class="fm-hyperlink"><a href="http://mng.bz/E2EX">http://mng.bz/E2EX</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">17.</sup> <a id="pgfId-1005335"></a>See section 12.3.1 for a definition of reachability and some examples.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">18.</sup> <a id="pgfId-1005352"></a>For a formal proof and a detailed description of the algorithm, see He, Yaobin, et al. “MR-DBSCAN: A scalable MapReduce-based DBSCAN algorithm for heavily skewed data.” <i class="calibre17">Frontiers of Computer Science</i> 8.1 (2014): 83-99.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">19.</sup> <a id="pgfId-1005372"></a>C6 doesn’t qualify to merge with C1, because none of its points in the margin region are core points; therefore, we need to explicitly perform some extra check (for instance, for each pair of clusters, verify if one is a subset of the other) to recognize these situations.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">20.</sup> <a id="pgfId-1005396"></a>It wouldn’t make sense to have a shared object in the MapReduce model! Can you explain why? (Hint: Besides technical challenges, do we really want to introduce shared state?)</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">21.</sup> <a id="pgfId-1005414"></a>See <span class="fm-hyperlink"><a href="https://en.wikipedia.org/wiki/Facade_pattern">https://en.wikipedia.org/wiki/Facade_pattern</a></span>.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">22.</sup> <a id="pgfId-1005430"></a>Since cells are overlapping, a point can be assigned to more than one cell.</p>
+
+  <p class="fm-footnote"><sup class="footnotenumber">23.</sup> <a id="pgfId-1017383"></a>He, Yaobin, et al. “MR-DBSCAN: A scalableMapReduce-based DBSCAN algorithm for heavily skewed data.” <i class="calibre17">Frontiers of Computer Science</i> 8.1 (2014): 83-99.</p>
+</body>
+</html>

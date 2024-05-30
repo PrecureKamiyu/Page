@@ -1,0 +1,792 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 37. Daemons</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch36.html" title="Chapter 36. Process Resources"/><link rel="next" href="ch38.html" title="Chapter 38. Writing Secure Privileged Programs"/></head><body><section class="chapter" title="Chapter 37. Daemons" epub:type="chapter" id="daemons"><div class="titlepage"><div><div><h2 class="title">Chapter 37. Daemons</h2></div></div></div><p>This chapter examines the characteristics of daemon processes and looks at the steps
+            required to turn a process into a daemon. We also look at how to log messages from a
+            daemon using the <span class="emphasis"><em>syslog</em></span> facility.</p><div class="sect1" title="Overview"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="overview-id8">Overview</h2></div></div></div><p>A <span class="emphasis"><em>daemon</em></span> is a process with the following
+                    characteristics:<a id="IDX-CHP-37-5398" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>It is long-lived. Often, a daemon is created at system startup and runs
+                        until the system is shut down.</p></li><li class="listitem"><p>It runs in the background and has no controlling terminal. The lack of a
+                        controlling terminal ensures that the kernel never automatically generates
+                        any job-control or terminal-related signals (such as <code class="literal">SIGINT, SIGTSTP</code>, and <code class="literal">SIGHUP</code>) for a daemon.</p></li></ul></div><p>Daemons are written to carry out specific tasks, as illustrated by the following
+                examples:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>cron</em></span>: a daemon that executes commands at a scheduled
+                        time.</p></li><li class="listitem"><p><span class="emphasis"><em>sshd</em></span>: the secure shell daemon, which permits logins
+                        from remote hosts using a secure communications protocol.</p></li><li class="listitem"><p><span class="emphasis"><em>httpd</em></span>: the HTTP server daemon (Apache), which serves
+                        web pages.</p></li><li class="listitem"><p><span class="emphasis"><em>inetd</em></span>: the Internet superserver daemon (described in
+                            <a class="xref" href="ch60.html#the_inetd_open_parenthesis_internet_supe" title="The inetd (Internet Superserver) Daemon">The <span class="emphasis"><em>inetd</em></span> (Internet Superserver) Daemon</a>), which
+                        listens for incoming network connections on specified TCP/IP ports and
+                        launches appropriate server programs to handle these connections.</p></li></ul></div><p>Many standard daemons run as privileged processes (i.e., effective user ID of 0),
+                and thus should be coded following the guidelines provided in <a class="xref" href="ch38.html" title="Chapter 38. Writing Secure Privileged Programs">Chapter 38</a>.</p><p>It is a convention (not universally observed) that daemons have names ending with
+                the letter <span class="emphasis"><em>d</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On Linux, certain daemons are run as <span class="emphasis"><em>kernel threads</em></span>. The
+                    code of such daemons is part of the kernel, and they are typically created
+                    during system startup. When listed using <span class="emphasis"><em>ps(1)</em></span>, the names
+                    of these daemons are surrounded by square brackets (<code class="literal">[]</code>). One example of a kernel thread is
+                        <span class="emphasis"><em>pdflush</em></span>, which periodically flushes dirty pages (e.g.,
+                    pages from the buffer cache) to disk.<a id="IDX-CHP-37-5399" class="indexterm"/></p></div></div><div class="sect1" title="Creating a Daemon"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="creating_a_daemon">Creating a Daemon</h2></div></div></div><p>To become a daemon, a program performs the following steps:<a id="IDX-CHP-37-5400" class="indexterm"/><a id="IDX-CHP-37-5401" class="indexterm"/><a id="IDX-CHP-37-5402" class="indexterm"/><a id="IDX-CHP-37-5403" class="indexterm"/><a id="IDX-CHP-37-5404" class="indexterm"/><a id="IDX-CHP-37-5405" class="indexterm"/><a id="IDX-CHP-37-5406" class="indexterm"/><a id="IDX-CHP-37-5407" class="indexterm"/><a id="IDX-CHP-37-5408" class="indexterm"/><a id="IDX-CHP-37-5409" class="indexterm"/><a id="IDX-CHP-37-5410" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Perform a <span class="emphasis"><em>fork()</em></span>, after which the parent exits and
+                        the child continues. (As a consequence, the daemon becomes a child of the
+                            <span class="emphasis"><em>init</em></span> process.) This step is done for two
+                            reasons:<a id="IDX-CHP-37-5411" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Assuming the daemon was started from the command line, the
+                                parent’s termination is noticed by the shell, which then displays
+                                another shell prompt and leaves the child to continue in the
+                                background.</p></li><li class="listitem"><p>The child process is guaranteed not to be a process group leader,
+                                since it inherited its process group ID from its parent and obtained
+                                its own unique process ID, which differs from the inherited process
+                                group ID. This is required in order to be able to successfully
+                                perform the next step.</p></li></ul></div></li><li class="listitem"><p>The child process calls <span class="emphasis"><em>setsid()</em></span> (<a class="xref" href="ch34.html#sessions" title="Sessions">Sessions</a>) to start a new session and free itself of any
+                        association with a controlling terminal.<a id="IDX-CHP-37-5412" class="indexterm"/></p></li><li class="listitem"><p>If the daemon never opens any terminal devices thereafter, then we don’t
+                        need to worry about the daemon reacquiring a controlling terminal. If the
+                        daemon might later open a terminal device, then we must take steps to ensure
+                        that the device does not become the controlling terminal. We can do this in
+                        two ways:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Specify the <code class="literal">O_NOCTTY</code> flag on
+                                any <span class="emphasis"><em>open()</em></span> that may apply to a terminal
+                                device.</p></li><li class="listitem"><p>Alternatively, and more simply, perform a second
+                                    <span class="emphasis"><em>fork()</em></span> after the
+                                    <span class="emphasis"><em>setsid()</em></span> call, and again have the parent
+                                exit and the (grand)child continue. This ensures that the child is
+                                not the session leader, and thus, according to the System V
+                                conventions for the acquisition of a controlling terminal (which
+                                Linux follows), the process can never reacquire a controlling
+                                terminal (<a class="xref" href="ch34.html#controlling_terminals_and_controlling_pr" title="Controlling Terminals and Controlling Processes">Controlling Terminals and Controlling Processes</a>).</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>On implementations following the BSD conventions, a process can obtain
+                            a controlling terminal only through an explicit
+                                <span class="emphasis"><em>ioctl()</em></span>
+                            <code class="literal">TIOCSCTTY</code> operation, and so this
+                            second <span class="emphasis"><em>fork()</em></span> has no effect with regard to the
+                            acquisition of a controlling terminal, but the superfluous
+                                <span class="emphasis"><em>fork()</em></span> does no harm.</p></div></li><li class="listitem"><p>Clear the process umask (<a class="xref" href="ch15.html#the_process_file_mode_creation_mask_colo" title="The Process File Mode Creation Mask: umask()">The Process File Mode Creation Mask: <span class="emphasis"><em>umask()</em></span></a>), to ensure that,
+                        when the daemon creates files and directories, they have the requested
+                        permissions.</p></li><li class="listitem"><p>Change the process’s current working directory, typically to the root
+                        directory (<code class="literal">/</code>). This is necessary because
+                        a daemon usually runs until system shutdown; if the daemon’s current working
+                        directory is on a file system other than the one containing <code class="literal">/</code>, then that file system can’t be unmounted
+                            (<a class="xref" href="ch14.html#unmounting_a_file_system_colon_umount_op" title="Unmounting a File System: umount() and umount2()">Unmounting a File System: <span class="emphasis"><em>umount()</em></span> and
+                        <span class="emphasis"><em>umount2()</em></span></a>).
+                        Alternatively, the daemon can change its working directory to a location
+                        where it does its job or a location defined in its configuration file, as
+                        long as we know that the file system containing this directory never needs
+                        to be unmounted. For example, <span class="emphasis"><em>cron</em></span> places itself in
+                            <code class="literal">/var/spool/cron</code>.</p></li><li class="listitem"><p>Close all open file descriptors that the daemon has inherited from its
+                        parent. (A daemon may need to keep certain inherited file descriptors open,
+                        so this step is optional, or open to variation.) This is done for a variety
+                        of reasons. Since the daemon has lost its controlling terminal and is
+                        running in the background, it makes no sense for the daemon to keep file
+                        descriptors 0, 1, and 2 open if these refer to the terminal. Furthermore, we
+                        can’t unmount any file systems on which the long-lived daemon holds files
+                        open. And, as usual, we should close unused open file descriptors because
+                        file descriptors are a finite resource.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Some UNIX implementations (e.g., Solaris 9 and some of the recent BSD
+                            releases) provide a function named <span class="emphasis"><em>closefrom(n)</em></span> (or
+                            similar), which closes all file descriptors greater than or equal to
+                                <span class="emphasis"><em>n</em></span>. This function isn’t available on
+                            Linux.</p></div></li><li class="listitem"><p>After having closed file descriptors 0, 1, and 2, a daemon normally opens
+                            <code class="literal">/dev/null</code> and uses
+                            <span class="emphasis"><em>dup2()</em></span> (or similar) to make all those descriptors
+                        refer to this device. This is done for two reasons:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>It ensures that if the daemon calls library functions that perform
+                                I/O on these descriptors, those functions won’t unexpectedly
+                                fail.</p></li><li class="listitem"><p>It prevents the possibility that the daemon later opens a file
+                                using descriptor 1 or 2, which is then written to—and thus
+                                corrupted—by a library function that expects to treat these
+                                descriptors as standard output and standard error.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p><code class="literal">/dev/null</code> is a virtual device that
+                            always discards the data written to it. When we want to eliminate the
+                            standard output or error of a shell command, we can redirect it to this
+                            file. Reads from this device always return end-of-file.</p></div></li></ol></div><p>We now show the implementation of a function, <span class="emphasis"><em>becomeDaemon()</em></span>,
+                that performs the steps described above in order to turn the caller into a
+                    daemon.<a id="IDX-CHP-37-5413" class="indexterm"/></p><a id="I_programlisting37_d1e101781"/><pre class="programlisting">#include &lt;syslog.h&gt;
+
+int <strong class="userinput"><code>becomeDaemon</code></strong>(int <span class="emphasis"><em>flags</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>becomeDaemon()</em></span> function takes a bit-mask argument,
+                    <span class="emphasis"><em>flags</em></span>, that allows the caller to selectively inhibit some
+                of the steps, as described in the comments in the header file in <a class="xref" href="ch37.html#header_file_for_become_underscore_daemon" title="Example 37-1. Header file for become_daemon.c">Example 37-1</a>.</p><div class="example"><a id="header_file_for_become_underscore_daemon"/><div class="example-title">Example 37-1. Header file for <code class="literal">become_daemon.c</code></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>daemons/become_daemon.h</code></strong>
+#ifndef BECOME_DAEMON_H             /* Prevent double inclusion */
+#define BECOME_DAEMON_H
+
+/* Bit-mask values for 'flags' argument of becomeDaemon() */
+
+#define BD_NO_CHDIR           01    /* Don't chdir("/") */
+#define BD_NO_CLOSE_FILES     02    /* Don't close all open files */
+#define BD_NO_REOPEN_STD_FDS  04    /* Don't reopen stdin, stdout, and
+                                      stderr to /dev/null */
+#define BD_NO_UMASK0         010    /* Don't do a umask(0) */
+
+#define BD_MAX_CLOSE  8192          /* Maximum file descriptors to close if
+                                       sysconf(_SC_OPEN_MAX) is indeterminate */
+
+int becomeDaemon(int flags);
+
+#endif
+      <strong class="userinput"><code>daemons/become_daemon.h</code></strong></pre></div></div><p>The implementation of the <span class="emphasis"><em>becomeDaemon()</em></span> function is shown in
+                    <a class="xref" href="ch37.html#creating_a_daemon_process" title="Example 37-2. Creating a daemon process">Example 37-2</a>.<a id="IDX-CHP-37-5414" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The GNU C library provides a nonstandard function,
+                        <span class="emphasis"><em>daemon()</em></span>, that turns the caller into a daemon. The
+                        <span class="emphasis"><em>glibc daemon()</em></span> function doesn’t have an equivalent of
+                    the <span class="emphasis"><em>flags</em></span> argument of our
+                        <span class="emphasis"><em>becomeDaemon()</em></span> function.<a id="IDX-CHP-37-5415" class="indexterm"/></p></div><div class="example"><a id="creating_a_daemon_process"/><div class="example-title">Example 37-2. Creating a daemon process</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>daemons/become_daemon.c</code></strong>
+#include &lt;sys/stat.h&gt;
+#include &lt;fcntl.h&gt;
+#include "become_daemon.h"
+#include "tlpi_hdr.h"
+
+int                             /* Returns 0 on success, -1 on error */
+becomeDaemon(int flags)
+{
+    int maxfd, fd;
+
+    switch (fork()) {                   /* Become background process */
+    case -1: return -1;
+    case 0:  break;                     /* Child falls through... */
+    default: _exit(EXIT_SUCCESS);       /* while parent terminates */
+    }
+
+    if (setsid() == -1)                 /* Become leader of new session */
+        return -1;
+
+    switch (fork()) {                   /* Ensure we are not session leader */
+    case -1: return -1;
+    case 0:  break;
+    default: _exit(EXIT_SUCCESS);
+    }
+
+    if (!(flags &amp; BD_NO_UMASK0))
+        umask(0);                       /* Clear file mode creation mask */
+
+    if (!(flags &amp; BD_NO_CHDIR))
+        chdir("/");                     /* Change to root directory */
+
+    if (!(flags &amp; BD_NO_CLOSE_FILES)) { /* Close all open files */
+        maxfd = sysconf(_SC_OPEN_MAX);
+        if (maxfd == -1)                /* Limit is indeterminate... */
+            maxfd = BD_MAX_CLOSE;       /* so take a guess */
+
+        for (fd = 0; fd &lt; maxfd; fd++)
+            close(fd);
+    }
+
+    if (!(flags &amp; BD_NO_REOPEN_STD_FDS)) {
+        close(STDIN_FILENO);            /* Reopen standard fd's to /dev/null */
+
+        fd = open("/dev/null", O_RDWR);
+
+        if (fd != STDIN_FILENO)         /* 'fd' should be 0 */
+            return -1;
+        if (dup2(STDIN_FILENO, STDOUT_FILENO) != STDOUT_FILENO)
+            return -1;
+        if (dup2(STDIN_FILENO, STDERR_FILENO) != STDERR_FILENO)
+            return -1;
+    }
+
+    return 0;
+}
+      <strong class="userinput"><code>daemons/become_daemon.c</code></strong></pre></div></div><p>If we write a program that makes the call <span class="emphasis"><em>becomeDaemon(0)</em></span> and
+                then sleeps for a while, we can use <span class="emphasis"><em>ps(1)</em></span> to look at some of
+                the attributes of the resulting process:</p><a id="I_programlisting37_d1e101861"/><pre class="programlisting">$ <strong class="userinput"><code>./test_become_daemon</code></strong>
+$ <strong class="userinput"><code>ps -C test_become_daemon -o "pid ppid pgid sid tty command"</code></strong>
+  PID  PPID  PGID   SID TT       COMMAND
+24731     1 24730 24730 ?        ./test_become_daemon</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>We don’t show the source code for <code class="literal">daemons/test_become_daemon.c</code>, since it is trivial, but the
+                    program is provided in the source code distribution for this book.</p></div><p>In the output of <span class="emphasis"><em>ps</em></span>, the <code class="literal">?</code>
+                under the <span class="emphasis"><em>TT</em></span> heading indicates that the process has no
+                controlling terminal. From the fact that the process ID is not the same as the
+                session ID (SID), we can also see that the process is not the leader of its session,
+                and so won’t reacquire a controlling terminal if it opens a terminal device. This is
+                as things should be for a daemon.</p></div><div class="sect1" title="Guidelines for Writing Daemons"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="guidelines_for_writing_daemons">Guidelines for Writing Daemons</h2></div></div></div><p>As previously noted, a daemon typically terminates only when the system shuts
+                down. Many standard daemons are stopped by application-specific scripts executed
+                during system shutdown. Those daemons that are not terminated in this fashion will
+                receive a <code class="literal">SIGTERM</code> signal, which the
+                    <span class="emphasis"><em>init</em></span> process sends to all of its children during system
+                shutdown. By default, <code class="literal">SIGTERM</code> terminates a
+                process. If the daemon needs to perform any cleanup before terminating, it should do
+                so by establishing a handler for this signal. This handler must be designed to
+                perform such cleanup quickly, since <span class="emphasis"><em>init</em></span> follows up the
+                    <code class="literal">SIGTERM</code> signal with a <code class="literal">SIGKILL</code> signal after 5 seconds. (This doesn’t mean
+                that the daemon can perform 5 seconds’ worth of CPU work; <span class="emphasis"><em>init</em></span>
+                signals all of the processes on the system at the same time, and they may all be
+                attempting to clean up within that 5 seconds.)<a id="IDX-CHP-37-5416" class="indexterm"/><a id="IDX-CHP-37-5417" class="indexterm"/><a id="IDX-CHP-37-5418" class="indexterm"/><a id="IDX-CHP-37-5419" class="indexterm"/><a id="IDX-CHP-37-5420" class="indexterm"/><a id="IDX-CHP-37-5421" class="indexterm"/></p><p>Since daemons are long-lived, we must be particularly wary of possible memory
+                leaks (<a class="xref" href="ch07.html#implementation_of_malloc_open_parenthesi" title="Implementation of malloc() and free()">Implementation of <span class="emphasis"><em>malloc()</em></span> and
+                        <span class="emphasis"><em>free()</em></span></a>) and file
+                descriptor leaks (where an application fails to close all of the file descriptors it
+                opens). If such bugs affect a daemon, the only remedy is to kill it and restart it
+                after (fixing the bug).</p><p>Many daemons need to ensure that just one instance of the daemon is active at one
+                time. For example, it makes no sense to have two copies of the
+                    <span class="emphasis"><em>cron</em></span> daemon both trying to execute scheduled jobs. In <a class="xref" href="ch55.html#running_just_one_instance_of_a_program" title="Running Just One Instance of a Program">Running Just One Instance of a Program</a>, we look at a technique for
+                achieving this.</p></div><div class="sect1" title="Using SIGHUP to Reinitialize a Daemon"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="using_sighup_to_reinitialize_a_daemon">Using <code class="literal">SIGHUP</code> to Reinitialize a Daemon</h2></div></div></div><p>The fact that many daemons should run continuously presents a couple of
+                programming hurdles:<a id="IDX-CHP-37-5422" class="indexterm"/><a id="IDX-CHP-37-5423" class="indexterm"/><a id="IDX-CHP-37-5424" class="indexterm"/><a id="IDX-CHP-37-5425" class="indexterm"/><a id="IDX-CHP-37-5426" class="indexterm"/><a id="IDX-CHP-37-5427" class="indexterm"/><a id="IDX-CHP-37-5428" class="indexterm"/><a id="IDX-CHP-37-5429" class="indexterm"/><a id="IDX-CHP-37-5430" class="indexterm"/><a id="IDX-CHP-37-5431" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Typically, a daemon reads operational parameters from an associated
+                        configuration file on startup. Sometimes, it is desirable to be able to
+                        change these parameters “on the fly,” without needing to stop and restart
+                        the daemon.</p></li><li class="listitem"><p>Some daemons produce log files. If the daemon never closes the log file,
+                        then it may grow endlessly, eventually clogging the file system. (In <a class="xref" href="ch18.html#creating_and_removing_open_parenthesis_h" title="Creating and Removing (Hard) Links: link() and unlink()">Creating and Removing (Hard) Links: <span class="emphasis"><em>link</em></span>() and
+                    <span class="emphasis"><em>unlink</em></span>()</a>, we noted that even
+                        if we remove the last name of a file, the file continues to exist as long as
+                        any process has it open.) What we need is a way of telling the daemon to
+                        close its log file and open a new file, so that we can rotate log files as
+                        required.</p></li></ul></div><p>The solution to both of these problems is to have the daemon establish a handler
+                for <code class="literal">SIGHUP</code>, and perform the required steps upon
+                receipt of this signal. In <a class="xref" href="ch34.html#controlling_terminals_and_controlling_pr" title="Controlling Terminals and Controlling Processes">Controlling Terminals and Controlling Processes</a>, we noted that <code class="literal">SIGHUP</code> is generated for the
+                controlling process on disconnection of a controlling terminal. Since a daemon has
+                no controlling terminal, the kernel never generates this signal for a daemon.
+                Therefore, daemons can use <code class="literal">SIGHUP</code> for the purpose
+                described here.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>logrotate</em></span> program can be used to automate rotation of
+                    daemon log files. See the <span class="emphasis"><em>logrotate(8)</em></span> manual page for
+                        details.<a id="IDX-CHP-37-5432" class="indexterm"/></p></div><p><a class="xref" href="ch37.html#using_sighup_to_reinitialize_a_daemo" title="Example 37-3. Using SIGHUP to reinitialize a daemon">Example 37-3</a> provides an example of how
+                a daemon can employ <code class="literal">SIGHUP</code>. This program
+                establishes a handler for <code class="literal">SIGHUP</code>
+                <span class="inlinemediaobject"><a id="I_inlinemediaobject37_d1e102075"/><img src="figs/web/U002.png" alt=""/></span>, becomes a daemon <span class="inlinemediaobject"><a id="I_inlinemediaobject37_d1e102081"/><img src="figs/web/U003.png" alt=""/></span>, opens the log file <span class="inlinemediaobject"><a id="I_inlinemediaobject37_d1e102087"/><img src="figs/web/U004.png" alt=""/></span>, and reads its configuration file <span class="inlinemediaobject"><a id="I_inlinemediaobject37_d1e102094"/><img src="figs/web/U005.png" alt=""/></span>. The <code class="literal">SIGHUP</code> handler
+                    <span class="inlinemediaobject"><a id="I_inlinemediaobject37_d1e102103"/><img src="figs/web/U001.png" alt=""/></span> just sets a global flag variable,
+                    <span class="emphasis"><em>hupReceived</em></span>, which is checked by the main program. The main
+                program sits in a loop, printing a message to the log file every 15 seconds
+                    <span class="inlinemediaobject"><a id="I_inlinemediaobject37_d1e102112"/><img src="figs/web/U008.png" alt=""/></span>. The calls to <span class="emphasis"><em>sleep()</em></span>
+                <span class="inlinemediaobject"><a id="I_inlinemediaobject37_d1e102122"/><img src="figs/web/U006.png" alt=""/></span> in this loop are intended to simulate some sort of processing
+                performed by a real application. After each return from <span class="emphasis"><em>sleep()</em></span>
+                in this loop, the program checks to see whether <span class="emphasis"><em>hupReceived</em></span> has
+                been set <span class="inlinemediaobject"><a id="I_inlinemediaobject37_d1e102134"/><img src="figs/web/U007.png" alt=""/></span>; if so, it reopens the log file, rereads the configuration
+                file, and clears the <span class="emphasis"><em>hupReceived</em></span> flag.</p><p>For brevity, the functions <span class="emphasis"><em>logOpen()</em></span>,
+                    <span class="emphasis"><em>logClose()</em></span>, <span class="emphasis"><em>logMessage()</em></span>, and
+                    <span class="emphasis"><em>readConfigFile()</em></span> are omitted from <a class="xref" href="ch37.html#using_sighup_to_reinitialize_a_daemo" title="Example 37-3. Using SIGHUP to reinitialize a daemon">Example 37-3</a>, but are provided with the
+                source code distribution of this book. The first three functions do what we would
+                expect from their names. The <span class="emphasis"><em>readConfigFile()</em></span> function simply
+                reads a line from the configuration file and echoes it to the log file.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Some daemons use an alternative method to reinitialize themselves on receipt
+                    of <code class="literal">SIGHUP</code>: they close all files and then
+                    restart themselves with an <span class="emphasis"><em>exec()</em></span>.</p></div><p>The following is an example of what we might see when running the program in <a class="xref" href="ch37.html#using_sighup_to_reinitialize_a_daemo" title="Example 37-3. Using SIGHUP to reinitialize a daemon">Example 37-3</a>. We begin by creating a dummy
+                configuration file and then launching the daemon:</p><a id="I_programlisting37_d1e102176"/><pre class="programlisting">$ <strong class="userinput"><code>echo START &gt; /tmp/ds.conf</code></strong>
+$ <strong class="userinput"><code>./daemon_SIGHUP</code></strong>
+$ <strong class="userinput"><code>cat /tmp/ds.log</code></strong>                                     <em class="lineannotation"><span class="lineannotation">View log file</span></em>
+2011-01-17 11:18:34: Opened log file
+2011-01-17 11:18:34: Read config file: START</pre><p>Now we modify the configuration file and rename the log file before sending
+                    <code class="literal">SIGHUP</code> to the daemon:</p><a id="I_programlisting37_d1e102196"/><pre class="programlisting">$ <strong class="userinput"><code>echo CHANGED &gt; /tmp/ds.conf</code></strong>
+$ <strong class="userinput"><code>date +'%F %X'; mv /tmp/ds.log /tmp/old_ds.log</code></strong>
+2011-01-17 11:19:03 AM
+$ <strong class="userinput"><code>date +'%F %X'; killall -HUP daemon_SIGHUP</code></strong>
+2011-01-17 11:19:23 AM
+$ <strong class="userinput"><code>ls /tmp/*ds.log</code></strong>                                     <em class="lineannotation"><span class="lineannotation">Log file was reopened</span></em>
+/tmp/ds.log  /tmp/old_ds.log
+$ <strong class="userinput"><code>cat /tmp/old_ds.log</code></strong>                                 <em class="lineannotation"><span class="lineannotation">View old log file</span></em>
+2011-01-17 11:18:34: Opened log file
+2011-01-17 11:18:34: Read config file: START
+2011-01-17 11:18:49: Main: 1
+2011-01-17 11:19:04: Main: 2
+2011-01-17 11:19:19: Main: 3
+2011-01-17 11:19:23: Closing log file</pre><p>The output of <span class="emphasis"><em>ls</em></span> shows that we have both an old and a new log
+                file. When we use <span class="emphasis"><em>cat</em></span> to view the contents of the old log file,
+                we see that even after the <span class="emphasis"><em>mv</em></span> command was used to rename the
+                file, the daemon continued to log messages there. At this point, we could delete the
+                old log file if we no longer need it. When we look at the new log file, we see that
+                the configuration file has been reread:</p><a id="I_programlisting37_d1e102231"/><pre class="programlisting">$ <strong class="userinput"><code>cat /tmp/ds.log</code></strong>
+2011-01-17 11:19:23: Opened log file
+2011-01-17 11:19:23: Read config file: CHANGED
+2011-01-17 11:19:34: Main: 4
+$ <strong class="userinput"><code>killall daemon_SIGHUP</code></strong>                               <em class="lineannotation"><span class="lineannotation">Kill our daemon</span></em></pre><p>Note that a daemon’s log and configuration files are typically placed in standard
+                directories, not in the <code class="literal">/tmp</code> directory, as is
+                done in the program in <a class="xref" href="ch37.html#using_sighup_to_reinitialize_a_daemo" title="Example 37-3. Using SIGHUP to reinitialize a daemon">Example 37-3</a>. By
+                convention, configuration files are placed in <code class="literal">/etc</code> or one of its subdirectories, while log files are often placed
+                in <code class="literal">/var/log</code>. Daemon programs commonly provide
+                command-line options to specify alternative locations instead of the
+                defaults.</p><div class="example"><a id="using_sighup_to_reinitialize_a_daemo"/><div class="example-title">Example 37-3. Using <code class="literal">SIGHUP</code> to reinitialize a
+                    daemon</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>daemons/daemon_SIGHUP.c</code></strong>
+    #include &lt;sys/stat.h&gt;
+    #include &lt;signal.h&gt;
+    #include "become_daemon.h"
+    #include "tlpi_hdr.h"
+
+    static const char *LOG_FILE = "/tmp/ds.log";
+    static const char *CONFIG_FILE = "/tmp/ds.conf";
+
+    /* Definitions of logMessage(), logOpen(), logClose(), and
+       readConfigFile() are omitted from this listing */
+
+    static volatile sig_atomic_t hupReceived = 0;
+                                        /* Set nonzero on receipt of SIGHUP */
+     from
+    static void
+    sighupHandler(int sig)
+    {
+<img src="figs/web/U001.png" alt=""/>    hupReceived = 1;
+    }
+
+    int
+    main(int argc, char *argv[])
+    {
+        const int SLEEP_TIME = 15;      /* Time to sleep between messages */
+        int count = 0;                  /* Number of completed SLEEP_TIME intervals */
+        int unslept;                    /* Time remaining in sleep interval */
+        struct sigaction sa;
+
+        sigemptyset(&amp;sa.sa_mask);
+        sa.sa_flags = SA_RESTART;
+        sa.sa_handler = sighupHandler;
+<img src="figs/web/U002.png" alt=""/>    if (sigaction(SIGHUP, &amp;sa, NULL) == -1)
+                   errExit("sigaction");
+<img src="figs/web/U003.png" alt=""/>    if (becomeDaemon(0) == -1)
+            errExit("becomeDaemon");
+
+<img src="figs/web/U004.png" alt=""/>    logOpen(LOG_FILE);
+<img src="figs/web/U005.png" alt=""/>    readConfigFile(CONFIG_FILE);
+
+
+        unslept = SLEEP_TIME;
+
+        for (;;) {
+<img src="figs/web/U006.png" alt=""/>        unslept = sleep(unslept);       /* Returns &gt; 0 if interrupted */
+<img src="figs/web/U007.png" alt=""/>        if (hupReceived) {              /* If we got SIGHUP... */
+                logClose();
+                    logOpen(LOG_FILE);
+                readConfigFile(CONFIG_FILE);
+                hupReceived = 0;            /* Get ready for next SIGHUP */
+            }
+
+            if (unslept == 0) {             /* On completed interval */
+                count++;
+<img src="figs/web/U008.png" alt=""/>            logMessage("Main: %d", count);
+                unslept = SLEEP_TIME;       /* Reset interval */
+            }
+        }
+    }
+          <strong class="userinput"><code>daemons/daemon_SIGHUP.c</code></strong></pre></div></div></div><div class="sect1" title="Logging Messages and Errors Using syslog"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="logging_messages_and_errors_using_syslog">Logging Messages and Errors Using <span class="emphasis"><em>syslog</em></span></h2></div></div></div><p>When writing a daemon, one problem we encounter is how to display error messages.
+                Since a daemon runs in the background, we can’t display messages on an associated
+                terminal, as we would typically do with other programs. One possible alternative is
+                to write messages to an application-specific log file, as is done in the program in
+                    <a class="xref" href="ch37.html#using_sighup_to_reinitialize_a_daemo" title="Example 37-3. Using SIGHUP to reinitialize a daemon">Example 37-3</a>. The main problem with
+                this approach is that it is difficult for a system administrator to manage multiple
+                application log files and monitor them all for error messages. The
+                    <span class="emphasis"><em>syslog</em></span> facility was devised to address this
+                    problem.<a id="IDX-CHP-37-5433" class="indexterm"/><a id="IDX-CHP-37-5434" class="indexterm"/><a id="IDX-CHP-37-5435" class="indexterm"/><a id="IDX-CHP-37-5436" class="indexterm"/><a id="IDX-CHP-37-5437" class="indexterm"/><a id="IDX-CHP-37-5438" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="overview-id9"/></div></div></div><div class="sect3" title="Overview"><div class="titlepage"><div><div><h4 class="title" id="overview-id10">Overview</h4></div></div></div><p>The <span class="emphasis"><em>syslog</em></span> facility provides a single, centralized
+                        logging facility that can be used to log messages by all applications on the
+                        system. An overview of this facility is provided in <a class="xref" href="ch37.html#overview_of_system_logging" title="Figure 37-1. Overview of system logging">Figure 37-1</a>.</p><div class="figure"><a id="overview_of_system_logging"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject37_d1e102386"/><img src="figs/web/37-1_DAEMON-syslog-scale90.png.jpg" alt="Overview of system logging"/></div></div><div class="figure-title">Figure 37-1. Overview of system logging</div></div><p>The <span class="emphasis"><em>syslog</em></span> facility has two principal components: the
+                            <span class="emphasis"><em>syslogd</em></span> daemon and the
+                            <span class="emphasis"><em>syslog(3)</em></span> library function.<a id="IDX-CHP-37-5439" class="indexterm"/></p><p>The <span class="emphasis"><em>System Log</em></span> daemon, <span class="emphasis"><em>syslogd</em></span>,
+                        accepts log messages from two different sources: a UNIX domain socket,
+                            <code class="literal">/dev/log</code>, which holds locally
+                        produced messages, and (if enabled) an Internet domain socket (UDP port
+                        514), which holds messages sent across a TCP/IP network. (On some other UNIX
+                        implementations, the <span class="emphasis"><em>syslog</em></span> socket is located at
+                            <code class="literal">/var/run/log</code>.)</p><p>Each message processed by <span class="emphasis"><em>syslogd</em></span> has a number of
+                        attributes, including a <span class="emphasis"><em>facility</em></span>, which specifies the
+                        type of program generating the message, and a <span class="emphasis"><em>level</em></span>,
+                        which specifies the severity (priority) of the message. The
+                            <span class="emphasis"><em>syslogd</em></span> daemon examines the
+                            <span class="emphasis"><em>facility</em></span> and <span class="emphasis"><em>level</em></span> of each
+                        message, and then passes it along to any of several possible destinations
+                        according to the dictates of an associated configuration file, <code class="literal">/etc/syslog.conf</code>. Possible destinations
+                        include a terminal or virtual console, a disk file, a FIFO, one or more (or
+                        all) logged-in users, or a process (typically another
+                            <span class="emphasis"><em>syslogd</em></span> daemon) on another system connected via a
+                        TCP/IP network. (Sending the message to a process on another system is
+                        useful for reducing administrative overhead by consolidating messages from
+                        multiple systems to a single location.) A single message may be sent to
+                        multiple destinations (or none at all), and messages with different
+                        combinations of <span class="emphasis"><em>facility</em></span> and <span class="emphasis"><em>level</em></span>
+                        can be targeted to different destinations or to different instances of
+                        destinations (i.e., different consoles, different disk files, and so
+                        on).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Sending <span class="emphasis"><em>syslog</em></span> messages to another system via a
+                            TCP/IP network can also help in detecting system break-ins. Break-ins
+                            often leave traces in the system log, but attackers usually try to cover
+                            up their activities by erasing log records. With remote logging, an
+                            attacker would need to break into another system in order to do
+                            that.</p></div><p>The <span class="emphasis"><em>syslog(3)</em></span> library function can be used by any
+                        process to log a message. This function, which we describe in detail in a
+                        moment, uses its supplied arguments to construct a message in a standard
+                        format that is then placed on the <code class="literal">/dev/log</code> socket for reading by
+                            <span class="emphasis"><em>syslogd</em></span>.<a id="IDX-CHP-37-5440" class="indexterm"/></p><p>An alternative source of the messages placed on <code class="literal">/dev/log</code> is the <span class="emphasis"><em>Kernel Log</em></span> daemon,
+                            <span class="emphasis"><em>klogd</em></span>, which collects kernel log messages (produced
+                        by the kernel using its <span class="emphasis"><em>printk()</em></span> function). These
+                        messages are collected using either of two equivalent Linux-specific
+                        interfaces—the <code class="literal">/proc/kmsg</code> file and the
+                            <span class="emphasis"><em>syslog(2)</em></span> system call—and then placed on <code class="literal">/dev/log</code> using the
+                            <span class="emphasis"><em>syslog(3)</em></span> library function.<a id="IDX-CHP-37-5441" class="indexterm"/><a id="IDX-CHP-37-5442" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Although <span class="emphasis"><em>syslog(2)</em></span> and
+                                <span class="emphasis"><em>syslog(3)</em></span> share the same name, they perform
+                            quite different tasks. An interface to <span class="emphasis"><em>syslog(2)</em></span> is
+                            provided in <span class="emphasis"><em>glibc</em></span> under the name
+                                <span class="emphasis"><em>klogctl()</em></span>. Unless explicitly indicated
+                            otherwise, when we refer to <span class="emphasis"><em>syslog()</em></span> in this
+                            section, we mean <span class="emphasis"><em>syslog(3)</em></span>.<a id="IDX-CHP-37-5443" class="indexterm"/><a id="IDX-CHP-37-5444" class="indexterm"/></p></div><p>The <span class="emphasis"><em>syslog</em></span> facility originally appeared in 4.2BSD,
+                        but is now provided on most UNIX implementations. SUSv3 has standardized
+                            <span class="emphasis"><em>syslog(3)</em></span> and related functions, but leaves the
+                        implementation and operation of <span class="emphasis"><em>syslogd</em></span>, as well as the
+                        format of the <code class="literal">syslog.conf</code> file,
+                        unspecified. The Linux implementation of <span class="emphasis"><em>syslogd</em></span>
+                        differs from the original BSD facility in permitting some extensions to the
+                        message-processing rules that can be specified in <code class="literal">syslog.conf</code>.<a id="IDX-CHP-37-5445" class="indexterm"/></p></div><div class="sect3" title="The syslog API"><div class="titlepage"><div><div><h4 class="title" id="the_syslog_api">The <code class="literal">syslog</code> API</h4></div></div></div><p>The <span class="emphasis"><em>syslog</em></span> API consists of three main
+                        functions:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>openlog()</em></span> function establishes default
+                                settings that apply to subsequent calls to
+                                    <span class="emphasis"><em>syslog()</em></span>. The use of
+                                    <span class="emphasis"><em>openlog()</em></span> is optional. If it is omitted, a
+                                connection to the logging facility is established with default
+                                settings on the first call to
+                                    <span class="emphasis"><em>syslog()</em></span>.<a id="IDX-CHP-37-5446" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>syslog()</em></span> function logs a message.</p></li><li class="listitem"><p>The <span class="emphasis"><em>closelog()</em></span> function is called after we
+                                have finished logging messages, to disestablish the connection with
+                                the log.<a id="IDX-CHP-37-5447" class="indexterm"/></p></li></ul></div><p>None of these functions returns a status value. In part, this is because
+                        system logging should always be available (the system administrator is soon
+                        likely to notice if it is not). Furthermore, if an error occurs with system
+                        logging, there is typically little that the application can usefully do to
+                        report it.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The GNU C library also provides the function <span class="emphasis"><em>void
+                                vsyslog(int priority, const char *format, va_list args)</em></span>.
+                            This function performs the same task as <span class="emphasis"><em>syslog()</em></span>,
+                            but takes an argument list previously processed by the
+                                <span class="emphasis"><em>stdarg(3)</em></span> API. (Thus,
+                                <span class="emphasis"><em>vsyslog()</em></span> is to <span class="emphasis"><em>syslog()</em></span>
+                            what <span class="emphasis"><em>vprintf()</em></span> is to
+                            <span class="emphasis"><em>printf()</em></span>.) SUSv3 doesn’t specify
+                                <span class="emphasis"><em>vsyslog()</em></span>, and it is not available on all UNIX
+                                implementations.<a id="IDX-CHP-37-5448" class="indexterm"/></p></div></div><div class="sect3" title="Establishing a connection to the system log"><div class="titlepage"><div><div><h4 class="title" id="establishing_a_connection_to_the_system">Establishing a connection to the system log</h4></div></div></div><p>The <span class="emphasis"><em>openlog()</em></span> function optionally establishes a
+                        connection to the system log facility and sets defaults that apply to
+                        subsequent <span class="emphasis"><em>syslog()</em></span> calls.<a id="IDX-CHP-37-5449" class="indexterm"/><a id="IDX-CHP-37-5450" class="indexterm"/><a id="IDX-CHP-37-5451" class="indexterm"/><a id="IDX-CHP-37-5452" class="indexterm"/><a id="IDX-CHP-37-5453" class="indexterm"/><a id="IDX-CHP-37-5454" class="indexterm"/><a id="IDX-CHP-37-5455" class="indexterm"/><a id="IDX-CHP-37-5456" class="indexterm"/><a id="IDX-CHP-37-5457" class="indexterm"/><a id="IDX-CHP-37-5458" class="indexterm"/><a id="IDX-CHP-37-5459" class="indexterm"/><a id="IDX-CHP-37-5460" class="indexterm"/></p><a id="I_programlisting37_d1e102728"/><pre class="programlisting">#include &lt;syslog.h&gt;
+
+void <strong class="userinput"><code>openlog</code></strong>(const char *<span class="emphasis"><em>ident</em></span>, int <span class="emphasis"><em>log_options</em></span>, int <span class="emphasis"><em>facility</em></span>);</pre><p>The <span class="emphasis"><em>ident</em></span> argument is a pointer to a string that is
+                        included in each message written by <span class="emphasis"><em>syslog()</em></span>;
+                        typically, the program name is specified for this argument. Note that
+                            <span class="emphasis"><em>openlog()</em></span> merely copies the value of this pointer.
+                        As long as it continues to call <span class="emphasis"><em>syslog()</em></span>, the
+                        application should ensure that the referenced string is not later
+                        changed.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>If <span class="emphasis"><em>ident</em></span> is specified as <code class="literal">NULL</code>, then, like some other implementations, the
+                                <span class="emphasis"><em>glibc syslog</em></span> implementation automatically uses
+                            the program name as the <span class="emphasis"><em>ident</em></span> value. However, this
+                            feature is not required by SUSv3, and is not provided on some
+                            implementations. Portable applications should avoid reliance on
+                            it.</p></div><p>The <span class="emphasis"><em>log_options</em></span> argument to
+                            <span class="emphasis"><em>openlog()</em></span> is a bit mask created by ORing together
+                        any of the following constants:</p><div class="variablelist"><dl><dt><span class="term">
+                                <code class="literal">LOG_CONS</code>
+                            </span></dt><dd><p>If there is an error sending to the system logger, then write
+                                    the message to the system console (<code class="literal">/dev/console</code>).</p></dd><dt><span class="term">
+                                <code class="literal">LOG_NDELAY</code>
+                            </span></dt><dd><p>Open the connection to the logging system (i.e., the
+                                    underlying UNIX domain socket, <code class="literal">/dev/log</code>) immediately. By default (<code class="literal">LOG_ODELAY</code>), the connection is
+                                    opened only when (and if) the first message is logged with
+                                        <span class="emphasis"><em>syslog()</em></span>. The <code class="literal">O_NDELAY</code> flag is useful in programs that need to
+                                    precisely control when the file descriptor for <code class="literal">/dev/log</code> is allocated. One example
+                                    of such a requirement is in a program that calls
+                                        <span class="emphasis"><em>chroot()</em></span>. After a
+                                        <span class="emphasis"><em>chroot()</em></span> call, the <code class="literal">/dev/log</code> pathname will no longer
+                                    be visible, and so an <span class="emphasis"><em>openlog()</em></span> call
+                                    specifying <code class="literal">LOG_NDELAY</code> must be
+                                    performed before the <span class="emphasis"><em>chroot()</em></span>. The
+                                        <span class="emphasis"><em>tftpd</em></span> (Trivial File Transfer) daemon is
+                                    an example of a program that uses <code class="literal">LOG_NDELAY</code> for this purpose.</p></dd><dt><span class="term">
+                                <code class="literal">LOG_NOWAIT</code>
+                            </span></dt><dd><p>Don’t <span class="emphasis"><em>wait()</em></span> for any child process that
+                                    may have been created in order to log the message. On
+                                    implementations that create a child process for logging
+                                    messages, <code class="literal">LOG_NOWAIT</code> is
+                                    needed if the caller is also creating and waiting for children,
+                                    so that <span class="emphasis"><em>syslog()</em></span> doesn’t attempt to wait
+                                    for a child that has already been reaped by the caller. On
+                                    Linux, <code class="literal">LOG_NOWAIT</code> has no
+                                    effect, since no child processes are created when logging a
+                                    message.</p></dd><dt><span class="term">
+                                <code class="literal">LOG_ODELAY</code>
+                            </span></dt><dd><p>This flag is the converse of <code class="literal">LOG_NDELAY</code>—connecting to the logging system is
+                                    delayed until the first message is logged. This is the default,
+                                    and need not be specified.</p></dd><dt><span class="term">
+                                <code class="literal">LOG_PERROR</code>
+                            </span></dt><dd><p>Write messages to standard error as well as to the system log.
+                                    Typically, daemon processes close standard error or redirect it
+                                    to <code class="literal">/dev/null</code>, in which case,
+                                        <code class="literal">LOG_PERROR</code> is not
+                                    useful.</p></dd><dt><span class="term">
+                                <code class="literal">LOG_PID</code>
+                            </span></dt><dd><p>Log the caller’s process ID with each message. Employing
+                                        <code class="literal">LOG_PID</code> in a server that
+                                    forks multiple children allows us to distinguish which process
+                                    logged a particular message.</p></dd></dl></div><p>All of the above constants are specified in SUSv3, except <code class="literal">LOG_PERROR</code>, which appears on many (but not
+                        all) other UNIX implementations.</p><p>The <span class="emphasis"><em>facility</em></span> argument to
+                            <span class="emphasis"><em>openlog()</em></span> specifies the default
+                            <span class="emphasis"><em>facility</em></span> value to be used in subsequent calls to
+                            <span class="emphasis"><em>syslog()</em></span>. Possible values for this argument are
+                        listed in <a class="xref" href="ch37.html#facility_values_for_openlog_open_parenth" title="Table 37-1. facility values for openlog() and the priority argument of syslog()">Table 37-1</a>.</p><p>The majority of the <span class="emphasis"><em>facility</em></span> values in <a class="xref" href="ch37.html#facility_values_for_openlog_open_parenth" title="Table 37-1. facility values for openlog() and the priority argument of syslog()">Table 37-1</a> appear in SUSv3, as
+                        indicated by the <span class="emphasis"><em>SUSv3</em></span> column of the table. Exceptions
+                        are <code class="literal">LOG_AUTHPRIV</code> and <code class="literal">LOG_FTP</code>, which appear on only a few other UNIX
+                        implementations, and <code class="literal">LOG_SYSLOG</code>, which
+                        appears on most implementations. The <code class="literal">LOG_AUTHPRIV</code> value is useful for logging messages containing
+                        passwords or other sensitive information to a different location than
+                            <code class="literal">LOG_AUTH</code>.</p><p>The <code class="literal">LOG_KERN</code>
+                        <span class="emphasis"><em>facility</em></span> value is used for kernel messages. Log
+                        messages for this facility can’t be generated from the user-space programs.
+                        The <code class="literal">LOG_KERN</code> constant has the value 0. If
+                        it is used in a <span class="emphasis"><em>syslog()</em></span> call, the 0 translates to “use
+                        the default level.”</p><div class="table"><a id="facility_values_for_openlog_open_parenth"/><div class="table-title">Table 37-1. <span class="emphasis"><em>facility</em></span> values for
+                                <span class="emphasis"><em>openlog()</em></span> and the <span class="emphasis"><em>priority</em></span>
+                            argument of <span class="emphasis"><em>syslog()</em></span></div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Value</p>
+                                    </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Description</p>
+                                    </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                        <p>SUSv3</p>
+                                    </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_AUTH</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Security and authorization messages (e.g.,
+                                                <span class="emphasis"><em>su</em></span>)</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>•</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_AUTHPRIV</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Private security and authorization messages</p>
+                                    </td><td style="border-bottom: 0.5pt solid ; "> </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_CRON</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Messages from the <span class="emphasis"><em>cron</em></span> and
+                                                <span class="emphasis"><em>at</em></span> daemons</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>•</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_DAEMON</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Messages from other system daemons</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>•</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_FTP</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Messages from the <span class="emphasis"><em>ftp</em></span> daemon
+                                                (<span class="emphasis"><em>ftpd</em></span>)</p>
+                                    </td><td style="border-bottom: 0.5pt solid ; "> </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_KERN</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Kernel messages (can’t be generated from a user
+                                            process)</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>•</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_LOCAL0</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Reserved for local use (also <code class="literal">LOG_LOCAL1</code> to <code class="literal">LOG_LOCAL7</code>)</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>•</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_LPR</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Messages from the line printer system
+                                                (<span class="emphasis"><em>lpr</em></span>, <span class="emphasis"><em>lpd</em></span>,
+                                                <span class="emphasis"><em>lpc</em></span>)</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>•</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_MAIL</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Messages from the mail system</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>•</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_NEWS</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Messages related to Usenet network news</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>•</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_SYSLOG</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Internal messages from the
+                                                <span class="emphasis"><em>syslogd</em></span> daemon</p>
+                                    </td><td style="border-bottom: 0.5pt solid ; "> </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_USER</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Messages generated by user processes (default)</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>•</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_UUCP</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>Messages from the UUCP system</p>
+                                    </td><td style="text-align: left; vertical-align: top; ">
+                                        <p>•</p>
+                                    </td></tr></tbody></table></div></div></div><div class="sect3" title="Logging a message"><div class="titlepage"><div><div><h4 class="title" id="logging_a_message">Logging a message</h4></div></div></div><p>To write a log message, we call <span class="emphasis"><em>syslog()</em></span>.<a id="IDX-CHP-37-5461" class="indexterm"/><a id="IDX-CHP-37-5462" class="indexterm"/><a id="IDX-CHP-37-5463" class="indexterm"/><a id="IDX-CHP-37-5464" class="indexterm"/><a id="IDX-CHP-37-5465" class="indexterm"/><a id="IDX-CHP-37-5466" class="indexterm"/><a id="IDX-CHP-37-5467" class="indexterm"/><a id="IDX-CHP-37-5468" class="indexterm"/><a id="IDX-CHP-37-5469" class="indexterm"/><a id="IDX-CHP-37-5470" class="indexterm"/><a id="IDX-CHP-37-5471" class="indexterm"/><a id="IDX-CHP-37-5472" class="indexterm"/><a id="IDX-CHP-37-5473" class="indexterm"/><a id="IDX-CHP-37-5474" class="indexterm"/><a id="IDX-CHP-37-5475" class="indexterm"/><a id="IDX-CHP-37-5476" class="indexterm"/><a id="IDX-CHP-37-5477" class="indexterm"/><a id="IDX-CHP-37-5478" class="indexterm"/><a id="IDX-CHP-37-5479" class="indexterm"/><a id="IDX-CHP-37-5480" class="indexterm"/><a id="IDX-CHP-37-5481" class="indexterm"/><a id="IDX-CHP-37-5482" class="indexterm"/><a id="IDX-CHP-37-5483" class="indexterm"/></p><a id="I_programlisting37_d1e103278"/><pre class="programlisting">#include &lt;syslog.h&gt;
+
+void <strong class="userinput"><code>syslog</code></strong>(int <span class="emphasis"><em>priority</em></span>, const char *<span class="emphasis"><em>format</em></span>, ...);</pre><p>The <span class="emphasis"><em>priority</em></span> argument is created by ORing together a
+                            <span class="emphasis"><em>facility</em></span> value and a <span class="emphasis"><em>level</em></span>
+                        value. The <span class="emphasis"><em>facility</em></span> indicates the general category of
+                        the application logging the message, and is specified as one of the values
+                        listed in <a class="xref" href="ch37.html#facility_values_for_openlog_open_parenth" title="Table 37-1. facility values for openlog() and the priority argument of syslog()">Table 37-1</a>. If
+                        omitted, the <span class="emphasis"><em>facility</em></span> defaults to the value specified
+                        in a previous <span class="emphasis"><em>openlog()</em></span> call, or to <code class="literal">LOG_USER</code> if that call was omitted. The
+                            <span class="emphasis"><em>level</em></span> value indicates the severity of the message,
+                        and is specified as one of the values in <a class="xref" href="ch37.html#level_values_for_the_priority_argument_o" title="Table 37-2. level values for the priority argument of syslog() (from highest to lowest severity)">Table 37-2</a>. All of the
+                            <span class="emphasis"><em>level</em></span> values listed in this table appear in
+                        SUSv3.</p><div class="table"><a id="level_values_for_the_priority_argument_o"/><div class="table-title">Table 37-2. <span class="emphasis"><em>level</em></span> values for the
+                                <span class="emphasis"><em>priority</em></span> argument of
+                                <span class="emphasis"><em>syslog()</em></span> (from highest to lowest
+                            severity)</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Value</p>
+                                    </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                        <p>Description</p>
+                                    </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_EMERG</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Emergency or panic condition (system is
+                                            unusable)</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_ALERT</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Condition requiring immediate action (e.g., corrupt
+                                            system database)</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_CRIT</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Critical condition (e.g., error on disk device)</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_ERR</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>General error condition</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_WARNING</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Warning message</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_NOTICE</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Normal condition that may require special
+                                            handling</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_INFO</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Informational message</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">LOG_DEBUG</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; ">
+                                        <p>Debugging message</p>
+                                    </td></tr></tbody></table></div></div><p>The remaining arguments to <span class="emphasis"><em>syslog()</em></span> are a format
+                        string and corresponding arguments in the manner of
+                            <span class="emphasis"><em>printf()</em></span>. One difference from
+                            <span class="emphasis"><em>printf()</em></span> is that the format string doesn’t need to
+                        include a terminating newline character. Also, the format string may include
+                        the 2-character sequence <code class="literal">%m</code>, which is
+                        replaced by the error string corresponding to the current value of
+                            <span class="emphasis"><em>errno</em></span> (i.e., the equivalent of
+                            <span class="emphasis"><em>strerror(errno)</em></span>).</p><p>The following code demonstrates the use of <span class="emphasis"><em>openlog()</em></span>
+                        and <span class="emphasis"><em>syslog()</em></span>:</p><a id="I_programlisting37_d1e103439"/><pre class="programlisting">openlog(argv[0], LOG_PID | LOG_CONS | LOG_NOWAIT, LOG_LOCALO);
+syslog(LOG_ERR, "Bad argument: %s", argv[1]);
+syslog(LOG_USER | LOG_INFO, "Exiting");</pre><p>Since no <span class="emphasis"><em>facility</em></span> is specified in the first
+                            <span class="emphasis"><em>syslog()</em></span> call, the default specified by
+                            <span class="emphasis"><em>openlog()</em></span> (<code class="literal">LOG_LOCAL0</code>) is used. In the second
+                            <span class="emphasis"><em>syslog()</em></span> call, explicitly specifying <code class="literal">LOG_USER</code> overrides the default established by
+                            <span class="emphasis"><em>openlog()</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>From the shell, we can use the <span class="emphasis"><em>logger(1)</em></span> command
+                            to add entries to the system log. This command allows specification of
+                            the <span class="emphasis"><em>level</em></span> (<span class="emphasis"><em>priority</em></span>) and
+                                <span class="emphasis"><em>ident</em></span> (<span class="emphasis"><em>tag</em></span>) to be
+                            associated with the logged messages. For further details, see the
+                                <span class="emphasis"><em>logger(1)</em></span> manual page. The
+                                <span class="emphasis"><em>logger</em></span> command is (weakly) specified in SUSv3,
+                            and a version of this command is provided on most UNIX
+                                implementations.<a id="IDX-CHP-37-5484" class="indexterm"/></p></div><p>It is an error to use <span class="emphasis"><em>syslog()</em></span> to write some
+                        user-supplied string in the following manner:</p><a id="I_programlisting37_d1e103501"/><pre class="programlisting">syslog(priority, user_supplied_string);</pre><p>The problem with this code is that it leaves the application open to
+                        so-called <span class="emphasis"><em>format-string attacks</em></span>. If the user-supplied
+                        string contains format specifiers (e.g., <code class="literal">%s</code>), then the results are unpredictable and, from a security
+                        point of view, potentially dangerous. (The same observation applies to the
+                        use of the conventional <span class="emphasis"><em>printf()</em></span> function.) We should
+                        instead rewrite the above call as follows:</p><a id="I_programlisting37_d1e103514"/><pre class="programlisting">syslog(priority, "%s", user_supplied_string);</pre></div><div class="sect3" title="Closing the log"><div class="titlepage"><div><div><h4 class="title" id="closing_the_log">Closing the log</h4></div></div></div><p>When we have finished logging, we can call <span class="emphasis"><em>closelog()</em></span>
+                        to deallocate the file descriptor used for the <code class="literal">/dev/log</code> socket.<a id="IDX-CHP-37-5485" class="indexterm"/><a id="IDX-CHP-37-5486" class="indexterm"/><a id="IDX-CHP-37-5487" class="indexterm"/><a id="IDX-CHP-37-5488" class="indexterm"/><a id="IDX-CHP-37-5489" class="indexterm"/><a id="IDX-CHP-37-5490" class="indexterm"/></p><a id="I_programlisting37_d1e103560"/><pre class="programlisting">#include &lt;syslog.h&gt;
+
+void <strong class="userinput"><code>closelog</code></strong>(void);</pre><p>Since a daemon typically keeps a connection open to the system log
+                        continuously, it is common to omit calling
+                        <span class="emphasis"><em>closelog()</em></span>.</p></div><div class="sect3" title="Filtering log messages"><div class="titlepage"><div><div><h4 class="title" id="filtering_log_messages">Filtering log messages</h4></div></div></div><p>The <span class="emphasis"><em>setlogmask()</em></span> function sets a mask that filters
+                        the messages written by <span class="emphasis"><em>syslog()</em></span>.<a id="IDX-CHP-37-5491" class="indexterm"/></p><a id="I_programlisting37_d1e103585"/><pre class="programlisting">#include &lt;syslog.h&gt;
+
+int <strong class="userinput"><code>setlogmask</code></strong>(int <span class="emphasis"><em>mask_priority</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns previous log priority mask</p></div><p>Any message whose <span class="emphasis"><em>level</em></span> is not included in the
+                        current mask setting is discarded. The default mask value allows all
+                        severity levels to be logged.</p><p>The macro <code class="literal">LOG_MASK()</code> (defined in
+                            <code class="literal">&lt;syslog.h&gt;</code>) converts
+                        the <span class="emphasis"><em>level</em></span> values of <a class="xref" href="ch37.html#level_values_for_the_priority_argument_o" title="Table 37-2. level values for the priority argument of syslog() (from highest to lowest severity)">Table 37-2</a> to bit values
+                        suitable for passing to <span class="emphasis"><em>setlogmask()</em></span>. For example, to
+                        discard all messages except those with priorities of <code class="literal">LOG_ERR</code> and above, we would make the following
+                            call:<a id="IDX-CHP-37-5492" class="indexterm"/></p><a id="I_programlisting37_d1e103625"/><pre class="programlisting">setlogmask(LOG_MASK(LOG_EMERG) | LOG_MASK(LOG_ALERT) |
+           LOG_MASK(LOG_CRIT) | LOG_MASK(LOG_ERR));</pre><p>The <code class="literal">LOG_MASK()</code> macro is specified by
+                        SUSv3. Most UNIX implementations (including Linux) also provide the
+                        unspecified macro <code class="literal">LOG_UPTO()</code>, which
+                        creates a bit mask filtering all messages of a certain
+                            <span class="emphasis"><em>level</em></span> and above. Using this macro, we can simplify
+                        the previous <span class="emphasis"><em>setlogmask()</em></span> call to the
+                            following:<a id="IDX-CHP-37-5493" class="indexterm"/></p><a id="I_programlisting37_d1e103645"/><pre class="programlisting">setlogmask(LOG_UPTO(LOG_ERR));</pre></div><div class="sect3" title="The /etc/syslog.conf File"><div class="titlepage"><div><div><h4 class="title" id="the_solidus_etc_solidus_syslog.conf_file">The <code class="literal">/etc/syslog.conf</code> File</h4></div></div></div><p>The <code class="literal">/etc/syslog.conf</code> configuration file
+                        controls the operation of the <span class="emphasis"><em>syslogd</em></span> daemon. This file
+                        consists of rules and comments (starting with a <code class="literal">#</code> character). Rules have the following general
+                            form:<a id="IDX-CHP-37-5494" class="indexterm"/><a id="IDX-CHP-37-5495" class="indexterm"/></p><a id="I_programlisting37_d1e103676"/><pre class="programlisting"><span class="emphasis"><em>facility.level       action</em></span></pre><p>Together, the <span class="emphasis"><em>facility</em></span> and <span class="emphasis"><em>level</em></span>
+                        are referred to as the <span class="emphasis"><em>selector</em></span>, since they select the
+                        messages to which the rule applies. These fields are strings corresponding
+                        to the values listed in <a class="xref" href="ch37.html#facility_values_for_openlog_open_parenth" title="Table 37-1. facility values for openlog() and the priority argument of syslog()">Table 37-1</a> and <a class="xref" href="ch37.html#level_values_for_the_priority_argument_o" title="Table 37-2. level values for the priority argument of syslog() (from highest to lowest severity)">Table 37-2</a>. The
+                            <span class="emphasis"><em>action</em></span> specifies where to send the messages
+                        matching this <span class="emphasis"><em>selector</em></span>. White space separates the
+                            <span class="emphasis"><em>selector</em></span> and the <span class="emphasis"><em>action</em></span> parts
+                        of a rule. The following are examples of rules:</p><a id="I_programlisting37_d1e103707"/><pre class="programlisting">*.err                           /dev/tty10
+auth.notice                     root
+*.debug;mail.none;news.none     -/var/log/messages</pre><p>The first rule says that messages from all facilities (<code class="literal">*</code>) with a <span class="emphasis"><em>level</em></span> of
+                            <code class="literal">err</code> (<code class="literal">LOG_ERR</code>) or higher should be sent to the <code class="literal">/dev/tty10</code> console device. The second rule
+                        says that authorization facility (<code class="literal">LOG_AUTH</code>) messages with a <span class="emphasis"><em>level</em></span> of
+                            <code class="literal">notice</code> (<code class="literal">LOG_NOTICE</code>) or higher should be sent to any consoles or
+                        terminals where <span class="emphasis"><em>root</em></span> is logged in. This particular rule
+                        would allow a logged-in <span class="emphasis"><em>root</em></span> user to immediately see
+                        messages about failed <span class="emphasis"><em>su</em></span> attempts, for example.</p><p>The last rule demonstrates several of the more advanced features of rule
+                        syntax. A rule can contain multiple selectors separated by semicolons. The
+                        first selector specifies <span class="emphasis"><em>all</em></span> messages, using the
+                            <code class="literal">*</code> wildcard for
+                            <span class="emphasis"><em>facility</em></span> and <code class="literal">debug</code> for <span class="emphasis"><em>level</em></span>, meaning all messages of
+                        level <code class="literal">debug</code> (the lowest level) and
+                        higher. (On Linux, as on some other UNIX implementations, it is possible to
+                        specify <span class="emphasis"><em>level</em></span> as <code class="literal">*</code>,
+                        with the same meaning as <code class="literal">debug</code>. However,
+                        this feature is not available to all <span class="emphasis"><em>syslog</em></span>
+                        implementations.) Normally, a rule that contains multiple selectors matches
+                        messages corresponding to any of the selectors, but specifying a
+                            <span class="emphasis"><em>level</em></span> of <code class="literal">none</code>
+                        has the effect of <span class="emphasis"><em>excluding</em></span> all messages belonging to
+                        the corresponding <span class="emphasis"><em>facility</em></span>. Thus, this rule sends all
+                        messages except those for the <code class="literal">mail</code> and
+                            <code class="literal">news</code> facilities to the file <code class="literal">/var/log/messages</code>. The hyphen (<code class="literal">-</code>) preceding the name of this file specifies
+                        that a sync to the disk does not occur on each write to the file (refer to
+                            <a class="xref" href="ch13.html#controlling_kernel_buffering_of_file_i_s" title="Controlling Kernel Buffering of File I/O">Controlling Kernel Buffering of File I/O</a>). This means
+                        that writes are faster, but some data may be lost if the system crashes soon
+                        after the write.</p><p>Whenever we change the <code class="literal">syslog.conf</code>
+                        file, we must ask the daemon to reinitialize itself from this file in the
+                        usual fashion:</p><a id="I_programlisting37_d1e103815"/><pre class="programlisting">$ <strong class="userinput"><code>killall -HUP syslogd</code></strong>                  <em class="lineannotation"><span class="lineannotation">Send</span></em> SIGHUP <em class="lineannotation"><span class="lineannotation">to syslogd</span></em></pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Further features of the <code class="literal">syslog.conf</code>
+                            rule syntax allow for much more powerful rules than we have shown. Full
+                            details are provided in the <span class="emphasis"><em>syslog.conf(5)</em></span> manual
+                            page.</p></div></div></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id36">Summary</h2></div></div></div><p>A daemon is a long-lived process that has no controlling terminal (i.e., it runs
+                in the background). Daemons perform specific tasks, such as providing a network
+                login facility or serving web pages. To become a daemon, a program performs a
+                standard sequence of steps, including calls to <span class="emphasis"><em>fork()</em></span> and
+                    <span class="emphasis"><em>setsid()</em></span>.<a id="IDX-CHP-37-5496" class="indexterm"/></p><p>Where appropriate, daemons should correctly handle the arrival of the <code class="literal">SIGTERM</code> and <code class="literal">SIGHUP</code>
+                signals. The <code class="literal">SIGTERM</code> signal should result in an
+                orderly shutdown of the daemon, while the <code class="literal">SIGHUP</code>
+                signal provides a way to trigger the daemon to reinitialize itself by rereading its
+                configuration file and reopening any log files it may be using.</p><p>The <span class="emphasis"><em>syslog</em></span> facility provides a convenient way for daemons
+                (and other applications) to log error and other messages to a central location.
+                These messages are processed by the <span class="emphasis"><em>syslogd</em></span> daemon, which
+                redistributes the messages according to the dictates of the <code class="literal">syslogd.conf</code> configuration file. Messages may be redistributed to a
+                number of targets, including terminals, disk files, logged-in users, and, via a
+                TCP/IP network, to other processes on remote hosts (typically other
+                    <span class="emphasis"><em>syslogd</em></span> daemons).</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id49"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id50">Further information</h4></div></div></div><p>Perhaps the best source of further information about writing daemons is
+                        the source code of various existing daemons.</p></div></div></div><div class="sect1" title="Exercise"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercise-id10">Exercise</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Write a program (similar to <span class="emphasis"><em>logger(1)</em></span>) that uses
+                            <span class="emphasis"><em>syslog(3)</em></span> to write arbitrary messages to the system
+                        log file. As well as accepting a single command-line argument containing the
+                        message to be logged, the program should permit an option to specify the
+                            <span class="emphasis"><em>level</em></span> of the message.</p></li></ol></div></div></section></body></html>

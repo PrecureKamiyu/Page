@@ -1,0 +1,1208 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 27. Program Execution</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch26.html" title="Chapter 26. Monitoring Child Processes"/><link rel="next" href="ch28.html" title="Chapter 28. Process Creation and Program Execution in More Detail"/></head><body><section class="chapter" title="Chapter 27. Program Execution" epub:type="chapter" id="program_execution"><div class="titlepage"><div><div><h2 class="title">Chapter 27. Program Execution</h2></div></div></div><p>This chapter follows from our discussion of process creation and termination in the
+            previous chapters. We now look at how a process can use the
+                <span class="emphasis"><em>execve()</em></span> system call to replace the program that it is running
+            by a completely new program. We then show how to implement the
+                <span class="emphasis"><em>system()</em></span> function, which allows its caller to execute an
+            arbitrary shell command.<a id="IDX-CHP-27-4004" class="indexterm"/></p><div class="sect1" title="Executing a New Program: execve()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="executing_a_new_program_colon_execve_ope">Executing a New Program: <span class="emphasis"><em>execve()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>execve()</em></span> system call loads a new program into a process’s
+                memory. During this operation, the old program is discarded, and the process’s
+                stack, data, and heap are replaced by those of the new program. After executing
+                various C library run-time startup code and program initialization code (e.g., C++
+                static constructors or C functions declared with the <span class="emphasis"><em>gcc</em></span>
+                <code class="literal">constructor</code> attribute described in <a class="xref" href="ch42.html#initialization_and_finalization_function" title="Initialization and Finalization Functions">Initialization and Finalization Functions</a>), the new program commences
+                execution at its <span class="emphasis"><em>main()</em></span> function.<a id="IDX-CHP-27-4005" class="indexterm"/><a id="IDX-CHP-27-4006" class="indexterm"/><a id="IDX-CHP-27-4007" class="indexterm"/><a id="IDX-CHP-27-4008" class="indexterm"/><a id="IDX-CHP-27-4009" class="indexterm"/><a id="IDX-CHP-27-4010" class="indexterm"/><a id="IDX-CHP-27-4011" class="indexterm"/><a id="IDX-CHP-27-4012" class="indexterm"/><a id="IDX-CHP-27-4013" class="indexterm"/></p><p>The most frequent use of <span class="emphasis"><em>execve()</em></span> is in the child produced by
+                a <span class="emphasis"><em>fork()</em></span>, although it is also occasionally used in applications
+                without a preceding <span class="emphasis"><em>fork()</em></span>.</p><p>Various library functions, all with names beginning with
+                <span class="emphasis"><em>exec</em></span>, are layered on top of the <span class="emphasis"><em>execve()</em></span>
+                system call. Each of these functions provides a different interface to the same
+                functionality. The loading of a new program by any of these calls is commonly
+                referred to as an <span class="emphasis"><em>exec</em></span> operation, or simply by the notation
+                    <span class="emphasis"><em>exec()</em></span>. We begin with a description of
+                    <span class="emphasis"><em>execve()</em></span> and then describe the library functions.<a id="IDX-CHP-27-4014" class="indexterm"/></p><a id="I_programlisting27_d1e75246"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+int <strong class="userinput"><code>execve</code></strong>(const char *<span class="emphasis"><em>pathname</em></span>, char *const <span class="emphasis"><em>argv</em></span>[], char *const <span class="emphasis"><em>envp</em></span>[]);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Never returns on success; returns -1 on error</p></div><p>The <span class="emphasis"><em>pathname</em></span> argument contains the pathname of the new
+                program to be loaded into the process’s memory. This pathname can be absolute
+                (indicated by an initial /) or relative to the current working directory of the
+                calling process.</p><p>The <span class="emphasis"><em>argv</em></span> argument specifies the command-line arguments to be
+                passed to the new program. This array corresponds to, and has the same form as, the
+                second (<span class="emphasis"><em>argv</em></span>) argument to a C <span class="emphasis"><em>main()</em></span>
+                function; it is a <code class="literal">NULL</code>-terminated list of
+                pointers to character strings. The value supplied for <span class="emphasis"><em>argv[0]</em></span>
+                corresponds to the command name. Typically, this value is the same as the basename
+                (i.e., the final component) of <span class="emphasis"><em>pathname</em></span>.</p><p>The final argument, <span class="emphasis"><em>envp</em></span>, specifies the environment list for
+                the new program. The <span class="emphasis"><em>envp</em></span> argument corresponds to the
+                    <span class="emphasis"><em>environ</em></span> array of the new program; it is a <code class="literal">NULL</code>-terminated list of pointers to character strings
+                of the form <span class="emphasis"><em>name=value</em></span> (<a class="xref" href="ch06.html#environment_list-id1" title="Environment List">Environment List</a>).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The Linux-specific <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/exe</code> file is a symbolic link containing the absolute pathname of
+                    the executable file being run by the corresponding process.<a id="IDX-CHP-27-4015" class="indexterm"/></p></div><p>After an <span class="emphasis"><em>execve()</em></span>, the process ID of the process remains the
+                same, because the same process continues to exist. A few other process attributes
+                also remain unchanged, as described in Section 28.4.</p><p>If the set-user-ID (set-group-ID) permission bit of the program file specified by
+                    <span class="emphasis"><em>pathname</em></span> is set, then, when the file is execed, the
+                effective user (group) ID of the process is changed to be the same as the owner
+                (group) of the program file. This is a mechanism for temporarily granting privileges
+                to users while running a specific program (see <a class="xref" href="ch09.html#set-user-id_and_set-group-id_programs" title="Set-User-ID and Set-Group-ID Programs">Set-User-ID and Set-Group-ID Programs</a>).</p><p>After optionally changing the effective IDs, and regardless of whether they were
+                changed, an <span class="emphasis"><em>execve()</em></span> copies the value of the process’s
+                effective user ID into its saved set-user-ID, and copies the value of the process’s
+                effective group ID into its saved set-group-ID.</p><p>Since it replaces the program that called it, a successful
+                    <span class="emphasis"><em>execve()</em></span> never returns. We never need to check the return
+                value from <span class="emphasis"><em>execve()</em></span>; it will always be -1. The very fact that
+                it returned informs us that an error occurred, and, as usual, we can use
+                    <span class="emphasis"><em>errno</em></span> to determine the cause. Among the errors that may be
+                returned in <span class="emphasis"><em>errno</em></span> are the following:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">EACCES</code>
+                    </span></dt><dd><p>The <span class="emphasis"><em>pathname</em></span> argument doesn’t refer to a regular
+                            file, the file doesn’t have execute permission enabled, or one of the
+                            directory components of <span class="emphasis"><em>pathname</em></span> is not searchable
+                            (i.e., execute permission is denied on the directory). Alternatively,
+                            the file resides on a file system that was mounted with the <code class="literal">MS_NOEXEC</code> flag (<a class="xref" href="ch14.html#mounting_a_file_system_colon_mount_open" title="Mounting a File System: mount()">Mounting a File System: <span class="emphasis"><em>mount()</em></span></a>).</p></dd><dt><span class="term">
+                        <code class="literal">ENOENT</code>
+                    </span></dt><dd><p>The file referred to by <span class="emphasis"><em>pathname</em></span> doesn’t
+                            exist.</p></dd><dt><span class="term">
+                        <code class="literal">ENOEXEC</code>
+                    </span></dt><dd><p>The file referred to by <span class="emphasis"><em>pathname</em></span> is marked as
+                            being executable, but it is not in a recognizable executable format.
+                            Possibly, it is a script that doesn’t begin with a line (starting with
+                            the characters <code class="literal">#!</code>) specifying a
+                            script interpreter.</p></dd><dt><span class="term">
+                        <code class="literal">ETXTBSY</code>
+                    </span></dt><dd><p>The file referred to by <span class="emphasis"><em>pathname</em></span> is open for
+                            writing by another process (<a class="xref" href="ch04.html#the_open_open_parenthesis_close_parenthe" title="The open() flags Argument">The <span class="emphasis"><em>open() flags</em></span> Argument</a>).</p></dd><dt><span class="term">
+                        <code class="literal">E2BIG</code>
+                    </span></dt><dd><p>The total space required by the argument list and environment list
+                            exceeds the allowed maximum.</p></dd></dl></div><p>The errors listed above may also be generated if any of these conditions apply to
+                the interpreter file defined to execute a script (refer to <a class="xref" href="ch27.html#interpreter_scripts" title="Interpreter Scripts">Interpreter Scripts</a>) or to the ELF interpreter being used to execute
+                the program.<a id="IDX-CHP-27-4016" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The Executable and Linking Format (ELF) is a widely implemented specification
+                    describing the layout of executable files. Normally, during an exec, a process
+                    image is constructed using the segments of the executable file (<a class="xref" href="ch06.html#memory_layout_of_a_process" title="Memory Layout of a Process">Memory Layout of a Process</a>). However, the ELF specification also
+                    allows for an executable file to define an interpreter (the <code class="literal">PT_INTERP</code> ELF program header element) to be used
+                    to execute the program. If an interpreter is defined, the kernel constructs the
+                    process image from the segments of the specified interpreter executable file. It
+                    is then the responsibility of the interpreter to load and execute the program.
+                    We say a little more about the ELF interpreter in <a class="xref" href="ch41.html" title="Chapter 41. Fundamentals of Shared Libraries">Chapter 41</a> and provide some pointers to
+                    further information in that chapter.<a id="IDX-CHP-27-4017" class="indexterm"/></p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="example_program-id33"/></div></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id34">Example program</h4></div></div></div><p><a class="xref" href="ch27.html#using_execve_open_parenthesis_close_pare" title="Example 27-1. Using execve() to execute a new program">Example 27-1</a> demonstrates
+                        the use of <span class="emphasis"><em>execve()</em></span>. This program creates an argument
+                        list and an environment for a new program, and then calls
+                            <span class="emphasis"><em>execve()</em></span>, using its command-line argument
+                            (<span class="emphasis"><em>argv[1]</em></span>) as the pathname to be executed.<a id="IDX-CHP-27-4018" class="indexterm"/><a id="IDX-CHP-27-4019" class="indexterm"/><a id="IDX-CHP-27-4020" class="indexterm"/><a id="IDX-CHP-27-4021" class="indexterm"/><a id="IDX-CHP-27-4022" class="indexterm"/></p><p><a class="xref" href="ch27.html#display_argument_list_and_environment" title="Example 27-2. Display argument list and environment">Example 27-2</a> shows a program
+                        that is designed to be executed by the program in <a class="xref" href="ch27.html#using_execve_open_parenthesis_close_pare" title="Example 27-1. Using execve() to execute a new program">Example 27-1</a>. This program
+                        simply displays its command-line arguments and environment list (the latter
+                        is accessed using the global <span class="emphasis"><em>environ</em></span> variable, as
+                        described in <a class="xref" href="ch06.html#environment_list-id1" title="Environment List">Environment List</a>).</p><p>The following shell session demonstrates the use of the programs in <a class="xref" href="ch27.html#using_execve_open_parenthesis_close_pare" title="Example 27-1. Using execve() to execute a new program">Example 27-1</a> and <a class="xref" href="ch27.html#display_argument_list_and_environment" title="Example 27-2. Display argument list and environment">Example 27-2</a> (in this example, a
+                        relative pathname is used to specify the program to be execed):</p><a id="I_programlisting27_d1e75498"/><pre class="programlisting">$ <strong class="userinput"><code>./t_execve ./envargs</code></strong>
+argv[0] = envargs                   <em class="lineannotation"><span class="lineannotation">All of the output is printed by</span></em> <strong class="userinput"><code>envargs</code></strong>
+argv[1] = hello world
+argv[2] = goodbye
+environ: GREET=salut
+environ: BYE=adieu</pre><div class="example"><a id="using_execve_open_parenthesis_close_pare"/><div class="example-title">Example 27-1. Using <span class="emphasis"><em>execve()</em></span> to execute a new program</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/t_execve.c</code></strong>
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    char *argVec[10];           /* Larger than required */
+    char *envVec[] = { "GREET=salut", "BYE=adieu", NULL };
+
+    if (argc != 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s pathname\n", argv[0]);
+
+    argVec[0] = strrchr(argv[1], '/');      /* Get basename from argv[1] */
+    if (argVec[0] != NULL)
+        argVec[0]++;
+    else
+        argVec[0] = argv[1];
+    argVec[1] = "hello world";
+    argVec[2] = "goodbye";
+    argVec[3] = NULL;           /* List must be NULL-terminated */
+
+    execve(argv[1], argVec, envVec);
+    errExit("execve");          /* If we get here, something went wrong */
+}
+
+      <strong class="userinput"><code>procexec/t_execve.c</code></strong></pre></div></div><div class="example"><a id="display_argument_list_and_environment"/><div class="example-title">Example 27-2. Display argument list and environment</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/envargs.c</code></strong>
+#include "tlpi_hdr.h"
+
+extern char **environ;
+
+int
+main(int argc, char *argv[])
+{
+    int j;
+    char **ep;
+
+    for (j = 0; j &lt; argc; j++)
+        printf("argv[%d] = %s\n", j, argv[j]);
+
+    for (ep = environ; *ep != NULL; ep++)
+        printf("environ: %s\n", *ep);
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>procexec/envargs.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="The exec() Library Functions"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_exec_open_parenthesis_close_parenthe">The <span class="emphasis"><em>exec()</em></span> Library Functions</h2></div></div></div><p>The library functions described in this section provide alternative APIs for
+                performing an <span class="emphasis"><em>exec()</em></span>. All of these functions are layered on top
+                of <span class="emphasis"><em>execve()</em></span>, and they differ from one another and from
+                    <span class="emphasis"><em>execve()</em></span> only in the way in which the program name,
+                argument list, and environment of the new program are specified.<a id="IDX-CHP-27-4023" class="indexterm"/><a id="IDX-CHP-27-4024" class="indexterm"/><a id="IDX-CHP-27-4025" class="indexterm"/><a id="IDX-CHP-27-4026" class="indexterm"/><a id="IDX-CHP-27-4027" class="indexterm"/><a id="IDX-CHP-27-4028" class="indexterm"/><a id="IDX-CHP-27-4029" class="indexterm"/></p><a id="I_programlisting27_d1e75594"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+int <strong class="userinput"><code>execle</code></strong>(const char *<span class="emphasis"><em>pathname</em></span>, const char *<span class="emphasis"><em>arg</em></span>, ...
+                /* , (char *) NULL, char *const <span class="emphasis"><em>envp</em></span>[] */ );
+int <strong class="userinput"><code>execlp</code></strong>(const char *<span class="emphasis"><em>filename</em></span>, const char *<span class="emphasis"><em>arg</em></span>, ...
+                /* , (char *) NULL */);
+int <strong class="userinput"><code>execvp</code></strong>(const char *<span class="emphasis"><em>filename</em></span>, char *const <span class="emphasis"><em>argv</em></span>[]);
+int <strong class="userinput"><code>execv</code></strong>(const char *<span class="emphasis"><em>pathname</em></span>, char *const <span class="emphasis"><em>argv</em></span>[]);
+int <strong class="userinput"><code>execl</code></strong>(const char *<span class="emphasis"><em>pathname</em></span>, const char *<span class="emphasis"><em>arg</em></span>, ...
+                /* , (char *) NULL */);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>None of the above returns on success; all return -1 on error</p></div><p>The final letters in the names of these functions provide a clue to the
+                differences between them. These differences are summarized in <a class="xref" href="ch27.html#summary_of_differences_between_the_exec" title="Table 27-1. Summary of differences between the exec() functions">Table 27-1</a> and detailed in the
+                following list:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Most of the <span class="emphasis"><em>exec()</em></span> functions expect a pathname as the
+                        specification of the new program to be loaded. However,
+                            <span class="emphasis"><em>execlp()</em></span> and <span class="emphasis"><em>execvp()</em></span> allow
+                        the program to be specified using just a filename. The filename is sought in
+                        the list of directories specified in the <code class="literal">PATH</code> environment variable (explained in more detail below).
+                        This is the kind of searching that the shell performs when given a command
+                        name. To indicate this difference in operation, the names of these functions
+                        contain the letter <span class="emphasis"><em>p</em></span> (for <code class="literal">PATH</code>). The <code class="literal">PATH</code> variable
+                        is not used if the filename contains a slash (<code class="literal">/</code>), in which case it is treated as a relative or absolute
+                            pathname.<a id="IDX-CHP-27-4030" class="indexterm"/><a id="IDX-CHP-27-4031" class="indexterm"/><a id="IDX-CHP-27-4032" class="indexterm"/></p></li><li class="listitem"><p>Instead of using an array to specify the <span class="emphasis"><em>argv</em></span> list
+                        for the new program, <span class="emphasis"><em>execle()</em></span>,
+                            <span class="emphasis"><em>execlp()</em></span>, and <span class="emphasis"><em>execl()</em></span> require
+                        the programmer to specify the arguments as a list of strings within the
+                        call. The first of these arguments corresponds to
+                            <span class="emphasis"><em>argv[0]</em></span> in the <span class="emphasis"><em>main</em></span> function
+                        of the new program, and is thus typically the same as the
+                            <span class="emphasis"><em>filename</em></span> argument or the basename component of the
+                            <span class="emphasis"><em>pathname</em></span> argument. A <code class="literal">NULL</code> pointer must terminate the argument list, so that these
+                        calls can locate the end of the list. (This requirement is indicated by the
+                        commented <span class="emphasis"><em>(char *) NULL</em></span> in the above prototypes; for a
+                        discussion of why the cast is required before the <code class="literal">NULL</code>, see <a class="xref" href="apc.html" title="Appendix C. Casting the NULL Pointer">Appendix C</a>.) The
+                        names of these functions contain the letter l (for
+                        <span class="emphasis"><em>list</em></span>) to distinguish them from those functions
+                        requiring the argument list as a <code class="literal">NULL</code>-terminated array. The names of the functions that require
+                        the argument list as an array (<span class="emphasis"><em>execve()</em></span>,
+                            <span class="emphasis"><em>execvp()</em></span>, and <span class="emphasis"><em>execv()</em></span>) contain
+                        the letter <span class="emphasis"><em>v</em></span> (for
+                            vec<span class="emphasis"><em>tor</em></span>).<a id="IDX-CHP-27-4033" class="indexterm"/><a id="IDX-CHP-27-4034" class="indexterm"/><a id="IDX-CHP-27-4035" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>execve()</em></span> and <span class="emphasis"><em>execle()</em></span>
+                        functions allow the programmer to explicitly specify the environment for the
+                        new program using <span class="emphasis"><em>envp</em></span>, a <code class="literal">NULL</code>-terminated array of pointers to character strings. The
+                        names of these functions end with the letter <span class="emphasis"><em>e</em></span> (for
+                            <span class="emphasis"><em>environment</em></span>) to indicate this fact. All of the
+                        other <span class="emphasis"><em>exec()</em></span> functions use the caller’s existing
+                        environment (i.e., the contents of <span class="emphasis"><em>environ</em></span>) as the
+                        environment for the new program.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>Version 2.11 of <span class="emphasis"><em>glibc</em></span> added a nonstandard function,
+                        <span class="emphasis"><em>execvpe(file, argv, envp)</em></span>. This function is like
+                        <span class="emphasis"><em>execvp()</em></span>, but instead of taking the environment for the
+                    new program from <span class="emphasis"><em>environ</em></span>, the caller specifies the new
+                    environment via the <span class="emphasis"><em>envp</em></span> argument (like
+                        <span class="emphasis"><em>execve()</em></span> and <span class="emphasis"><em>execle()</em></span>).</p></div><p>In the next few pages, we demonstrate the use of some of these
+                    <span class="emphasis"><em>exec()</em></span> variants.</p><div class="table"><a id="summary_of_differences_between_the_exec"/><div class="table-title">Table 27-1. Summary of differences between the <span class="emphasis"><em>exec()</em></span>
+                    functions</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/><col class="col4"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Function</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Specification of program file<span class="emphasis"><em>(-,
+                                    p)</em></span></p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Specification of arguments<span class="emphasis"><em>(v, l)</em></span></p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>Source of environment<span class="emphasis"><em>(e, -)</em></span></p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <span class="emphasis"><em>execve()</em></span>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>pathname</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>array</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p><span class="emphasis"><em>envp</em></span> argument</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <span class="emphasis"><em>execle()</em></span>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>pathname</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>list</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p><span class="emphasis"><em>envp</em></span> argument</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <span class="emphasis"><em>execlp()</em></span>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>filename + <code class="literal">PATH</code></p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>list</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>caller’s <span class="emphasis"><em>environ</em></span></p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <span class="emphasis"><em>execvp()</em></span>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>filename + <code class="literal">PATH</code></p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>array</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>caller’s <span class="emphasis"><em>environ</em></span></p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <span class="emphasis"><em>execv()</em></span>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>pathname</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>array</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>caller’s <span class="emphasis"><em>environ</em></span></p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <span class="emphasis"><em>execl()</em></span>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>pathname</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>list</p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>caller’s <span class="emphasis"><em>environ</em></span></p>
+                            </td></tr></tbody></table></div></div><div class="sect2" title="The PATH Environment Variable"><div class="titlepage"><div><div><h3 class="title" id="the_path_environment_variable">The <code class="literal">PATH</code> Environment Variable</h3></div></div></div><p>The <span class="emphasis"><em>execvp()</em></span> and <span class="emphasis"><em>execlp()</em></span> functions
+                    allow us to specify just the name of the file to be executed. These functions
+                    make use of the <code class="literal">PATH</code> environment variable to
+                    search for the file. The value of <code class="literal">PATH</code> is a
+                    string consisting of colon-separated directory names called <span class="emphasis"><em>path
+                        prefixes</em></span>. As an example, the following <code class="literal">PATH</code> value specifies five directories:<a id="IDX-CHP-27-4036" class="indexterm"/><a id="IDX-CHP-27-4037" class="indexterm"/><a id="IDX-CHP-27-4038" class="indexterm"/><a id="IDX-CHP-27-4039" class="indexterm"/><a id="IDX-CHP-27-4040" class="indexterm"/></p><a id="I_programlisting27_d1e76006"/><pre class="programlisting">$ <strong class="userinput"><code>echo $PATH</code></strong>
+/home/mtk/bin:/usr/local/bin:/usr/bin:/bin:.</pre><p>The <code class="literal">PATH</code> value for a login shell is set by
+                    system-wide and user-specific shell startup scripts. Since a child process
+                    inherits a copy of its parent’s environment variables, each process that the
+                    shell creates to execute a command inherits a copy of the shell’s <code class="literal">PATH</code>.</p><p>The directory pathnames specified in <code class="literal">PATH</code>
+                    can be either absolute (commencing with an initial <code class="literal">/</code>) or relative. A relative pathname is interpreted with respect
+                    to the current working directory of the calling process. The current working
+                    directory can be specified using <code class="literal">.</code> (dot), as
+                    in the above example.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>It is also possible to specify the current working directory by including
+                        a zero-length prefix in <code class="literal">PATH</code>, by
+                        employing consecutive colons, an initial colon, or a trailing colon (e.g.,
+                            <code class="literal">/usr/bin:/bin:</code>). SUSv3 declares this
+                        technique obsolete; the current working directory should be explicitly
+                        specified using <code class="literal">.</code> (dot).</p></div><p>If the <code class="literal">PATH</code> variable is not defined, then
+                        <span class="emphasis"><em>execvp()</em></span> and <span class="emphasis"><em>execlp()</em></span> assume a
+                    default path list of <code class="literal">.:/usr/bin:/bin</code>.</p><p>As a security measure, the superuser account (<span class="emphasis"><em>root</em></span>) is
+                    normally set up so that the current working directory is excluded from <code class="literal">PATH</code>. This prevents <span class="emphasis"><em>root</em></span> from
+                    accidentally executing a file from the current working directory (which may have
+                    been deliberately placed there by a malicious user) with the same name as a
+                    standard command or with a name that is a misspelling of a common command (e.g.,
+                        <span class="emphasis"><em>sl</em></span> instead of <span class="emphasis"><em>ls</em></span>). In some Linux
+                    distributions, the default value for <code class="literal">PATH</code>
+                    also excludes the current working directory for unprivileged users. We assume
+                    such a <code class="literal">PATH</code> definition in all of the shell
+                    session logs shown in this book, which is why we always prefix ./ to the names
+                    of programs executed from the current working directory. (This also has the
+                    useful side effect of visually distinguishing our programs from standard
+                    commands in the shell session logs shown in this book.)</p><p>The <span class="emphasis"><em>execvp()</em></span> and <span class="emphasis"><em>execlp()</em></span> functions
+                    search for the filename in each of the directories named in <code class="literal">PATH</code>, starting from the beginning of the list and
+                    continuing until a file with the given name is successfully execed. Using the
+                        <code class="literal">PATH</code> environment variable in this way is
+                    useful if we don’t know the run-time location of an executable file or don’t
+                    want to create a hard-coded dependency on that location.</p><p>The use of <span class="emphasis"><em>execvp()</em></span> and <span class="emphasis"><em>execlp()</em></span> in
+                    set-user-ID or set-group-ID programs should be avoided, or at least approached
+                    with great caution. In particular, the <code class="literal">PATH</code>
+                    environment variable should be carefully controlled to prevent the execing of a
+                    malicious program. In practice, this means that the application should override
+                    any previously defined <code class="literal">PATH</code> value with a
+                    known-secure directory list.</p><p><a class="xref" href="ch27.html#using_execlp_open_parenthesis_close_pare" title="Example 27-3. Using execlp() to search for a filename in PATH">Example 27-3</a> provides an example
+                    of the use of <span class="emphasis"><em>execlp()</em></span>. The following shell session log
+                    demonstrates the use of this program to invoke the <span class="emphasis"><em>echo</em></span>
+                    command (<code class="literal">/bin/echo</code>):</p><a id="I_programlisting27_d1e76121"/><pre class="programlisting">$ <strong class="userinput"><code>which echo</code></strong>
+/bin/echo
+$ <strong class="userinput"><code>ls -l /bin/echo</code></strong>
+-rwxr-xr-x    1 root      15428 Mar 19 21:28 /bin/echo
+$ <strong class="userinput"><code>echo $PATH</code></strong>                      <em class="lineannotation"><span class="lineannotation">Show contents of</span></em> <strong class="userinput"><code>PATH</code></strong>
+<em class="lineannotation"><span class="lineannotation">environment variable</span></em>
+/home/mtk/bin:/usr/local/bin:/usr/bin:/bin/      bin <em class="lineannotation"><span class="lineannotation">is in</span></em> PATH
+$ <strong class="userinput"><code>./t_execlp echo</code></strong>                 execlp() <em class="lineannotation"><span class="lineannotation">uses</span></em> PATH <em class="lineannotation"><span class="lineannotation">to successfully find</span></em> echo
+hello world</pre><p>The string <span class="emphasis"><em>hello world</em></span> that appears above was supplied as
+                    the third argument of the call to <span class="emphasis"><em>execlp()</em></span> in the program
+                    in <a class="xref" href="ch27.html#using_execlp_open_parenthesis_close_pare" title="Example 27-3. Using execlp() to search for a filename in PATH">Example 27-3</a>.</p><p>We continue by redefining <code class="literal">PATH</code> to omit
+                        <code class="literal">/bin</code>, which is the directory containing
+                    the <span class="emphasis"><em>echo</em></span> program:</p><a id="I_programlisting27_d1e76175"/><pre class="programlisting">$ <strong class="userinput"><code>PATH=/home/mtk/bin:/usr/local/bin:/usr/bin</code></strong>
+$ <strong class="userinput"><code>./t_execlp echo</code></strong>
+ERROR [ENOENT No such file or directory] execlp
+$ <strong class="userinput"><code>./t_execlp /bin/echo</code></strong>
+hello world</pre><p>As can be seen, when we supply a filename (i.e., a string containing no
+                    slashes) to <span class="emphasis"><em>execlp()</em></span>, the call fails, since a file named
+                        <code class="literal">echo</code> was not found in any of the
+                    directories listed in <code class="literal">PATH</code>. On the other
+                    hand, when we provide a pathname containing one or more slashes,
+                        <span class="emphasis"><em>execlp()</em></span> ignores the contents of <code class="literal">PATH</code>.</p><div class="example"><a id="using_execlp_open_parenthesis_close_pare"/><div class="example-title">Example 27-3. Using <span class="emphasis"><em>execlp()</em></span> to search for a filename in <code class="literal">PATH</code></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/t_execlp.c</code></strong>
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    if (argc != 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s pathname\n", argv[0]);
+
+    execlp(argv[1], argv[1], "hello world", (char *) NULL);
+    errExit("execlp");          /* If we get here, something went wrong */
+}
+     <strong class="userinput"><code>procexec/t_execlp.c</code></strong></pre></div></div></div><div class="sect2" title="Specifying Program Arguments as a List"><div class="titlepage"><div><div><h3 class="title" id="specifying_program_arguments_as_a_list">Specifying Program Arguments as a List</h3></div></div></div><p>When we know the number of arguments for an <span class="emphasis"><em>exec()</em></span> at the
+                    time we write a program, we can use <span class="emphasis"><em>execle()</em></span>,
+                        <span class="emphasis"><em>execlp()</em></span>, or <span class="emphasis"><em>execl()</em></span> to specify
+                    the arguments as a list within the function call. This can be convenient, since
+                    it requires less code than assembling the arguments in an
+                        <span class="emphasis"><em>argv</em></span> vector. The program in <a class="xref" href="ch27.html#using_execle_open_parenthesis_close_pare" title="Example 27-4. Using execle() to specify program arguments as a list">Example 27-4</a> achieves the same
+                    result as the program in <a class="xref" href="ch27.html#using_execve_open_parenthesis_close_pare" title="Example 27-1. Using execve() to execute a new program">Example 27-1</a> but using
+                        <span class="emphasis"><em>execle()</em></span> instead of
+                        <span class="emphasis"><em>execve()</em></span>.<a id="IDX-CHP-27-4042" class="indexterm"/><a id="IDX-CHP-27-4043" class="indexterm"/><a id="IDX-CHP-27-4044" class="indexterm"/><a id="IDX-CHP-27-4045" class="indexterm"/><a id="IDX-CHP-27-4041" class="indexterm"/><a id="IDX-CHP-27-4046" class="indexterm"/><a id="IDX-CHP-27-4047" class="indexterm"/></p><div class="example"><a id="using_execle_open_parenthesis_close_pare"/><div class="example-title">Example 27-4. Using <span class="emphasis"><em>execle()</em></span> to specify program arguments as a
+                        list</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/t_execle.c</code></strong>
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    char *envVec[] = { "GREET=salut", "BYE=adieu", NULL };
+    char *filename;
+
+    if (argc != 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s pathname\n", argv[0]);
+
+    filename = strrchr(argv[1], '/');       /* Get basename from argv[1] */
+    if (filename != NULL)
+        filename++;
+    else
+        filename = argv[1];
+
+    execle(argv[1], filename, "hello world", (char *) NULL, envVec);
+    errExit("execle");          /* If we get here, something went wrong */
+}
+      <strong class="userinput"><code>procexec/t_execle.c</code></strong></pre></div></div></div><div class="sect2" title="Passing the Caller’s Environment to the New Program"><div class="titlepage"><div><div><h3 class="title" id="passing_the_caller_number_symble_s_envir">Passing the Caller’s Environment to the New Program</h3></div></div></div><p>The <span class="emphasis"><em>execlp()</em></span>, <span class="emphasis"><em>execvp()</em></span>,
+                        <span class="emphasis"><em>execl()</em></span>, and <span class="emphasis"><em>execv()</em></span> functions
+                    don’t permit the programmer to explicitly specify an environment list; instead,
+                    the new program inherits its environment from the calling process (<a class="xref" href="ch06.html#environment_list-id1" title="Environment List">Environment List</a>). This may, or may not, be desirable. For
+                    security reasons, it is sometimes preferable to ensure that a program is execed
+                    with a known environment list. We consider this point further in Section
+                        38.8.<a id="IDX-CHP-27-4048" class="indexterm"/><a id="IDX-CHP-27-4049" class="indexterm"/></p><p><a class="xref" href="ch27.html#passing_the_caller_number_symble_s_e" title="Example 27-5. Passing the caller’s environment to the new program using execl()">Example 27-5</a> demonstrates that the
+                    new program inherits its environment from the caller during an
+                        <span class="emphasis"><em>execl()</em></span> call. This program first uses
+                        <span class="emphasis"><em>putenv()</em></span> to make a change to the environment that it
+                    inherits from the shell as a result of <span class="emphasis"><em>fork()</em></span>. Then the
+                        <span class="emphasis"><em>printenv</em></span> program is execed to display the values of the
+                        <code class="literal">USER</code> and <code class="literal">SHELL</code> environment variables. When we run this program, we see the
+                    following:</p><a id="I_programlisting27_d1e76345"/><pre class="programlisting">$ <strong class="userinput"><code>echo $USER $SHELL</code></strong>           <em class="lineannotation"><span class="lineannotation">Display some of the shell’s environment variables</span></em>
+blv /bin/bash
+$ <strong class="userinput"><code>./t_execl</code></strong>
+Initial value of USER: blv    <em class="lineannotation"><span class="lineannotation">Copy of environment was inherited from the shell</span></em>
+britta                        <em class="lineannotation"><span class="lineannotation">These two lines are displayed by execed</span></em> printenv
+/bin/bash</pre><div class="example"><a id="passing_the_caller_number_symble_s_e"/><div class="example-title">Example 27-5. Passing the caller’s environment to the new program using
+                            <span class="emphasis"><em>execl()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/t_execl.c</code></strong>
+#include &lt;stdlib.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    printf("Initial value of USER: %s\n", getenv("USER"));
+    if (putenv("USER=britta") != 0)
+        errExit("putenv");
+
+    execl("/usr/bin/printenv", "printenv", "USER", "SHELL", (char *) NULL);
+    errExit("execl");           /* If we get here, something went wrong */
+}
+     <strong class="userinput"><code>procexec/t_execl.c</code></strong></pre></div></div></div><div class="sect2" title="Executing a File Referred to by a Descriptor: fexecve()"><div class="titlepage"><div><div><h3 class="title" id="executing_a_file_referred_to_by_a_descri">Executing a File Referred to by a Descriptor:
+                    <span class="emphasis"><em>fexecve()</em></span></h3></div></div></div><p>Since version 2.3.2, <span class="emphasis"><em>glibc</em></span> provides
+                        <span class="emphasis"><em>fexecve()</em></span>, which behaves just like
+                        <span class="emphasis"><em>execve()</em></span>, but specifies the file to be execed via the
+                    open file descriptor <span class="emphasis"><em>fd</em></span>, rather than as a pathname. Using
+                        <span class="emphasis"><em>fexecve()</em></span> is useful for applications that want to open
+                    a file, verify its contents by performing a checksum, and then execute the
+                        file.<a id="IDX-CHP-27-4051" class="indexterm"/><a id="IDX-CHP-27-4052" class="indexterm"/><a id="IDX-CHP-27-4053" class="indexterm"/><a id="IDX-CHP-27-4050" class="indexterm"/></p><a id="I_programlisting27_d1e76418"/><pre class="programlisting">#define _GNU_SOURCE
+#include &lt;unistd.h&gt;
+
+int <strong class="userinput"><code>fexecve</code></strong>(int <span class="emphasis"><em>fd</em></span>, char *const <span class="emphasis"><em>argv</em></span>[], char *const <span class="emphasis"><em>envp</em></span>[]);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Doesn’t return on success; returns -1 on error</p></div><p>Without <span class="emphasis"><em>fexecve()</em></span>, we could <span class="emphasis"><em>open()</em></span>
+                    and read the file to verify its contents, and then exec it. However, this would
+                    allow the possibility that, between opening the file and execing it, the file
+                    was replaced (holding an open file descriptor doesn’t prevent a new file with
+                    the same name from being created), so that the content that was execed was
+                    different from the content that was checked.</p></div></div><div class="sect1" title="Interpreter Scripts"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="interpreter_scripts">Interpreter Scripts</h2></div></div></div><p>An <span class="emphasis"><em>interpreter</em></span> is a program that reads commands in text form
+                and executes them. (This contrasts with a <span class="emphasis"><em>compiler</em></span>, which
+                translates input source code into a machine language that can then be executed on a
+                real or virtual machine.) Examples of interpreters include the various UNIX shells
+                and programs such as <span class="emphasis"><em>awk</em></span>, <span class="emphasis"><em>sed</em></span>,
+                    <span class="emphasis"><em>perl</em></span>, <span class="emphasis"><em>python</em></span>, and
+                    <span class="emphasis"><em>ruby</em></span>. In addition to being able to read and execute
+                commands interactively, interpreters usually provide a facility to read and execute
+                commands from a text file, referred to as a <span class="emphasis"><em>script</em></span>.<a id="IDX-CHP-27-4054" class="indexterm"/><a id="IDX-CHP-27-4055" class="indexterm"/><a id="IDX-CHP-27-4056" class="indexterm"/></p><p>UNIX kernels allow interpreter scripts to be run in the same way as a binary
+                program file, as long as two requirements are met. First, execute permission must be
+                enabled for the script file. Second, the file must contain an initial line that
+                specifies the pathname of the interpreter to be used to run the script. This line
+                has the following form:</p><a id="I_programlisting27_d1e76486"/><pre class="programlisting">#! <em class="lineannotation"><span class="lineannotation">interpreter-path</span></em> [<em class="lineannotation"><span class="lineannotation">optional-arg</span></em>]</pre><p>The <code class="literal">#!</code> characters must be placed at the start
+                of the line; optionally, a space may separate these characters from the interpreter
+                pathname. The <code class="literal">PATH</code> environment variable is
+                    <span class="emphasis"><em>not</em></span> used in interpreting this pathname, so that an absolute
+                pathname usually should be specified. A relative pathname is also possible, though
+                unusual; it is interpreted relative to the current working directory of the process
+                starting the interpreter. White space separates the interpreter pathname from an
+                optional argument, whose purpose we explain shortly. The optional argument should
+                not contain white-space characters.</p><p>As an example, UNIX shell scripts usually begin with the following line, which
+                specifies that the shell is to be used to execute the script:</p><a id="I_programlisting27_d1e76507"/><pre class="programlisting">#!/bin/sh</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>The optional argument in the first line of the interpreter script file should
+                    not contain white space because the behavior in this case is highly
+                    implementation-dependent. On Linux, white space in
+                        <span class="emphasis"><em>optional-arg</em></span> is not interpreted specially—all of the
+                    text from the start of the argument to the end of the line is interpreted as a
+                    single word (which is given as an argument to the script, as we describe below).
+                    Note that this treatment of spaces contrasts with the shell, where white space
+                    delimits the words of a command line.<a id="IDX-CHP-27-4057" class="indexterm"/></p><p>While some UNIX implementations treat white space in
+                        <span class="emphasis"><em>optional-arg</em></span> in the same way as Linux, other
+                    implementations do not. On FreeBSD before version 6.0, multiple space-delimited
+                    optional arguments may follow <span class="emphasis"><em>interpreter-path</em></span> (and these
+                    are passed as separate words to the script); since version 6.0, FreeBSD behaves
+                    like Linux. On Solaris 8, white-space characters terminate
+                        <span class="emphasis"><em>optional-arg</em></span>, and any remaining text in the <code class="literal">#!</code> line is ignored.</p></div><p>The Linux kernel places a 127-character limit on the length of the <code class="literal">#!</code> line of a script (excluding the newline character
+                at the end of the line). Additional characters are silently ignored.</p><p>The <code class="literal">#!</code> technique for interpreter scripts is not
+                specified in SUSv3, but is available on most UNIX implementations.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The limit placed on the length of the <code class="literal">#!</code>
+                    line varies across UNIX implementations. For example, the limit is 64 characters
+                    in OpenBSD 3.1 and 1024 characters on Tru64 5.1. On some historical
+                    implementations (e.g., SunOS 4), this limit was as low as 32 characters.</p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="execution_of_interpreter_scripts"/></div></div></div><div class="sect3" title="Execution of interpreter scripts"><div class="titlepage"><div><div><h4 class="title" id="execution_of_interpreter_scripts-id1">Execution of interpreter scripts</h4></div></div></div><p>Since a script doesn’t contain binary machine code, when
+                            <span class="emphasis"><em>execve()</em></span> is used to run the script, obviously
+                        something different from usual must be occurring when the script is
+                        executed. If <span class="emphasis"><em>execve()</em></span> detects that the file it has been
+                        given commences with the 2-byte sequence <code class="literal">#!</code>, then it extracts the remainder of the line (the pathname
+                        and argument), and execs the interpreter file with the following list of
+                        arguments:</p><a id="I_programlisting27_d1e76565"/><pre class="programlisting"><em class="replaceable"><code>interpreter-path</code></em> [<em class="replaceable"><code>optional-arg</code></em> ] <em class="replaceable"><code>script-path arg</code></em>...</pre><p>Here, <span class="emphasis"><em>interpreter-path</em></span> and
+                            <span class="emphasis"><em>optional-arg</em></span> are taken from the <code class="literal">#!</code> line of the script,
+                            <span class="emphasis"><em>script-path</em></span> is the pathname given to
+                            <span class="emphasis"><em>execve()</em></span>, and <span class="emphasis"><em>arg..</em></span>. is the
+                        list of any further arguments specified via the <span class="emphasis"><em>argv</em></span>
+                        argument to <span class="emphasis"><em>execve()</em></span> (but excluding
+                            <span class="emphasis"><em>argv[0]</em></span>). The origin of each of the script
+                        arguments is summarized in <a class="xref" href="ch27.html#the_argument_list_supplied_to_an_execed" title="Figure 27-1. The argument list supplied to an execed script">Figure 27-1</a>.</p><div class="figure"><a id="the_argument_list_supplied_to_an_execed"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject27_d1e76610"/><img src="figs/web/27-1_PROCEXEC-script-exec-scale90.png.jpg" alt="The argument list supplied to an execed script"/></div></div><div class="figure-title">Figure 27-1. The argument list supplied to an execed script</div></div><p>We can demonstrate the origin of the interpreter arguments by writing a
+                        script that uses the program in <a class="xref" href="ch06.html#echoing_command-line_arguments" title="Example 6-2. Echoing command-line arguments">Example 6-2</a> (<code class="literal">necho.c</code>, in <a class="xref" href="ch06.html#environment_list-id1" title="Environment List">Environment List</a>) as an
+                        interpreter. This program simply echoes all of its command-line arguments.
+                        We then use the program in <a class="xref" href="ch27.html#using_execve_open_parenthesis_close_pare" title="Example 27-1. Using execve() to execute a new program">Example 27-1</a> to exec the
+                        script:</p><a id="I_programlisting27_d1e76626"/><pre class="programlisting">$ <strong class="userinput"><code>cat &gt; necho.script</code></strong>                <em class="lineannotation"><span class="lineannotation">Create script</span></em>
+#!/home/mtk/bin/necho some argument
+Some junk
+<em class="lineannotation"><span class="lineannotation">Type Control-D</span></em>
+$ <strong class="userinput"><code>chmod +x necho.script</code></strong>             <em class="lineannotation"><span class="lineannotation">Make script executable</span></em>
+$ <strong class="userinput"><code>./t_execve necho.script</code></strong>           <em class="lineannotation"><span class="lineannotation">And exec the script</span></em>
+argv[0] = /home/mtk/bin/necho       <em class="lineannotation"><span class="lineannotation">First 3 arguments are generated by kernel</span></em>
+argv[1] = some argument             <em class="lineannotation"><span class="lineannotation">Script argument is treated as a single word</span></em>
+argv[2] = necho.script              <em class="lineannotation"><span class="lineannotation">This is the script path</span></em>
+argv[3] = hello world               <em class="lineannotation"><span class="lineannotation">This was argVec[1] given to execve()</span></em>
+argv[4] = goodbye                   <em class="lineannotation"><span class="lineannotation">And this was argVec[2]</span></em></pre><p>In this example, our “interpreter” (<code class="literal">necho</code>) ignores the contents of its script file (<code class="literal">necho.script</code>), and the second line of the
+                        script (<span class="emphasis"><em>Some junk</em></span>) has no effect on its
+                        execution.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The Linux 2.2 kernel passes only the basename part of the
+                                <span class="emphasis"><em>interpreter-path</em></span> as the first argument when
+                            invoking a script. Consequently, on Linux 2.2, the line displaying
+                                <span class="emphasis"><em>argv[0]</em></span> would show just the value
+                                <span class="emphasis"><em>echo</em></span>.</p></div><p>Most UNIX shells and interpreters treat the # character as the start of a
+                        comment. Thus, these interpreters ignore the initial <code class="literal">#!</code> line when interpreting the script.</p></div><div class="sect3" title="Using the script optional-arg"><div class="titlepage"><div><div><h4 class="title" id="using_the_script_optional-arg">Using the script <span class="emphasis"><em>optional-arg</em></span></h4></div></div></div><p>One use of the <span class="emphasis"><em>optional-arg</em></span> in a script’s initial
+                            <code class="literal">#!</code> line is to specify command-line
+                        options for the interpreter. This feature is useful with certain
+                        interpreters, such as <span class="emphasis"><em>awk</em></span>.<a id="IDX-CHP-27-4058" class="indexterm"/><a id="IDX-CHP-27-4059" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>awk</em></span> interpreter has been part of the UNIX
+                            system since the late 1970s. The <span class="emphasis"><em>awk</em></span> language is
+                            described in a number of books, including one by its creators [Aho et
+                            al., 1988], whose initials gave the language its name. Its forte is
+                            rapid prototyping of text-processing applications. In its design—a
+                            weakly typed language, with a rich set of text-handling primitives, and
+                            a syntax based on C—<span class="emphasis"><em>awk</em></span> is the ancestor of many
+                            widely used contemporary scripting languages, such as JavaScript and
+                            PHP.</p></div><p>A script can be supplied to <span class="emphasis"><em>awk</em></span> in two different
+                        ways. The default is to provide the script as the first command-line
+                        argument to <span class="emphasis"><em>awk</em></span>:</p><a id="I_programlisting27_d1e76737"/><pre class="programlisting">$ <strong class="userinput"><code>awk</code></strong> <strong class="userinput"><code>'</code></strong><strong class="userinput"><code><em class="replaceable"><code>script</code></em></code></strong><strong class="userinput"><code>'</code></strong> <strong class="userinput"><code><em class="replaceable"><code>input-file</code></em></code></strong>...</pre><p>Alternatively, an <span class="emphasis"><em>awk</em></span> script can reside inside a
+                        file, as in the following <span class="emphasis"><em>awk</em></span> script, which prints out
+                        the length of the longest line of its input:</p><a id="I_programlisting27_d1e76762"/><pre class="programlisting">$ <strong class="userinput"><code>cat longest_line.awk</code></strong>
+#!/usr/bin/awk
+length &gt; max { max = length; }
+END          { print max; }</pre><p>Suppose that we try execing this script using the following C code:</p><a id="I_programlisting27_d1e76769"/><pre class="programlisting">execl("longest_line.awk", "longest_line.awk", "input.txt", (char *) NULL);</pre><p>This <span class="emphasis"><em>execl()</em></span> call in turn employs
+                            <span class="emphasis"><em>execve()</em></span> with the following argument list to invoke
+                            <span class="emphasis"><em>awk</em></span>:</p><a id="I_programlisting27_d1e76782"/><pre class="programlisting">/usr/bin/awk longest_line.awk input.txt</pre><p>This <span class="emphasis"><em>execve()</em></span> call fails, because
+                            <span class="emphasis"><em>awk</em></span> interprets the string
+                            <span class="emphasis"><em>longest_line.awk</em></span> as a script containing an invalid
+                            <span class="emphasis"><em>awk</em></span> command. We need a way of informing
+                            <span class="emphasis"><em>awk</em></span> that this argument is actually the name of a
+                        file containing the script. We can do this by adding the
+                            <span class="emphasis"><em>-f</em></span> option as the optional argument in the script’s
+                            <code class="literal">#!</code> line. This tells
+                            <span class="emphasis"><em>awk</em></span> that the following argument is a script
+                        file:</p><a id="I_programlisting27_d1e76812"/><pre class="programlisting">#!/usr/bin/awk -f
+length &gt; max { max = length; }
+END          { print max; }</pre><p>Now, our <span class="emphasis"><em>execl()</em></span> call results in the following
+                        argument list being used:</p><a id="I_programlisting27_d1e76819"/><pre class="programlisting">/usr/bin/awk -f longest_line.awk input.txt</pre><p>This successfully invokes <span class="emphasis"><em>awk</em></span> using the script
+                            <code class="literal">longest_line.awk</code> to process the file
+                            <code class="literal">input.txt</code>.</p></div><div class="sect3" title="Executing scripts with execlp() and execvp()"><div class="titlepage"><div><div><h4 class="title" id="executing_scripts_with_execlp_open_paren">Executing scripts with <span class="emphasis"><em>execlp()</em></span> and
+                            <span class="emphasis"><em>execvp()</em></span></h4></div></div></div><p>Normally, the absence of a <code class="literal">#!</code> line at
+                        the start of a script causes the <span class="emphasis"><em>exec()</em></span> functions to
+                        fail. However, <span class="emphasis"><em>execlp()</em></span> and
+                            <span class="emphasis"><em>execvp()</em></span> do things somewhat differently. Recall
+                        that these are the functions that use the <code class="literal">PATH</code> environment variable to obtain a list of directories in
+                        which to search for a file to be executed. If either of these functions
+                        finds a file that has execute permission turned on, but is not a binary
+                        executable and does not start with a <code class="literal">#!</code>
+                        line, then they exec the shell to interpret the file. On Linux, this means
+                        that such files are treated as though they started with a line containing
+                        the string <code class="literal">#!/bin/sh</code>.<a id="IDX-CHP-27-4062" class="indexterm"/><a id="IDX-CHP-27-4060" class="indexterm"/><a id="IDX-CHP-27-4061" class="indexterm"/></p></div></div></div><div class="sect1" title="File Descriptors and exec()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="file_descriptors_and_exec_open_parenthes">File Descriptors and <span class="emphasis"><em>exec()</em></span></h2></div></div></div><p>By default, all file descriptors opened by a program that calls
+                    <span class="emphasis"><em>exec()</em></span> remain open across the <span class="emphasis"><em>exec()</em></span>
+                and are available for use by the new program. This is frequently useful, because the
+                calling program may open files on particular descriptors, and these files are
+                automatically available to the new program, without it needing to know the names of,
+                or open, the files.</p><p>The shell takes advantage of this feature to handle I/O redirection for the
+                programs that it executes. For example, suppose we enter the following shell
+                command:</p><a id="I_programlisting27_d1e76893"/><pre class="programlisting">$ <strong class="userinput"><code>ls /tmp &gt; dir.txt</code></strong></pre><p>The shell performs the following steps to execute this command:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>A <span class="emphasis"><em>fork()</em></span> is performed to create a child process that
+                        is also running a copy of the shell (and thus has a copy of the
+                        command).</p></li><li class="listitem"><p>The child shell opens <code class="literal">dir.txt</code> for
+                        output using file descriptor 1 (standard output). This can be done in either
+                        of the following ways:</p><div class="orderedlist"><ol class="orderedlist" type="a"><li class="listitem"><p>The child shell closes descriptor 1 (<code class="literal">STDOUT_FILENO</code>) and then opens the file <code class="literal">dir.txt</code>. Since
+                                    <span class="emphasis"><em>open()</em></span> always uses the lowest available
+                                file descriptor, and standard input (descriptor 0) remains open, the
+                                file will be opened on descriptor 1.</p></li><li class="listitem"><p>The shell opens <code class="literal">dir.txt</code>,
+                                obtaining a new file descriptor. Then, if that file descriptor is
+                                not standard output, the shell uses <span class="emphasis"><em>dup2()</em></span> to
+                                force standard output to be a duplicate of the new descriptor and
+                                closes the new descriptor, since it is no longer required. (This
+                                method is safer than the preceding method, since it doesn’t rely on
+                                lower-numbered descriptors being open.) The code sequence is
+                                something like the following:</p><a id="I_programlisting27_d1e76934"/><pre class="programlisting">fd = open("dir.txt", O_WRONLY | O_CREAT,
+            S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP |
+ S_IROTH | S_IWOTH);                     /* rw-rw-rw- */
+if (fd != STDOUT_FILENO) {
+    dup2(fd, STDOUT_FILENO);
+    close(fd);
+}</pre></li></ol></div></li><li class="listitem"><p>The child shell execs the <span class="emphasis"><em>ls</em></span> program. The
+                            <span class="emphasis"><em>ls</em></span> program writes its output to standard output,
+                        which is the file <code class="literal">dir.txt</code>.</p></li></ol></div><div class="note" title="Note"><h3 class="title">Note</h3><p>The explanation given here of how the shell performs I/O redirections
+                    simplifies some points. In particular, certain commands—so-called shell
+                        <span class="emphasis"><em>built-in</em></span> commands—are executed directly by the shell,
+                    without performing a <span class="emphasis"><em>fork()</em></span> or an
+                        <span class="emphasis"><em>exec()</em></span>. Such commands must be treated somewhat
+                    differently for the purposes of I/O redirection.</p><p>A shell command is implemented as a built-in for either of two reasons:
+                    efficiency and to obtain side effects within the shell. Some frequently used
+                    commands—such as <span class="emphasis"><em>pwd</em></span>, <span class="emphasis"><em>echo</em></span>, and
+                        <span class="emphasis"><em>test</em></span>—are sufficiently simple that it is a worthwhile
+                    efficiency to implement them inside the shell. Other commands are implemented
+                    within the shell so that they have side effects on the shell itself—that is,
+                    they change information stored by the shell, or modify attributes of or affect
+                    the execution of the shell process. For example, the <span class="emphasis"><em>cd</em></span>
+                    command must change the working directory of the shell itself, and so can’t be
+                    executed within a separate process. Other examples of commands that are built in
+                    for their side effects include <span class="emphasis"><em>exec</em></span>,
+                        <span class="emphasis"><em>exit</em></span>, <span class="emphasis"><em>read</em></span>,
+                        <span class="emphasis"><em>set</em></span>, <span class="emphasis"><em>source</em></span>,
+                        <span class="emphasis"><em>ulimit</em></span>, <span class="emphasis"><em>umask</em></span>,
+                        <span class="emphasis"><em>wait</em></span>, and the shell job-control commands
+                        (<span class="emphasis"><em>jobs</em></span>, <span class="emphasis"><em>fg</em></span>, and
+                        <span class="emphasis"><em>bg</em></span>). The full set of built-in commands understood by a
+                    shell is documented in the shell’s manual page.</p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="the_close-on-exec_flag_open_parent"/></div></div></div><div class="sect3" title="The close-on-exec flag (FD_CLOEXEC)"><div class="titlepage"><div><div><h4 class="title" id="the_close-on-exec_flag_open_parent-id1">The close-on-exec flag (<code class="literal">FD_CLOEXEC</code>)</h4></div></div></div><p>Sometimes, it may be desirable to ensure that certain file descriptors are
+                        closed before an <span class="emphasis"><em>exec()</em></span>. In particular, if we
+                            <span class="emphasis"><em>exec()</em></span> an unknown program (i.e., one that we did
+                        not write) from a privileged process, or a program that doesn’t need
+                        descriptors for files we have already opened, then it is secure programming
+                        practice to ensure that all unnecessary file descriptors are closed before
+                        the new program is loaded. We could do this by calling
+                            <span class="emphasis"><em>close()</em></span> on all such descriptors, but this suffers
+                        the following limitations:<a id="IDX-CHP-27-4064" class="indexterm"/><a id="IDX-CHP-27-4065" class="indexterm"/><a id="IDX-CHP-27-4066" class="indexterm"/><a id="IDX-CHP-27-4067" class="indexterm"/><a id="IDX-CHP-27-4068" class="indexterm"/><a id="IDX-CHP-27-4069" class="indexterm"/><a id="IDX-CHP-27-4070" class="indexterm"/><a id="IDX-CHP-27-4063" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The file descriptor may have been opened by a library function.
+                                This function has no mechanism to force the main program to close
+                                the file descriptor before the <span class="emphasis"><em>exec()</em></span> is
+                                performed. (As a general principle, library functions should always
+                                set the close-on-exec flag, using the technique described below, for
+                                any files that they open.)</p></li><li class="listitem"><p>If the <span class="emphasis"><em>exec()</em></span> call fails for some reason, we
+                                may want to keep the file descriptors open. If they are already
+                                closed, it may be difficult, or impossible, to reopen them so that
+                                they refer to the same files.</p></li></ul></div><p>For these reasons, the kernel provides a close-on-exec flag for each file
+                        descriptor. If this flag is set, then the file descriptor is automatically
+                        closed during a successful <span class="emphasis"><em>exec()</em></span>, but left open if the
+                            <span class="emphasis"><em>exec()</em></span> fails. The close-on-exec flag for a file
+                        descriptor can be accessed using the <span class="emphasis"><em>fcntl()</em></span> system
+                        call (<a class="xref" href="ch05.html#file_control_operations_colon_fcntl_open" title="File Control Operations: fcntl()">File Control Operations: <span class="emphasis"><em>fcntl()</em></span></a>). The
+                            <span class="emphasis"><em>fcntl()</em></span>
+                        <code class="literal">F_GETFD</code> operation retrieves a copy of the
+                        file descriptor flags:</p><a id="I_programlisting27_d1e77099"/><pre class="programlisting">int flags;
+
+flags = fcntl(fd, F_GETFD);
+if (flags == -1)
+    errExit("fcntl");</pre><p>After retrieving these flags, we can modify the <code class="literal">FD_CLOEXEC</code> bit and use a second <span class="emphasis"><em>fcntl()</em></span>
+                        call specifying <code class="literal">F_SETFD</code> to update the
+                        flags:</p><a id="I_programlisting27_d1e77112"/><pre class="programlisting">flags |= FD_CLOEXEC;
+if (fcntl(fd, F_SETFD, flags) == -1)
+    errExit("fcntl");</pre><div class="note" title="Note"><h3 class="title">Note</h3><p><code class="literal">FD_CLOEXEC</code> is actually the only bit
+                            used in the file descriptor flags. This bit corresponds to the value 1.
+                            In older programs, we may sometimes see the close-on-exec flag set using
+                            just the call <span class="emphasis"><em>fcntl(fd, F_SETFD, 1)</em></span>, relying on the
+                            fact that there are no other bits that can be affected by this
+                            operation. Theoretically, this may not always be so (in the future, some
+                            UNIX system might implement additional flag bits), so we should use the
+                            technique shown in the main text.</p><p>Many UNIX implementations, including Linux, also allow the
+                            close-on-exec flag to be modified using two unstandardized
+                                <span class="emphasis"><em>ioctl()</em></span> calls: <span class="emphasis"><em>ioctl(fd,
+                                FIOCLEX)</em></span> to set the close-on-exec flag for
+                                <span class="emphasis"><em>fd</em></span>, and <span class="emphasis"><em>ioctl(fd,
+                                FIONCLEX)</em></span> to clear the flag.</p></div><p>When <span class="emphasis"><em>dup()</em></span>, <span class="emphasis"><em>dup2()</em></span>, or
+                            <span class="emphasis"><em>fcntl()</em></span> is used to create a duplicate of a file
+                        descriptor, the close-on-exec flag is always cleared for the duplicate
+                        descriptor. (This behavior is historical and an SUSv3 requirement.)</p><p><a class="xref" href="ch27.html#setting_the_close-on-exec_flag_for_a_fil" title="Example 27-6. Setting the close-on-exec flag for a file descriptor">Example 27-6</a> demonstrates
+                        the manipulation of the close-on-exec flag. Depending on the presence of a
+                        command-line argument (any string), this program first sets the
+                        close-on-exec flag for standard output and then execs the
+                            <span class="emphasis"><em>ls</em></span> program. Here is what we see when we run the
+                        program:</p><a id="I_programlisting27_d1e77153"/><pre class="programlisting">$ <strong class="userinput"><code>./closeonexec</code></strong>                     <em class="lineannotation"><span class="lineannotation">Exec ls without closing standard output</span></em>
+-rwxr-xr-x   1 mtk    users    28098 Jun 15 13:59 closeonexec
+$ <strong class="userinput"><code>./closeonexec n</code></strong>                   <em class="lineannotation"><span class="lineannotation">Sets close-on-exec flag for standard output</span></em>
+ls: write error: Bad file descriptor</pre><p>In the second run shown above, <span class="emphasis"><em>ls</em></span> detects that its
+                        standard output is closed and prints an error message on standard
+                        error.</p><div class="example"><a id="setting_the_close-on-exec_flag_for_a_fil"/><div class="example-title">Example 27-6. Setting the close-on-exec flag for a file descriptor</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/closeonexec.c</code></strong>
+#include &lt;fcntl.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int flags;
+
+    if (argc &gt; 1) {
+        flags = fcntl(STDOUT_FILENO, F_GETFD);              /* Fetch flags */
+        if (flags == -1)
+            errExit("fcntl - F_GETFD");
+
+        flags |= FD_CLOEXEC;                    /* Turn on FD_CLOEXEC */
+
+        if (fcntl(STDOUT_FILENO, F_SETFD, flags) == -1)     /* Update flags */
+            errExit("fcntl - F_SETFD");
+    }
+
+    execlp("ls", "ls", "-l", argv[0], (char *) NULL);
+    errExit("execlp");
+}
+     <strong class="userinput"><code>procexec/closeonexec.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Signals and exec()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="signals_and_exec_open_parenthesis_close">Signals and <span class="emphasis"><em>exec()</em></span></h2></div></div></div><p>During an <span class="emphasis"><em>exec()</em></span>, the text of the existing process is
+                discarded. This text may include signal handlers established by the calling program.
+                Because the handlers disappear, the kernel resets the dispositions of all handled
+                signals to <code class="literal">SIG_DFL</code>. The dispositions of all other
+                signals (i.e., those with dispositions of <code class="literal">SIG_IGN</code>
+                or <code class="literal">SIG_DFL</code>) are left unchanged by an
+                    <span class="emphasis"><em>exec()</em></span>. This behavior is required by SUSv3.<a id="IDX-CHP-27-4071" class="indexterm"/><a id="IDX-CHP-27-4072" class="indexterm"/><a id="IDX-CHP-27-4073" class="indexterm"/><a id="IDX-CHP-27-4074" class="indexterm"/><a id="IDX-CHP-27-4075" class="indexterm"/><a id="IDX-CHP-27-4076" class="indexterm"/><a id="IDX-CHP-27-4077" class="indexterm"/><a id="IDX-CHP-27-4078" class="indexterm"/><a id="IDX-CHP-27-4079" class="indexterm"/><a id="IDX-CHP-27-4080" class="indexterm"/><a id="IDX-CHP-27-4081" class="indexterm"/></p><p>SUSv3 makes a special case for an ignored <code class="literal">SIGCHLD</code> signal. (We noted in <a class="xref" href="ch26.html#ignoring_dead_child_processes" title="Ignoring Dead Child Processes">Ignoring Dead Child Processes</a> that ignoring <code class="literal">SIGCHLD</code> prevents the creation of zombies.) SUSv3 leaves it
+                unspecified whether an ignored <code class="literal">SIGCHLD</code> remains
+                ignored across an <span class="emphasis"><em>exec()</em></span> or its disposition is reset to
+                    <code class="literal">SIG_DFL</code>. Linux does the former, but some
+                other UNIX implementations (e.g., Solaris) do the latter. This implies that, in
+                programs that ignore <code class="literal">SIGCHLD</code>, for maximum
+                portability, we should perform a <span class="emphasis"><em>signal(SIGCHLD, SIG_DFL)</em></span> call
+                prior to an <span class="emphasis"><em>exec()</em></span>, and ensure that we don’t write programs
+                that rely on the initial disposition of <code class="literal">SIGCHLD</code>
+                being anything other than <code class="literal">SIG_DFL</code>.</p><p>The destruction of the old program’s data, heap, and stack also means that any
+                alternate signal stack established by a call to <span class="emphasis"><em>sigaltstack()</em></span>
+                    (<a class="xref" href="ch21.html#handling_a_signal_on_an_alternate_stack" title="Handling a Signal on an Alternate Stack: sigaltstack()">Handling a Signal on an Alternate Stack:
+                <span class="emphasis"><em>sigaltstack()</em></span></a>) is lost. Since an
+                alternate signal stack is not preserved across an <span class="emphasis"><em>exec()</em></span>, the
+                    <code class="literal">SA_ONSTACK</code> bit is also cleared for all
+                    signals.<a id="IDX-CHP-27-4082" class="indexterm"/><a id="IDX-CHP-27-4083" class="indexterm"/></p><p>During an <span class="emphasis"><em>exec()</em></span>, the process signal mask and set of pending
+                signals are both preserved. This feature allows us to block and queue signals for
+                the newly execed program. However, SUSv3 notes that many existing applications
+                wrongly assume that they are started with the disposition of certain signals set to
+                    <code class="literal">SIG_DFL</code> or that these signals are unblocked.
+                (In particular, the C standards provide a much weaker specification of signals,
+                which doesn’t specify signal blocking; therefore, C programs written on non-UNIX
+                systems won’t know to unblock signals.) For this reason, SUSv3 recommends that
+                signals should not be blocked or ignored across an <span class="emphasis"><em>exec()</em></span> of an
+                arbitrary program. Here, “arbitrary” means a program that we did not write. It is
+                acceptable to block or ignore signals when execing a program we have written or one
+                with known behavior with respect to signals.<a id="IDX-CHP-27-4084" class="indexterm"/><a id="IDX-CHP-27-4085" class="indexterm"/><a id="IDX-CHP-27-4086" class="indexterm"/><a id="IDX-CHP-27-4087" class="indexterm"/></p></div><div class="sect1" title="Executing a Shell Command: system()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="executing_a_shell_command_colon_system_o">Executing a Shell Command: <span class="emphasis"><em>system()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>system()</em></span> function allows the calling program to execute
+                an arbitrary shell command. In this section, we describe the operation of
+                    <span class="emphasis"><em>system()</em></span>, and in the next section we show how
+                    <span class="emphasis"><em>system()</em></span> can be implemented using
+                    <span class="emphasis"><em>fork()</em></span>, <span class="emphasis"><em>exec()</em></span>,
+                    <span class="emphasis"><em>wait()</em></span>, and <span class="emphasis"><em>exit()</em></span>.<a id="IDX-CHP-27-4088" class="indexterm"/><a id="IDX-CHP-27-4089" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>In <a class="xref" href="ch44.html#talking_to_a_shell_command_via_a_pipe_co" title="Talking to a Shell Command via a Pipe: popen()">Talking to a Shell Command via a Pipe: <span class="emphasis"><em>popen()</em></span></a>, we look at the
+                        <span class="emphasis"><em>popen()</em></span> and <span class="emphasis"><em>pclose()</em></span> functions,
+                    which can also be used to execute a shell command, but allow the calling program
+                    to either read the output of the command or to send input to the command.</p></div><a id="I_programlisting27_d1e77407"/><pre class="programlisting">#include &lt;stdlib.h&gt;
+
+int <strong class="userinput"><code>system</code></strong>(const char *<span class="emphasis"><em>command</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>See main text for a description of return value</p></div><p>The <span class="emphasis"><em>system()</em></span> function creates a child process that invokes a
+                shell to execute <span class="emphasis"><em>command</em></span>. Here is an example of a call to
+                    <span class="emphasis"><em>system()</em></span>:</p><a id="I_programlisting27_d1e77429"/><pre class="programlisting">system("ls | wc");</pre><p>The principal advantages of <span class="emphasis"><em>system()</em></span> are simplicity and
+                convenience:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>We don’t need to handle the details of calling
+                        <span class="emphasis"><em>fork()</em></span>, <span class="emphasis"><em>exec()</em></span>,
+                            <span class="emphasis"><em>wait()</em></span>, and <span class="emphasis"><em>exit()</em></span>.</p></li><li class="listitem"><p>Error and signal handling are performed by <span class="emphasis"><em>system()</em></span>
+                        on our behalf.</p></li><li class="listitem"><p>Because <span class="emphasis"><em>system()</em></span> uses the shell to execute
+                            <span class="emphasis"><em>command</em></span>, all of the usual shell processing,
+                        substitutions, and redirections are performed on
+                            <span class="emphasis"><em>command</em></span> before it is executed. This makes it easy
+                        to add an “execute a shell command” feature to an application. (Many
+                        interactive applications provide such a feature in the form of a <code class="literal">!</code> command.)</p></li></ul></div><p>The main cost of <span class="emphasis"><em>system()</em></span> is inefficiency. Executing a
+                command using <span class="emphasis"><em>system()</em></span> requires the creation of at least two
+                processes—one for the shell and one or more for the command(s) it executes—each of
+                which performs an <span class="emphasis"><em>exec()</em></span>. If efficiency or speed is a
+                requirement, it is preferable to use explicit <span class="emphasis"><em>fork()</em></span> and
+                    <span class="emphasis"><em>exec()</em></span> calls to execute the desired program.</p><p>The return value of <span class="emphasis"><em>system()</em></span> is as follows:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If <span class="emphasis"><em>command</em></span> is a <code class="literal">NULL</code> pointer, then <span class="emphasis"><em>system()</em></span> returns a
+                        nonzero value if a shell is available, and 0 if no shell is available. This
+                        case arises out of the C programming language standards, which are not tied
+                        to any operating system, so a shell might not be available if
+                            <span class="emphasis"><em>system()</em></span> is running on a non-UNIX system.
+                        Furthermore, even though all UNIX implementations have a shell, this shell
+                        might not be available if the program called <span class="emphasis"><em>chroot()</em></span>
+                        before calling <span class="emphasis"><em>system()</em></span>. If
+                            <span class="emphasis"><em>command</em></span> is non-<code class="literal">NULL</code>, then the return value for <span class="emphasis"><em>system()</em></span>
+                        is determined according to the remaining rules in this list.<a id="IDX-CHP-27-4090" class="indexterm"/></p></li><li class="listitem"><p>If a child process could not be created or its termination status could
+                        not be retrieved, then <span class="emphasis"><em>system()</em></span> returns -1.</p></li><li class="listitem"><p>If a shell could not be execed in the child process, then
+                            <span class="emphasis"><em>system()</em></span> returns a value as though the child shell
+                        had terminated with the call <span class="emphasis"><em>_exit(127)</em></span>.</p></li><li class="listitem"><p>If all system calls succeed, then <span class="emphasis"><em>system()</em></span> returns
+                        the termination status of the child shell used to execute
+                            <span class="emphasis"><em>command</em></span>. (The termination status of a shell is the
+                        termination status of the last command it executes.)</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>It is impossible (using the value returned by <span class="emphasis"><em>system()</em></span>)
+                    to distinguish the case where <span class="emphasis"><em>system()</em></span> fails to exec a
+                    shell from the case where the shell exits with the status 127 (the latter
+                    possibility can occur if the shell could not find a program with the given name
+                    to exec).</p></div><p>In the last two cases, the value returned by <span class="emphasis"><em>system()</em></span> is a
+                    <span class="emphasis"><em>wait status</em></span> of the same form returned by
+                    <span class="emphasis"><em>waitpid()</em></span>. This means we should use the functions described
+                in <a class="xref" href="ch26.html#the_wait_status_value" title="The Wait Status Value">The Wait Status Value</a> to dissect this value, and we can display
+                the value using our <span class="emphasis"><em>printWaitStatus()</em></span> function (<a class="xref" href="ch26.html#displaying_the_status_value_returned_by" title="Example 26-2. Displaying the status value returned by wait() and related calls">Example 26-2</a>, in <a class="xref" href="ch26.html#example_program-id31" title="Example program">Example program</a>).<a id="IDX-CHP-27-4091" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="example_program-id35"/></div></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id36">Example program</h4></div></div></div><p><a class="xref" href="ch27.html#executing_shell_commands_with_system_ope" title="Example 27-7. Executing shell commands with system()">Example 27-7</a> demonstrates
+                        the use of <span class="emphasis"><em>system()</em></span>. This program executes a loop that
+                        reads a command string, executes it using <span class="emphasis"><em>system()</em></span>, and
+                        then analyzes and displays the value returned by
+                            <span class="emphasis"><em>system()</em></span>. Here is a sample run:</p><a id="I_programlisting27_d1e77606"/><pre class="programlisting">$ <strong class="userinput"><code>./t_system</code></strong>
+Command: <strong class="userinput"><code>whoami</code></strong>
+mtk
+system() returned: status=0x0000 (0,0)
+child exited, status=0
+Command: <strong class="userinput"><code>ls | grep XYZ</code></strong>                   <em class="lineannotation"><span class="lineannotation">Shell terminates with the status of...</span></em>
+system() returned: status=0x0100 (1,0)   <em class="lineannotation"><span class="lineannotation">its last command (grep), which...</span></em>
+child exited, status=1                   <em class="lineannotation"><span class="lineannotation">found no match, and so did an exit(1)</span></em>
+Command: <strong class="userinput"><code>exit 127</code></strong>
+system() returned: status=0x7f00 (127,0)
+(Probably) could not invoke shell        <em class="lineannotation"><span class="lineannotation">Actually, not true in this case</span></em>
+Command: <strong class="userinput"><code>sleep 100</code></strong>
+<em class="lineannotation"><span class="lineannotation">Type Control-Z to suspend foreground process group</span></em>
+[1]+  Stopped           ./t_system
+$ <strong class="userinput"><code>ps | grep sleep</code></strong>                        <em class="lineannotation"><span class="lineannotation">Find PID of sleep</span></em>
+29361 pts/6    00:00:00 sleep
+$ <strong class="userinput"><code>kill 29361</code></strong>                             <em class="lineannotation"><span class="lineannotation">And send a signal to terminate it</span></em>
+$ <strong class="userinput"><code>fg</code></strong>                                     <em class="lineannotation"><span class="lineannotation">Bring t_system back into foreground</span></em>
+./t_system
+system() returned: status=0x000f (0,15)
+child killed by signal 15 (Terminated)
+Command: <strong class="userinput"><code>^D</code></strong>$                             <em class="lineannotation"><span class="lineannotation">Type Control-D to terminate program</span></em></pre><div class="example"><a id="executing_shell_commands_with_system_ope"/><div class="example-title">Example 27-7. Executing shell commands with <span class="emphasis"><em>system()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/t_system.c</code></strong>
+#include &lt;sys/wait.h&gt;
+#include "print_wait_status.h"
+#include "tlpi_hdr.h"
+
+#define MAX_CMD_LEN 200
+
+int
+main(int argc, char *argv[])
+{
+    char str[MAX_CMD_LEN];      /* Command to be executed by system() */
+    int status;                 /* Status return from system() */
+
+    for (;;) {                  /* Read and execute a shell command */
+        printf("Command: ");
+        fflush(stdout);
+        if (fgets(str, MAX_CMD_LEN, stdin) == NULL)
+            break;              /* end-of-file */
+
+        status = system(str);
+        printf("system() returned: status=0x%04x (%d,%d)\n",
+                (unsigned int) status, status &gt;&gt; 8, status &amp; 0xff);
+
+        if (status == -1) {
+            errExit("system");
+        } else {
+            if (WIFEXITED(status) &amp;&amp; WEXITSTATUS(status) == 127)
+                printf("(Probably) could not invoke shell\n");
+            else                /* Shell successfully executed command */
+                printWaitStatus(NULL, status);
+        }
+    }
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>procexec/t_system.c</code></strong></pre></div></div></div><div class="sect3" title="Avoid using system() in set-user-ID and set-group-ID programs"><div class="titlepage"><div><div><h4 class="title" id="avoid_using_system_open_parenthesis_clos">Avoid using <span class="emphasis"><em>system()</em></span> in set-user-ID and set-group-ID
+                        programs</h4></div></div></div><p>Set-user-ID and set-group-ID programs should never use
+                            <span class="emphasis"><em>system()</em></span> while operating under the program’s
+                        privileged identifier. Even when such programs don’t allow the user to
+                        specify the text of the command to be executed, the shell’s reliance on
+                        various environment variables to control its operation means that the use of
+                            <span class="emphasis"><em>system()</em></span> inevitably opens the door for a system
+                        security breach.<a id="IDX-CHP-27-4092" class="indexterm"/><a id="IDX-CHP-27-4093" class="indexterm"/><a id="IDX-CHP-27-4094" class="indexterm"/><a id="IDX-CHP-27-4095" class="indexterm"/></p><p>For example, in older Bourne shells, the <code class="literal">IFS</code> environment variable, which defined the internal field
+                        separator used to break a command line into separate words, was the source
+                        of a number of successful system break-ins. If we defined <code class="literal">IFS</code> to have the value <span class="emphasis"><em>a</em></span>,
+                        then the shell would treat the command string <span class="emphasis"><em>shar</em></span> as
+                        the word <span class="emphasis"><em>sh</em></span> followed by the argument
+                            <span class="emphasis"><em>r</em></span>, and invoke another shell to execute the script
+                        file named <code class="literal">r</code> in the current working
+                        directory, instead of the intended purpose (executing a command named
+                            <span class="emphasis"><em>shar</em></span>). This particular security hole was fixed by
+                        applying <code class="literal">IFS</code> only to the words produced
+                        by shell expansions. In addition, modern shells reset <code class="literal">IFS</code> (to a string consisting of the three
+                        characters space, tab, and newline) on shell startup to ensure that scripts
+                        behave consistently if they inherit a strange <code class="literal">IFS</code> value. As a further security measure,
+                            <span class="emphasis"><em>bash</em></span> reverts to the real user (group) ID when
+                        invoked from a set-user-ID (set-group-ID) program.<a id="IDX-CHP-27-4096" class="indexterm"/></p><p>Secure programs that need to spawn another program should use
+                            <span class="emphasis"><em>fork()</em></span> and one of the <span class="emphasis"><em>exec()</em></span>
+                        functions—other than <span class="emphasis"><em>execlp()</em></span> or
+                            <span class="emphasis"><em>execvp()</em></span>—directly.</p></div></div></div><div class="sect1" title="Implementing system()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="implementing_system_open_parenthesis_clo">Implementing <span class="emphasis"><em>system()</em></span></h2></div></div></div><p>In this section, we explain how to implement <span class="emphasis"><em>system()</em></span>. We
+                begin with a simple implementation, explain what pieces are missing from that
+                implementation, and then present a complete implementation.<a id="IDX-CHP-27-4098" class="indexterm"/><a id="IDX-CHP-27-4099" class="indexterm"/><a id="IDX-CHP-27-4100" class="indexterm"/><a id="IDX-CHP-27-4097" class="indexterm"/><a id="IDX-CHP-27-4101" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="a_simple_implementation_of_system"/></div></div></div><div class="sect3" title="A simple implementation of system()"><div class="titlepage"><div><div><h4 class="title" id="a_simple_implementation_of_system-id1">A simple implementation of <span class="emphasis"><em>system()</em></span></h4></div></div></div><p>The <span class="emphasis"><em>-c</em></span> option of the <span class="emphasis"><em>sh</em></span> command
+                        provides an easy way to execute a string containing arbitrary shell
+                        commands:</p><a id="I_programlisting27_d1e77818"/><pre class="programlisting">$ <strong class="userinput"><code>sh -c "ls | wc"</code></strong>
+     38      38     444</pre><p>Thus, to implement <span class="emphasis"><em>system()</em></span>, we need to use
+                            <span class="emphasis"><em>fork()</em></span> to create a child that then does an
+                            <span class="emphasis"><em>execl()</em></span> with arguments corresponding to the above
+                            <span class="emphasis"><em>sh</em></span> command:</p><a id="I_programlisting27_d1e77837"/><pre class="programlisting">execl("/bin/sh", "sh", "-c", command, (char *) NULL);</pre><p>To collect the status of the child created by
+                            <span class="emphasis"><em>system()</em></span>, we use a <span class="emphasis"><em>waitpid()</em></span>
+                        call that specifies the child’s process ID. (Using
+                            <span class="emphasis"><em>wait()</em></span> would not suffice, because
+                            <span class="emphasis"><em>wait()</em></span> waits for any child, which could
+                        accidentally collect the status of some other child created by the calling
+                        process.) A simple, and incomplete, implementation of
+                            <span class="emphasis"><em>system()</em></span> is shown in <a class="xref" href="ch27.html#an_implementation_of_system_open_parenth" title="Example 27-8. An implementation of system() that excludes signal handling">Example 27-8</a>.</p><div class="example"><a id="an_implementation_of_system_open_parenth"/><div class="example-title">Example 27-8. An implementation of <span class="emphasis"><em>system()</em></span> that excludes
+                            signal handling</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/simple_system.c</code></strong>
+#include &lt;unistd.h&gt;
+#include &lt;sys/wait.h&gt;
+#include &lt;sys/types.h&gt;
+
+int
+system(char *command)
+{
+    int status;
+    pid_t childPid;
+
+    switch (childPid = fork()) {
+    case -1: /* Error */
+        return -1;
+
+    case 0: /* Child */
+        execl("/bin/sh", "sh", "-c", command, (char *) NULL);
+        _exit(127);                     /* Failed exec */
+
+    default: /* Parent */
+        if (waitpid(childPid, &amp;status, 0) == -1)
+            return -1;
+        else
+            return status;
+    }
+}
+      <strong class="userinput"><code>procexec/simple_system.c</code></strong></pre></div></div></div><div class="sect3" title="Treating signals correctly inside system()"><div class="titlepage"><div><div><h4 class="title" id="treating_signals_correctly_inside_system">Treating signals correctly inside <span class="emphasis"><em>system()</em></span></h4></div></div></div><p>What adds complexity to the implementation of
+                            <span class="emphasis"><em>system()</em></span> is the correct treatment with
+                            signals.<a id="IDX-CHP-27-4102" class="indexterm"/><a id="IDX-CHP-27-4103" class="indexterm"/><a id="IDX-CHP-27-4104" class="indexterm"/><a id="IDX-CHP-27-4105" class="indexterm"/><a id="IDX-CHP-27-4106" class="indexterm"/></p><p>The first signal to consider is <code class="literal">SIGCHLD</code>. Suppose that the program calling
+                            <span class="emphasis"><em>system()</em></span> is also directly creating children, and
+                        has established a handler for <code class="literal">SIGCHLD</code>
+                        that performs its own <span class="emphasis"><em>wait()</em></span>. In this situation, when a
+                            <code class="literal">SIGCHLD</code> signal is generated by the
+                        termination of the child created by <span class="emphasis"><em>system()</em></span>, it is
+                        possible that the signal handler of the main program will be invoked—and
+                        collect the child’s status—before <span class="emphasis"><em>system()</em></span> has a chance
+                        to call <span class="emphasis"><em>waitpid()</em></span>. (This is an example of a race
+                        condition.) This has two undesirable consequences:<a id="IDX-CHP-27-4107" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The calling program would be deceived into thinking that one of
+                                the children that it created has terminated.</p></li><li class="listitem"><p>The <span class="emphasis"><em>system()</em></span> function would be unable to
+                                obtain the termination status of the child that it created.</p></li></ul></div><p>Therefore, <span class="emphasis"><em>system()</em></span> must block delivery of <code class="literal">SIGCHLD</code> while it is executing.</p><p>The other signals to consider are those generated by the terminal
+                            <span class="emphasis"><em>interrupt</em></span> (usually <span class="emphasis"><em>Control-C</em></span>)
+                        and <span class="emphasis"><em>quit</em></span> (usually <span class="emphasis"><em>Control-\</em></span>)
+                        characters, <code class="literal">SIGINT</code> and <code class="literal">SIGQUIT</code>, respectively. Consider what is
+                        happening when we execute the following call:</p><a id="I_programlisting27_d1e77983"/><pre class="programlisting">system("sleep 20");</pre><p>At this point, three processes are running: the process executing the
+                        calling program, a shell, and <span class="emphasis"><em>sleep</em></span>, as shown in <a class="xref" href="ch27.html#arrangement_of_processes_during_executio" title="Figure 27-2. Arrangement of processes during execution of system(“sleep 20”)">Figure 27-2</a>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>As an efficiency measure, when the string given to the
+                                <span class="emphasis"><em>-c</em></span> option is a simple command (as opposed to a
+                            pipeline or a sequence), some shells (including
+                                <span class="emphasis"><em>bash</em></span>) directly exec the command, rather than
+                            forking a child shell. For shells that perform such an optimization,
+                                <a class="xref" href="ch27.html#arrangement_of_processes_during_executio" title="Figure 27-2. Arrangement of processes during execution of system(“sleep 20”)">Figure 27-2</a> is not
+                            strictly accurate, since there will be only two processes (the calling
+                            process and <span class="emphasis"><em>sleep</em></span>). Nevertheless, the arguments in
+                            this section about how <span class="emphasis"><em>system()</em></span> should handle
+                            signals still apply.</p></div><p>All of the processes shown in <a class="xref" href="ch27.html#arrangement_of_processes_during_executio" title="Figure 27-2. Arrangement of processes during execution of system(“sleep 20”)">Figure 27-2</a> form part of the
+                        foreground process group for the terminal. (We consider process groups in
+                        detail in Section 34.2.) Therefore, when we type the
+                            <span class="emphasis"><em>interrupt</em></span> or <span class="emphasis"><em>quit</em></span> characters,
+                        all three processes are sent the corresponding signal. The shell ignores
+                            <code class="literal">SIGINT</code> and <code class="literal">SIGQUIT</code> while waiting for its child. However, both the
+                        calling program and the <span class="emphasis"><em>sleep</em></span> process would, by
+                        default, be killed by these signals.</p><p>How should the calling process and the executed command respond to these
+                        signals? SUSv3 specifies the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><code class="literal">SIGINT</code> and <code class="literal">SIGQUIT</code> should be ignored in the
+                                calling process while the command is being executed.</p></li><li class="listitem"><p>In the child, <code class="literal">SIGINT</code> and
+                                    <code class="literal">SIGQUIT</code> should be treated as
+                                they would be if the calling process did a
+                                    <span class="emphasis"><em>fork()</em></span> and <span class="emphasis"><em>exec()</em></span>;
+                                that is, the disposition of handled signals is reset to the default,
+                                and the disposition of other signals remains unchanged.</p></li></ul></div><div class="figure"><a id="arrangement_of_processes_during_executio"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject27_d1e78061"/><img src="figs/web/27-2_PROCEXEC-system-scale90.png.jpg" alt="Arrangement of processes during execution of system(“sleep 20”)"/></div></div><div class="figure-title">Figure 27-2. Arrangement of processes during execution of <span class="emphasis"><em>system(“sleep
+                                20”)</em></span></div></div><p>Dealing with signals in the manner specified by SUSv3 is the most
+                        reasonable approach, for the following reasons:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>It would not make sense to have both processes responding to these
+                                signals, since this could lead to confusing behaviors for the user
+                                of the application.</p></li><li class="listitem"><p>Similarly, it would not make sense to ignore these signals in the
+                                process executing the command while treating them according to their
+                                default dispositions in the calling process. This would allow the
+                                user to do things such as killing the calling process while the
+                                executed command was left running. It is also inconsistent with the
+                                fact that the calling process has actually given up control (i.e.,
+                                is blocked in a <span class="emphasis"><em>waitpid()</em></span> call) while the
+                                command passed to <span class="emphasis"><em>system()</em></span> is being
+                                executed.</p></li><li class="listitem"><p>The command executed by <span class="emphasis"><em>system()</em></span> may be an
+                                interactive application, and it makes sense to have this application
+                                respond to terminal-generated signals.</p></li></ul></div><p>SUSv3 requires the treatment of <code class="literal">SIGINT</code>
+                        and <code class="literal">SIGQUIT</code> described above, but notes
+                        that this could have an undesirable effect in a program that invisibly uses
+                            <span class="emphasis"><em>system()</em></span> to perform some task. While the command is
+                        being executed, typing <span class="emphasis"><em>Control-C</em></span> or
+                            <span class="emphasis"><em>Control-</em></span>\ will kill only the child of
+                            <span class="emphasis"><em>system()</em></span>, while the application (unexpectedly, to
+                        the user) continues to run. A program that uses
+                            <span class="emphasis"><em>system()</em></span> in this way should check the termination
+                        status returned by <span class="emphasis"><em>system()</em></span>, and take appropriate
+                        action if it detects that the command was killed by a signal.</p></div><div class="sect3" title="An improved system() implementation"><div class="titlepage"><div><div><h4 class="title" id="an_improved_system_open_parenthesis_clos">An improved <span class="emphasis"><em>system()</em></span> implementation</h4></div></div></div><p><a class="xref" href="ch27.html#implementation_of_system_open_parenthesi" title="Example 27-9. Implementation of system()">Example 27-9</a> shows an
+                        implementation of <span class="emphasis"><em>system()</em></span> conforming to the rules
+                        described above. Note the following points about this
+                            implementation:<a id="IDX-CHP-27-4108" class="indexterm"/><a id="IDX-CHP-27-4109" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>As noted earlier, if <span class="emphasis"><em>command</em></span> is a <code class="literal">NULL</code> pointer, then
+                                    <span class="emphasis"><em>system()</em></span> should return nonzero if a shell
+                                is available or 0 if no shell is available. The only way to reliably
+                                determine this information is to try to execute a shell. We do this
+                                by recursively calling <span class="emphasis"><em>system()</em></span> to execute the
+                                    <code class="literal">:</code> shell command and checking
+                                for a return status of 0 from the recursive call <span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78157"/><img src="figs/web/U001.png" alt=""/></span>. The <code class="literal">:</code>
+                                command is a shell built-in command that does nothing, but always
+                                returns a success status. We could have executed the shell command
+                                    <span class="emphasis"><em>exit 0</em></span> to achieve the same result. (Note
+                                that it isn’t sufficient to use <span class="emphasis"><em>access()</em></span> to
+                                check whether the file <code class="literal">/bin/sh</code>
+                                exists and has execute permission enabled. In a
+                                    <span class="emphasis"><em>chroot()</em></span> environment, even if the shell
+                                executable is present, it may not be able to be executed if it is
+                                dynamically linked and the required shared libraries are not
+                                available.)</p></li><li class="listitem"><p>It is only in the parent process (the caller of
+                                    <span class="emphasis"><em>system()</em></span>) that <code class="literal">SIGCHLD</code> needs to be blocked <span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78187"/><img src="figs/web/U002.png" alt=""/></span>, and <code class="literal">SIGINT</code>
+                                and <code class="literal">SIGQUIT</code> need to be ignored
+                                    <span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78200"/><img src="figs/web/U003.png" alt=""/></span>. However, we must perform these actions prior
+                                to the <span class="emphasis"><em>fork()</em></span> call, because, if they were done
+                                in the parent after the <span class="emphasis"><em>fork()</em></span>, we would create
+                                a race condition. (Suppose, for example, that the child exited
+                                before the parent had a chance to block <code class="literal">SIGCHLD</code>.) Consequently, the child must undo these
+                                changes to the signal attributes, as described shortly.</p></li><li class="listitem"><p>In the parent, we ignore errors from the
+                                    <span class="emphasis"><em>sigaction()</em></span> and
+                                    <span class="emphasis"><em>sigprocmask()</em></span> calls used to manipulate
+                                signal dispositions and the signal mask <span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78224"/><img src="figs/web/U002.png" alt=""/></span>
+                                <span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78230"/><img src="figs/web/U003.png" alt=""/></span>
+                                <span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78236"/><img src="figs/web/U009.png" alt=""/></span>. We do this for two reasons. First, these calls
+                                are very unlikely to fail. In practice, the only thing that can
+                                realistically go wrong with these calls is an error in specifying
+                                their arguments, and such an error should be eliminated during
+                                initial debugging. Second, we assume that the caller is more
+                                interested in knowing if <span class="emphasis"><em>fork()</em></span> or
+                                    <span class="emphasis"><em>waitpid()</em></span> failed than in knowing if these
+                                signal-manipulation calls failed. For similar reasons, we bracket
+                                the signal-manipulation calls used at the end of
+                                    <span class="emphasis"><em>system()</em></span> with code to save
+                                    <span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78252"/><img src="figs/web/U008.png" alt=""/></span> and restore <span class="emphasis"><em>errno</em></span>
+                                <span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78261"/><img src="figs/web/U010.png" alt=""/></span>, so that if <span class="emphasis"><em>fork()</em></span> or
+                                    <span class="emphasis"><em>waitpid()</em></span> fails, then the caller can
+                                determine why. If we returned -1 because these signal-manipulation
+                                calls failed, then the caller might wrongly assume that
+                                    <span class="emphasis"><em>system()</em></span> failed to execute
+                                    <span class="emphasis"><em>command</em></span>.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv3 merely says that <span class="emphasis"><em>system()</em></span> should return -1
+                            if a child process could not be created or its status could not be
+                            obtained. No mention is made of a -1 return because of failures in
+                            signal-manipulation operations by <span class="emphasis"><em>system()</em></span>.</p></div><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Error checking is not performed for signal-related system calls in
+                                the child <span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78293"/><img src="figs/web/U004.png" alt=""/></span><span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78298"/><img src="figs/web/U005.png" alt=""/></span>. On the one hand, there is no way of reporting
+                                such an error (the use of <span class="emphasis"><em>_exit(127)</em></span> is
+                                reserved for reporting an error when execing the shell); on the
+                                other hand, such failures don’t affect the caller of
+                                    <span class="emphasis"><em>system()</em></span>, which is a separate
+                                process.</p></li><li class="listitem"><p>On return from <span class="emphasis"><em>fork()</em></span> in the child, the
+                                disposition of <code class="literal">SIGINT</code> and
+                                    <code class="literal">SIGQUIT</code> is <code class="literal">SIG_IGN</code> (i.e., the disposition
+                                inherited from the parent). However, as noted earlier, in the child,
+                                these signals should be treated as if the caller of
+                                    <span class="emphasis"><em>system()</em></span> did a <span class="emphasis"><em>fork()</em></span>
+                                and an <span class="emphasis"><em>exec()</em></span>. A <span class="emphasis"><em>fork()</em></span>
+                                leaves the treatment of signals unchanged in the child. An
+                                    <span class="emphasis"><em>exec()</em></span> resets the dispositions of handled
+                                signals to their defaults and leaves the dispositions of other
+                                signals unchanged (<a class="xref" href="ch27.html#signals_and_exec_open_parenthesis_close" title="Signals and exec()">Signals and <span class="emphasis"><em>exec()</em></span></a>). Therefore,
+                                if the dispositions of <code class="literal">SIGINT</code> and
+                                    <code class="literal">SIGQUIT</code> in the caller were
+                                other than <code class="literal">SIG_IGN</code>, then the
+                                child resets the dispositions to <code class="literal">SIG_DFL</code>
+                                <span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78356"/><img src="figs/web/U004.png" alt=""/></span>.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>Some implementations of <span class="emphasis"><em>system()</em></span> instead reset
+                            the <code class="literal">SIGINT</code> and <code class="literal">SIGQUIT</code> dispositions to those that were in
+                            effect in the caller, relying on the fact that the subsequent
+                                <span class="emphasis"><em>execl()</em></span> will automatically reset the
+                            disposition of handled signals to their defaults. However, this could
+                            result in potentially undesirable behavior if the caller is handling
+                            either of these signals. In this case, if a signal was delivered to the
+                            child in the small time interval before the call to
+                                <span class="emphasis"><em>execl()</em></span>, then the handler would be invoked in
+                            the child, after the signal was unblocked by
+                                <span class="emphasis"><em>sigprocmask()</em></span>.</p></div><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If the <span class="emphasis"><em>execl()</em></span> call in the child fails, then
+                                we use <span class="emphasis"><em>_exit()</em></span> to terminate the process
+                                    <span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78394"/><img src="figs/web/U006.png" alt=""/></span>, rather than <span class="emphasis"><em>exit()</em></span>, in
+                                order to prevent flushing of any unwritten data in the child’s copy
+                                of the <span class="emphasis"><em>stdio</em></span> buffers.</p></li><li class="listitem"><p>In the parent, we must use <span class="emphasis"><em>waitpid()</em></span> to wait
+                                specifically for the child that we created <span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78412"/><img src="figs/web/U007.png" alt=""/></span>. If we used <span class="emphasis"><em>wait()</em></span>, then
+                                we might inadvertently fetch the status of some other child created
+                                by the calling program.</p></li><li class="listitem"><p>Although the implementation of <span class="emphasis"><em>system()</em></span>
+                                doesn’t require the use of a signal handler, the calling program may
+                                have established signal handlers, and one of these could interrupt a
+                                blocked call to <span class="emphasis"><em>waitpid()</em></span>. SUSv3 explicitly
+                                requires that the wait be restarted in this case. Therefore, we use
+                                a loop to restart <span class="emphasis"><em>waitpid()</em></span> if it fails with
+                                the error <code class="literal">EINTR</code>
+                                <span class="inlinemediaobject"><a id="I_inlinemediaobject27_d1e78436"/><img src="figs/web/U007.png" alt=""/></span>; any other error from
+                                    <span class="emphasis"><em>waitpid()</em></span> causes this loop to
+                                terminate.</p></li></ul></div><div class="example"><a id="implementation_of_system_open_parenthesi"/><div class="example-title">Example 27-9. Implementation of <span class="emphasis"><em>system()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/system.c</code></strong>
+    #include &lt;unistd.h&gt;
+    #include &lt;signal.h&gt;
+    #include &lt;sys/wait.h&gt;
+    #include &lt;sys/types.h&gt;
+    #include &lt;errno.h&gt;
+
+    int
+    system(const char *command)
+    {
+        sigset_t blockMask, origMask;
+        struct sigaction saIgnore, saOrigQuit, saOrigInt, saDefault;
+        pid_t childPid;
+        int status, savedErrno;
+
+<img src="figs/web/U001.png" alt=""/>    if (command == NULL)                /* Is a shell available? */
+            return system(":") == 0;
+
+            sigemptyset(&amp;blockMask);            /* Block SIGCHLD */
+        sigaddset(&amp;blockMask, SIGCHLD);
+<img src="figs/web/U002.png" alt=""/>  sigprocmask(SIG_BLOCK, &amp;blockMask, &amp;origMask);
+
+        saIgnore.sa_handler = SIG_IGN;      /* Ignore SIGINT and SIGQUIT */
+        saIgnore.sa_flags = 0;
+        sigemptyset(&amp;saIgnore.sa_mask);
+<img src="figs/web/U003.png" alt=""/>  sigaction(SIGINT, &amp;saIgnore, &amp;saOrigInt);
+        sigaction(SIGQUIT, &amp;saIgnore, &amp;saOrigQuit);
+
+        switch (childPid = fork()) {
+        case -1: /* fork() failed */
+            status = -1;
+            break;                  /* Carry on to reset signal attributes */
+
+        case 0: /* Child: exec command */
+            saDefault.sa_handler = SIG_DFL;
+            saDefault.sa_flags = 0;
+            sigemptyset(&amp;saDefault.sa_mask);
+<img src="figs/web/U004.png" alt=""/>      if (saOrigInt.sa_handler != SIG_IGN)
+                sigaction(SIGINT, &amp;saDefault, NULL);
+            if (saOrigQuit.sa_handler != SIG_IGN)
+                sigaction(SIGQUIT, &amp;saDefault, NULL);
+
+<img src="figs/web/U005.png" alt=""/>      sigprocmask(SIG_SETMASK, &amp;origMask, NULL);
+
+            execl("/bin/sh", "sh", "-c", command, (char *) NULL);
+<img src="figs/web/U006.png" alt=""/>      _exit(127);                     /* We could not exec the shell */
+
+        default: /* Parent: wait for our child to terminate */
+<img src="figs/web/U007.png" alt=""/>        while (waitpid(childPid, &amp;status, 0) == -1) {
+                if (errno != EINTR) {       /* Error other than EINTR */
+                    status = -1;
+
+                    break;                  /* So exit loop */
+                }
+            }
+            break;
+        }
+
+        /* Unblock SIGCHLD, restore dispositions of SIGINT and SIGQUIT */
+
+<img src="figs/web/U008.png" alt=""/>    savedErrno = errno;                 /* The following may change 'errno' */
+
+<img src="figs/web/U009.png" alt=""/>    sigprocmask(SIG_SETMASK, &amp;origMask, NULL);
+        sigaction(SIGINT, &amp;saOrigInt, NULL);
+        sigaction(SIGQUIT, &amp;saOrigQuit, NULL);
+
+<img src="figs/web/U010.png" alt=""/>    errno = savedErrno;
+
+        return status;
+    }
+
+          <strong class="userinput"><code>procexec/system.c</code></strong></pre></div></div></div><div class="sect3" title="Further details on system()"><div class="titlepage"><div><div><h4 class="title" id="further_details_on_system_open_parenthes">Further details on <span class="emphasis"><em>system()</em></span></h4></div></div></div><p>Portable applications should ensure that <span class="emphasis"><em>system()</em></span> is
+                        not called with the disposition of <code class="literal">SIGCHLD</code> set to <code class="literal">SIG_IGN</code>,
+                        because it is impossible for the <span class="emphasis"><em>waitpid()</em></span> call to
+                        obtain the status of the child in this case. (Ignoring <code class="literal">SIGCHLD</code> causes the status of a child process
+                        to be immediately discarded, as described in <a class="xref" href="ch26.html#ignoring_dead_child_processes" title="Ignoring Dead Child Processes">Ignoring Dead Child Processes</a>.)</p><p>On some UNIX implementations, system() handles the case that it is called
+                        with the disposition of <code class="literal">SIGCHLD</code> set to
+                            <code class="literal">SIG_IGN</code> by temporarily setting the
+                        disposition of <code class="literal">SIGCHLD to SIG_DFL</code>. This
+                        is workable, as long as the UNIX implementation is one of those that (unlike
+                        Linux) reaps existing zombie children when the disposition of <code class="literal">SIGCHLD</code> is reset to <code class="literal">SIG_IGN</code>. (If the implementation doesn’t do this, then
+                        implementing <span class="emphasis"><em>system()</em></span> in this way would have the
+                        negative consequence that if another child that was created by the caller
+                        terminated during the execution of <span class="emphasis"><em>system()</em></span>, it would
+                        become a zombie that might never be reaped.)</p><p>On some UNIX implementations (notably Solaris), <code class="literal">/bin/sh</code> is not a standard POSIX shell. If we want to ensure
+                        that we exec a standard shell, then we must use the
+                            <span class="emphasis"><em>confstr()</em></span> library function to obtain the value of
+                        the _<code class="literal">CS_PATH</code> configuration variable. This
+                        value is a <code class="literal">PATH</code>-style list of directories
+                        containing the standard system utilities. We can assign this list to
+                            <code class="literal">PATH</code>, and then use
+                            <span class="emphasis"><em>execlp()</em></span> to exec the standard shell as
+                            follows:<a id="IDX-CHP-27-4110" class="indexterm"/></p><a id="I_programlisting27_d1e78592"/><pre class="programlisting">char path[PATH_MAX];
+
+if (confstr(_CS_PATH, path, PATH_MAX) == 0)
+    _exit(127);
+if (setenv("PATH", path, 1) == -1)
+    _exit(127);
+execlp("sh", "sh", "-c", command, (char *) NULL);
+_exit(127);</pre></div></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id26">Summary</h2></div></div></div><p>Using <span class="emphasis"><em>execve()</em></span>, a process can replace the program that it is
+                currently running by a new program. Arguments to the <span class="emphasis"><em>execve()</em></span>
+                call allow the specification of the argument list (<span class="emphasis"><em>argv</em></span>) and
+                environment list for the new program. Various similarly named library functions are
+                layered on top of <span class="emphasis"><em>execve()</em></span> and provide different interfaces to
+                the same functionality.<a id="IDX-CHP-27-4111" class="indexterm"/></p><p>All of the <span class="emphasis"><em>exec()</em></span> functions can be used to load a binary
+                executable file or to execute an interpreter script. When a process execs a script,
+                the script’s interpreter program replaces the program currently being executed by
+                the process. The script’s interpreter is normally identified by an initial line
+                (starting with the characters <code class="literal">#!</code>) in the script
+                that specifies the pathname of the interpreter. If no such line is present, then the
+                script is executable only via <span class="emphasis"><em>execlp()</em></span> or
+                    <span class="emphasis"><em>execvp()</em></span>, and these functions exec the shell as the script
+                interpreter.</p><p>We showed how <span class="emphasis"><em>fork()</em></span>, <span class="emphasis"><em>exec()</em></span>,
+                    <span class="emphasis"><em>exit()</em></span>, and <span class="emphasis"><em>wait()</em></span> can be combined to
+                implement the <span class="emphasis"><em>system()</em></span> function, which can be used to execute
+                an arbitrary shell command.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id31"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id32">Further information</h4></div></div></div><p>Refer to the sources of further information listed in Section 24.6.</p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id17">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>The final command in the following shell session uses the program in <a class="xref" href="ch27.html#using_execlp_open_parenthesis_close_pare" title="Example 27-3. Using execlp() to search for a filename in PATH">Example 27-3</a> to exec the program
+                            <span class="emphasis"><em>xyz</em></span>. What happens?<a id="IDX-CHP-27-4112" class="indexterm"/><a id="IDX-CHP-27-4113" class="indexterm"/></p><a id="I_programlisting27_d1e78675"/><pre class="programlisting">$ <strong class="userinput"><code>echo $PATH</code></strong>
+/usr/local/bin:/usr/bin:/bin:./dir1:./dir2
+$ <strong class="userinput"><code>ls -l dir1</code></strong>
+total 8
+-rw-r—r—   1 mtk      users        7860 Jun 13 11:55 xyz
+$ <strong class="userinput"><code>ls -l dir2</code></strong>
+total 28
+-rwxr-xr-x   1 mtk      users       27452 Jun 13 11:55 xyz
+$ <strong class="userinput"><code>./t_execlp xyz</code></strong></pre></li><li class="listitem"><p>Use <span class="emphasis"><em>execve()</em></span> to implement
+                            <span class="emphasis"><em>execlp()</em></span>. You will need to use the
+                            <span class="emphasis"><em>stdarg(3)</em></span> API to handle the variable-length
+                        argument list supplied to <span class="emphasis"><em>execlp()</em></span>. You will also need
+                        to use functions in the <span class="emphasis"><em>malloc</em></span> package to allocate
+                        space for the argument and environment vectors. Finally, note that an easy
+                        way of checking whether a file exists in a particular directory and is
+                        executable is simply to try execing the file.<a id="IDX-CHP-27-4114" class="indexterm"/></p></li><li class="listitem"><p>What output would we see if we make the following script executable and
+                            <span class="emphasis"><em>exec()</em></span> it?</p><a id="I_programlisting27_d1e78717"/><pre class="programlisting">#!/bin/cat -n
+Hello world</pre></li><li class="listitem"><p>What is the effect of the following code? In what circumstances might it
+                        be useful?</p><a id="I_programlisting27_d1e78722"/><pre class="programlisting">childPid = fork();
+if (childPid == -1)
+    errExit("fork1");
+if (childPid == 0) {    /* Child */
+    switch (fork()) {
+    case -1: errExit("fork2");
+
+    case 0:             /* Grandchild */
+        /* ——- Do real work here ——- */
+        exit(EXIT_SUCCESS);             /* After doing real work */
+
+    default:
+        exit(EXIT_SUCCESS);             /* Make grandchild an orphan */
+    }
+}
+
+/* Parent falls through to here */
+
+if (waitpid(childPid, &amp;status, 0) == -1)
+    errExit("waitpid");
+
+/* Parent carries on to do other things */</pre></li><li class="listitem"><p>When we run the following program, we find it produces no output. Why is
+                        this?</p><a id="I_programlisting27_d1e78727"/><pre class="programlisting">#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    printf("Hello world");
+    execlp("sleep", "sleep", "0", (char *) NULL);
+}</pre></li><li class="listitem"><p>Suppose that a parent process has established a handler for <code class="literal">SIGCHLD</code> and also blocked this signal.
+                        Subsequently, one of its children exits, and the parent then does a
+                            <span class="emphasis"><em>wait()</em></span> to collect the child’s status. What happens
+                        when the parent unblocks <code class="literal">SIGCHLD</code>? Write a
+                        program to verify your answer. What is the relevance of the result for a
+                        program calling the <span class="emphasis"><em>system()</em></span> function?</p></li></ol></div></div></section></body></html>

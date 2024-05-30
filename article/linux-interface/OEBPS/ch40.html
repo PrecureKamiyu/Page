@@ -1,0 +1,624 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 40. Login Accounting</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch39.html" title="Chapter 39. Capabilities"/><link rel="next" href="ch41.html" title="Chapter 41. Fundamentals of Shared Libraries"/></head><body><section class="chapter" title="Chapter 40. Login Accounting" epub:type="chapter" id="login_accounting"><div class="titlepage"><div><div><h2 class="title">Chapter 40. Login Accounting</h2></div></div></div><p>Login accounting is concerned with recording which users are currently logged in to
+            the system, and recording past logins and logouts. This chapter looks at the login
+            accounting files and the library functions used to retrieve and update the information
+            they contain. We also describe the steps that an application providing a login service
+            should perform in order to update these files when a user logs in and out.<a id="IDX-CHP-40-5773" class="indexterm"/></p><div class="sect1" title="Overview of the utmp and wtmp Files"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="overview_of_the_utmp_and_wtmp_files">Overview of the <code class="literal">utmp</code> and <code class="literal">wtmp</code> Files</h2></div></div></div><p>UNIX systems maintain two data files containing information about users logging in
+                and out of the system:<a id="IDX-CHP-40-5774" class="indexterm"/><a id="IDX-CHP-40-5775" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <code class="literal">utmp</code> file maintains a record of
+                        users currently logged in to the system (as well as certain other
+                        information that we describe later). As each user logs in, a record is
+                        written to the <code class="literal">utmp</code> file. One of the
+                        fields in this record, <span class="emphasis"><em>ut_user</em></span>, records the login name
+                        of the user. This record is later erased on logout. Programs such as
+                            <span class="emphasis"><em>who(1)</em></span> use the information in the <code class="literal">utmp</code> file to display a list of currently
+                        logged-in users.<a id="IDX-CHP-40-5776" class="indexterm"/></p></li><li class="listitem"><p>The <code class="literal">wtmp</code> file is an audit trail of all
+                        user logins and logouts (as well as certain other information that we
+                        describe later). On each login, a record containing the same information as
+                        is written to the <code class="literal">utmp</code> file is appended
+                        to the <code class="literal">wtmp</code> file. On logout, a further
+                        record is appended to the file. This record contains the same information,
+                        except that the <span class="emphasis"><em>ut_user</em></span> field is zeroed out. The
+                            <span class="emphasis"><em>last(1)</em></span> command can be used to display and filter
+                        the contents of the <code class="literal">wtmp</code> file.<a id="IDX-CHP-40-5777" class="indexterm"/></p></li></ul></div><p>On Linux, the <code class="literal">utmp</code> file resides at <code class="literal">/var/run/utmp</code>, and the <code class="literal">wtmp</code> file resides at <code class="literal">/var/log/wtmp</code>. In general, applications don’t need to know about these
+                pathnames, since they are compiled into <span class="emphasis"><em>glibc</em></span>. Programs that do
+                need to refer to the locations of these files should use the <code class="literal">_PATH_UTMP</code> and <code class="literal">_PATH_WTMP</code> pathname constants, defined in <code class="literal">&lt;paths.h&gt;</code> (and <code class="literal">&lt;utmpx.h&gt;</code>), rather than explicitly coding pathnames
+                into the program.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv3 doesn’t standardize any symbolic names for the pathnames of the <code class="literal">utmp</code> and <code class="literal">wtmp</code>
+                    files. The names <code class="literal">_PATH_UTMP</code> and <code class="literal">_PATH_WTMP</code> are used on Linux and the BSDs. Many
+                    other UNIX implementations instead define the constants <code class="literal">UTMP_FILE</code> and <code class="literal">WTMP_FILE</code> for
+                    these pathnames. Linux also defines these names in <code class="literal">&lt;utmp.h&gt;</code>, but doesn’t define them in <code class="literal">&lt;utmpx.h&gt;</code> or <code class="literal">&lt;paths.h&gt;</code>.</p></div></div><div class="sect1" title="The utmpx API"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_utmpx_api">The <span class="emphasis"><em>utmpx</em></span> API</h2></div></div></div><p>The <code class="literal">utmp</code> and <code class="literal">wtmp</code> files have been present in the UNIX system since early times,
+                but underwent steady evolution and divergence across various UNIX implementations,
+                especially BSD versus System V. System V Release 4 greatly extended the API, in the
+                process creating a new (parallel) <span class="emphasis"><em>utmpx</em></span> structure and
+                associated <code class="literal">utmpx</code> and <code class="literal">wtmpx</code> files. The letter <span class="emphasis"><em>x</em></span> was likewise included
+                in the names of header files and additional functions for processing these new
+                files. Many other UNIX implementations also added their own extensions to the
+                    API.<a id="IDX-CHP-40-5778" class="indexterm"/><a id="IDX-CHP-40-5779" class="indexterm"/><a id="IDX-CHP-40-5780" class="indexterm"/><a id="IDX-CHP-40-5781" class="indexterm"/><a id="IDX-CHP-40-5782" class="indexterm"/><a id="IDX-CHP-40-5783" class="indexterm"/><a id="IDX-CHP-40-5784" class="indexterm"/><a id="IDX-CHP-40-5785" class="indexterm"/></p><p>In this chapter, we describe the Linux <span class="emphasis"><em>utmpx</em></span> API, which is a
+                hybrid of the BSD and System V implementations. Linux doesn’t follow System V in
+                creating parallel <code class="literal">utmpx</code> and <code class="literal">wtmpx</code> files; instead, the <code class="literal">utmp</code> and <code class="literal">wtmp</code> files contain all of
+                the required information. However, for compatibility with other UNIX
+                implementations, Linux provides both the traditional <span class="emphasis"><em>utmp</em></span> and
+                the System V-derived <span class="emphasis"><em>utmpx</em></span> APIs for accessing the contents of
+                these files. On Linux, these two APIs return exactly the same information. (One of
+                the few differences between the two APIs is that the <span class="emphasis"><em>utmp</em></span> API
+                contains reentrant versions of a few functions, while the <span class="emphasis"><em>utmpx</em></span>
+                API does not.) However, we confine our discussion to the utmpx interface, since that
+                is the API specified in SUSv3 and is thus preferred for portability to other UNIX
+                implementations.</p><p>The SUSv3 specification doesn’t cover all aspects of the <code class="literal">utmpx</code> API (e.g., the locations of the <code class="literal">utmp</code> and <code class="literal">wtmp</code> files are not
+                specified). The precise contents of the login accounting files differ somewhat
+                across implementations, and various implementations provide additional login
+                accounting functions that are not specified in SUSv3.</p><div class="note" title="Note"><h3 class="title">Note</h3><p><a class="xref" href="ch17.html" title="Chapter 17. Access Control Lists">Chapter 17</a> of [Frisch, 2002] summarizes some of
+                    the variations in the location and use of the <code class="literal">wtmp</code> and <code class="literal">utmp</code> files across
+                    different UNIX implementations. It also describes the use of the
+                        <span class="emphasis"><em>ac(1)</em></span> command, which can be used to summarize login
+                    information from the <code class="literal">wtmp</code> file.</p></div></div><div class="sect1" title="The utmpx Structure"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_utmpx_structure">The <span class="emphasis"><em>utmpx</em></span> Structure</h2></div></div></div><p>The <code class="literal">utmp</code> and <code class="literal">wtmp</code> files consist of <span class="emphasis"><em>utmpx</em></span> records. The
+                    <span class="emphasis"><em>utmpx</em></span> structure is defined in <code class="literal">&lt;utmpx.h&gt;</code>, as shown in <a class="xref" href="ch40.html#definition_of_the_utmpx_structure" title="Example 40-1. Definition of the utmpx structure">Example 40-1</a>.<a id="IDX-CHP-40-5786" class="indexterm"/><a id="IDX-CHP-40-5787" class="indexterm"/><a id="IDX-CHP-40-5788" class="indexterm"/><a id="IDX-CHP-40-5789" class="indexterm"/><a id="IDX-CHP-40-5790" class="indexterm"/><a id="IDX-CHP-40-5791" class="indexterm"/><a id="IDX-CHP-40-5792" class="indexterm"/><a id="IDX-CHP-40-5793" class="indexterm"/><a id="IDX-CHP-40-5794" class="indexterm"/><a id="IDX-CHP-40-5795" class="indexterm"/><a id="IDX-CHP-40-5796" class="indexterm"/><a id="IDX-CHP-40-5797" class="indexterm"/><a id="IDX-CHP-40-5798" class="indexterm"/><a id="IDX-CHP-40-5799" class="indexterm"/><a id="IDX-CHP-40-5800" class="indexterm"/><a id="IDX-CHP-40-5801" class="indexterm"/><a id="IDX-CHP-40-5802" class="indexterm"/><a id="IDX-CHP-40-5803" class="indexterm"/><a id="IDX-CHP-40-5804" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The SUSv3 specification of the <span class="emphasis"><em>utmpx</em></span> structure doesn’t
+                    include the <span class="emphasis"><em>ut_host</em></span>, <span class="emphasis"><em>ut_exit</em></span>,
+                        <span class="emphasis"><em>ut_session</em></span>, or <span class="emphasis"><em>ut_addr_v6</em></span> fields.
+                    The <span class="emphasis"><em>ut_host</em></span> and <span class="emphasis"><em>ut_exit</em></span> fields are
+                    present on most other implementations; <span class="emphasis"><em>ut_session</em></span> is
+                    present on a few other implementations; and <span class="emphasis"><em>ut_addr_v6</em></span> is
+                    Linux-specific. SUSv3 specifies the <span class="emphasis"><em>ut_line</em></span> and
+                        <span class="emphasis"><em>ut_user</em></span> fields, but leaves their lengths
+                        unspecified.<a id="IDX-CHP-40-5805" class="indexterm"/></p></div><p>The <span class="emphasis"><em>int32_t</em></span> data type used to define the
+                    <span class="emphasis"><em>ut_addr_v6</em></span> field of the <span class="emphasis"><em>utmpx</em></span>
+                structure is a 32-bit integer.<a id="IDX-CHP-40-5806" class="indexterm"/></p><div class="example"><a id="definition_of_the_utmpx_structure"/><div class="example-title">Example 40-1. Definition of the <span class="emphasis"><em>utmpx</em></span> structure</div><div class="example-contents"><pre class="programlisting">#define _GNU_SOURCE             /* Without _GNU_SOURCE the two field
+struct exit_status {               names below are prepended by "__" */
+    short e_termination;        /* Process termination status (signal) */
+    short e_exit;               /* Process exit status */
+};
+
+#define __UT_LINESIZE    32
+#define __UT_NAMESIZE    32
+#define __UT_HOSTSIZE   256
+
+struct utmpx {
+    short ut_type;                      /* Type of record */
+    pid_t ut_pid;                       /* PID of login process */
+    char  ut_line[__UT_LINESIZE];       /* Terminal device name */
+    char  ut_id[4];                     /* Suffix from terminal name, or
+                                           ID field from inittab(5) */
+    char  ut_user[__UT_NAMESIZE];       /* Username */
+    char  ut_host[__UT_HOSTSIZE];       /* Hostname for remote login, or kernel
+                                           version for run-level messages */
+    struct exit_status ut_exit;         /* Exit status of process marked
+                                           as DEAD_PROCESS (not filled
+                                           in by init(8) on Linux) */
+    long  ut_session;                   /* Session ID */
+    struct timeval ut_tv;               /* Time when entry was made */
+    int32_t ut_addr_v6[4];              /* IP address of remote host (IPv4
+                                           address uses just ut_addr_v6[0],
+                                           with other elements set to 0) */
+    char __unused[20];                  /* Reserved for future use */
+};</pre></div></div><p>Each of the string fields in the <span class="emphasis"><em>utmpx</em></span> structure is
+                null-terminated unless it completely fills the corresponding array.</p><p>For login processes, the information stored in the <span class="emphasis"><em>ut_line</em></span>
+                and <span class="emphasis"><em>ut_id</em></span> fields is derived from the name of the terminal
+                device. The <span class="emphasis"><em>ut_line</em></span> field contains the complete filename of the
+                terminal device. The <span class="emphasis"><em>ut_id</em></span> field contains the suffix part of
+                the filename—that is, the string following <span class="emphasis"><em>tty</em></span>,
+                    <span class="emphasis"><em>pts</em></span>, or <span class="emphasis"><em>pty</em></span> (the last two are for
+                System-V and BSD-style pseudoterminals, respectively). Thus, for the terminal
+                    <code class="literal">/dev/tty2</code>, <span class="emphasis"><em>ut_line</em></span> would
+                be <span class="emphasis"><em>tty2</em></span> and <span class="emphasis"><em>ut_id</em></span> would be
+                    <span class="emphasis"><em>2</em></span>.</p><p>In a windowing environment, some terminal emulators use the
+                    <span class="emphasis"><em>ut_session</em></span> field to record the session ID for the terminal
+                window. (Refer to <a class="xref" href="ch34.html#sessions" title="Sessions">Sessions</a> for an explanation of session
+                    IDs.)<a id="IDX-CHP-40-5807" class="indexterm"/></p><p>The <span class="emphasis"><em>ut_type</em></span> field is an integer defining the type of record
+                being written to the file. The following set of constants (with their corresponding
+                numeric values shown in parentheses) can be used as values for this field:</p><div class="variablelist"><dl><dt><span class="term"><code class="literal">EMPTY</code> (0)</span></dt><dd><p>This record doesn’t contain valid accounting information.</p></dd><dt><span class="term"><code class="literal">RUN_LVL</code> (1)</span></dt><dd><p>This record indicates a change in the system’s run-level during system
+                            startup or shutdown. (Information about run-levels can be found in the
+                                <span class="emphasis"><em>init(8)</em></span> manual page.) The <code class="literal">_GNU_SOURCE</code> feature test macro must be
+                            defined in order to obtain the definition of this constant from <code class="literal">&lt;utmpx.h&gt;</code>.</p></dd><dt><span class="term"><code class="literal">BOOT_TIME</code> (2)</span></dt><dd><p>This record contains the time of system boot in the
+                                <span class="emphasis"><em>ut_tv</em></span> field. The usual author of <code class="literal">RUN_LVL</code> and <code class="literal">BOOT_TIME</code> records is <span class="emphasis"><em>init</em></span>. These
+                            records are written to both the <code class="literal">utmp</code>
+                            file and the <code class="literal">wtmp</code> file.</p></dd><dt><span class="term"><code class="literal">NEW_TIME</code> (3)</span></dt><dd><p>This record contains the new time after a system clock change,
+                            recorded in the <span class="emphasis"><em>ut_tv</em></span> field.</p></dd><dt><span class="term"><code class="literal">OLD_TIME</code> (4)</span></dt><dd><p>This record contains the old time before a system clock change,
+                            recorded in the <span class="emphasis"><em>ut_tv</em></span> field. Records of type
+                                <code class="literal">OLD_TIME</code> and <code class="literal">NEW_TIME</code> are written to the <code class="literal">utmp</code> and <code class="literal">wtmp</code> files by the NTP (or a similar) daemon when it makes
+                            changes to the system clock.</p></dd><dt><span class="term"><code class="literal">INIT_PROCESS</code> (5)</span></dt><dd><p>This is a record for a process spawned by <span class="emphasis"><em>init</em></span>,
+                            such as a <span class="emphasis"><em>getty</em></span> process. Refer to the
+                                <span class="emphasis"><em>inittab(5)</em></span> manual page for details.</p></dd><dt><span class="term"><code class="literal">LOGIN_PROCESS</code> (6)</span></dt><dd><p>This is a record for a session leader process for a user login, such
+                            as a <span class="emphasis"><em>login(1)</em></span> process.</p></dd><dt><span class="term"><code class="literal">USER_PROCESS</code> (7)</span></dt><dd><p>This is a record for a user process, usually a login session, with the
+                            username appearing in the <span class="emphasis"><em>ut_user</em></span> field. The login
+                            session may have been started by <span class="emphasis"><em>login(1)</em></span> or by
+                            some application offering a remote login facility, such as
+                                <span class="emphasis"><em>ftp</em></span> or <span class="emphasis"><em>ssh</em></span>.</p></dd><dt><span class="term"><code class="literal">DEAD_PROCESS</code> (8)</span></dt><dd><p>This record identifies a process that has exited.</p></dd></dl></div><p>We show the numeric values of these constants because various applications depend
+                on the constants having the above numerical order. For example, in the source code
+                of the <span class="emphasis"><em>agetty</em></span> program, we find checks such as the
+                following:</p><a id="I_programlisting40_d1e108854"/><pre class="programlisting">utp-&gt;ut_type &gt;= INIT_PROCESS &amp;&amp; utp-&gt;ut_type &lt;= DEAD_PROCESS</pre><p>Records of the type <code class="literal">INIT_PROCESS</code> usually
+                correspond to invocations of <span class="emphasis"><em>getty(8)</em></span> (or a similar program,
+                such as <span class="emphasis"><em>agetty(8)</em></span> or <span class="emphasis"><em>mingetty(8)</em></span>). On
+                system boot, the <span class="emphasis"><em>init</em></span> process creates a child for each terminal
+                line and virtual console, and each child execs the <span class="emphasis"><em>getty</em></span>
+                program. The <span class="emphasis"><em>getty</em></span> program opens the terminal, prompts the user
+                for a login name, and then execs <span class="emphasis"><em>login(1)</em></span>. After successfully
+                validating the user and performing various other steps, <span class="emphasis"><em>login</em></span>
+                forks a child that execs the user’s login shell. The complete life of such a login
+                session is represented by four records written to the <code class="literal">wtmp</code> file in the following order:<a id="IDX-CHP-40-5808" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>an <code class="literal">INIT_PROCESS</code> record, written by
+                            <span class="emphasis"><em>init</em></span>;</p></li><li class="listitem"><p>a <code class="literal">LOGIN_PROCESS</code> record, written by
+                            <span class="emphasis"><em>getty</em></span>;</p></li><li class="listitem"><p>a <code class="literal">USER_PROCESS</code> record, written by
+                            <span class="emphasis"><em>login</em></span>; and</p></li><li class="listitem"><p>a <code class="literal">DEAD_PROCESS</code> record, written by
+                            <span class="emphasis"><em>init</em></span> when it detects the death of the child
+                            <span class="emphasis"><em>login</em></span> process (which occurs on user logout).</p></li></ul></div><p>Further details on the operation of <span class="emphasis"><em>getty</em></span> and
+                    <span class="emphasis"><em>login</em></span> during user login can be found in <a class="xref" href="ch09.html" title="Chapter 9. Process Credentials">Chapter 9</a> of [Stevens &amp; Rago, 2005].</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Some versions of <span class="emphasis"><em>init</em></span> spawn the
+                        <span class="emphasis"><em>getty</em></span> process before updating the <code class="literal">wtmp</code> file. Consequently, <span class="emphasis"><em>init</em></span>
+                    and <span class="emphasis"><em>getty</em></span> race with each other to update the <code class="literal">wtmp</code> file, with the result that the <code class="literal">INIT_PROCESS</code> and <code class="literal">LOGIN_PROCESS</code> records may be written in the opposite order from
+                    that described in the main text.</p></div></div><div class="sect1" title="Retrieving Information from the utmp and wtmp Files"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="retrieving_information_from_the_utmp_and">Retrieving Information from the <code class="literal">utmp</code> and
+                    <code class="literal">wtmp</code> Files</h2></div></div></div><p>The functions described in this section retrieve records from files containing
+                    <span class="emphasis"><em>utmpx</em></span>-format records. By default, these functions use the
+                standard <code class="literal">utmp</code> file, but this can be changed using
+                the <span class="emphasis"><em>utmpxname()</em></span> function (described below).<a id="IDX-CHP-40-5809" class="indexterm"/><a id="IDX-CHP-40-5810" class="indexterm"/><a id="IDX-CHP-40-5811" class="indexterm"/><a id="IDX-CHP-40-5812" class="indexterm"/><a id="IDX-CHP-40-5813" class="indexterm"/><a id="IDX-CHP-40-5814" class="indexterm"/><a id="IDX-CHP-40-5815" class="indexterm"/><a id="IDX-CHP-40-5816" class="indexterm"/><a id="IDX-CHP-40-5817" class="indexterm"/><a id="IDX-CHP-40-5818" class="indexterm"/><a id="IDX-CHP-40-5819" class="indexterm"/><a id="IDX-CHP-40-5820" class="indexterm"/><a id="IDX-CHP-40-5821" class="indexterm"/><a id="IDX-CHP-40-5822" class="indexterm"/><a id="IDX-CHP-40-5823" class="indexterm"/><a id="IDX-CHP-40-5824" class="indexterm"/><a id="IDX-CHP-40-5825" class="indexterm"/><a id="IDX-CHP-40-5826" class="indexterm"/><a id="IDX-CHP-40-5827" class="indexterm"/></p><p>These functions employ the notion of a <span class="emphasis"><em>current location</em></span>
+                within the file from which they are retrieving records. This location is updated by
+                each function.</p><p>The <span class="emphasis"><em>setutxent()</em></span> function rewinds the <code class="literal">utmp</code> file to the beginning.<a id="IDX-CHP-40-5828" class="indexterm"/></p><a id="I_programlisting40_d1e109116"/><pre class="programlisting">#include &lt;utmpx.h&gt;
+
+void <strong class="userinput"><code>setutxent</code></strong>(void);</pre><p>Normally, we should call <span class="emphasis"><em>setutxent()</em></span> before employing any of
+                the <span class="emphasis"><em>getutx*()</em></span> functions (described below). This prevents
+                possible confusion that might result if some third-party function that we have
+                called has previously made use of these functions. Depending on the task being
+                performed, it may also be necessary to call <span class="emphasis"><em>setutxent()</em></span> again
+                at appropriate points later in a program.</p><p>The <span class="emphasis"><em>setutxent()</em></span> function and the
+                    <span class="emphasis"><em>getutx*()</em></span> functions open the <code class="literal">utmp</code> file if it is not already open. When we have finished using the
+                file, we can close it with the <span class="emphasis"><em>endutxent()</em></span> function.<a id="IDX-CHP-40-5829" class="indexterm"/></p><a id="I_programlisting40_d1e109150"/><pre class="programlisting">#include &lt;utmpx.h&gt;
+
+void <strong class="userinput"><code>endutxent</code></strong>(void);</pre><p>The <span class="emphasis"><em>getutxent()</em></span>, <span class="emphasis"><em>getutxid()</em></span>, and
+                    <span class="emphasis"><em>getutxline()</em></span> functions read a record from the <code class="literal">utmp</code> file and return a pointer to a (statically
+                allocated) <span class="emphasis"><em>utmpx</em></span> structure.<a id="IDX-CHP-40-5830" class="indexterm"/><a id="IDX-CHP-40-5831" class="indexterm"/><a id="IDX-CHP-40-5832" class="indexterm"/><a id="IDX-CHP-40-5833" class="indexterm"/></p><a id="I_programlisting40_d1e109190"/><pre class="programlisting">#include &lt;utmpx.h&gt;
+
+struct utmpx *<strong class="userinput"><code>getutxent</code></strong>(void);
+struct utmpx *<strong class="userinput"><code>getutxid</code></strong>(const struct utmpx *<span class="emphasis"><em>ut</em></span>);
+struct utmpx *<strong class="userinput"><code>getutxline</code></strong>(const struct utmpx *<span class="emphasis"><em>ut</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>All return a pointer to a statically allocated <span class="emphasis"><em>utmpx</em></span>
+                    structure, or <code class="literal">NULL</code> if no matching record or
+                    EOF was encountered</p></div><p>The <span class="emphasis"><em>getutxent()</em></span> function retrieves the next sequential record
+                from the <code class="literal">utmp</code> file. The
+                    <span class="emphasis"><em>getutxid()</em></span> and <span class="emphasis"><em>getutxline()</em></span> functions
+                perform searches, starting from the current file location, for a record matching the
+                criteria specified in the <span class="emphasis"><em>utmpx</em></span> structure pointed to by the
+                    <span class="emphasis"><em>ut</em></span> argument.</p><p>The <span class="emphasis"><em>getutxid()</em></span> function searches the <code class="literal">utmp</code> file for a record based on the values specified in the
+                    <span class="emphasis"><em>ut_type</em></span> and <span class="emphasis"><em>ut_id</em></span> fields of the
+                    <span class="emphasis"><em>ut</em></span> argument:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If the <span class="emphasis"><em>ut_type</em></span> field is <code class="literal">RUN_LVL</code>, <code class="literal">BOOT_TIME</code>,
+                            <code class="literal">NEW_TIME</code>, or <code class="literal">OLD_TIME</code>, then <span class="emphasis"><em>getutxid()</em></span> finds the next
+                        record whose <span class="emphasis"><em>ut_type</em></span> field matches the specified value.
+                        (Records of these types don’t correspond to user logins.) This permits
+                        searches for records of changes to the system time and run-level.</p></li><li class="listitem"><p>If the <span class="emphasis"><em>ut_type</em></span> field is one of the remaining valid
+                        values (<code class="literal">INIT_PROCESS</code>, <code class="literal">LOGIN_PROCESS</code>, <code class="literal">USER_PROCESS</code>, or <code class="literal">DEAD_PROCESS</code>), then <span class="emphasis"><em>getutxent()</em></span> finds
+                        the next record whose <span class="emphasis"><em>ut_type</em></span> field matches
+                            <span class="emphasis"><em>any</em></span> of these values and whose
+                            <span class="emphasis"><em>ut_id</em></span> field matches that specified in its
+                            <span class="emphasis"><em>ut</em></span> argument. This permits scanning the file for
+                        records corresponding to a particular terminal.</p></li></ul></div><p>The <span class="emphasis"><em>getutxline()</em></span> function searches forward for a record whose
+                    <span class="emphasis"><em>ut_type</em></span> field is either <code class="literal">LOGIN_PROCESS</code> or <code class="literal">USER_PROCESS</code>, and
+                whose <span class="emphasis"><em>ut_line</em></span> field matches that specified in the
+                    <span class="emphasis"><em>ut</em></span> argument. This is useful for finding records
+                corresponding to user logins.</p><p>Both <span class="emphasis"><em>getutxid()</em></span> and <span class="emphasis"><em>getutxline()</em></span> return
+                    <code class="literal">NULL</code> if the search fails (i.e., end-of-file
+                is encountered without finding a matching record).</p><p>On some UNIX implementations, <span class="emphasis"><em>getutxline()</em></span> and
+                    <span class="emphasis"><em>getutxid()</em></span> treat the static area used for returning the
+                    <span class="emphasis"><em>utmpx</em></span> structure as a kind of cache. If they determine that
+                the record placed in this cache by a previous <span class="emphasis"><em>getutx*()</em></span> call
+                matches the criteria specified in ut, then no file read is performed; the call
+                simply returns the same record once more (SUSv3 permits this behavior). Therefore,
+                to prevent the same record from being repeatedly returned when calling
+                    <span class="emphasis"><em>getutxline()</em></span> and <span class="emphasis"><em>getutxid()</em></span> within a
+                loop, we must zero out this static data structure, using code such as the
+                following:</p><a id="I_programlisting40_d1e109368"/><pre class="programlisting">struct utmpx *res = NULL;
+
+/* Other code omitted */
+
+if (res != NULL)            /* If 'res' was set via a previous call */
+    memset(res, 0, sizeof(struct utmpx));
+res = getutxline(&amp;ut);</pre><p>The <span class="emphasis"><em>glibc</em></span> implementation doesn’t perform this type of
+                caching, but we should nevertheless employ this technique for the sake of
+                portability.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Because the <span class="emphasis"><em>getutx*()</em></span> functions return a pointer to a
+                    statically allocated structure, they are not reentrant. The GNU C library
+                    provides reentrant versions of the traditional <span class="emphasis"><em>utmp</em></span>
+                    functions (<span class="emphasis"><em>getutent_r()</em></span>, <span class="emphasis"><em>getutid_r()</em></span>,
+                    and <span class="emphasis"><em>getutline_r()</em></span>), but doesn’t provide reentrant versions
+                    of their <span class="emphasis"><em>utmpx</em></span> counterparts. (SUSv3 doesn’t specify the
+                    reentrant versions.)<a id="IDX-CHP-40-5834" class="indexterm"/><a id="IDX-CHP-40-5835" class="indexterm"/><a id="IDX-CHP-40-5836" class="indexterm"/></p></div><p>By default, all of the <span class="emphasis"><em>getutx*()</em></span> functions work on the
+                standard <code class="literal">utmp</code> file. If we want to use another
+                file, such as the <code class="literal">wtmp</code> file, then we must first
+                call <span class="emphasis"><em>utmpxname()</em></span>, specifying the desired pathname.<a id="IDX-CHP-40-5837" class="indexterm"/></p><a id="I_programlisting40_d1e109427"/><pre class="programlisting">#define _GNU_SOURCE
+#include &lt;utmpx.h&gt;
+
+int <strong class="userinput"><code>utmpxname</code></strong>(const char *<span class="emphasis"><em>file</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>utmpxname()</em></span> function merely records a copy of the
+                pathname given to it. It doesn’t open the file, but does close any file previously
+                opened by one of the other calls. This means that <span class="emphasis"><em>utmpxname()</em></span>
+                doesn’t return an error if an invalid pathname is specified. Instead, when one of
+                the <span class="emphasis"><em>getutx*()</em></span> functions is later called, it will return an
+                error (i.e., <code class="literal">NULL</code>, with
+                    <span class="emphasis"><em>errno</em></span> set to <code class="literal">ENOENT</code>)
+                when it fails to open the file.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Although not specified in SUSv3, most UNIX implementations provide
+                        <span class="emphasis"><em>utmpxname()</em></span> or the analogous
+                        <span class="emphasis"><em>utmpname()</em></span> function.</p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="example_program-id52"/></div></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id53">Example program</h4></div></div></div><p>The program in <a class="xref" href="ch40.html#displaying_the_contents_of_a_utmpx-forma" title="Example 40-2. Displaying the contents of a utmpx-format file">Example 40-2</a>
+                        uses some of the functions described in this section to dump the contents of
+                        a <span class="emphasis"><em>utmpx</em></span>-format file. The following shell session log
+                        demonstrates the results when we use this program to dump the contents of
+                            <code class="literal">/var/run/utmp</code> (the default used by
+                        these functions if <span class="emphasis"><em>utmpxname()</em></span> is not
+                            called):<a id="IDX-CHP-40-5838" class="indexterm"/><a id="IDX-CHP-40-5839" class="indexterm"/></p><a id="I_programlisting40_d1e109499"/><pre class="programlisting">$ <strong class="userinput"><code>./dump_utmpx</code></strong>
+user     type        PID line   id  host      date/time
+LOGIN    LOGIN_PR   1761 tty1   1             Sat Oct 23 09:29:37 2010
+LOGIN    LOGIN_PR   1762 tty2   2             Sat Oct 23 09:29:37 2010
+lynley   USER_PR   10482 tty3   3             Sat Oct 23 10:19:43 2010
+david    USER_PR    9664 tty4   4             Sat Oct 23 10:07:50 2010
+liz      USER_PR    1985 tty5   5             Sat Oct 23 10:50:12 2010
+mtk      USER_PR   10111 pts/0  /0            Sat Oct 23 09:30:57 2010</pre><p>For brevity, we edited out much of the output produced by the program. The
+                        lines matching <code class="literal">tty1</code> to <code class="literal">tty5</code> are for logins on virtual consoles
+                            (<code class="literal">/dev/tty[1-6]</code>). The last line of
+                        output is for an <span class="emphasis"><em>xterm</em></span> session on a
+                        pseudoterminal.</p><p>The following output produced by dumping <code class="literal">/var/log/wtmp</code> shows that when a user logs in and out, two
+                        records are written to the <code class="literal">wtmp</code> file. (We
+                        edited out all of the other output produced by the program.) By searching
+                        sequentially through the <code class="literal">wtmp</code> file (using
+                            <span class="emphasis"><em>getutxline()</em></span>), these records can be matched via the
+                            <span class="emphasis"><em>ut_line</em></span> field.</p><a id="I_programlisting40_d1e109535"/><pre class="programlisting">$ <strong class="userinput"><code>./dump_utmpx /var/log/wtmp</code></strong>
+user     type        PID line   id  host      date/time
+lynley   USER_PR   10482 tty3   3             Sat Oct 23 10:19:43 2010
+         DEAD_PR   10482 tty3   3   2.4.20-4G Sat Oct 23 10:32:54 2010</pre><div class="example"><a id="displaying_the_contents_of_a_utmpx-forma"/><div class="example-title">Example 40-2. Displaying the contents of a <span class="emphasis"><em>utmpx</em></span>-format
+                            file</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>loginacct/dump_utmpx.c</code></strong>
+#define _GNU_SOURCE
+#include &lt;time.h&gt;
+#include &lt;utmpx.h&gt;
+#include &lt;paths.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    struct utmpx *ut;
+
+    if (argc &gt; 1 &amp;&amp; strcmp(argv[1], "--help") == 0)
+        usageErr("%s [utmp-pathname]\n", argv[0]);
+
+    if (argc &gt; 1)               /* Use alternate file if supplied */
+        if (utmpxname(argv[1]) == -1)
+            errExit("utmpxname");
+
+    setutxent();
+
+    printf("user     type        PID line   id  host      date/time\n");
+
+    while ((ut = getutxent()) != NULL) {        /* Sequential scan to EOF */
+        printf("%-8s ", ut-&gt;ut_user);
+        printf("%-9.9s ",
+                (ut-&gt;ut_type == EMPTY) ?         "EMPTY" :
+                (ut-&gt;ut_type == RUN_LVL) ?       "RUN_LVL" :
+                (ut-&gt;ut_type == BOOT_TIME) ?     "BOOT_TIME" :
+                (ut-&gt;ut_type == NEW_TIME) ?      "NEW_TIME" :
+                (ut-&gt;ut_type == OLD_TIME) ?      "OLD_TIME" :
+                (ut-&gt;ut_type == INIT_PROCESS) ?  "INIT_PR" :
+                (ut-&gt;ut_type == LOGIN_PROCESS) ? "LOGIN_PR" :
+                (ut-&gt;ut_type == USER_PROCESS) ?  "USER_PR" :
+                (ut-&gt;ut_type == DEAD_PROCESS) ?  "DEAD_PR" : "???");
+        printf("%5ld %-6.6s %-3.5s %-9.9s ", (long) ut-&gt;ut_pid,
+                ut-&gt;ut_line, ut-&gt;ut_id, ut-&gt;ut_host);
+        printf("%s", ctime((time_t *) &amp;(ut-&gt;ut_tv.tv_sec)));
+    }
+
+    endutxent();
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>loginacct/dump_utmpx.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Retrieving the Login Name: getlogin()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="retrieving_the_login_name_colon_getlogin">Retrieving the Login Name: <span class="emphasis"><em>getlogin()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>getlogin()</em></span> function returns the name of the user logged
+                in on the controlling terminal of the calling process. This function uses the
+                information maintained in the <code class="literal">utmp</code>
+                    file.<a id="IDX-CHP-40-5840" class="indexterm"/></p><a id="I_programlisting40_d1e109569"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+char *<strong class="userinput"><code>getlogin</code></strong>(void);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns pointer to username string, or <code class="literal">NULL</code>
+                    on error</p></div><p>The <span class="emphasis"><em>getlogin()</em></span> function calls <span class="emphasis"><em>ttyname()</em></span>
+                    (<a class="xref" href="ch62.html#terminal_identification" title="Terminal Identification">Terminal Identification</a>) to find the name of the terminal
+                associated with the calling process’s standard input. It then searches the <code class="literal">utmp</code> file for a record whose
+                    <span class="emphasis"><em>ut_line</em></span> value matches this terminal name. If a matching
+                record is found, then <span class="emphasis"><em>getlogin()</em></span> returns the
+                    <span class="emphasis"><em>ut_user</em></span> string from that record.</p><p>If a match is not found or an error occurs, then <span class="emphasis"><em>getlogin()</em></span>
+                returns <code class="literal">NULL</code> and sets <span class="emphasis"><em>errno</em></span>
+                to indicate the error. One reason <span class="emphasis"><em>getlogin()</em></span> may fail is that
+                the process doesn’t have a terminal associated with its standard input (<code class="literal">ENOTTY</code>), perhaps because it is daemon. Another
+                possibility is that this terminal session is not recorded in <code class="literal">utmp</code>; for example, some software terminal emulators
+                don’t create entries in the <code class="literal">utmp</code> file.</p><p>Even in the (unusual) case where a user ID has multiple login names in <code class="literal">/etc/passwd</code>, <span class="emphasis"><em>getlogin()</em></span> is able
+                to return the actual username that was used to log in on this terminal because it
+                relies on the <code class="literal">utmp</code> file. By contrast, using
+                    <span class="emphasis"><em>getpwuid(getuid())</em></span> always retrieves the first matching
+                record from <code class="literal">/etc/passwd</code>, regardless of the name
+                that was used to log in.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>A reentrant version of <span class="emphasis"><em>getlogin()</em></span> is specified by SUSv3,
+                    in the form of <span class="emphasis"><em>getlogin_r()</em></span>, and this function is provided
+                    by <span class="emphasis"><em>glibc</em></span>.<a id="IDX-CHP-40-5841" class="indexterm"/></p><p>The <code class="literal">LOGNAME</code> environment variable can also
+                    be used to find a user’s login name. However, the value of this variable can be
+                    changed by the user, which means that it can’t be used to securely identify a
+                        user.<a id="IDX-CHP-40-5842" class="indexterm"/></p></div></div><div class="sect1" title="Updating the utmp and wtmp Files for a Login Session"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="updating_the_utmp_and_wtmp_files_for_a_l">Updating the <code class="literal">utmp</code> and <code class="literal">wtmp</code> Files for a Login Session</h2></div></div></div><p>When writing an application that creates a login session (in the manner of, say,
+                    <span class="emphasis"><em>login</em></span> or <span class="emphasis"><em>sshd</em></span>), we should update the
+                    <code class="literal">utmp</code> and <code class="literal">wtmp</code> files as follows:<a id="IDX-CHP-40-5843" class="indexterm"/><a id="IDX-CHP-40-5844" class="indexterm"/><a id="IDX-CHP-40-5845" class="indexterm"/><a id="IDX-CHP-40-5846" class="indexterm"/><a id="IDX-CHP-40-5847" class="indexterm"/><a id="IDX-CHP-40-5848" class="indexterm"/><a id="IDX-CHP-40-5849" class="indexterm"/><a id="IDX-CHP-40-5850" class="indexterm"/><a id="IDX-CHP-40-5851" class="indexterm"/><a id="IDX-CHP-40-5852" class="indexterm"/><a id="IDX-CHP-40-5853" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>On login, a record should be written to the <code class="literal">utmp</code> file to indicate that this user logged in. The
+                        application must check whether a record for this terminal already exists in
+                        the <code class="literal">utmp</code> file. If a previous record
+                        exists, it is overwritten; otherwise, a new record is appended to the file.
+                        Often, calling <span class="emphasis"><em>pututxline()</em></span> (described shortly) is
+                        enough to ensure that these steps are correctly performed (see <a class="xref" href="ch40.html#updating_the_utmp_greater_than_and_wtmp" title="Example 40-3. Updating the utmp and wtmp files">Example 40-3</a> for an example). The
+                        output <span class="emphasis"><em>utmpx</em></span> record should have at least the
+                            <span class="emphasis"><em>ut_type</em></span>, <span class="emphasis"><em>ut_user</em></span>,
+                            <span class="emphasis"><em>ut_tv</em></span>, <span class="emphasis"><em>ut_pid</em></span>,
+                            <span class="emphasis"><em>ut_id</em></span>, and <span class="emphasis"><em>ut_line</em></span> fields
+                        filled in. The <span class="emphasis"><em>ut_type</em></span> field should be set to <code class="literal">USER_PROCESS</code>. The <span class="emphasis"><em>ut_id</em></span>
+                        field should contain the suffix of the name of the device (i.e., the
+                        terminal or pseudoterminal) on which the user is logging in, and the
+                            <span class="emphasis"><em>ut_line</em></span> field should contain the name of the login
+                        device, with the leading <code class="literal">/dev/</code> string
+                        removed. (Examples of the contents of these two fields are shown in the
+                        sample runs of the program in <a class="xref" href="ch40.html#displaying_the_contents_of_a_utmpx-forma" title="Example 40-2. Displaying the contents of a utmpx-format file">Example 40-2</a>.) A record
+                        containing exactly the same information is appended to the <code class="literal">wtmp</code> file.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The terminal name acts (via the <span class="emphasis"><em>ut_line</em></span> and
+                                <span class="emphasis"><em>ut_id</em></span> fields) as a unique key for records in
+                            the <code class="literal">utmp</code> file.</p></div></li><li class="listitem"><p>On logout, the record previously written to the <code class="literal">utmp</code> file should be erased. This is done by creating a record
+                        with <span class="emphasis"><em>ut_type</em></span> set to <code class="literal">DEAD_PROCESS</code>, and with the same <span class="emphasis"><em>ut_id</em></span>
+                        and <span class="emphasis"><em>ut_line</em></span> values as the record written during login,
+                        but with the <span class="emphasis"><em>ut_user</em></span> field zeroed out. This record is
+                        written over the earlier record. A copy of the same record is appended to
+                        the <code class="literal">wtmp</code> file.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>If we fail to clean up the <span class="emphasis"><em>utmp</em></span> record on logout,
+                            perhaps because of a program crash, then, on the next reboot,
+                                <span class="emphasis"><em>init</em></span> automatically cleans up the record,
+                            setting its <span class="emphasis"><em>ut_type</em></span> to <code class="literal">DEAD_PROCESS</code> and zeroing out various other fields of the
+                            record.</p></div></li></ul></div><p>The <code class="literal">utmp</code> and <code class="literal">wtmp</code> files are normally protected so that only privileged users can
+                perform updates on these files. The accuracy of <span class="emphasis"><em>getlogin()</em></span>
+                depends on the integrity of the <code class="literal">utmp</code> file. For
+                this, as well as other reasons, the permissions on the <code class="literal">utmp</code> and <code class="literal">wtmp</code> files should never
+                be set to allow writing by unprivileged users.<a id="IDX-CHP-40-5854" class="indexterm"/></p><p>What qualifies as a login session? As we might expect, logins via
+                    <span class="emphasis"><em>login</em></span>, <span class="emphasis"><em>telnet</em></span>, and
+                    <span class="emphasis"><em>ssh</em></span> are recorded in the login accounting files. Most
+                    <span class="emphasis"><em>ftp</em></span> implementations also create login accounting records.
+                However, are login accounting records created for each terminal window started on
+                the system or for invocations of <span class="emphasis"><em>su</em></span>, for example? The answer to
+                that question varies across UNIX implementations.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Under some terminal emulator programs (e.g., <span class="emphasis"><em>xterm</em></span>),
+                    command-line options or other mechanisms can be used to determine whether the
+                    program updates the login accounting files.</p></div><p>The <span class="emphasis"><em>pututxline()</em></span> function writes the
+                    <span class="emphasis"><em>utmpx</em></span> structure pointed to by <span class="emphasis"><em>ut</em></span> into
+                the <code class="literal">/var/run/utmp</code> file (or an alternative file if
+                    <span class="emphasis"><em>utmpxname()</em></span> was previously called).<a id="IDX-CHP-40-5855" class="indexterm"/><a id="IDX-CHP-40-5856" class="indexterm"/></p><a id="I_programlisting40_d1e109948"/><pre class="programlisting">#include &lt;utmpx.h&gt;
+
+struct utmpx *<strong class="userinput"><code>pututxline</code></strong>(const struct utmpx *<span class="emphasis"><em>ut</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns pointer to copy of successfully updated record on success, or <code class="literal">NULL</code> on error</p></div><p>Before writing the record, <span class="emphasis"><em>pututxline()</em></span> first uses
+                    <span class="emphasis"><em>getutxid()</em></span> to search forward for a record that may be
+                overwritten. If such a record is found, it is overwritten; otherwise, a new record
+                is appended to the end of the file. In many cases, an application precedes a call to
+                    <span class="emphasis"><em>pututxline()</em></span> by a call to one of the
+                    <span class="emphasis"><em>getutx*()</em></span> functions, which sets the current file location
+                to the correct record—that is, one matching the
+                <span class="emphasis"><em>getutxid()</em></span>-style criteria in the <span class="emphasis"><em>utmpx</em></span>
+                structure pointed to by <span class="emphasis"><em>ut</em></span>. If
+                    <span class="emphasis"><em>pututxline()</em></span> determines that this has occurred, it doesn’t
+                call <span class="emphasis"><em>getutxid()</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>If <span class="emphasis"><em>pututxline()</em></span> makes an internal call to
+                        <span class="emphasis"><em>getutxid()</em></span>, this call doesn’t change the static area
+                    used by the <span class="emphasis"><em>getutx*()</em></span> functions to return the
+                        <span class="emphasis"><em>utmpx</em></span> structure. SUSv3 requires this behavior from an
+                    implementation.</p></div><p>When updating the <code class="literal">wtmp</code> file, we simply open the
+                file and append a record to it. Because this is a standard operation,
+                    <span class="emphasis"><em>glibc</em></span> encapsulates it in the
+                    <span class="emphasis"><em>updwtmpx()</em></span> function.<a id="IDX-CHP-40-5857" class="indexterm"/></p><a id="I_programlisting40_d1e110023"/><pre class="programlisting">#define _GNU_SOURCE
+#include &lt;utmpx.h&gt;
+
+void <strong class="userinput"><code>updwtmpx</code></strong>(char *<span class="emphasis"><em>wtmpx_file</em></span>, struct utmpx *<span class="emphasis"><em>ut</em></span>);</pre><p>The <span class="emphasis"><em>updwtmpx()</em></span> function appends the
+                    <span class="emphasis"><em>utmpx</em></span> record pointed to by <span class="emphasis"><em>ut</em></span> to the
+                file specified in <span class="emphasis"><em>wtmpx_file</em></span>.</p><p>SUSv3 doesn’t specify <span class="emphasis"><em>updwtmpx()</em></span>, and it appears on only a
+                few other UNIX implementations. Other implementations provide related
+                    functions—<span class="emphasis"><em>login(3)</em></span>, <span class="emphasis"><em>logout(3)</em></span>, and
+                    <span class="emphasis"><em>logwtmp(3)</em></span>—which are also in <span class="emphasis"><em>glibc</em></span> and
+                described in the manual pages. If such functions are not present, we need to write
+                our own equivalents. (The implementation of these functions is not complex.)</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="example_program-id54"/></div></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id55">Example program</h4></div></div></div><p><a class="xref" href="ch40.html#updating_the_utmp_greater_than_and_wtmp" title="Example 40-3. Updating the utmp and wtmp files">Example 40-3</a> uses the
+                        functions described in this section to update the <code class="literal">utmp</code> and <code class="literal">wtmp</code> files. This
+                        program performs the required updates to <code class="literal">utmp</code> and <code class="literal">wtmp</code> in order to
+                        log in the user named on the command line, and then, after sleeping a few
+                        seconds, log them out again. Normally, such actions would be associated with
+                        the creation and termination of a login session for a user. This program
+                        uses <span class="emphasis"><em>ttyname()</em></span> to retrieve the name of the terminal
+                        device associated with a file descriptor. We describe
+                            <span class="emphasis"><em>ttyname()</em></span> in <a class="xref" href="ch62.html#terminal_identification" title="Terminal Identification">Terminal Identification</a>.<a id="IDX-CHP-40-5858" class="indexterm"/><a id="IDX-CHP-40-5859" class="indexterm"/><a id="IDX-CHP-40-5860" class="indexterm"/><a id="IDX-CHP-40-5861" class="indexterm"/><a id="IDX-CHP-40-5862" class="indexterm"/><a id="IDX-CHP-40-5863" class="indexterm"/><a id="IDX-CHP-40-5864" class="indexterm"/><a id="IDX-CHP-40-5865" class="indexterm"/><a id="IDX-CHP-40-5866" class="indexterm"/><a id="IDX-CHP-40-5867" class="indexterm"/><a id="IDX-CHP-40-5868" class="indexterm"/><a id="IDX-CHP-40-5869" class="indexterm"/><a id="IDX-CHP-40-5870" class="indexterm"/></p><p>The following shell session log demonstrates the operation of the program
+                        in <a class="xref" href="ch40.html#updating_the_utmp_greater_than_and_wtmp" title="Example 40-3. Updating the utmp and wtmp files">Example 40-3</a>. We assume
+                        privilege in order to be able to update the login accounting files, and then
+                        use the program to create a record for the user
+                        <span class="emphasis"><em>mtk</em></span>:</p><a id="I_programlisting40_d1e110182"/><pre class="programlisting">$ <strong class="userinput"><code>su</code></strong>
+Password:
+# <strong class="userinput"><code>./utmpx_login mtk</code></strong>
+Creating login entries in utmp and wtmp
+        using pid 1471, line pts/7, id /7
+<em class="lineannotation"><span class="lineannotation">Type Control-Z to suspend program</span></em>
+[1]+  Stopped                 ./utmpx_login mtk</pre><p>While the <span class="emphasis"><em>utmpx_login</em></span> program was sleeping, we typed
+                            <span class="emphasis"><em>Control-Z</em></span> to suspend the program and push it into
+                        the background. Next, we use the program in <a class="xref" href="ch40.html#displaying_the_contents_of_a_utmpx-forma" title="Example 40-2. Displaying the contents of a utmpx-format file">Example 40-2</a> to examine the
+                        contents of the <code class="literal">utmp</code> file:</p><a id="I_programlisting40_d1e110206"/><pre class="programlisting"># <strong class="userinput"><code>./dump_utmpx /var/run/utmp</code></strong>
+user     type        PID line   id  host      date/time
+cecilia  USER_PR     249 tty1   1             Fri Feb  1 21:39:07 2008
+mtk      USER_PR    1471 pts/7  /7            Fri Feb  1 22:08:06 2008
+# <strong class="userinput"><code>who</code></strong>
+cecilia  tty1     Feb  1 21:39
+mtk      pts/7    Feb  1 22:08</pre><p>Above, we used the <span class="emphasis"><em>who(1)</em></span> command to show that the
+                        output of <span class="emphasis"><em>who</em></span> derives from
+                        <span class="emphasis"><em>utmp</em></span>.</p><p>Next we use our program to examine the contents of the <code class="literal">wtmp</code> file:</p><a id="I_programlisting40_d1e110230"/><pre class="programlisting"># <strong class="userinput"><code>./dump_utmpx /var/log/wtmp</code></strong>
+user     type        PID line   id  host      date/time
+cecilia  USER_PR     249 tty1   1             Fri Feb  1 21:39:07 2008
+mtk      USER_PR    1471 pts/7  /7            Fri Feb  1 22:08:06 2008
+# <strong class="userinput"><code>last mtk</code></strong>
+mtk      pts/7                      Fri Feb  1 22:08   still logged in</pre><p>Above, we used the <span class="emphasis"><em>last(1)</em></span> command to show that the
+                        output of last derives from <code class="literal">wtmp</code>. (For
+                        brevity, we have edited the output of the <span class="emphasis"><em>dump_utmpx</em></span>
+                        and <span class="emphasis"><em>last</em></span> commands in this shell session log to remove
+                        lines of output that are irrelevant to our discussion.)</p><p>Next, we use the <span class="emphasis"><em>fg</em></span> command to resume the
+                            <span class="emphasis"><em>utmpx_login</em></span> program in the foreground. It
+                        subsequently writes logout records to the <code class="literal">utmp</code> and <code class="literal">wtmp</code>
+                        files.</p><a id="I_programlisting40_d1e110267"/><pre class="programlisting"># <strong class="userinput"><code>fg</code></strong>
+./utmpx_login mtk
+Creating logout entries in utmp and wtmp</pre><p>We then once more examine the contents of the <code class="literal">utmp</code> file. We see that the <code class="literal">utmp</code> record was overwritten:</p><a id="I_programlisting40_d1e110280"/><pre class="programlisting"># <strong class="userinput"><code>./dump_utmpx /var/run/utmp</code></strong>
+user     type        PID line   id  host      date/time
+cecilia  USER_PR     249 tty1   1             Fri Feb  1 21:39:07 2008
+         DEAD_PR    1471 pts/7  /7            Fri Feb  1 22:09:09 2008
+# <strong class="userinput"><code>who</code></strong>
+cecilia  tty1     Feb  1 21:39</pre><p>The final line of output shows that <span class="emphasis"><em>who</em></span> ignored the
+                            <code class="literal">DEAD_PROCESS</code> record.</p><p>When we examine the <code class="literal">wtmp</code> file, we see
+                        that the <code class="literal">wtmp</code> record was
+                        superseded:</p><a id="I_programlisting40_d1e110304"/><pre class="programlisting"># <strong class="userinput"><code>./dump_utmpx /var/log/wtmp</code></strong>
+user     type        PID line   id  host      date/time
+cecilia  USER_PR     249 tty1   1             Fri Feb  1 21:39:07 2008
+mtk      USER_PR    1471 pts/7  /7            Fri Feb  1 22:08:06 2008
+         DEAD_PR    1471 pts/7  /7            Fri Feb  1 22:09:09 2008
+# <strong class="userinput"><code>last mtk</code></strong>
+mtk      pts/7                      Fri Feb  1 22:08 - 22:09  (00:01)</pre><p>The final line of output above demonstrates that <span class="emphasis"><em>last</em></span>
+                        matches the login and logout records in <code class="literal">wtmp</code> to show the starting and ending times of the completed
+                        login session.</p><div class="example"><a id="updating_the_utmp_greater_than_and_wtmp"/><div class="example-title">Example 40-3. Updating the <code class="literal">utmp</code> and <code class="literal">wtmp</code> files</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>loginacct/utmpx_login.c</code></strong>
+#define _GNU_SOURCE
+#include &lt;time.h&gt;
+#include &lt;utmpx.h&gt;
+#include &lt;paths.h&gt;              /* Definitions of _PATH_UTMP and _PATH_WTMP */
+#include "tlpi_hdr.h"
+int
+main(int argc, char *argv[])
+{
+    struct utmpx ut;
+    char *devName;
+
+    if (argc &lt; 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s username [sleep-time]\n", argv[0]);
+
+    /* Initialize login record for utmp and wtmp files */
+
+    memset(&amp;ut, 0, sizeof(struct utmpx));
+    ut.ut_type = USER_PROCESS;          /* This is a user login */
+    strncpy(ut.ut_user, argv[1], sizeof(ut.ut_user));
+    if (time((time_t *) &amp;ut.ut_tv.tv_sec) == -1)
+        errExit("time");                /* Stamp with current time */
+    ut.ut_pid = getpid();
+
+    /* Set ut_line and ut_id based on the terminal associated with
+       'stdin'. This code assumes terminals named "/dev/[pt]t[sy]*".
+       The "/dev/" dirname is 5 characters; the "[pt]t[sy]" filename
+       prefix is 3 characters (making 8 characters in all). */
+
+    devName = ttyname(STDIN_FILENO);
+    if (devName == NULL)
+        errExit("ttyname");
+    if (strlen(devName) &lt;= 8)           /* Should never happen */
+        fatal("Terminal name is too short: %s", devName);
+
+    strncpy(ut.ut_line, devName + 5, sizeof(ut.ut_line));
+    strncpy(ut.ut_id, devName + 8, sizeof(ut.ut_id));
+
+    printf("Creating login entries in utmp and wtmp\n");
+    printf("        using pid %ld, line %.*s, id %.*s\n",
+            (long) ut.ut_pid, (int) sizeof(ut.ut_line), ut.ut_line,
+            (int) sizeof(ut.ut_id), ut.ut_id);
+
+    setutxent();                        /* Rewind to start of utmp file */
+    if (pututxline(&amp;ut) == NULL)        /* Write login record to utmp */
+        errExit("pututxline");
+    updwtmpx(_PATH_WTMP, &amp;ut);          /* Append login record to wtmp */
+
+    /* Sleep a while, so we can examine utmp and wtmp files */
+
+    sleep((argc &gt; 2) ? getInt(argv[2], GN_NONNEG, "sleep-time") : 15);
+
+    /* Now do a "logout"; use values from previously initialized 'ut',
+       except for changes below */
+
+    ut.ut_type = DEAD_PROCESS;          /* Required for logout record */
+    time((time_t *) &amp;ut.ut_tv.tv_sec);  /* Stamp with logout time */
+    memset(&amp;ut.ut_user, 0, sizeof(ut.ut_user));
+                                        /* Logout record has null username */
+    printf("Creating logout entries in utmp and wtmp\n");
+    setutxent();                        /* Rewind to start of utmp file */
+    if (pututxline(&amp;ut) == NULL)        /* Overwrite previous utmp record */
+        errExit("pututxline");
+    updwtmpx(_PATH_WTMP, &amp;ut);          /* Append logout record to wtmp */
+
+    endutxent();
+    exit(EXIT_SUCCESS);
+}
+      <strong class="userinput"><code>loginacct/utmpx_login.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="The lastlog File"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_lastlog_file">The <code class="literal">lastlog</code> File</h2></div></div></div><p>The <code class="literal">lastlog</code> file records the time each user
+                last logged in to the system. (This is different from the <code class="literal">wtmp</code> file, which records all logins and logouts by all users.) Among
+                other things, the <code class="literal">lastlog</code> file allows the
+                    <span class="emphasis"><em>login</em></span> program to inform users (at the start of a new login
+                session) when they last logged in. In addition to updating <code class="literal">utmp</code> and <code class="literal">wtmp</code>, applications
+                providing login services should also update <code class="literal">lastlog</code>.<a id="IDX-CHP-40-5871" class="indexterm"/><a id="IDX-CHP-40-5872" class="indexterm"/><a id="IDX-CHP-40-5873" class="indexterm"/><a id="IDX-CHP-40-5874" class="indexterm"/><a id="IDX-CHP-40-5875" class="indexterm"/><a id="IDX-CHP-40-5876" class="indexterm"/><a id="IDX-CHP-40-5877" class="indexterm"/><a id="IDX-CHP-40-5878" class="indexterm"/><a id="IDX-CHP-40-5879" class="indexterm"/><a id="IDX-CHP-40-5880" class="indexterm"/></p><p>As with the <code class="literal">utmp</code> and <code class="literal">wtmp</code> files, there is variation in the location and format of the
+                    <code class="literal">lastlog</code> file. (A few UNIX implementations
+                don’t provide this file.) On Linux, this file resides at <code class="literal">/var/log/lastlog</code>, and a constant, <code class="literal">_PATH_LASTLOG</code>, is defined in <code class="literal">&lt;paths.h&gt;</code> to point to this location. Like the <code class="literal">utmp</code> and <code class="literal">wtmp</code>
+                files, the <code class="literal">lastlog</code> file is normally protected so
+                that it can be read by all users but can be updated only by privileged
+                processes.</p><p>The records in the <code class="literal">lastlog</code> file have the
+                following format (defined in <code class="literal">&lt;lastlog.h&gt;</code>):</p><a id="I_programlisting40_d1e110459"/><pre class="programlisting">#define UT_NAMESIZE           32
+#define UT_HOSTSIZE          256
+
+struct lastlog {
+    time_t ll_time;                     /* Time of last login */
+    char   ll_line[UT_NAMESIZE];        /* Terminal for remote login */
+    char   ll_host[UT_HOSTSIZE];        /* Hostname for remote login */
+};</pre><p>Note that these records don’t include a username or user ID. Instead, the <code class="literal">lastlog</code> file consists of a series of records that are
+                indexed by user ID. Thus, to find the <code class="literal">lastlog</code>
+                record for user ID 1000, we would seek to byte <span class="emphasis"><em>(1000 * sizeof(struct
+                    lastlog))</em></span> of the file. This is demonstrated in <a class="xref" href="ch40.html#displaying_information_from_the_lastlog" title="Example 40-4. Displaying information from the lastlog file">Example 40-4</a>, a program that allows us to
+                view the <code class="literal">lastlog</code> records for the user(s) listed
+                on its command line. This is similar to the functionality offered by the
+                    <span class="emphasis"><em>lastlog(1)</em></span> command. Here is an example of the output
+                produced by running this program:</p><a id="I_programlisting40_d1e110481"/><pre class="programlisting">$ <strong class="userinput"><code>./view_lastlog annie paulh</code></strong>
+annie    tty2                        Mon Jan 17 11:00:12 2011
+paulh    pts/11                      Sat Aug 14 09:22:14 2010</pre><p>Performing updates on <code class="literal">lastlog</code> is similarly a
+                matter of opening the file, seeking to the correct location, and performing a
+                write.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Since the <code class="literal">lastlog</code> file is indexed by user
+                    ID, it is not possible to distinguish logins under different usernames that have
+                    the same user ID. (In <a class="xref" href="ch08.html#the_password_file_colon__solidus_etc_sol" title="The Password File: /etc/passwd">The Password File: <code class="literal">/etc/passwd</code></a>, we noted that it is possible, though unusual, to have multiple login names
+                    with the same user ID.)</p></div><div class="example"><a id="displaying_information_from_the_lastlog"/><div class="example-title">Example 40-4. Displaying information from the <code class="literal">lastlog</code>
+                    file</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>loginacct/view_lastlog.c</code></strong>
+#include &lt;time.h&gt;
+#include &lt;lastlog.h&gt;
+#include &lt;paths.h&gt;                      /* Definition of _PATH_LASTLOG */
+#include &lt;fcntl.h&gt;
+#include "ugid_functions.h"             /* Declaration of userIdFromName() */
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    struct lastlog llog;
+    int fd, j;
+    uid_t uid;
+
+    if (argc &gt; 1 &amp;&amp; strcmp(argv[1], "--help") == 0)
+        usageErr("%s [username...]\n", argv[0]);
+
+    fd = open(_PATH_LASTLOG, O_RDONLY);
+    if (fd == -1)
+        errExit("open");
+
+    for (j = 1; j &lt; argc; j++) {
+        uid = userIdFromName(argv[j]);
+        if (uid == -1) {
+            printf("No such user: %s\n", argv[j]);
+            continue;
+        }
+
+        if (lseek(fd, uid * sizeof(struct lastlog), SEEK_SET) == -1)
+            errExit("lseek");
+
+        if (read(fd, &amp;llog, sizeof(struct lastlog)) &lt;= 0) {
+            printf("read failed for %s\n", argv[j]);    /* EOF or error */
+            continue;
+        }
+
+        printf("%-8.8s %-6.6s %-20.20s %s", argv[j], llog.ll_line,
+                llog.ll_host, ctime((time_t *) &amp;llog.ll_time));
+    }
+
+    close(fd);
+    exit(EXIT_SUCCESS);
+}
+      <strong class="userinput"><code>loginacct/view_lastlog.c</code></strong></pre></div></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id39">Summary</h2></div></div></div><p>Login accounting records the users currently logged in, as well as all past
+                logins. This information is maintained in three files: the <code class="literal">utmp</code> file, which maintains a record of all currently logged-in users;
+                the <code class="literal">wtmp</code> file, which is an audit trail of all
+                logins and logouts; and the <code class="literal">lastlog</code> file, which
+                records the time of last login for each user. Various commands, such as
+                    <span class="emphasis"><em>who</em></span> and <span class="emphasis"><em>last</em></span>, use the information in
+                these files.</p><p>The C library provides functions to retrieve and update the information in the
+                login accounting files. Applications providing login services should use these
+                functions to update the login accounting files, so that commands depending on this
+                information operate correctly.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id53"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id54">Further information</h4></div></div></div><p>Aside from the <span class="emphasis"><em>utmp(5)</em></span> manual page, the most useful
+                        place to find further information about the login accounting functions is in
+                        the source code of the various applications that use these functions. See,
+                        for example, the sources of <span class="emphasis"><em>mingetty</em></span> (or
+                            <span class="emphasis"><em>agetty</em></span>), <span class="emphasis"><em>login</em></span>,
+                            <span class="emphasis"><em>init</em></span>, <span class="emphasis"><em>telnet</em></span>,
+                            <span class="emphasis"><em>ssh</em></span>, and <span class="emphasis"><em>ftp</em></span>.</p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id26">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Implement <span class="emphasis"><em>getlogin()</em></span>. As noted in <a class="xref" href="ch40.html#retrieving_the_login_name_colon_getlogin" title="Retrieving the Login Name: getlogin()">Retrieving the Login Name: <span class="emphasis"><em>getlogin()</em></span></a>,
+                            <span class="emphasis"><em>getlogin()</em></span> may not work correctly for processes
+                        running under some software terminal emulators; in that case, test from a
+                        virtual console instead.</p></li><li class="listitem"><p>Modify the program in <a class="xref" href="ch40.html#updating_the_utmp_greater_than_and_wtmp" title="Example 40-3. Updating the utmp and wtmp files">Example 40-3</a> (<code class="literal">utmpx_login.c</code>) so that it updates the <code class="literal">lastlog</code> file in addition to the <code class="literal">utmp</code> and <code class="literal">wtmp</code> files.</p></li><li class="listitem"><p>Read the manual pages for <span class="emphasis"><em>login(3)</em></span>,
+                            <span class="emphasis"><em>logout(3)</em></span>, and <span class="emphasis"><em>logwtmp(3)</em></span>.
+                        Implement these functions.</p></li><li class="listitem"><p>Implement a simple version of <span class="emphasis"><em>who(1)</em></span>.</p></li></ol></div></div></section></body></html>

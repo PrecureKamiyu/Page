@@ -1,0 +1,1347 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 61. Sockets: Advanced Topics</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch60.html" title="Chapter 60. Sockets: Server Design"/><link rel="next" href="ch62.html" title="Chapter 62. Terminals"/></head><body><section class="chapter" title="Chapter 61. Sockets: Advanced Topics" epub:type="chapter" id="sockets_colon_advanced_topics"><div class="titlepage"><div><div><h2 class="title">Chapter 61. Sockets: Advanced Topics</h2></div></div></div><p>This chapter considers a range of more advanced topics relating to sockets
+            programming, including the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>the circumstances in which partial reads and writes can occur on stream
+                    sockets;</p></li><li class="listitem"><p>the use of <span class="emphasis"><em>shutdown()</em></span> to close one half of the
+                    bidirectional channel between two connected sockets;</p></li><li class="listitem"><p>the <span class="emphasis"><em>recv()</em></span> and <span class="emphasis"><em>send()</em></span> I/O system
+                    calls, which provide socket-specific functionality not available with
+                        <span class="emphasis"><em>read()</em></span> and <span class="emphasis"><em>write()</em></span>;</p></li><li class="listitem"><p>the <span class="emphasis"><em>sendfile()</em></span> system call, which is used in certain
+                    circumstances to efficiently output data on a socket;</p></li><li class="listitem"><p>details of the operation of the TCP protocol, with the aim of eliminating some
+                    common misunderstandings that lead to mistakes when writing programs that use
+                    TCP sockets;</p></li><li class="listitem"><p>the use of the <span class="emphasis"><em>netstat</em></span> and <span class="emphasis"><em>tcpdump</em></span>
+                    commands for monitoring and debugging applications that use sockets; and</p></li><li class="listitem"><p>the use of the <span class="emphasis"><em>getsockopt()</em></span> and
+                        <span class="emphasis"><em>setsockopt()</em></span> system calls to retrieve and modify
+                    options affecting the operation of a socket.</p></li></ul></div><p>We also consider a number of other more minor topics, and conclude the chapter with a
+            summary of some advanced sockets features.</p><div class="sect1" title="Partial Reads and Writes on Stream Sockets"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="partial_reads_and_writes_on_stream_socke">Partial Reads and Writes on Stream Sockets</h2></div></div></div><p>When we first introduced the <span class="emphasis"><em>read()</em></span> and
+                    <span class="emphasis"><em>write()</em></span> system calls in <a class="xref" href="ch04.html" title="Chapter 4. File I/O: The Universal I/O Model">Chapter 4</a>, we noted that, in some
+                circumstances, they may transfer fewer bytes than requested. Such partial transfers
+                can occur when performing I/O on stream sockets. We now consider why they can occur
+                and show a pair of functions that transparently handle partial transfers.<a id="IDX-CHP-61-7929" class="indexterm"/><a id="IDX-CHP-61-7930" class="indexterm"/><a id="IDX-CHP-61-7931" class="indexterm"/><a id="IDX-CHP-61-7932" class="indexterm"/><a id="IDX-CHP-61-7933" class="indexterm"/><a id="IDX-CHP-61-7934" class="indexterm"/></p><p>A partial read may occur if there are fewer bytes available in the socket than
+                were requested in the <span class="emphasis"><em>read()</em></span> call. In this case,
+                    <span class="emphasis"><em>read()</em></span> simply returns the number of bytes available. (This
+                is the same behavior that we saw with pipes and FIFOs in <a class="xref" href="ch44.html#semantics_of_read_open_parenthesis_close" title="Semantics of read() and write() on Pipes and FIFOs">Semantics of <span class="emphasis"><em>read()</em></span> and <span class="emphasis"><em>write()</em></span> on
+                Pipes and FIFOs</a>.)</p><p>A partial write may occur if there is insufficient buffer space to transfer all of
+                the requested bytes and one of the following is true:<a id="IDX-CHP-61-7935" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>A signal handler interrupted the <span class="emphasis"><em>write()</em></span> call (<a class="xref" href="ch21.html#interruption_and_restarting_of_system_ca" title="Interruption and Restarting of System Calls">Interruption and Restarting of System Calls</a>) after it
+                        transferred some of the requested bytes.</p></li><li class="listitem"><p>The socket was operating in nonblocking mode (<code class="literal">O_NONBLOCK</code>), and it was possible to transfer only some of the
+                        requested bytes.</p></li><li class="listitem"><p>An asynchronous error occurred after only some of the requested bytes had
+                        been transferred. By an <span class="emphasis"><em>asynchronous error</em></span>, we mean an
+                        error that occurs asynchronously with respect to the application’s use of
+                        calls in the sockets API. An asynchronous error can arise, for example,
+                        because of a problem with a TCP connection, perhaps resulting from a crash
+                        by the peer application.<a id="IDX-CHP-61-7936" class="indexterm"/></p></li></ul></div><p>In all of the above cases, assuming that there was space to transfer at least 1
+                byte, the <span class="emphasis"><em>write()</em></span> is successful, and returns the number of
+                bytes that were transferred to the output buffer.</p><p>If a partial I/O occurs—for example, if a <span class="emphasis"><em>read()</em></span> returns
+                fewer bytes than requested or a blocked <span class="emphasis"><em>write()</em></span> is interrupted
+                by a signal handler after transferring only part of the requested data—then it is
+                sometimes useful to restart the system call to complete the transfer. In <a class="xref" href="ch61.html#implementation_of_readn_open_parenthesis" title="Example 61-1. Implementation of readn() and writen()">Example 61-1</a>, we provide two functions
+                that do this: <span class="emphasis"><em>readn()</em></span> and <span class="emphasis"><em>writen()</em></span>. (The
+                ideas for these functions are drawn from functions of the same name presented in
+                [Stevens et al., 2004].)<a id="IDX-CHP-61-7937" class="indexterm"/><a id="IDX-CHP-61-7938" class="indexterm"/></p><a id="I_programlisting61_d1e156181"/><pre class="programlisting">#include "rdwrn.h"
+
+ssize_t <strong class="userinput"><code>readn</code></strong>(int <span class="emphasis"><em>fd</em></span>, void *<span class="emphasis"><em>buffer</em></span>, size_t <span class="emphasis"><em>count</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns number of bytes read, 0 on EOF, or -1 on error</p></div><a id="I_programlisting61_d1e156198"/><pre class="programlisting">ssize_t <strong class="userinput"><code>writen</code></strong>(int fd, void *<span class="emphasis"><em>buffer</em></span>, size_t <span class="emphasis"><em>count</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns number of bytes written, or -1 on error</p></div><p>The <span class="emphasis"><em>readn()</em></span> and <span class="emphasis"><em>writen()</em></span> functions take
+                the same arguments as <span class="emphasis"><em>read()</em></span> and <span class="emphasis"><em>write()</em></span>.
+                However, they use a loop to restart these system calls, thus ensuring that the
+                requested number of bytes is always transferred (unless an error occurs or
+                end-of-file is detected on a <span class="emphasis"><em>read()</em></span>).</p><div class="example"><a id="implementation_of_readn_open_parenthesis"/><div class="example-title">Example 61-1. Implementation of <span class="emphasis"><em>readn()</em></span> and
+                        <span class="emphasis"><em>writen()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/rdwrn.c</code></strong>
+#include &lt;unistd.h&gt;
+#include &lt;errno.h&gt;
+#include "rdwrn.h"                      /* Declares readn() and writen() */
+
+ssize_t
+readn(int fd, void *buffer, size_t n)
+{
+    ssize_t numRead;                    /* # of bytes fetched by last read() */
+    size_t totRead;                     /* Total # of bytes read so far */
+    char *buf;
+
+    buf = buffer;                       /* No pointer arithmetic on "void *" */
+    for (totRead = 0; totRead &lt; n; ) {
+        numRead = read(fd, buf, n - totRead);
+
+        if (numRead == 0)               /* EOF */
+            return totRead;             /* May be 0 if this is first read() */
+        if (numRead == -1) {
+            if (errno == EINTR)
+                continue;               /* Interrupted --&gt; restart read() */
+            else
+                return -1;              /* Some other error */
+        }
+        totRead += numRead;
+        buf += numRead;
+    }
+    return totRead;                     /* Must be 'n' bytes if we get here */
+}
+
+ssize_t
+writen(int fd, const void *buffer, size_t n)
+{
+    ssize_t numWritten;                 /* # of bytes written by last write() */
+    size_t totWritten;                  /* Total # of bytes written so far */
+    const char *buf;
+
+    buf = buffer;                       /* No pointer arithmetic on "void *" */
+    for (totWritten = 0; totWritten &lt; n; ) {
+        numWritten = write(fd, buf, n - totWritten);
+
+        if (numWritten &lt;= 0) {
+            if (numWritten == -1 &amp;&amp; errno == EINTR)
+                continue;               /* Interrupted --&gt; restart write() */
+            else
+                return -1;              /* Some other error */
+        }
+        totWritten += numWritten;
+        buf += numWritten;
+    }
+    return totWritten;                  /* Must be 'n' bytes if we get here */
+}
+      <strong class="userinput"><code>sockets/rdwrn.c</code></strong></pre></div></div></div><div class="sect1" title="The shutdown() System Call"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_shutdown_open_parenthesis_close_pare">The <span class="emphasis"><em>shutdown()</em></span> System Call</h2></div></div></div><p>Calling <span class="emphasis"><em>close()</em></span> on a socket closes both halves of the
+                bidirectional communication channel. Sometimes, it is useful to close one half of
+                the connection, so that data can be transmitted in just one direction through the
+                socket. The <span class="emphasis"><em>shutdown()</em></span> system call provides this
+                    functionality.<a id="IDX-CHP-61-7940" class="indexterm"/><a id="IDX-CHP-61-7941" class="indexterm"/><a id="IDX-CHP-61-7942" class="indexterm"/><a id="IDX-CHP-61-7943" class="indexterm"/><a id="IDX-CHP-61-7944" class="indexterm"/><a id="IDX-CHP-61-7939" class="indexterm"/></p><a id="I_programlisting61_d1e156287"/><pre class="programlisting">#include &lt;sys/socket.h&gt;
+
+int <strong class="userinput"><code>shutdown</code></strong>(int <span class="emphasis"><em>sockfd</em></span>, int <span class="emphasis"><em>how</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>shutdown()</em></span> system call closes one or both channels of the
+                socket <span class="emphasis"><em>sockfd</em></span>, depending on the value of
+                    <span class="emphasis"><em>how</em></span>, which is specified as one of the following:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">SHUT_RD</code>
+                    </span></dt><dd><p>Close the reading half of the connection. Subsequent reads will return
+                            end-of-file (0). Data can still be written to the socket. After a
+                                <code class="literal">SHUT_RD</code> on a UNIX domain stream
+                            socket, the peer application receives a <code class="literal">SIGPIPE</code> signal and the <code class="literal">EPIPE</code> error if it makes further attempts to write to the
+                            peer socket. As discussed in <a class="xref" href="ch61.html#calling_shutdown_open_parenthesis_close" title="Calling shutdown() on a TCP Socket">Calling <span class="emphasis"><em>shutdown()</em></span> on a TCP Socket</a>, <code class="literal">SHUT_RD</code> can’t be used meaningfully for TCP
+                                sockets.<a id="IDX-CHP-61-7945" class="indexterm"/><a id="IDX-CHP-61-7946" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SHUT_WR</code>
+                    </span></dt><dd><p>Close the writing half of the connection. Once the peer application
+                            has read all outstanding data, it will see end-of-file. Subsequent
+                            writes to the local socket yield the <code class="literal">SIGPIPE</code> signal and an <code class="literal">EPIPE</code> error. Data written by the peer can still be read
+                            from the socket. In other words, this operation allows us to signal
+                            end-of-file to the peer while still being able to read data that the
+                            peer sends back to us. The <code class="literal">SHUT_WR</code>
+                            operation is employed by programs such as <span class="emphasis"><em>ssh</em></span> and
+                                <span class="emphasis"><em>rsh</em></span> (refer to <a class="xref" href="ch18.html#working_with_symbolic_links_colon_symlin" title="Working with Symbolic Links: symlink() and readlink()">Working with Symbolic Links: <span class="emphasis"><em>symlink()</em></span> and
+                    <span class="emphasis"><em>readlink()</em></span></a> of [Stevens,
+                            1994]). The <code class="literal">SHUT_WR</code> operation is the
+                            most common use of <span class="emphasis"><em>shutdown()</em></span>, and is sometimes
+                            referred to as a <span class="emphasis"><em>socket half-close</em></span>.<a id="IDX-CHP-61-7947" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SHUT_RDWR</code>
+                    </span></dt><dd><p>Close both the read and the write halves of the connection. This is
+                            the same as performing a <code class="literal">SHUT_RD</code>
+                            followed by a <code class="literal">SHUT_WR</code>.</p></dd></dl></div><p>Aside from the semantics of the <span class="emphasis"><em>how</em></span> argument,
+                    <span class="emphasis"><em>shutdown()</em></span> differs from <span class="emphasis"><em>close()</em></span> in
+                another important respect: it closes the socket channel(s) regardless of whether
+                there are other file descriptors referring to the socket. (In other words,
+                    <span class="emphasis"><em>shutdown()</em></span> is performing an operation on the open file
+                description, rather than the file descriptor. See <a class="xref" href="ch05.html#failing_to_exclusively_create_a_file" title="Figure 5-1. Failing to exclusively create a file">Figure 5-1</a>, in <a class="xref" href="ch05.html#creating_a_file_exclusively-id1" title="Creating a file exclusively">Creating a file exclusively</a>.) Suppose, for example, that
+                    <span class="emphasis"><em>sockfd</em></span> refers to a connected stream socket. If we make the
+                following calls, then the connection remains open, and we can still perform I/O on
+                the connection via the file descriptor <span class="emphasis"><em>fd2</em></span>:</p><a id="I_programlisting61_d1e156422"/><pre class="programlisting">fd2 = dup(sockfd);
+close(sockfd);</pre><p>However, if we make the following sequence of calls, then both channels of the
+                connection are closed, and I/O can no longer be performed via
+                    <span class="emphasis"><em>fd2</em></span>:</p><a id="I_programlisting61_d1e156429"/><pre class="programlisting">fd2 = dup(sockfd);
+shutdown(sockfd, SHUT_RDWR);</pre><p>A similar scenario holds if a file descriptor for a socket is duplicated during a
+                    <span class="emphasis"><em>fork()</em></span>. If, after the <span class="emphasis"><em>fork()</em></span>, one
+                process does a <code class="literal">SHUT_RDWR</code> on its copy of the
+                descriptor, then the other process also can no longer perform I/O on its
+                descriptor.</p><p>Note that <span class="emphasis"><em>shutdown()</em></span> doesn’t close the file descriptor, even
+                if <span class="emphasis"><em>how</em></span> is specified as <code class="literal">SHUT_RDWR</code>. To close the file descriptor, we must additionally call
+                    <span class="emphasis"><em>close()</em></span>.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="example_program-id73"/></div></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id74">Example program</h4></div></div></div><p><a class="xref" href="ch61.html#a_client_for_the_echo_service" title="Example 61-2. A client for the echo service">Example 61-2</a> demonstrates the use of
+                        the <span class="emphasis"><em>shutdown()</em></span>
+                        <code class="literal">SHUT_WR</code> operation. This program is a TCP
+                        client for the <span class="emphasis"><em>echo</em></span> service. (We presented a TCP server
+                        for the <span class="emphasis"><em>echo</em></span> service in Section 60.3.) To shorten the
+                        implementation, we make use of functions in the Internet domain sockets
+                        library shown in <a class="xref" href="ch59.html#an_internet_domain_sockets_library" title="An Internet Domain Sockets Library">An Internet Domain Sockets Library</a>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>In some Linux distributions, the <span class="emphasis"><em>echo</em></span> service is
+                            not enabled by default, and therefore we must enable it before running
+                            the program in <a class="xref" href="ch61.html#a_client_for_the_echo_service" title="Example 61-2. A client for the echo service">Example 61-2</a>.
+                            Typically, this service is implemented internally by the
+                                <span class="emphasis"><em>inetd(8)</em></span> daemon (<a class="xref" href="ch60.html#the_inetd_open_parenthesis_internet_supe" title="The inetd (Internet Superserver) Daemon">The <span class="emphasis"><em>inetd</em></span> (Internet Superserver) Daemon</a>), and, to
+                            enable the <span class="emphasis"><em>echo</em></span> service, we must edit the file
+                                <code class="literal">/etc/inetd.conf</code> to uncomment the
+                            two lines corresponding to the UDP and TCP <span class="emphasis"><em>echo</em></span>
+                            services (see <a class="xref" href="ch60.html#example_lines_from_solidus_etc_solidus_i" title="Example 60-5. Example lines from /etc/inetd.conf">Example 60-5</a>, in <a class="xref" href="ch60.html#the_solidus_etc_solidus_inetd.conf_file" title="The /etc/inetd.conf file">The <code class="literal">/etc/inetd.conf</code> file</a>), and
+                            then send a <code class="literal">SIGHUP</code> signal to the
+                                <span class="emphasis"><em>inetd</em></span> daemon.</p><p>Many distributions supply the more modern
+                                <span class="emphasis"><em>xinetd(8)</em></span> instead of
+                                <span class="emphasis"><em>inetd(8)</em></span>. Consult the
+                                <span class="emphasis"><em>xinetd</em></span> documentation for information about how
+                            to make the equivalent changes under <span class="emphasis"><em>xinetd</em></span>.</p></div><p>As its single command-line argument, the program takes the name of the
+                        host on which the <span class="emphasis"><em>echo</em></span> server is running. The client
+                        performs a <span class="emphasis"><em>fork()</em></span>, yielding parent and child
+                        processes.</p><p>The client parent writes the contents of standard input to the socket, so
+                        that it can be read by the <span class="emphasis"><em>echo</em></span> server. When the parent
+                        detects end-of-file on standard input, it uses
+                            <span class="emphasis"><em>shutdown()</em></span> to close the writing half of its socket.
+                        This causes the <span class="emphasis"><em>echo</em></span> server to see end-of-file, at
+                        which point it closes its socket (which causes the client child in turn to
+                        see end-of-file). The parent then terminates.</p><p>The client child reads the <span class="emphasis"><em>echo</em></span> server’s response
+                        from the socket and echoes the response on standard output. The child
+                        terminates when it sees end-of-file on the socket.</p><p>The following shows an example of what we see when running this
+                        program:</p><a id="I_programlisting61_d1e156552"/><pre class="programlisting">$ <strong class="userinput"><code>cat &gt; tell-tale-heart.txt</code></strong>                           <em class="lineannotation"><span class="lineannotation">Create a file for testing</span></em>
+<strong class="userinput"><code>It is impossible to say how the idea entered my brain;</code></strong>
+<strong class="userinput"><code>but once conceived, it haunted me day and night.</code></strong>
+<em class="lineannotation"><span class="lineannotation">Type Control-D</span></em>
+$ <strong class="userinput"><code>./is_echo_cl tekapo &lt; tell-tale-heart.txt</code></strong>
+It is impossible to say how the idea entered my brain;
+but once conceived, it haunted me day and night.</pre><div class="example"><a id="a_client_for_the_echo_service"/><div class="example-title">Example 61-2. A client for the <span class="emphasis"><em>echo</em></span> service</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/is_echo_cl.c</code></strong>
+#include "inet_sockets.h"
+#include "tlpi_hdr.h"
+
+#define BUF_SIZE 100
+
+int
+main(int argc, char *argv[])
+{
+    int sfd;
+    ssize_t numRead;
+    char buf[BUF_SIZE];
+
+    if (argc != 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s host\n", argv[0]);
+
+    sfd = inetConnect(argv[1], "echo", SOCK_STREAM);
+    if (sfd == -1)
+        errExit("inetConnect");
+
+    switch (fork()) {
+    case -1:
+        errExit("fork");
+
+    case 0:             /* Child: read server's response, echo on stdout */
+        for (;;) {
+            numRead = read(sfd, buf, BUF_SIZE);
+            if (numRead &lt;= 0)           /* Exit on EOF or error */
+                break;
+            printf("%.*s", (int) numRead, buf);
+        }
+        exit(EXIT_SUCCESS);
+
+    default:            /* Parent: write contents of stdin to socket */
+        for (;;) {
+            numRead = read(STDIN_FILENO, buf, BUF_SIZE);
+            if (numRead &lt;= 0)           /* Exit loop on EOF or error */
+                break;
+            if (write(sfd, buf, numRead) != numRead)
+                fatal("write() failed");
+        }
+
+        /* Close writing channel, so server sees EOF */
+
+        if (shutdown(sfd, SHUT_WR) == -1)
+            errExit("shutdown");
+        exit(EXIT_SUCCESS);
+    }
+}
+      <strong class="userinput"><code>sockets/is_echo_cl.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Socket-Specific I/O System Calls: recv() and send()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="socket-specific_i_solidus_o_system_calls">Socket-Specific I/O System Calls: <span class="emphasis"><em>recv()</em></span> and
+                    <span class="emphasis"><em>send()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>recv()</em></span> and <span class="emphasis"><em>send()</em></span> system calls
+                perform I/O on connected sockets. They provide socket-specific functionality that is
+                not available with the traditional <span class="emphasis"><em>read()</em></span> and
+                    <span class="emphasis"><em>write()</em></span> system calls.<a id="IDX-CHP-61-7950" class="indexterm"/><a id="IDX-CHP-61-7951" class="indexterm"/><a id="IDX-CHP-61-7952" class="indexterm"/><a id="IDX-CHP-61-7953" class="indexterm"/><a id="IDX-CHP-61-7954" class="indexterm"/><a id="IDX-CHP-61-7955" class="indexterm"/><a id="IDX-CHP-61-7956" class="indexterm"/><a id="IDX-CHP-61-7957" class="indexterm"/><a id="IDX-CHP-61-7958" class="indexterm"/><a id="IDX-CHP-61-7959" class="indexterm"/><a id="IDX-CHP-61-7948" class="indexterm"/><a id="IDX-CHP-61-7949" class="indexterm"/></p><a id="I_programlisting61_d1e156670"/><pre class="programlisting">#include &lt;sys/socket.h&gt;
+
+ssize_t <strong class="userinput"><code>recv</code></strong>(int <span class="emphasis"><em>sockfd</em></span>, void *<span class="emphasis"><em>buffer</em></span>, size_t <span class="emphasis"><em>length</em></span>, int <span class="emphasis"><em>flags</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns number of bytes received, 0 on EOF, or -1 on error</p></div><a id="I_programlisting61_d1e156690"/><pre class="programlisting">ssize_t <strong class="userinput"><code>send</code></strong>(int <span class="emphasis"><em>sockfd</em></span>, const void *<span class="emphasis"><em>buffer</em></span>, size_t <span class="emphasis"><em>length</em></span>, int <span class="emphasis"><em>flags</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns number of bytes sent, or -1 on error</p></div><p>The return value and the first three arguments to <span class="emphasis"><em>recv()</em></span> and
+                    <span class="emphasis"><em>send()</em></span> are the same as for <span class="emphasis"><em>read()</em></span> and
+                    <span class="emphasis"><em>write()</em></span>. The last argument, <span class="emphasis"><em>flags</em></span>, is
+                a bit mask that modifies the behavior of the I/O operation. For
+                    <span class="emphasis"><em>recv()</em></span>, the bits that may be ORed in
+                    <span class="emphasis"><em>flags</em></span> include the following:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">MSG_DONTWAIT</code>
+                    </span></dt><dd><p>Perform a nonblocking <span class="emphasis"><em>recv()</em></span>. If no data is
+                            available, then instead of blocking, return immediately with the error
+                                <code class="literal">EAGAIN</code>. We can obtain the same
+                            behavior by using <span class="emphasis"><em>fcntl()</em></span> to set nonblocking mode
+                                (<code class="literal">O_NONBLOCK</code>) on the socket, with
+                            the difference that <code class="literal">MSG_DONTWAIT</code>
+                            allows us to control nonblocking behavior on a per-call basis.</p></dd><dt><span class="term">
+                        <code class="literal">MSG_OOB</code>
+                    </span></dt><dd><p>Receive out-of-band data on the socket. We briefly describe this
+                            feature in <a class="xref" href="ch61.html#out-of-band_data" title="Out-of-Band Data">Out-of-Band Data</a>.<a id="IDX-CHP-61-7960" class="indexterm"/><a id="IDX-CHP-61-7961" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">MSG_PEEK</code>
+                    </span></dt><dd><p>Retrieve a copy of the requested bytes from the socket buffer, but
+                            don’t actually remove them from the buffer. The data can later be reread
+                            by another <span class="emphasis"><em>recv()</em></span> or <span class="emphasis"><em>read()</em></span>
+                            call.</p></dd><dt><span class="term">
+                        <code class="literal">MSG_WAITALL</code>
+                    </span></dt><dd><p>Normally, a <span class="emphasis"><em>recv()</em></span> call returns the lesser of the
+                            number of bytes requested (<span class="emphasis"><em>length</em></span>) and the number
+                            of bytes actually available in the socket. Specifying the <code class="literal">MSG_WAITALL</code> flag causes the system call to
+                            block until <span class="emphasis"><em>length</em></span> bytes have been received.
+                            However, even when this flag is specified, the call may return fewer
+                            bytes than requested if: (a) a signal is caught; (b) the peer on a
+                            stream socket terminated the connection; (c) an out-of-band data byte
+                                (<a class="xref" href="ch61.html#out-of-band_data" title="Out-of-Band Data">Out-of-Band Data</a>) was encountered; (d) the
+                            received message from a datagram socket is less than
+                                <span class="emphasis"><em>length</em></span> bytes; or (e) an error occurs on the
+                            socket. (The <code class="literal">MSG_WAITALL</code> flag can
+                            replace the <span class="emphasis"><em>readn()</em></span> function that we show in <a class="xref" href="ch61.html#implementation_of_readn_open_parenthesis" title="Example 61-1. Implementation of readn() and writen()">Example 61-1</a>, with the
+                            difference that our <span class="emphasis"><em>readn()</em></span> function does restart
+                            itself if interrupted by a signal handler.)</p></dd></dl></div><p>All of the above flags are specified in SUSv3, except for <code class="literal">MSG_DONTWAIT</code>, which is nevertheless available on some other UNIX
+                implementations. The <code class="literal">MSG_WAITALL</code> flag was a later
+                addition to the sockets API, and is not present in some older
+                implementations.</p><p>For <span class="emphasis"><em>send()</em></span>, the bits that may be ORed in
+                    <span class="emphasis"><em>flags</em></span> include the following:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">MSG_DONTWAIT</code>
+                    </span></dt><dd><p>Perform a nonblocking <span class="emphasis"><em>send()</em></span>. If the data can’t
+                            be immediately transferred (because the socket send buffer is full),
+                            then, instead of blocking, fail with the error <code class="literal">EAGAIN</code>. As with <span class="emphasis"><em>recv()</em></span>, the same
+                            effect can be achieved by setting the <code class="literal">O_NONBLOCK</code> flag for the socket.</p></dd><dt><span class="term"><code class="literal">MSG_MORE</code> (since Linux 2.4.4)</span></dt><dd><p>This flag is used with TCP sockets to achieve the same effect as the
+                                <code class="literal">TCP_CORK</code> socket option (<a class="xref" href="ch61.html#the_sendfile_open_parenthesis_close_pare" title="The sendfile() System Call">The <span class="emphasis"><em>sendfile()</em></span> System Call</a>), with the
+                            difference that it provides corking of data on a per-call basis. Since
+                            Linux 2.6, this flag can also be used with datagram sockets, where it
+                            has a different meaning. Data transmitted in successive
+                                <span class="emphasis"><em>send()</em></span> or <span class="emphasis"><em>sendto()</em></span> calls
+                            specifying <code class="literal">MSG_MORE</code> is packaged into
+                            a single datagram that is transmitted only when a further call is made
+                            that does not specify this flag. (Linux also provides an analogous
+                                <code class="literal">UDP_CORK</code> socket option that
+                            causes data from successive <span class="emphasis"><em>send()</em></span> or
+                                <span class="emphasis"><em>sendto()</em></span> calls to be accumulated into a single
+                            datagram that is transmitted when <code class="literal">UDP_CORK</code> is disabled.) The <code class="literal">MSG_MORE</code> flag has no effect for UNIX domain
+                            sockets.</p></dd><dt><span class="term">
+                        <code class="literal">MSG_NOSIGNAL</code>
+                    </span></dt><dd><p>When sending data on a connected stream socket, don’t generate a
+                                <code class="literal">SIGPIPE</code> signal if the other end
+                            of the connection has been closed. Instead, the
+                                <span class="emphasis"><em>send()</em></span> call fails with the error <code class="literal">EPIPE</code>. This is the same behavior as can be
+                            obtained by ignoring the <code class="literal">SIGPIPE</code>
+                            signal, with the difference that the <code class="literal">MSG_NOSIGNAL</code> flag controls the behavior on a per-call
+                                basis.<a id="IDX-CHP-61-7962" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">MSG_OOB</code>
+                    </span></dt><dd><p>Send out-of-band data on a stream socket. Refer to <a class="xref" href="ch61.html#out-of-band_data" title="Out-of-Band Data">Out-of-Band Data</a>.<a id="IDX-CHP-61-7963" class="indexterm"/><a id="IDX-CHP-61-7964" class="indexterm"/></p></dd></dl></div><p>Of the above flags, only <code class="literal">MSG_OOB</code> is specified
+                by SUSv3. SUSv4 adds a specification for <code class="literal">MSG_NOSIGNAL.
+                    MSG_DONTWAIT</code> is not standardized, but appears on a few other UNIX
+                implementations. <code class="literal">MSG_MORE</code> is Linux-specific. The
+                    <span class="emphasis"><em>send(2)</em></span> and <span class="emphasis"><em>recv(2)</em></span> manual pages
+                describe further flags that we don’t cover here.</p></div><div class="sect1" title="The sendfile() System Call"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_sendfile_open_parenthesis_close_pare">The <span class="emphasis"><em>sendfile()</em></span> System Call</h2></div></div></div><p>Applications such as web servers and file servers frequently need to transfer the
+                unaltered contents of a disk file through a (connected) socket. One way to do this
+                would be a loop of the following form:<a id="IDX-CHP-61-7966" class="indexterm"/><a id="IDX-CHP-61-7967" class="indexterm"/><a id="IDX-CHP-61-7968" class="indexterm"/><a id="IDX-CHP-61-7969" class="indexterm"/><a id="IDX-CHP-61-7970" class="indexterm"/><a id="IDX-CHP-61-7971" class="indexterm"/><a id="IDX-CHP-61-7972" class="indexterm"/><a id="IDX-CHP-61-7973" class="indexterm"/><a id="IDX-CHP-61-7974" class="indexterm"/><a id="IDX-CHP-61-7975" class="indexterm"/><a id="IDX-CHP-61-7976" class="indexterm"/><a id="IDX-CHP-61-7977" class="indexterm"/><a id="IDX-CHP-61-7978" class="indexterm"/><a id="IDX-CHP-61-7965" class="indexterm"/></p><a id="I_programlisting61_d1e157042"/><pre class="programlisting">while ((n = read(diskfilefd, buf, BUZ_SIZE)) &gt; 0)
+    write(sockfd, buf, n);</pre><p>For many applications, such a loop is perfectly acceptable. However, if we
+                frequently transfer large files via a socket, this technique is inefficient. In
+                order to transmit the file, we must use two system calls (possibly multiple times
+                within a loop): one to copy the file contents from the kernel buffer cache into user
+                space, and the other to copy the user-space buffer back to kernel space in order to
+                be transmitted via the socket. This scenario is shown on the left side of <a class="xref" href="ch61.html#transferring_the_contents_of_a_file_to_a" title="Figure 61-1. Transferring the contents of a file to a socket">Figure 61-1</a>. Such a two-step process is
+                wasteful if the application doesn’t perform any processing of the file contents
+                before transmitting them. The <span class="emphasis"><em>sendfile()</em></span> system call is
+                designed to eliminate this inefficiency. When an application calls
+                    <span class="emphasis"><em>sendfile()</em></span>, the file contents are transferred directly to
+                the socket, without passing through user space, as shown on the right side of <a class="xref" href="ch61.html#transferring_the_contents_of_a_file_to_a" title="Figure 61-1. Transferring the contents of a file to a socket">Figure 61-1</a>. This is referred to as a
+                    <span class="emphasis"><em>zero-copy transfer</em></span>.<a id="IDX-CHP-61-7979" class="indexterm"/></p><div class="figure"><a id="transferring_the_contents_of_a_file_to_a"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject61_d1e157066"/><img src="figs/web/61-1_SOCKADV-sendfile.png.jpg" alt="Transferring the contents of a file to a socket"/></div></div><div class="figure-title">Figure 61-1. Transferring the contents of a file to a socket</div></div><a id="I_programlisting61_d1e157071"/><pre class="programlisting">#include &lt;sys/sendfile.h&gt;
+
+ssize_t <strong class="userinput"><code>sendfile</code></strong>(int <span class="emphasis"><em>out_fd</em></span>, int <span class="emphasis"><em>in_fd</em></span>, off_t *<span class="emphasis"><em>offset</em></span>, size_t <span class="emphasis"><em>count</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns number of bytes transferred, or -1 on error</p></div><p>The <span class="emphasis"><em>sendfile()</em></span> system call transfers bytes from the file
+                referred to by the descriptor <span class="emphasis"><em>in_fd</em></span> to the file referred to by
+                the descriptor <span class="emphasis"><em>out_fd</em></span>. The <span class="emphasis"><em>out_fd</em></span>
+                descriptor must refer to a socket. The <span class="emphasis"><em>in_fd</em></span> argument must
+                refer to a file to which <span class="emphasis"><em>mmap()</em></span> can be applied; in practice,
+                this usually means a regular file. This somewhat restricts the use of
+                    <span class="emphasis"><em>sendfile()</em></span>. We can use it to pass data from a file to a
+                socket, but not vice versa. And we can’t use <span class="emphasis"><em>sendfile()</em></span> to pass
+                data directly from one socket to another.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Performance benefits could also be obtained if <span class="emphasis"><em>sendfile()</em></span>
+                    could be used to transfer bytes between two regular files. On Linux 2.4 and
+                    earlier, <span class="emphasis"><em>out_fd</em></span> could refer to a regular file. Some
+                    reworking of the underlying implementation meant that this possibility
+                    disappeared in the 2.6 kernel. However, this feature may be reinstated in a
+                    future kernel version.</p></div><p>If <span class="emphasis"><em>offset</em></span> is not <code class="literal">NULL</code>,
+                then it should point to an <span class="emphasis"><em>off_t</em></span> value that specifies the
+                starting file offset from which bytes should be transferred from
+                    <span class="emphasis"><em>in_fd</em></span>. This is a value-result argument. On return, it
+                contains the offset of the next byte following the last byte that was transferred
+                from <span class="emphasis"><em>in_fd</em></span>. In this case, <span class="emphasis"><em>sendfile()</em></span>
+                doesn’t change the file offset for <span class="emphasis"><em>in_fd</em></span>.</p><p>If <span class="emphasis"><em>offset</em></span> is <code class="literal">NULL</code>, then
+                bytes are transferred from <span class="emphasis"><em>in_fd</em></span> starting at the current file
+                offset, and the file offset is updated to reflect the number of bytes
+                transferred.</p><p>The <span class="emphasis"><em>count</em></span> argument specifies the number of bytes to be
+                transferred. If end-of-file is encountered before <span class="emphasis"><em>count</em></span> bytes
+                are transferred, only the available bytes are transferred. On success,
+                    <span class="emphasis"><em>sendfile()</em></span> returns the number of bytes actually
+                transferred.</p><p>SUSv3 doesn’t specify <span class="emphasis"><em>sendfile()</em></span>. Versions of
+                    <span class="emphasis"><em>sendfile()</em></span> are available on some other UNIX
+                implementations, but the argument list is typically different from the version on
+                Linux.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Starting with kernel 2.6.17, Linux provides three new (nonstandard) system
+                        calls—<span class="emphasis"><em>splice()</em></span>, <span class="emphasis"><em>vmsplice()</em></span>, and
+                        <span class="emphasis"><em>tee()</em></span>—that provide a superset of the functionality of
+                        <span class="emphasis"><em>sendfile()</em></span>. See the manual pages for details.<a id="IDX-CHP-61-7980" class="indexterm"/><a id="IDX-CHP-61-7981" class="indexterm"/><a id="IDX-CHP-61-7982" class="indexterm"/></p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="the_tcp_underscore_cork_socket"/></div></div></div><div class="sect3" title="The TCP_CORK socket option"><div class="titlepage"><div><div><h4 class="title" id="the_tcp_underscore_cork_socket-id1">The <code class="literal">TCP_CORK</code> socket option</h4></div></div></div><p>To further improve the efficiency of TCP applications using
+                            <span class="emphasis"><em>sendfile()</em></span>, it is sometimes useful to employ the
+                        Linux-specific <code class="literal">TCP_CORK</code> socket option. As
+                        an example, consider a web server delivering a page in response to a request
+                        by a web browser. The web server’s response consists of two parts: HTTP
+                        headers, perhaps output using <span class="emphasis"><em>write()</em></span>, followed by the
+                        page data, perhaps output using <span class="emphasis"><em>sendfile()</em></span>. In this
+                        scenario, normally <span class="emphasis"><em>two</em></span> TCP segments are transmitted:
+                        the headers are sent in the first (rather small) segment, and then the page
+                        data is sent in a second segment. This is an inefficient use of network
+                        bandwidth. It probably also creates unnecessary work for both the sending
+                        and the receiving TCP, since in many cases the HTTP headers and the page
+                        data would be small enough to fit inside a single TCP segment. The <code class="literal">TCP_CORK</code> option is designed to address this
+                            inefficiency.<a id="IDX-CHP-61-7983" class="indexterm"/></p><p>When the <code class="literal">TCP_CORK</code> option is enabled on
+                        a TCP socket, all subsequent output is buffered into a single TCP segment
+                        until either the upper limit on the size of a segment is reached, the
+                            <code class="literal">TCP_CORK</code> option is disabled, the
+                        socket is closed, or a maximum of 200 milliseconds passes from the time that
+                        the first corked byte is written. (The timeout ensures that the corked data
+                        is transmitted if the application forgets to disable the <code class="literal">TCP_CORK</code> option.)</p><p>We enable and disable the <code class="literal">TCP_CORK</code>
+                        option using the <span class="emphasis"><em>setsockopt()</em></span> system call (<a class="xref" href="ch61.html#socket_options" title="Socket Options">Socket Options</a>). The following code (which omits error
+                        checking) demonstrates the use of <code class="literal">TCP_CORK</code> for our hypothetical HTTP server example:</p><a id="I_programlisting61_d1e157268"/><pre class="programlisting">int optval;
+
+/* Enable TCP_CORK option on 'sockfd' - subsequent TCP output is corked
+   until this option is disabled. */
+
+optval = 1;
+setsockopt(sockfd, IPPROTO_TCP, TCP_CORK, &amp;optval, sizeof(optval));
+
+write(sockfd, ...);                     /* Write HTTP headers */
+sendfile(sockfd, ...);                  /* Send page data */
+
+/* Disable TCP_CORK option on 'sockfd' - corked output is now transmitted
+   in a single TCP segment. */
+
+optval = 0
+setsockopt(sockfd, IPPROTO_TCP, TCP_CORK, &amp;optval, sizeof(optval));</pre><p>We could avoid the possibility of two segments being transmitted by
+                        building a single data buffer within our application, and then transmitting
+                        that buffer with a single <span class="emphasis"><em>write()</em></span>. (Alternatively, we
+                        could use <span class="emphasis"><em>writev()</em></span> to combine two distinct buffers in a
+                        single output operation.) However, if we want to combine the zero-copy
+                        efficiency of <span class="emphasis"><em>sendfile()</em></span> with the ability to include a
+                        header as part of the first segment of transmitted file data, then we need
+                        to use <code class="literal">TCP_CORK</code>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>In <a class="xref" href="ch61.html#socket-specific_i_solidus_o_system_calls" title="Socket-Specific I/O System Calls: recv() and send()">Socket-Specific I/O System Calls: <span class="emphasis"><em>recv()</em></span> and
+                    <span class="emphasis"><em>send()</em></span></a>, we
+                            noted that the <code class="literal">MSG_MORE</code> flag provides
+                            similar functionality to <code class="literal">TCP_CORK</code>,
+                            but on a per-system-call basis. This is not necessarily an advantage. It
+                            is possible to set the <code class="literal">TCP_CORK</code>
+                            option on the socket, and then exec a program that performs output on
+                            the inherited file descriptor without being aware of the <code class="literal">TCP_CORK</code> option. By contrast, the use of
+                                <code class="literal">MSG_MORE</code> requires explicit
+                            changes to the source code of a program.</p></div><p>FreeBSD provides an option similar to <code class="literal">TCP_CORK</code> in the form of <code class="literal">TCP_NOPUSH</code>.</p></div></div></div><div class="sect1" title="Retrieving Socket Addresses"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="retrieving_socket_addresses">Retrieving Socket Addresses</h2></div></div></div><p>The <span class="emphasis"><em>getsockname()</em></span> and <span class="emphasis"><em>getpeername()</em></span>
+                system calls return, respectively, the local address to which a socket is bound and
+                the address of the peer socket to which the local socket is connected.<a id="IDX-CHP-61-7984" class="indexterm"/><a id="IDX-CHP-61-7985" class="indexterm"/><a id="IDX-CHP-61-7986" class="indexterm"/><a id="IDX-CHP-61-7987" class="indexterm"/><a id="IDX-CHP-61-7988" class="indexterm"/><a id="IDX-CHP-61-7989" class="indexterm"/><a id="IDX-CHP-61-7990" class="indexterm"/><a id="IDX-CHP-61-7991" class="indexterm"/><a id="IDX-CHP-61-7992" class="indexterm"/></p><a id="I_programlisting61_d1e157370"/><pre class="programlisting">#include &lt;sys/socket.h&gt;
+
+int <strong class="userinput"><code>getsockname</code></strong>(int <span class="emphasis"><em>sockfd</em></span>, struct sockaddr *<span class="emphasis"><em>addr</em></span>, socklen_t *<span class="emphasis"><em>addrlen</em></span>);
+int <strong class="userinput"><code>getpeername</code></strong>(int <span class="emphasis"><em>sockfd</em></span>, struct sockaddr *<span class="emphasis"><em>addr</em></span>, socklen_t *<span class="emphasis"><em>addrlen</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Both return 0 on success, or -1 on error</p></div><p>For both calls, <span class="emphasis"><em>sockfd</em></span> is a file descriptor referring to a
+                socket, and <span class="emphasis"><em>addr</em></span> is a pointer to a suitably sized buffer that
+                is used to return a structure containing the socket address. The size and type of
+                this structure depend on the socket domain. The <span class="emphasis"><em>addrlen</em></span>
+                argument is a value-result argument. Before the call, it should be initialized to
+                the length of the buffer pointed to by <span class="emphasis"><em>addr</em></span>; on return, it
+                contains the number of bytes actually written to this buffer.</p><p>The <span class="emphasis"><em>getsockname()</em></span> function returns a socket’s address family
+                and the address to which a socket is bound. This is useful if the socket was bound
+                by another program (e.g., <span class="emphasis"><em>inetd(8)</em></span>) and the socket file
+                descriptor was then preserved across an <span class="emphasis"><em>exec()</em></span>.</p><p>Calling <span class="emphasis"><em>getsockname()</em></span> is also useful if we want to determine
+                the ephemeral port number that the kernel assigned to a socket when performing an
+                implicit bind of an Internet domain socket. The kernel performs an implicit bind in
+                the following circumstances:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>after a <span class="emphasis"><em>connect()</em></span> or a <span class="emphasis"><em>listen()</em></span>
+                        call on a TCP socket that has not previously been bound to an address by
+                            <span class="emphasis"><em>bind()</em></span>;</p></li><li class="listitem"><p>on the first <span class="emphasis"><em>sendto()</em></span> on a UDP socket that had not
+                        previously been bound to an address; or</p></li><li class="listitem"><p>after a <span class="emphasis"><em>bind()</em></span> call where the port number
+                            (<span class="emphasis"><em>sin_port</em></span>) was specified as 0. In this case, the
+                            <span class="emphasis"><em>bind()</em></span> specifies the IP address for the socket, but
+                        the kernel selects an ephemeral port number.</p></li></ul></div><p>The <span class="emphasis"><em>getpeername()</em></span> system call returns the address of the peer
+                socket on a stream socket connection. This is useful primarily with TCP sockets, if
+                the server wants to find out the address of the client that has made a connection.
+                This information could also be obtained when the <span class="emphasis"><em>accept()</em></span> call
+                is performed; however, if the server was execed by the program that did the
+                    <span class="emphasis"><em>accept()</em></span> (e.g., <span class="emphasis"><em>inetd</em></span>), then it
+                inherits the socket file descriptor, but the address information returned by
+                    <span class="emphasis"><em>accept()</em></span> is no longer available.</p><p><a class="xref" href="ch61.html#using_getsockname_open_parenthesis_close" title="Example 61-3. Using getsockname() and getpeername()">Example 61-3</a> demonstrates the use of
+                    <span class="emphasis"><em>getsockname()</em></span> and <span class="emphasis"><em>getpeername()</em></span>. This
+                program employs the functions that we defined in <a class="xref" href="ch59.html#an_internet_domain_sockets_librar" title="Example 59-9. An Internet domain sockets library">Example 59-9</a> (in <a class="xref" href="ch59.html#an_internet_domain_sockets_library" title="An Internet Domain Sockets Library">An Internet Domain Sockets Library</a>), and performs the following
+                steps:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Use our <span class="emphasis"><em>inetListen()</em></span> function to create a listening
+                        socket, <span class="emphasis"><em>listenFd</em></span>, bound to the wildcard IP address and
+                        the port specified in the program’s sole command-line argument. (The port
+                        can be specified numerically or as a service name.) The
+                            <span class="emphasis"><em>len</em></span> argument returns the length of the address
+                        structure for this socket’s domain. This value is passed in a later call to
+                            <span class="emphasis"><em>malloc()</em></span> to allocate a buffer that is used to
+                        return a socket address from calls to <span class="emphasis"><em>getsockname()</em></span> and
+                            <span class="emphasis"><em>getpeername()</em></span>.</p></li><li class="listitem"><p>Use our <span class="emphasis"><em>inetConnect()</em></span> function to create a second
+                        socket, <span class="emphasis"><em>connFd</em></span>, which is used to send a connection
+                        request to the socket created in step 1.</p></li><li class="listitem"><p>Call <span class="emphasis"><em>accept()</em></span> on the listening socket in order to
+                        create a third socket, <span class="emphasis"><em>acceptFd</em></span>, that is connected to
+                        the socket created in the previous step.</p></li><li class="listitem"><p>Use calls to <span class="emphasis"><em>getsockname()</em></span> and
+                            <span class="emphasis"><em>getpeername()</em></span> to obtain the local and peer
+                        addresses for the two connected sockets, <span class="emphasis"><em>connFd</em></span> and
+                            <span class="emphasis"><em>acceptFd</em></span>. After each of these calls, the program
+                        uses our <span class="emphasis"><em>inetAddressStr()</em></span> function to convert the
+                        socket address into printable form.</p></li><li class="listitem"><p>Sleep for a few seconds so that we can run <span class="emphasis"><em>netstat</em></span> in
+                        order to confirm the socket address information. (We describe
+                            <span class="emphasis"><em>netstat</em></span> in Section 61.7.)</p></li></ol></div><p>The following shell session log shows an example run of this program:</p><a id="I_programlisting61_d1e157562"/><pre class="programlisting">$ <strong class="userinput"><code>./socknames 55555 &amp;</code></strong>
+getsockname(connFd):   (localhost, 32835)
+getsockname(acceptFd): (localhost, 55555)
+getpeername(connFd):   (localhost, 55555)
+getpeername(acceptFd): (localhost, 32835)
+[1] 8171
+$ <strong class="userinput"><code>netstat -a | egrep '(Address|55555)'</code></strong>
+Proto Recv-Q Send-Q Local Address    Foreign Address  State
+tcp        0      0 *:55555          *:*              LISTEN
+tcp        0      0 localhost:32835  localhost:55555  ESTABLISHED
+tcp        0      0 localhost:55555  localhost:32835  ESTABLISHED</pre><p>From the above output, we can see that the connected socket
+                    (<span class="emphasis"><em>connFd</em></span>) was bound to the ephemeral port 32835. The
+                    <span class="emphasis"><em>netstat</em></span> command shows us information about all three
+                sockets created by the program, and allows us to confirm the port information for
+                the two connected sockets, which are in the ESTABLISHED state (described in <a class="xref" href="ch61.html#tcp_state_machine_and_state_transition_d" title="TCP State Machine and State Transition Diagram">TCP State Machine and State Transition Diagram</a>).</p><div class="example"><a id="using_getsockname_open_parenthesis_close"/><div class="example-title">Example 61-3. Using <span class="emphasis"><em>getsockname()</em></span> and
+                        <span class="emphasis"><em>getpeername()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/socknames.c</code></strong>
+#include "inet_sockets.h"               /* Declares our socket functions */
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int listenFd, acceptFd, connFd;
+    socklen_t len;                      /* Size of socket address buffer */
+    void *addr;                         /* Buffer for socket address */
+    char addrStr[IS_ADDR_STR_LEN];
+
+    if (argc != 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s service\n", argv[0]);
+
+    listenFd = inetListen(argv[1], 5, &amp;len);
+    if (listenFd == -1)
+        errExit("inetListen");
+
+    connFd = inetConnect(NULL, argv[1], SOCK_STREAM);
+    if (connFd == -1)
+        errExit("inetConnect");
+
+    acceptFd = accept(listenFd, NULL, NULL);
+    if (acceptFd == -1)
+        errExit("accept");
+
+    addr = malloc(len);
+    if (addr == NULL)
+        errExit("malloc");
+
+    if (getsockname(connFd, addr, &amp;len) == -1)
+        errExit("getsockname");
+    printf("getsockname(connFd):   %s\n",
+            inetAddressStr(addr, len, addrStr, IS_ADDR_STR_LEN));
+    if (getsockname(acceptFd, addr, &amp;len) == -1)
+        errExit("getsockname");
+    printf("getsockname(acceptFd): %s\n",
+            inetAddressStr(addr, len, addrStr, IS_ADDR_STR_LEN));
+
+    if (getpeername(connFd, addr, &amp;len) == -1)
+        errExit("getpeername");
+    printf("getpeername(connFd):   %s\n",
+            inetAddressStr(addr, len, addrStr, IS_ADDR_STR_LEN));
+    if (getpeername(acceptFd, addr, &amp;len) == -1)
+        errExit("getpeername");
+    printf("getpeername(acceptFd): %s\n",
+            inetAddressStr(addr, len, addrStr, IS_ADDR_STR_LEN));
+
+    sleep(30);                          /* Give us time to run netstat(8) */
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>sockets/socknames.c</code></strong></pre></div></div></div><div class="sect1" title="A Closer Look at TCP"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="a_closer_look_at_tcp">A Closer Look at TCP</h2></div></div></div><p>Knowing some of the details of the operation of TCP helps us to debug applications
+                that use TCP sockets, and, in some cases, to make such applications more efficient.
+                In the following sections, we look at:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>the format of TCP segments;<a id="IDX-CHP-61-7993" class="indexterm"/></p></li><li class="listitem"><p>the TCP acknowledgement scheme;</p></li><li class="listitem"><p>the TCP state machine;</p></li><li class="listitem"><p>TCP connection establishment and termination; and</p></li><li class="listitem"><p>the TCP TIME_WAIT state.</p></li></ul></div><div class="sect2" title="Format of a TCP Segment"><div class="titlepage"><div><div><h3 class="title" id="format_of_a_tcp_segment">Format of a TCP Segment</h3></div></div></div><p><a class="xref" href="ch61.html#format_of_a_tcp_segment-id1" title="Figure 61-2. Format of a TCP segment">Figure 61-2</a> shows the format of the TCP
+                    segments that are exchanged between the endpoints of a TCP connection. The
+                    meanings of these fields are as follows:<a id="IDX-CHP-61-7994" class="indexterm"/><a id="IDX-CHP-61-7995" class="indexterm"/><a id="IDX-CHP-61-7996" class="indexterm"/><a id="IDX-CHP-61-7997" class="indexterm"/><a id="IDX-CHP-61-7998" class="indexterm"/><a id="IDX-CHP-61-7999" class="indexterm"/><a id="IDX-CHP-61-8000" class="indexterm"/><a id="IDX-CHP-61-8001" class="indexterm"/><a id="IDX-CHP-61-8002" class="indexterm"/><a id="IDX-CHP-61-8003" class="indexterm"/><a id="IDX-CHP-61-8004" class="indexterm"/><a id="IDX-CHP-61-8005" class="indexterm"/><a id="IDX-CHP-61-8006" class="indexterm"/><a id="IDX-CHP-61-8007" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>Source port number</em></span>: This is the port number of
+                            the sending TCP.</p></li><li class="listitem"><p><span class="emphasis"><em>Destination port number</em></span>: This is the port number
+                            of the destination TCP.</p></li><li class="listitem"><p><span class="emphasis"><em>Sequence number</em></span>: This is the sequence number for
+                            this segment. This is the offset of the first byte of data in this
+                            segment within the stream of data being transmitted in this direction
+                            over the connection, as described in <a class="xref" href="ch58.html#transmission_control_protocol_open_paren" title="Transmission Control Protocol (TCP)">Transmission Control Protocol (TCP)</a>.<a id="IDX-CHP-61-8008" class="indexterm"/></p><div class="figure"><a id="format_of_a_tcp_segment-id1"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject61_d1e157701"/><img src="figs/web/61-2_SOCKADV-TCP-segment.png.jpg" alt="Format of a TCP segment"/></div></div><div class="figure-title">Figure 61-2. Format of a TCP segment</div></div></li><li class="listitem"><p><span class="emphasis"><em>Acknowledgement number</em></span>: If the ACK bit (see
+                            below) is set, then this field contains the sequence number of the next
+                            byte of data that the receiver expects to receive from the
+                            sender.</p></li><li class="listitem"><p><span class="emphasis"><em>Header length</em></span>: This is the length of the header,
+                            in units of 32-bit words. Since this is a 4-bit field, the total header
+                            length can be up to 60 bytes (15 words). This field enables the
+                            receiving TCP to determine the length of the variable-length
+                                <span class="emphasis"><em>options</em></span> field and the starting point of the
+                                <span class="emphasis"><em>data</em></span>.</p></li><li class="listitem"><p><span class="emphasis"><em>Reserved</em></span>: This consists of 4 unused bits (must be
+                            set to 0).</p></li><li class="listitem"><p><span class="emphasis"><em>Control bits</em></span>: This field consists of 8 bits that
+                            further specify the meaning of the segment:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>CWR</em></span>: the <span class="emphasis"><em>congestion window
+                                        reduced</em></span> flag.</p></li><li class="listitem"><p><span class="emphasis"><em>ECE</em></span>: the <span class="emphasis"><em>explicit congestion
+                                        notification echo</em></span> flag. The CWR and ECE flags are
+                                    used as part of TCP/IP’s Explicit Congestion Notification (ECN)
+                                    algorithm. ECN is a relatively recent addition to TCP/IP and is
+                                    described in RFC 3168 and in [Floyd, 1994]. ECN is implemented
+                                    in Linux from kernel 2.4 onward, and enabled by placing a
+                                    nonzero value in the Linux-specific <code class="literal">/proc/sys/net/ipv4/tcp_ecn</code> file.<a id="IDX-CHP-61-8009" class="indexterm"/><a id="IDX-CHP-61-8010" class="indexterm"/></p></li><li class="listitem"><p><span class="emphasis"><em>URG</em></span>: if set, then the <span class="emphasis"><em>urgent
+                                        pointer</em></span> field contains valid information.</p></li><li class="listitem"><p><span class="emphasis"><em>ACK</em></span>: if set, then the
+                                        <span class="emphasis"><em>acknowledgement number</em></span> field contains
+                                    valid information (i.e., this segment acknowledges data
+                                    previously sent by the peer).</p></li><li class="listitem"><p><span class="emphasis"><em>PSH</em></span>: push all received data to the
+                                    receiving process. This flag is described in RFC 993 and in
+                                    [Stevens, 1994].<a id="IDX-CHP-61-8011" class="indexterm"/></p></li><li class="listitem"><p><span class="emphasis"><em>RST</em></span>: reset the connection. This is used
+                                    to handle various error situations.</p></li><li class="listitem"><p><span class="emphasis"><em>SYN</em></span>: synchronize sequence numbers.
+                                    Segments with this flag set are exchanged during connection
+                                    establishment to allow the two TCPs to specify the initial
+                                    sequence numbers to be used for transferring data in each
+                                    direction.</p></li><li class="listitem"><p><span class="emphasis"><em>FIN</em></span>: used by a sender to indicate that it
+                                    has finished sending data.</p></li></ul></div><p>Multiple control bits (or none at all) may be set in a segment, which
+                            allows a single segment to serve multiple purposes. For example, we’ll
+                            see later that a segment with both the SYN and the ACK bits set is
+                            exchanged during TCP connection establishment.</p></li><li class="listitem"><p><span class="emphasis"><em>Window size</em></span>: This field is used when a receiver
+                            sends an ACK to indicate the number of bytes of data that the receiver
+                            has space to accept. (This relates to the sliding window scheme briefly
+                            described in <a class="xref" href="ch58.html#transmission_control_protocol_open_paren" title="Transmission Control Protocol (TCP)">Transmission Control Protocol (TCP)</a>.)</p></li><li class="listitem"><p><span class="emphasis"><em>Checksum</em></span>: This is a 16-bit checksum covering both
+                            the TCP header and the TCP data.<a id="IDX-CHP-61-8012" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The TCP checksum covers not just the TCP header and data, but also
+                                12 bytes usually referred to as the TCP
+                                    <span class="emphasis"><em>pseudoheader</em></span>. The pseudoheader consists of
+                                the following: the source and destination IP address (4 bytes each);
+                                2 bytes specifying the size of the TCP segment (this value is
+                                computed, but doesn’t form part of either the IP or the TCP header);
+                                1 byte containing the value 6, which is TCP’s unique protocol number
+                                within the TCP/IP suite of protocols; and 1 padding byte containing
+                                0 (so that the length of the pseudoheader is a multiple of 16 bits).
+                                The purpose of including the pseudoheader in the checksum
+                                calculation is to allow the receiving TCP to double-check that an
+                                incoming segment has arrived at the correct destination (i.e., that
+                                IP has not wrongly accepted a datagram that was addressed to another
+                                host or passed TCP a packet that should have gone to another upper
+                                layer). UDP calculates the checksum in its packet headers in a
+                                similar manner and for similar reasons. See [Stevens, 1994] for
+                                further details on the pseudoheader.</p></div></li><li class="listitem"><p><span class="emphasis"><em>Urgent pointer</em></span>: If the URG control bit is set,
+                            then this field indicates the location of so-called urgent data within
+                            the stream of data being transmitted from the sender to the receiver. We
+                            briefly discuss urgent data in <a class="xref" href="ch61.html#out-of-band_data" title="Out-of-Band Data">Out-of-Band Data</a>.</p></li><li class="listitem"><p><span class="emphasis"><em>Options</em></span>: This is a variable-length field
+                            containing options controlling the operation of the TCP
+                                connection.<a id="IDX-CHP-61-8013" class="indexterm"/></p></li><li class="listitem"><p><span class="emphasis"><em>Data</em></span>: This field contains the user data
+                            transmitted in this segment. This field may be of length 0 if this
+                            segment doesn’t contain any data (e.g., if it is simply an ACK
+                            segment).</p></li></ul></div></div><div class="sect2" title="TCP Sequence Numbers and Acknowledgements"><div class="titlepage"><div><div><h3 class="title" id="tcp_sequence_numbers_and_acknowledgement">TCP Sequence Numbers and Acknowledgements</h3></div></div></div><p>Each byte that is transmitted over a TCP connection is assigned a logical
+                    sequence number by TCP. (Each of the two streams in a connection has its own
+                    sequence numbering.) When a segment is transmitted, its <span class="emphasis"><em>sequence
+                        number</em></span> field is set to the logical offset of the first byte of
+                    data in the segment within the stream of data being transmitted in this
+                    direction over the connection. This allows the receiving TCP to assemble the
+                    received segments in the correct order, and to indicate which data was received
+                    when sending an acknowledgement to the sender.<a id="IDX-CHP-61-8014" class="indexterm"/><a id="IDX-CHP-61-8015" class="indexterm"/><a id="IDX-CHP-61-8016" class="indexterm"/><a id="IDX-CHP-61-8017" class="indexterm"/><a id="IDX-CHP-61-8018" class="indexterm"/></p><p>To implement reliable communication, TCP uses positive acknowledgements; that
+                    is, when a segment is successfully received, an acknowledgement message (i.e., a
+                    segment with the ACK bit set) is sent from the receiving TCP to the sending TCP,
+                    as shown in <a class="xref" href="ch61.html#acknowledgements_in_tcp" title="Figure 61-3. Acknowledgements in TCP">Figure 61-3</a>. The
+                        <span class="emphasis"><em>acknowledgement number</em></span> field of this message is set to
+                    indicate the logical sequence number of the next byte of data that the receiver
+                    expects to receive. (In other words, the value in the acknowledgement number
+                    field is the sequence number of the last byte in the segment that it
+                    acknowledges, plus 1.)<a id="IDX-CHP-61-8019" class="indexterm"/></p><div class="figure"><a id="acknowledgements_in_tcp"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject61_d1e157894"/><img src="figs/web/61-3_SOCKADV-TCP-ACK.png.jpg" alt="Acknowledgements in TCP"/></div></div><div class="figure-title">Figure 61-3. Acknowledgements in TCP</div></div><p>When the sending TCP transmits a segment, it sets a timer. If an
+                    acknowledgement is not received before the timer expires, the segment is
+                    retransmitted.</p><div class="note" title="Note"><h3 class="title">Note</h3><p><a class="xref" href="ch61.html#acknowledgements_in_tcp" title="Figure 61-3. Acknowledgements in TCP">Figure 61-3</a> and later similar diagrams are
+                        intended to illustrate the exchange of TCP segments between two endpoints.
+                        An implicit time dimension is assumed when reading these diagrams from top
+                        to bottom.</p></div></div><div class="sect2" title="TCP State Machine and State Transition Diagram"><div class="titlepage"><div><div><h3 class="title" id="tcp_state_machine_and_state_transition_d">TCP State Machine and State Transition Diagram</h3></div></div></div><p>Maintaining a TCP connection requires the coordination of the TCPs at both
+                    ends of the connection. To reduce the complexity of this task, a TCP endpoint is
+                    modeled as a <span class="emphasis"><em>state machine</em></span>. This means that the TCP can be
+                    in one of a fixed set of <span class="emphasis"><em>states</em></span>, and it moves from one
+                    state to another in response to <span class="emphasis"><em>events</em></span>, such as system
+                    calls by the application above the TCP or the arrival of TCP segments from the
+                    peer TCP. The TCP states are the following:<a id="IDX-CHP-61-8020" class="indexterm"/><a id="IDX-CHP-61-8021" class="indexterm"/><a id="IDX-CHP-61-8022" class="indexterm"/><a id="IDX-CHP-61-8023" class="indexterm"/><a id="IDX-CHP-61-8024" class="indexterm"/><a id="IDX-CHP-61-8025" class="indexterm"/><a id="IDX-CHP-61-8026" class="indexterm"/><a id="IDX-CHP-61-8027" class="indexterm"/><a id="IDX-CHP-61-8028" class="indexterm"/><a id="IDX-CHP-61-8029" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>LISTEN: The TCP is waiting for a connection request from a peer
+                            TCP.</p></li><li class="listitem"><p>SYN_SENT: The TCP has sent a SYN on behalf of an application
+                            performing an active open and is waiting for a reply from the peer in
+                            order to complete the connection.</p></li><li class="listitem"><p>SYN_RECV: The TCP, formerly in the LISTEN state, has received a SYN
+                            and has responded with a SYN/ACK (i.e., a TCP segment with both the SYN
+                            and ACK bits set), and is now waiting for an ACK from the peer TCP in
+                            order to complete the connection.</p></li><li class="listitem"><p>ESTABLISHED: Establishment of the connection to the peer TCP has been
+                            completed. Data segments can now be exchanged in either direction
+                            between the two TCPs.</p></li><li class="listitem"><p>FIN_WAIT1: The application has closed the connection. The TCP has sent
+                            a FIN to the peer TCP in order to terminate its side of the connection
+                            and is waiting for an ACK from the peer. This and the next three states
+                            are associated with an application performing an active close—that is,
+                            the first application to close its side of the connection.</p></li><li class="listitem"><p>FIN_WAIT2: The TCP, formerly in the FIN_WAIT1 state, has now received
+                            an ACK from the peer TCP.</p></li><li class="listitem"><p>CLOSING: The TCP, formerly awaiting an ACK in the FIN_WAIT1 state,
+                            instead received a FIN from its peer indicating that the peer
+                            simultaneously tried to perform an active close. (In other words, the
+                            two TCPs sent FIN segments at almost the same time. This is a rare
+                            scenario.)</p></li><li class="listitem"><p>TIME_WAIT: Having done an active close, the TCP has received a FIN,
+                            indicating that the peer TCP has performed a passive close. This TCP now
+                            spends a fixed period of time in the TIME_WAIT state, in order to ensure
+                            reliable termination of the TCP connection and to ensure that any old
+                            duplicate segments expire in the network before a new incarnation of the
+                            same connection is created. (We explain the TIME_WAIT state in more
+                            detail in <a class="xref" href="ch61.html#the_time_underscore_wait_state" title="The TIME_WAIT State">The TIME_WAIT State</a>.) When this
+                            fixed time period expires, the connection is closed, and the associated
+                            kernel resources are freed.</p></li><li class="listitem"><p>CLOSE_WAIT: The TCP has received a FIN from the peer TCP. This and the
+                            following state are associated with an application performing a passive
+                            close—that is, the second application to close the connection.</p></li><li class="listitem"><p>LAST_ACK: The application performed a passive close, and the TCP,
+                            formerly in the CLOSE_WAIT state, sent a FIN to the peer TCP and is
+                            waiting for it to be acknowledged. When this ACK is received, the
+                            connection is closed, and the associated kernel resources are
+                            freed.</p></li></ul></div><p>To the above states, RFC 793 adds one further, fictional state, CLOSED,
+                    representing the state when there is no connection (i.e., no kernel resources
+                    are allocated to describe a TCP connection).<a id="IDX-CHP-61-8030" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>In the above list we use the spellings for the TCP states as defined in
+                        the Linux source code. These differ slightly from the spellings in RFC
+                        793.</p></div><p><a class="xref" href="ch61.html#tcp_state_transition_diagram" title="Figure 61-4. TCP state transition diagram">Figure 61-4</a> shows the <span class="emphasis"><em>state
+                        transition diagram</em></span> for TCP. (This figure is based on diagrams in
+                    RFC 793 and [Stevens et al., 2004].) This diagram shows how a TCP endpoint moves
+                    from one state to another in response to various events. Each arrow indicates a
+                    possible transition and is labeled with the event that triggers the transition.
+                    This label is either an action by the application (in boldface) or the string
+                        <span class="emphasis"><em>recv</em></span>, indicating the receipt of a segment from the peer
+                    TCP. As a TCP moves from one state to another, it may transmit a segment to the
+                    peer, and this is indicated by the <span class="emphasis"><em>send</em></span> label on the
+                    transition. For example, the arrow for the transition from the ESTABLISHED to
+                    the FIN_WAIT1 state shows that the triggering event is a
+                        <span class="emphasis"><em>close()</em></span> by the local application, and that, during the
+                    transition, the TCP sends a FIN segment to its peer.</p><p>In <a class="xref" href="ch61.html#tcp_state_transition_diagram" title="Figure 61-4. TCP state transition diagram">Figure 61-4</a>, the usual transition path
+                    for a client TCP is shown with heavy solid arrows, and the usual transition path
+                    for a server TCP is shown with heavy dashed arrows. (Other arrows indicate paths
+                    less traveled.) Looking at the parenthetical numbering on the arrows in these
+                    paths, we can see that the segments sent and received by the two TCPs are mirror
+                    images of one another. (After the ESTABLISHED state, the paths traveled by the
+                    server TCP and the client TCP may be the opposite of those indicated, if it is
+                    the server that performs the active close.)</p><div class="note" title="Note"><h3 class="title">Note</h3><p><a class="xref" href="ch61.html#tcp_state_transition_diagram" title="Figure 61-4. TCP state transition diagram">Figure 61-4</a> doesn’t show all possible
+                        transitions for the TCP state machine; it illustrates just those of
+                        principal interest. A more detailed TCP state transition diagram can be
+                        found at <a class="ulink" href="http://www.cl.cam.ac.uk/~pes20/Netsem/poster.pdf" target="_top">http://www.cl.cam.ac.uk/~pes20/Netsem/poster.pdf</a>.</p></div></div><div class="sect2" title="TCP Connection Establishment"><div class="titlepage"><div><div><h3 class="title" id="tcp_connection_establishment">TCP Connection Establishment</h3></div></div></div><p>At the sockets API level, two stream sockets are connected via the following
+                    steps (see <a class="xref" href="ch56.html#overview_of_system_calls_used_with_strea" title="Figure 56-1. Overview of system calls used with stream sockets">Figure 56-1</a>, in <a class="xref" href="ch56.html#listening_for_incoming_connections_colon" title="Listening for Incoming Connections: listen()">Listening for Incoming Connections: <span class="emphasis"><em>listen()</em></span></a>):<a id="IDX-CHP-61-8031" class="indexterm"/><a id="IDX-CHP-61-8032" class="indexterm"/><a id="IDX-CHP-61-8033" class="indexterm"/><a id="IDX-CHP-61-8034" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>The server calls <span class="emphasis"><em>listen()</em></span> to perform a passive
+                            open of a socket, and then calls <span class="emphasis"><em>accept()</em></span>, which
+                            blocks until a connection is established.</p></li><li class="listitem"><p>The client calls <span class="emphasis"><em>connect()</em></span> to perform an active
+                            open of a socket in order to establish a connection to the server’s
+                            passive socket.</p></li></ol></div><p>The steps performed by TCP to establish a connection are shown in <a class="xref" href="ch61.html#three-way_handshake_for_tcp_connection_e" title="Figure 61-5. Three-way handshake for TCP connection establishment">Figure 61-5</a>. These steps are often
+                    referred to as the <span class="emphasis"><em>three-way handshake</em></span>, since three
+                    segments pass between the two TCPs. The steps are as follows:<a id="IDX-CHP-61-8035" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>The <span class="emphasis"><em>connect()</em></span> causes the client TCP to send a SYN
+                            segment to the server TCP. This segment informs the server TCP of the
+                            client TCP’s initial sequence number (labeled <span class="emphasis"><em>M</em></span> in
+                            the diagram). This information is necessary because sequence numbers
+                            don’t begin at 0, as noted in <a class="xref" href="ch58.html#transmission_control_protocol_open_paren" title="Transmission Control Protocol (TCP)">Transmission Control Protocol (TCP)</a>.</p></li><li class="listitem"><p>The server TCP must both acknowledge the client TCP’s SYN segment and
+                            inform the client TCP of its own initial sequence number (labeled
+                                <span class="emphasis"><em>N</em></span> in the diagram). (Two sequence numbers are
+                            required because a stream socket is bidirectional.) The server TCP can
+                            perform both operations by returning a single segment with both the SYN
+                            and the ACK control bits set. (We say that the ACK is
+                                <span class="emphasis"><em>piggybacked</em></span> on the SYN.)</p></li><li class="listitem"><p>The client TCP sends an ACK segment to acknowledge the server TCP’s
+                            SYN segment.</p></li></ol></div><div class="figure"><a id="tcp_state_transition_diagram"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject61_d1e158096"/><img src="figs/web/61-4_SOCKADV-TCP-STD.png.jpg" alt="TCP state transition diagram"/></div></div><div class="figure-title">Figure 61-4. TCP state transition diagram</div></div><div class="note" title="Note"><h3 class="title">Note</h3><p>The SYN segments exchanged in the first two steps of the three-way
+                        handshake may contain information in the <span class="emphasis"><em>options</em></span> field
+                        of the TCP header that is used to determine various parameters for the
+                        connection. See [Stevens et al., 2004], [Stevens, 1994], and [Wright
+                        &amp; Stevens, 1995] for details.<a id="IDX-CHP-61-8036" class="indexterm"/></p></div><p>The labels inside angle brackets (e.g., &lt;LISTEN&gt;) in <a class="xref" href="ch61.html#three-way_handshake_for_tcp_connection_e" title="Figure 61-5. Three-way handshake for TCP connection establishment">Figure 61-5</a> indicate the states of
+                    the TCPs on either side of the connection.</p><p>The SYN flag consumes a byte of the sequence-number space for the connection.
+                    This is necessary so that this flag can be acknowledged unambiguously, since
+                    segments with this flag set may also contain data bytes. This is why we show the
+                    acknowledgement of the <span class="emphasis"><em>SYN M</em></span> segment as <span class="emphasis"><em>ACK
+                        M+1</em></span> in <a class="xref" href="ch61.html#three-way_handshake_for_tcp_connection_e" title="Figure 61-5. Three-way handshake for TCP connection establishment">Figure 61-5</a>.</p><div class="figure"><a id="three-way_handshake_for_tcp_connection_e"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject61_d1e158129"/><img src="figs/web/61-5_SOCKADV-TCP-connection-establishment.png.jpg" alt="Three-way handshake for TCP connection establishment"/></div></div><div class="figure-title">Figure 61-5. Three-way handshake for TCP connection establishment</div></div></div><div class="sect2" title="TCP Connection Termination"><div class="titlepage"><div><div><h3 class="title" id="tcp_connection_termination">TCP Connection Termination</h3></div></div></div><p>Closing a TCP connection normally occurs in the following manner:<a id="IDX-CHP-61-8037" class="indexterm"/><a id="IDX-CHP-61-8038" class="indexterm"/><a id="IDX-CHP-61-8039" class="indexterm"/><a id="IDX-CHP-61-8040" class="indexterm"/><a id="IDX-CHP-61-8041" class="indexterm"/><a id="IDX-CHP-61-8042" class="indexterm"/><a id="IDX-CHP-61-8043" class="indexterm"/><a id="IDX-CHP-61-8044" class="indexterm"/><a id="IDX-CHP-61-8045" class="indexterm"/><a id="IDX-CHP-61-8046" class="indexterm"/><a id="IDX-CHP-61-8047" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>An application on one end of the connection performs a
+                                <span class="emphasis"><em>close()</em></span>. (This is often, but not necessarily,
+                            the client.) We say that this application is performing an
+                                <span class="emphasis"><em>active close</em></span>.</p></li><li class="listitem"><p>Later, the application on the other end of the connection (the server)
+                            also performs a <span class="emphasis"><em>close()</em></span>. This is termed a
+                                <span class="emphasis"><em>passive close</em></span>.</p></li></ol></div><p><a class="xref" href="ch61.html#tcp_connection_termination-id1" title="Figure 61-6. TCP connection termination">Figure 61-6</a> shows the corresponding steps
+                    performed by the underlying TCPs (here, we assume that it is the client that
+                    does the active close). These steps are as follows:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>The client performs an active close, which causes the client TCP to
+                            send a FIN to the server TCP.</p></li><li class="listitem"><p>After receipt of the FIN, the server TCP responds with an ACK. Any
+                            subsequent attempt by the server to <span class="emphasis"><em>read()</em></span> from the
+                            socket yields end-of-file (i.e., a 0 return).</p></li><li class="listitem"><p>When the server later closes its end of the connection, the server TCP
+                            sends a FIN to the client TCP.</p></li><li class="listitem"><p>The client TCP responds with an ACK to acknowledge the server’s
+                            FIN.</p></li></ol></div><p>As with the SYN flag, and for the same reasons, the FIN flag consumes a byte
+                    of the sequence-number space for the connection. This is why we show the
+                    acknowledgement of the <span class="emphasis"><em>FIN M</em></span> segment as <span class="emphasis"><em>ACK
+                        M+1</em></span> in <a class="xref" href="ch61.html#tcp_connection_termination-id1" title="Figure 61-6. TCP connection termination">Figure 61-6</a>.</p><div class="figure"><a id="tcp_connection_termination-id1"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject61_d1e158243"/><img src="figs/web/61-6_SOCKADV-TCP-disconnect.png.jpg" alt="TCP connection termination"/></div></div><div class="figure-title">Figure 61-6. TCP connection termination</div></div></div><div class="sect2" title="Calling shutdown() on a TCP Socket"><div class="titlepage"><div><div><h3 class="title" id="calling_shutdown_open_parenthesis_close">Calling <span class="emphasis"><em>shutdown()</em></span> on a TCP Socket</h3></div></div></div><p>The discussion in the preceding section assumed a full-duplex close; that is,
+                    an application closes both the sending and receiving channels of the TCP socket
+                    using <span class="emphasis"><em>close()</em></span>. As noted in <a class="xref" href="ch61.html#the_shutdown_open_parenthesis_close_pare" title="The shutdown() System Call">The <span class="emphasis"><em>shutdown()</em></span> System Call</a>, we can use
+                        <span class="emphasis"><em>shutdown()</em></span> to close just one channel of the connection
+                    (a half-duplex close). This section notes some specific details for
+                        <span class="emphasis"><em>shutdown()</em></span> on a TCP socket.<a id="IDX-CHP-61-8048" class="indexterm"/><a id="IDX-CHP-61-8049" class="indexterm"/><a id="IDX-CHP-61-8050" class="indexterm"/><a id="IDX-CHP-61-8051" class="indexterm"/><a id="IDX-CHP-61-8052" class="indexterm"/></p><p>Specifying <span class="emphasis"><em>how</em></span> as <code class="literal">SHUT_WR</code> or <code class="literal">SHUT_RDWR</code> initiates
+                    the TCP connection termination sequence (i.e., the active close) described in
+                        <a class="xref" href="ch61.html#tcp_connection_termination" title="TCP Connection Termination">TCP Connection Termination</a>, regardless of whether there
+                    are other file descriptors referring to the socket. Once this sequence has been
+                    initiated, the local TCP moves into the FIN_WAIT1 state, and then into the
+                    FIN_WAIT2 state, while the peer TCP moves into the CLOSE_WAIT state (<a class="xref" href="ch61.html#tcp_connection_termination-id1" title="Figure 61-6. TCP connection termination">Figure 61-6</a>). If <span class="emphasis"><em>how</em></span> is
+                    specified as <code class="literal">SHUT_WR</code>, then, since the socket
+                    file descriptor remains valid and the reading half of the connection remains
+                    open, the peer can continue to send data back to us.</p><p>The <code class="literal">SHUT_RD</code> operation can’t be meaningfully
+                    used with TCP sockets. This is because most TCP implementations don’t provide
+                    the expected behavior for <code class="literal">SHUT_RD</code>, and the
+                    effect of <code class="literal">SHUT_RD</code> varies across
+                    implementations. On Linux and a few other implementations, following a <code class="literal">SHUT_RD</code> (and after any outstanding data has been
+                    read), a <span class="emphasis"><em>read()</em></span> returns end-of-file, as we expect from the
+                    description of <code class="literal">SHUT_RD</code> in Section 61.2.
+                    However, if the peer application subsequently writes data on its socket, then it
+                    is still possible to read that data on the local socket.</p><p>On some other implementations (e.g., the BSDs), <code class="literal">SHUT_RD</code> does indeed cause subsequent calls to
+                        <span class="emphasis"><em>read()</em></span> to always return 0. However, on those
+                    implementations, if the peer continues to <span class="emphasis"><em>write()</em></span> to the
+                    socket, then the data channel will eventually fill until the point where a
+                    further (blocking) call to <span class="emphasis"><em>write()</em></span> by the peer will block.
+                    (With UNIX domain stream sockets, a peer would receive a <code class="literal">SIGPIPE</code> signal and the <code class="literal">EPIPE</code> error if it continued writing to its socket after a
+                        <code class="literal">SHUT_RD</code> had been performed on the local
+                    socket.)</p><p>In summary, the use of <code class="literal">SHUT_RD</code> should be
+                    avoided for portable TCP applications.</p></div><div class="sect2" title="The TIME_WAIT State"><div class="titlepage"><div><div><h3 class="title" id="the_time_underscore_wait_state">The TIME_WAIT State</h3></div></div></div><p>The TCP TIME_WAIT state is a frequent source of confusion in network
+                    programming. Looking at <a class="xref" href="ch61.html#tcp_state_transition_diagram" title="Figure 61-4. TCP state transition diagram">Figure 61-4</a>, we can
+                    see that a TCP performing an active close goes through this state. The TIME_WAIT
+                    state exists to serve two purposes:<a id="IDX-CHP-61-8053" class="indexterm"/><a id="IDX-CHP-61-8054" class="indexterm"/><a id="IDX-CHP-61-8055" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>to implement reliable connection termination; and</p></li><li class="listitem"><p>to allow expiration of old duplicate segments in the network so that
+                            they are not accepted by a new incarnation of the connection.</p></li></ul></div><p>The TIME_WAIT state differs from the other states in that the event that
+                    causes a transition out of this state (to CLOSED) is a timeout. This timeout has
+                    a duration of twice the MSL (2MSL), where MSL (<span class="emphasis"><em>maximum segment
+                        lifetime</em></span>) is the assumed maximum lifetime of a TCP segment in the
+                        network.<a id="IDX-CHP-61-8056" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>An 8-bit time-to-live (TTL) field in the IP header ensures that all IP
+                        packets are eventually discarded if they don’t reach their destination
+                        within a fixed number of hops (routers traversed) while traveling from the
+                        source to the destination host. The MSL is an estimate of the maximum time
+                        that an IP packet could take to exceed the TTL limit. Since it is
+                        represented using 8 bits, the TTL permits a maximum of 255 hops. Normally,
+                        an IP packet requires considerably fewer hops than this to complete its
+                        journey. A packet could encounter this limit because of certain types of
+                        router anomalies (e.g., a router configuration problem) that cause the
+                        packet to get caught in a network loop until it exceeds the TTL
+                        limit.</p></div><p>The BSD sockets implementation assumes a value of 30 seconds for the MSL, and
+                    Linux follows the BSD norm. Thus, the TIME_WAIT state has a lifetime of 60
+                    seconds on Linux. However, RFC 1122 recommends a value of 2 minutes for the MSL,
+                    and, on implementations following this recommendation, the TIME_WAIT state can
+                    thus last 4 minutes.<a id="IDX-CHP-61-8057" class="indexterm"/></p><p>We can understand the first purpose of the TIME_WAIT state--ensuring reliable
+                    connection termination--by looking at <a class="xref" href="ch61.html#tcp_connection_termination-id1" title="Figure 61-6. TCP connection termination">Figure 61-6</a>. In this diagram, we can see that
+                    four segments are usually exchanged during the termination of a TCP connection.
+                    The last of these is an ACK sent from the TCP performing the active close to the
+                    TCP performing the passive close. Suppose that this ACK gets lost in the
+                    network. If this occurs, then the TCP performing the passive close will
+                    eventually retransmit its FIN. Having the TCP that performs the active close
+                    remain in the TIME_WAIT state for a fixed period ensures that it is available to
+                    resend the final ACK in this case. If the TCP that performs the active close did
+                    not still exist, then—since it wouldn’t have any state information for the
+                    connection—the TCP protocol would respond to the resent FIN by sending an RST
+                    (reset) segment to the TCP performing the passive close, and this RST would be
+                    interpreted as an error. (This explains why the duration of the TIME_WAIT state
+                    is <span class="emphasis"><em>twice</em></span> the MSL: one MSL for the final ACK to reach the
+                    peer TCP, plus a further MSL in case a further FIN must be sent.)</p><div class="note" title="Note"><h3 class="title">Note</h3><p>An equivalent of the TIME_WAIT state is not required for the TCP
+                        performing the passive close, because it is the initiator of the final
+                        exchange in the connection termination. After sending the FIN, this TCP will
+                        wait for the ACK from its peer, and retransmit the FIN if its timer expires
+                        before the ACK is received.</p></div><p>To understand the second purpose of the TIME_WAIT state—ensuring the
+                    expiration of old duplicate segments in the network—we must remember that the
+                    retransmission algorithm used by TCP means that duplicate segments may be
+                    generated, and that, depending on routing decisions, these duplicates could
+                    arrive after the connection has been closed. For example, suppose that we have a
+                    TCP connection between two socket addresses, say, <code class="literal">204.152.189.116</code> port 21 (the FTP port) and <code class="literal">200.0.0.1</code> port 50,000. Suppose also that this
+                    connection is closed, and that later a new connection is established using
+                    exactly the same IP addresses and ports. This is referred to as a new
+                    incarnation of the connection. In this case, TCP must ensure that no old
+                    duplicate segments from the previous incarnation are accepted as valid data in
+                    the new incarnation. This is done by preventing a new incarnation from being
+                    established while there is an existing TCP in the TIME_WAIT state on one of the
+                    endpoints.</p><p>A frequent question posted to online forums is how to disable the TIME_WAIT
+                    state, since it can lead to the error <code class="literal">EADDRINUSE</code> (“Address already in use”) when a restarted server
+                    tries to bind a socket to an address that has a TCP in the TIME_WAIT state.
+                    Although there are ways of doing this (see [Stevens et al., 2004]), and also
+                    ways of assassinating a TCP in this state (i.e., causing the TIME_WAIT state to
+                    terminate prematurely, see [Snader, 2000]), this should be avoided, since it
+                    would thwart the reliability guarantees that the TIME_WAIT state provides. In
+                        <a class="xref" href="ch61.html#the_so_underscore_reuseaddr_socket_optio" title="The SO_REUSEADDR Socket Option">The <span class="emphasis"><em>SO_REUSEADDR</em></span> Socket Option</a>, we look at the
+                    use of the <code class="literal">SO_REUSEADDR</code> socket option, which
+                    can be used to avoid the usual causes of the <code class="literal">EADDRINUSE</code> error, while still allowing the TIME_WAIT to provide
+                    its reliability guarantees.</p></div></div><div class="sect1" title="Monitoring Sockets: netstat"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="monitoring_sockets_colon_netstat">Monitoring Sockets: <span class="emphasis"><em>netstat</em></span></h2></div></div></div><p>The <span class="emphasis"><em>netstat</em></span> program displays the state of Internet and UNIX
+                domain sockets on a system. It is a useful debugging tool when writing socket
+                applications. Most UNIX implementations provide a version of
+                    <span class="emphasis"><em>netstat</em></span>, although there is some variation in the syntax of
+                its command-line arguments across implementations.<a id="IDX-CHP-61-8058" class="indexterm"/><a id="IDX-CHP-61-8059" class="indexterm"/><a id="IDX-CHP-61-8060" class="indexterm"/></p><p>By default, when executed with no command-line options,
+                    <span class="emphasis"><em>netstat</em></span> displays information for connected sockets in both
+                the UNIX and Internet domains. We can use a number of command-line options to change
+                the information displayed. Some of these options are listed in <a class="xref" href="ch61.html#options_for_the_netstat_command" title="Table 61-1. Options for the netstat command">Table 61-1</a>.</p><div class="table"><a id="options_for_the_netstat_command"/><div class="table-title">Table 61-1. Options for the <span class="emphasis"><em>netstat</em></span> command</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Option<a id="IDX-CHP-61-8061" class="indexterm"/></p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>Description</p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">-a</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Display information about all sockets, including listening
+                                    sockets</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">-e</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Display extended information (includes user ID of socket
+                                    owner)</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">-c</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Redisplay socket information continuously (each second)</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">-l</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Display information only about listening sockets</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">-n</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Display IP addresses, port numbers, and usernames in numerical
+                                    form</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">-p</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Show the process ID and name of program to which socket
+                                    belongs</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">--inet</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Display information for Internet domain sockets</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">--tcp</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Display information for Internet domain TCP (stream)
+                                    sockets</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">--udp</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Display information for Internet domain UDP (datagram)
+                                    sockets</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">--unix</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>Display information for UNIX domain sockets</p>
+                            </td></tr></tbody></table></div></div><p>Here is an abridged example of the output that we see when using
+                    <span class="emphasis"><em>netstat</em></span> to list all Internet domain sockets on the
+                system:</p><a id="I_programlisting61_d1e158578"/><pre class="programlisting">$ <strong class="userinput"><code>netstat -a --inet</code></strong>
+Active Internet connections (servers and established)
+Proto Recv-Q Send-Q Local Address    Foreign Address  State
+tcp        0      0 *:50000          *:*              LISTEN
+tcp        0      0 *:55000          *:*              LISTEN
+tcp        0      0 localhost:smtp   *:*              LISTEN
+tcp        0      0 localhost:32776  localhost:58000  TIME_WAIT
+tcp    34767      0 localhost:55000  localhost:32773  ESTABLISHED
+tcp        0 115680 localhost:32773  localhost:55000  ESTABLISHED
+udp        0      0 localhost:61000  localhost:60000  ESTABLISHED
+udp      684      0 *:60000          *:*</pre><p>For each Internet domain socket, we see the following information:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><code class="literal">Proto</code>: This is the socket protocol—for
+                        example, <code class="literal">tcp</code> or <code class="literal">udp</code>.</p></li><li class="listitem"><p><code class="literal">Recv-Q</code>: This is the number of bytes in
+                        the socket receive buffer that are as yet unread by the local application.
+                        For UDP sockets, this field counts not just data, but also bytes in UDP
+                        headers and other metadata.<a id="IDX-CHP-61-8062" class="indexterm"/></p></li><li class="listitem"><p><code class="literal">Send-Q</code>: This is the number of bytes
+                        queued for transmission in the socket send buffer. As with the <code class="literal">Recv-Q</code> field, for UDP sockets, this field
+                        includes bytes in UDP headers and other metadata.<a id="IDX-CHP-61-8063" class="indexterm"/></p></li><li class="listitem"><p><code class="literal">Local Address</code>: This is the address to
+                        which the socket is bound, expressed in the form
+                            <span class="emphasis"><em>host-IP-address:port</em></span>. By default, both components
+                        of the address are displayed as names, unless the numeric values can’t be
+                        resolved to corresponding host and service names. An asterisk (<code class="literal">*</code>) in the host part of the address means the
+                        wildcard IP address.</p></li><li class="listitem"><p><code class="literal">Foreign Address</code>: This is the address of
+                        the peer socket to which this socket is bound. The string <code class="literal">*:*</code> indicates no peer address.</p></li><li class="listitem"><p><code class="literal">State</code>: This is the current state of the
+                        socket. For a TCP socket, this state is one of those described in <a class="xref" href="ch61.html#tcp_state_machine_and_state_transition_d" title="TCP State Machine and State Transition Diagram">TCP State Machine and State Transition Diagram</a>.</p></li></ul></div><p>For further details, see the <span class="emphasis"><em>netstat(8)</em></span> manual page.</p><p>Various Linux-specific files in the directory <code class="literal">/proc/net</code> allow a program to read much of the same information that
+                is displayed by <span class="emphasis"><em>netstat</em></span>. These files are named <code class="literal">tcp</code>, <code class="literal">udp</code>, <code class="literal">tcp6</code>, <code class="literal">udp6</code>, and
+                    <code class="literal">unix</code>, with the obvious purposes. For further
+                details, see the <span class="emphasis"><em>proc(5)</em></span> manual page.</p></div><div class="sect1" title="Using tcpdump to Monitor TCP Traffic"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="using_tcpdump_to_monitor_tcp_traffic">Using <span class="emphasis"><em>tcpdump</em></span> to Monitor TCP Traffic</h2></div></div></div><p>The <span class="emphasis"><em>tcpdump</em></span> program is a useful debugging tool that allows
+                the superuser to monitor the Internet traffic on a live network, generating a
+                real-time textual equivalent of diagrams such as <a class="xref" href="ch61.html#acknowledgements_in_tcp" title="Figure 61-3. Acknowledgements in TCP">Figure 61-3</a>. Despite its name,
+                    <span class="emphasis"><em>tcpdump</em></span> can be used to display traffic for all kinds of
+                network packets (e.g., TCP segments, UDP datagrams, and ICMP packets). For each
+                network packet, <span class="emphasis"><em>tcpdump</em></span> displays information such as
+                timestamps, the source and destination IP addresses, and further protocol-specific
+                details. It is possible to select the packets to be monitored by protocol type,
+                source and destination IP address and port number, and a range of other criteria.
+                Full details are provided in the <span class="emphasis"><em>tcpdump</em></span> manual page.<a id="IDX-CHP-61-8064" class="indexterm"/><a id="IDX-CHP-61-8065" class="indexterm"/><a id="IDX-CHP-61-8066" class="indexterm"/><a id="IDX-CHP-61-8067" class="indexterm"/><a id="IDX-CHP-61-8068" class="indexterm"/><a id="IDX-CHP-61-8069" class="indexterm"/><a id="IDX-CHP-61-8070" class="indexterm"/><a id="IDX-CHP-61-8071" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>wireshark</em></span> (formerly <span class="emphasis"><em>ethereal</em></span>;
+                        <a class="ulink" href="http://www.wireshark.org" target="_top">http://www.wireshark.org</a>) program performs a similar task to
+                        <span class="emphasis"><em>tcpdump</em></span>, but displays traffic information via a
+                    graphical interface.</p></div><p>For each TCP segment, <span class="emphasis"><em>tcpdump</em></span> displays a line of the
+                following form:</p><a id="I_programlisting61_d1e158761"/><pre class="programlisting"><span class="emphasis"><em>src</em></span> &gt; <span class="emphasis"><em>dst</em></span>: <span class="emphasis"><em>flags data-seqno ack window urg</em></span> &lt;<span class="emphasis"><em>options</em></span>&gt;</pre><p>These fields have the following meanings:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>src</em></span>: This is the source IP address and port.</p></li><li class="listitem"><p><span class="emphasis"><em>dst</em></span>: This is the destination IP address and
+                        port.</p></li><li class="listitem"><p><span class="emphasis"><em>flags</em></span>: This field contains zero or more of the
+                        following letters, each of which corresponds to one of the TCP control bits
+                        described in <a class="xref" href="ch61.html#format_of_a_tcp_segment" title="Format of a TCP Segment">Format of a TCP Segment</a>: S (SYN), F (FIN), P
+                        (PSH), R (RST), E (ECE), and C (CWR).</p></li><li class="listitem"><p><span class="emphasis"><em>data-seqno</em></span>: This is the range of the sequence-number
+                        space covered by the bytes in this packet.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>By default, the sequence-number range is displayed relative to the
+                            first byte monitored for this direction of the data stream. The
+                                <span class="emphasis"><em>tcpdump -S</em></span> option causes sequence numbers to be
+                            displayed in absolute format.</p></div></li><li class="listitem"><p><span class="emphasis"><em>ack</em></span>: This is a string of the form “<code class="literal">ack</code>
+                        <span class="emphasis"><em>num</em></span>” indicating the sequence number of the next byte
+                        expected from the other direction on this connection.</p></li><li class="listitem"><p><span class="emphasis"><em>window</em></span>: This is a string of the form “<code class="literal">win</code>
+                        <span class="emphasis"><em>num</em></span>” indicating the number of bytes of receive buffer
+                        space available for transmission in the opposite direction on this
+                        connection.</p></li><li class="listitem"><p><span class="emphasis"><em>urg</em></span>: This is a string of the form “<code class="literal">urg</code>
+                        <span class="emphasis"><em>num</em></span>” indicating that this segment contains urgent data
+                        at the specified offset within the segment.</p></li><li class="listitem"><p><span class="emphasis"><em>options</em></span>: This string describes any TCP options
+                        contained in the segment.</p></li></ul></div><p>The <span class="emphasis"><em>src</em></span>, <span class="emphasis"><em>dst</em></span>, and
+                    <span class="emphasis"><em>flags</em></span> fields always appear. The remaining fields are
+                displayed only if appropriate.</p><p>The shell session below shows how <span class="emphasis"><em>tcpdump</em></span> can be used to
+                monitor the traffic between a client (running on the host <code class="literal">pukaki</code>) and a server (running on <code class="literal">tekapo</code>). In this shell session, we use two
+                    <span class="emphasis"><em>tcpdump</em></span> options that make the output less verbose. The
+                    <span class="emphasis"><em>-t</em></span> option suppresses the display of timestamp information.
+                The <span class="emphasis"><em>-N</em></span> option causes hostnames to be displayed without a
+                qualifying domain name. Furthermore, for brevity, and because we don’t describe the
+                details of TCP options, we have removed the <span class="emphasis"><em>options</em></span> fields from
+                the lines of <span class="emphasis"><em>tcpdump</em></span> output.</p><p>The server operates on port 55555, so our <span class="emphasis"><em>tcpdump</em></span> command
+                selects traffic for that port. The output shows the three segments exchanged during
+                connection establishment:</p><a id="I_programlisting61_d1e158886"/><pre class="programlisting">$ <strong class="userinput"><code>tcpdump -t -N 'port 55555'</code></strong>
+IP pukaki.60391 &gt; tekapo.55555: S 3412991013:3412991013(0) win 5840
+IP tekapo.55555 &gt; pukaki.60391: S 1149562427:1149562427(0) ack 3412991014 win 5792
+IP pukaki.60391 &gt; tekapo.55555: . ack 1 win 5840</pre><p>These three segments are the SYN, SYN/ACK, and ACK segments exchanged for the
+                three-way handshake (see <a class="xref" href="ch61.html#three-way_handshake_for_tcp_connection_e" title="Figure 61-5. Three-way handshake for TCP connection establishment">Figure 61-5</a>).</p><p>In the following output, the client sends the server two messages, containing 16
+                and 32 bytes, respectively, and the server responds in each case with a 4-byte
+                message:</p><a id="I_programlisting61_d1e158898"/><pre class="programlisting">IP pukaki.60391 &gt; tekapo.55555: P 1:17(16) ack 1 win 5840
+IP tekapo.55555 &gt; pukaki.60391: . ack 17 win 1448
+IP tekapo.55555 &gt; pukaki.60391: P 1:5(4) ack 17 win 1448
+IP pukaki.60391 &gt; tekapo.55555: . ack 5 win 5840
+IP pukaki.60391 &gt; tekapo.55555: P 17:49(32) ack 5 win 5840
+IP tekapo.55555 &gt; pukaki.60391: . ack 49 win 1448
+IP tekapo.55555 &gt; pukaki.60391: P 5:9(4) ack 49 win 1448
+IP pukaki.60391 &gt; tekapo.55555: . ack 9 win 5840</pre><p>For each of the data segments, we see an ACK sent in the opposite
+                direction.</p><p>Lastly, we show the segments exchanged during connection termination (first, the
+                client closes its end of the connection, and then the server closes the other
+                end):</p><a id="I_programlisting61_d1e158904"/><pre class="programlisting">IP pukaki.60391 &gt; tekapo.55555: F 49:49(0) ack 9 win 5840
+IP tekapo.55555 &gt; pukaki.60391: . ack 50 win 1448
+IP tekapo.55555 &gt; pukaki.60391: F 9:9(0) ack 50 win 1448
+IP pukaki.60391 &gt; tekapo.55555: . ack 10 win 5840</pre><p>The above output shows the four segments exchanged during connection termination
+                (see <a class="xref" href="ch61.html#tcp_connection_termination-id1" title="Figure 61-6. TCP connection termination">Figure 61-6</a>).</p></div><div class="sect1" title="Socket Options"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="socket_options">Socket Options</h2></div></div></div><p>Socket options affect various features of the operation of a socket. In this book,
+                we describe just a couple of the many socket options that are available. An
+                extensive discussion covering most standard socket options is provided in [Stevens
+                et al., 2004]. See the <span class="emphasis"><em>tcp(7)</em></span>, <span class="emphasis"><em>udp(7)</em></span>,
+                    <span class="emphasis"><em>ip(7)</em></span>, <span class="emphasis"><em>socket(7)</em></span>, and
+                    <span class="emphasis"><em>unix(7)</em></span> manual pages for additional Linux-specific
+                    details.<a id="IDX-CHP-61-8072" class="indexterm"/><a id="IDX-CHP-61-8073" class="indexterm"/><a id="IDX-CHP-61-8074" class="indexterm"/><a id="IDX-CHP-61-8075" class="indexterm"/><a id="IDX-CHP-61-8076" class="indexterm"/><a id="IDX-CHP-61-8077" class="indexterm"/></p><p>The <span class="emphasis"><em>setsockopt()</em></span> and <span class="emphasis"><em>getsockopt()</em></span> system
+                calls set and retrieve socket options.<a id="IDX-CHP-61-8078" class="indexterm"/><a id="IDX-CHP-61-8079" class="indexterm"/></p><a id="I_programlisting61_d1e158979"/><pre class="programlisting">#include &lt;sys/socket.h&gt;
+
+int <strong class="userinput"><code>getsockopt</code></strong>(int <span class="emphasis"><em>sockfd</em></span>, int <span class="emphasis"><em>level</em></span>, int <span class="emphasis"><em>optname</em></span>, void *<span class="emphasis"><em>optval</em></span>,
+               socklen_t *<span class="emphasis"><em>optlen</em></span>);
+int <strong class="userinput"><code>setsockopt</code></strong>(int <span class="emphasis"><em>sockfd</em></span>, int <span class="emphasis"><em>level</em></span>, int <span class="emphasis"><em>optname</em></span>, const void *<span class="emphasis"><em>optval</em></span>,
+               socklen_t <span class="emphasis"><em>optlen</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Both return 0 on success, or -1 on error</p></div><p>For both <span class="emphasis"><em>setsockopt()</em></span> and <span class="emphasis"><em>getsockopt()</em></span>,
+                    <span class="emphasis"><em>sockfd</em></span> is a file descriptor referring to a socket.</p><p>The <span class="emphasis"><em>level</em></span> argument specifies the protocol to which the socket
+                option applies—for example, IP or TCP. For most of the socket options that we
+                describe in this book, <span class="emphasis"><em>level</em></span> is set to <code class="literal">SOL_SOCKET</code>, which indicates an option that applies at the sockets API
+                level.</p><p>The <span class="emphasis"><em>optname</em></span> argument identifies the option whose value we
+                wish to set or retrieve. The <span class="emphasis"><em>optval</em></span> argument is a pointer to a
+                buffer used to specify or return the option value; this argument is a pointer to an
+                integer or a structure, depending on the option.</p><p>The <span class="emphasis"><em>optlen</em></span> argument specifies the size (in bytes) of the
+                buffer pointed to by <span class="emphasis"><em>optval</em></span>. For
+                    <span class="emphasis"><em>setsockopt()</em></span>, this argument is passed by value. For
+                    <span class="emphasis"><em>getsockopt()</em></span>, <span class="emphasis"><em>optlen</em></span> is a value-result
+                argument. Before the call, we initialize it to the size of the buffer pointed to by
+                    <span class="emphasis"><em>optval</em></span>; upon return, it is set to the number of bytes
+                actually written to that buffer.</p><p>As detailed in <a class="xref" href="ch61.html#inheritance_of_flags_and_options_across" title="Inheritance of Flags and Options Across accept()">Inheritance of Flags and Options Across <span class="emphasis"><em>accept()</em></span></a>, the
+                socket file descriptor returned by a call to <span class="emphasis"><em>accept()</em></span> inherits
+                the values of settable socket options from the listening socket.</p><p>Socket options are associated with an open file description (refer to <a class="xref" href="ch05.html#relationship_between_file_descriptors_co" title="Figure 5-2. Relationship between file descriptors, open file descriptions, and i-nodes">Figure 5-2</a>, in <a class="xref" href="ch05.html#relationship_between_file_descriptors_an" title="Relationship Between File Descriptors and Open Files">Relationship Between File Descriptors and Open Files</a>). This means that file
+                descriptors duplicated as a consequence of <span class="emphasis"><em>dup()</em></span> (or similar)
+                or <span class="emphasis"><em>fork()</em></span> share the same set of socket options.</p><p>A simple example of a socket option is <code class="literal">SO_TYPE</code>,
+                which can be used to find out the type of a socket, as follows:</p><a id="I_programlisting61_d1e159098"/><pre class="programlisting">int optval;
+socklen_t optlen;
+
+optlen = sizeof(optval);
+if (getsockopt(sfd, SOL_SOCKET, SO_TYPE, &amp;optval, &amp;optlen) == -1)
+    errExit("getsockopt");</pre><p>After this call, <span class="emphasis"><em>optval</em></span> contains the socket type—for example,
+                    <code class="literal">SOCK_STREAM</code> or <code class="literal">SOCK_DGRAM</code>. Using this call can be useful in a program that inherited
+                a socket file descriptor across an <span class="emphasis"><em>exec()</em></span>—for example, a
+                program execed by <span class="emphasis"><em>inetd</em></span>—since that program may not know which
+                type of socket it inherited.</p><p><code class="literal">SO_TYPE</code> is an example of a read-only socket
+                option. It is not possible to use <span class="emphasis"><em>setsockopt()</em></span> to change a
+                socket’s type.</p></div><div class="sect1" title="The SO_REUSEADDR Socket Option"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_so_underscore_reuseaddr_socket_optio">The <span class="emphasis"><em>SO_REUSEADDR</em></span> Socket Option</h2></div></div></div><p>The <code class="literal">SO_REUSEADDR</code> socket option serves a number
+                of purposes (see <a class="xref" href="ch07.html" title="Chapter 7. Memory Allocation">Chapter 7</a> of [Stevens et al., 2004] for
+                details). We’ll concern ourselves with only one common use: to avoid the <code class="literal">EADDRINUSE</code> (“Address already in use”) error when a TCP
+                server is restarted and tries to bind a socket to a port that currently has an
+                associated TCP. There are two scenarios in which this usually occurs:<a id="IDX-CHP-61-8080" class="indexterm"/><a id="IDX-CHP-61-8081" class="indexterm"/><a id="IDX-CHP-61-8082" class="indexterm"/><a id="IDX-CHP-61-8083" class="indexterm"/><a id="IDX-CHP-61-8084" class="indexterm"/><a id="IDX-CHP-61-8085" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>A previous invocation of the server that was connected to a client
+                        performed an active close, either by calling <span class="emphasis"><em>close()</em></span>,
+                        or by crashing (e.g., it was killed by a signal). This leaves a TCP endpoint
+                        that remains in the TIME_WAIT state until the 2MSL timeout expires.</p></li><li class="listitem"><p>A previous invocation of the server created a child process to handle a
+                        connection to a client. Later, the server terminated, while the child
+                        continues to serve the client, and thus maintain a TCP endpoint using the
+                        server’s well-known port.</p></li></ul></div><p>In both of these scenarios, the outstanding TCP endpoint is unable to accept new
+                connections. Nevertheless, in both cases, by default, most TCP implementations
+                prevent a new listening socket from being bound to the server’s well-known
+                port.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <code class="literal">EADDRINUSE</code> error doesn’t usually occur
+                    with clients, since they typically use an ephemeral port that won’t be one of
+                    those ports currently in the TIME_WAIT state. However, if a client binds to a
+                    specific port number, then it also can encounter this error.</p></div><p>To understand the operation of the <code class="literal">SO_REUSEADDR</code>
+                socket option, it can help to return to our earlier telephone analogy for stream
+                sockets (<a class="xref" href="ch56.html#stream_sockets" title="Stream Sockets">Stream Sockets</a>). Like a telephone call (we ignore the
+                notion of conference calls), a TCP socket connection is identifiable by the
+                    <span class="emphasis"><em>combination</em></span> of a pair of connected endpoints. The operation
+                of <span class="emphasis"><em>accept()</em></span> is analogous to the task performed by a telephone
+                operator on an internal company switchboard (“a server”). When an external telephone
+                call arrives, the operator transfers it to some internal telephone (“a new socket”)
+                within the organization. From an outside perspective, there is no way of identifying
+                that internal telephone. When multiple external calls are being handled by the
+                switchboard, the only way of distinguishing them is via the combination of the
+                external caller’s number and the switchboard number. (The latter is necessary when
+                we consider that there will be multiple company switchboards within the telephone
+                network as a whole.) Analogously, each time we accept a socket connection on a
+                listening socket, a new socket is created. All of these sockets are associated with
+                the same local address as the listening socket. The only way of distinguishing them
+                is via their connections to different peer sockets.</p><p>In other words, a connected TCP socket is identified by a 4-tuple (i.e., a
+                combination of four values) of the following form:</p><a id="I_programlisting61_d1e159200"/><pre class="programlisting">{ local-IP-address, local-port, foreign-IP-address, foreign-port }</pre><p>The TCP specification requires that each such tuple be unique; that is, only one
+                corresponding connection incarnation (“telephone call”) can exist. The problem is
+                that most implementations (including Linux) enforce a stricter constraint: a local
+                port can’t be reused (i.e., specified in a call to <span class="emphasis"><em>bind()</em></span>) if
+                any TCP connection incarnation with a matching local port exists on the host. This
+                rule is enforced even when the TCP could not accept new connections, as in the
+                scenarios described at the start of this section.</p><p>Enabling the <code class="literal">SO_REUSEADDR</code> socket option relaxes
+                this constraint, bringing it closer to the TCP requirement. By default, this option
+                has the value 0, meaning that it is disabled. We enable the option by giving it a
+                nonzero value before binding a socket, as shown in <a class="xref" href="ch61.html#setting_the_so_underscore_reuseaddr_sock" title="Example 61-4. Setting the SO_REUSEADDR socket option">Example 61-4</a>.</p><p>Setting the <code class="literal">SO_REUSEADDR</code> option means that we
+                can bind a socket to a local port even if another TCP is bound to the same port in
+                either of the scenarios described at the start of this section. Most TCP servers
+                should enable this option. We have already seen some examples of the use of this
+                option in <a class="xref" href="ch59.html#an_iterative_server_that_uses_a_stream_s" title="Example 59-6. An iterative server that uses a stream socket to communicate with clients">Example 59-6</a> (page 1221) and
+                    <a class="xref" href="ch59.html#an_internet_domain_sockets_librar" title="Example 59-9. An Internet domain sockets library">Example 59-9</a> (page 1228).</p><div class="example"><a id="setting_the_so_underscore_reuseaddr_sock"/><div class="example-title">Example 61-4. Setting the <code class="literal">SO_REUSEADDR</code> socket
+                    option</div><div class="example-contents"><pre class="programlisting">int sockfd, optval;
+
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd == -1)
+        errExit("socket");
+
+    optval = 1;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &amp;optval,
+            sizeof(optval)) == -1)
+        errExit("socket");
+
+    if (bind(sockfd, &amp;addr, addrlen) == -1)
+        errExit("bind");
+    if (listen(sockfd, backlog) == -1)
+        errExit("listen");</pre></div></div></div><div class="sect1" title="Inheritance of Flags and Options Across accept()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="inheritance_of_flags_and_options_across">Inheritance of Flags and Options Across <span class="emphasis"><em>accept()</em></span></h2></div></div></div><p>Various flags and settings can be associated with open file descriptions and file
+                descriptors (<a class="xref" href="ch05.html#relationship_between_file_descriptors_an" title="Relationship Between File Descriptors and Open Files">Relationship Between File Descriptors and Open Files</a>).
+                Furthermore, as described in <a class="xref" href="ch61.html#socket_options" title="Socket Options">Socket Options</a>, various options can
+                be set for a socket. If these flags and options are set on a listening socket, are
+                they inherited by the new socket returned by <span class="emphasis"><em>accept()</em></span>? We
+                describe the details here.<a id="IDX-CHP-61-8086" class="indexterm"/><a id="IDX-CHP-61-8087" class="indexterm"/><a id="IDX-CHP-61-8088" class="indexterm"/><a id="IDX-CHP-61-8089" class="indexterm"/><a id="IDX-CHP-61-8090" class="indexterm"/><a id="IDX-CHP-61-8091" class="indexterm"/><a id="IDX-CHP-61-8092" class="indexterm"/></p><p>On Linux, the following attributes are not inherited by the new file descriptor
+                returned by <span class="emphasis"><em>accept()</em></span>:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The status flags associated with an open file description—the flags that
+                        can be altered using the <span class="emphasis"><em>fcntl()</em></span>
+                        <code class="literal">F_SETFL</code> operation (<a class="xref" href="ch05.html#open_file_status_flags" title="Open File Status Flags">Open File Status Flags</a>). These include flags such as
+                            <code class="literal">O_NONBLOCK</code> and <code class="literal">O_ASYNC</code>.</p></li><li class="listitem"><p>The file descriptor flags—the flags that can be altered using the
+                            <span class="emphasis"><em>fcntl()</em></span>
+                        <code class="literal">F_SETFD</code> operation. The only such flag is
+                        the close-on-exec flag (<code class="literal">FD_CLOEXEC</code>,
+                        described in <a class="xref" href="ch27.html#file_descriptors_and_exec_open_parenthes" title="File Descriptors and exec()">File Descriptors and <span class="emphasis"><em>exec()</em></span></a>).<a id="IDX-CHP-61-8093" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>fcntl()</em></span>
+                        <code class="literal">F_SETOWN</code> (owner process ID) and <code class="literal">F_SETSIG</code> (generated signal) file descriptor
+                        attributes associated with signal-driven I/O (<a class="xref" href="ch63.html#signal-driven_i_solidus_o" title="Signal-Driven I/O">Signal-Driven I/O</a>).</p></li></ul></div><p>On the other hand, the new descriptor returned by <span class="emphasis"><em>accept()</em></span>
+                inherits a copy of most of the socket options that can be set using
+                    <span class="emphasis"><em>setsockopt()</em></span> (<a class="xref" href="ch61.html#socket_options" title="Socket Options">Socket Options</a>).</p><p>SUSv3 is silent on the details described here, and the inheritance rules for the
+                new connected socket returned by <span class="emphasis"><em>accept()</em></span> vary across UNIX
+                implementations. Most notably, on some UNIX implementations, if open file status
+                flags such as <code class="literal">O_NONBLOCK</code> and <code class="literal">O_ASYNC</code> are set on a listening socket, then they are
+                inherited by the new socket returned by <span class="emphasis"><em>accept()</em></span>. For
+                portability, it may be necessary to explicitly reset these attributes on a socket
+                returned by <span class="emphasis"><em>accept()</em></span>.</p></div><div class="sect1" title="TCP Versus UDP"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="tcp_versus_udp">TCP Versus UDP</h2></div></div></div><p>Given that TCP provides reliable delivery of data, while UDP does not, an obvious
+                question is, “Why use UDP at all?” The answer to this question is covered at some
+                length in <a class="xref" href="ch22.html" title="Chapter 22. Signals: Advanced Features">Chapter 22</a> of [Stevens et al.,
+                2004]. Here, we summarize some of the points that may lead us to choose UDP over
+                    TCP:<a id="IDX-CHP-61-8094" class="indexterm"/><a id="IDX-CHP-61-8095" class="indexterm"/><a id="IDX-CHP-61-8096" class="indexterm"/><a id="IDX-CHP-61-8097" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>A UDP server can receive (and reply to) datagrams from multiple clients,
+                        without needing to create and terminate a connection for each client (i.e.,
+                        transmission of single messages using UDP has a lower overhead than is
+                        required when using TCP).</p></li><li class="listitem"><p>For simple request-response communications, UDP can be faster than TCP,
+                        since it doesn’t require connection establishment and termination. <a class="xref" href="apa.html" title="Appendix A. Tracing System Calls">Appendix A</a> of [Stevens, 1996] notes that in the
+                        best-case scenario, the time using TCP is</p><a id="I_programlisting61_d1e159399"/><pre class="programlisting">2 * RTT + SPT</pre><p>In this formula, RTT is the round-trip time (the time required to send a
+                        request and receive a response), and SPT is the time spent by the server
+                        processing the request. (On a wide area network, the SPT value may be small
+                        compared to the RTT.) For UDP, the best-case scenario for a single
+                        request-response communication is</p><a id="I_programlisting61_d1e159403"/><pre class="programlisting">RTT + SPT</pre><p>This is one RTT less than the time required for TCP. Since the RTT between
+                        hosts separated by large (i.e., intercontinental) distances or many
+                        intervening routers is typically several tenths of a second, this difference
+                        can make UDP attractive for some types of request-response communication.
+                        DNS is a good example of an application that uses UDP for this reason—using
+                        UDP allows name lookup to be performed by transmitting a single packet in
+                        each direction between servers.</p></li><li class="listitem"><p>UDP sockets permit broadcasting and multicasting.
+                            <span class="emphasis"><em>Broadcasting</em></span> allows a sender to transmit a datagram
+                        to the same destination port on all of the hosts connected to a network.
+                            <span class="emphasis"><em>Multicasting</em></span> is similar, but allows a datagram to
+                        be sent to a specified set of hosts. For further details see <a class="xref" href="ch21.html" title="Chapter 21. Signals: Signal Handlers">Chapter 21</a> and <a class="xref" href="ch22.html" title="Chapter 22. Signals: Advanced Features">Chapter 22</a> of [Stevens et al.,
+                            2004].<a id="IDX-CHP-61-8098" class="indexterm"/><a id="IDX-CHP-61-8099" class="indexterm"/></p></li><li class="listitem"><p>Certain types of applications (e.g., streaming video and audio
+                        transmission) can function acceptably without the reliability provided by
+                        TCP. On the other hand, the delay that may occur after TCP tries to recover
+                        from a lost segment may result in transmission delays that are unacceptably
+                        long. (A delay in streaming media transmission may be worse than a brief
+                        loss of the transmission stream.) Therefore, such applications may prefer
+                        UDP, and adopt application-specific recovery strategies to deal with
+                        occasional packet loss.</p></li></ul></div><p>An application that uses UDP, but nevertheless requires reliability, must
+                implement reliability features itself. Usually, this requires at least sequence
+                numbers, acknowledgements, retransmission of lost packets, and duplicate detection.
+                An example of how to do this is shown in [Stevens et al., 2004]. However, if more
+                advanced features such as flow control and congestion control are also required,
+                then it is probably best to use TCP instead. Trying to implement all of these
+                features on top of UDP is complex, and, even when well implemented, the result is
+                unlikely to perform better than TCP.</p></div><div class="sect1" title="Advanced Features"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="advanced_features">Advanced Features</h2></div></div></div><p>UNIX and Internet domain sockets have many other features that we have not
+                detailed in this book. We summarize a few of these features in this section. For
+                full details, see [Stevens et al., 2004].<a id="IDX-CHP-61-8100" class="indexterm"/><a id="IDX-CHP-61-8101" class="indexterm"/><a id="IDX-CHP-61-8102" class="indexterm"/><a id="IDX-CHP-61-8103" class="indexterm"/><a id="IDX-CHP-61-8104" class="indexterm"/><a id="IDX-CHP-61-8105" class="indexterm"/></p><div class="sect2" title="Out-of-Band Data"><div class="titlepage"><div><div><h3 class="title" id="out-of-band_data">Out-of-Band Data</h3></div></div></div><p>Out-of-band data is a feature of stream sockets that allows a sender to mark
+                    transmitted data as high priority; that is, the receiver can obtain notification
+                    of the availability of out-of-band data without needing to read all of the
+                    intervening data in the stream. This feature is used in programs such as
+                        <span class="emphasis"><em>telnet, rlogin</em></span>, and <span class="emphasis"><em>ftp</em></span> to make it
+                    possible to abort previously transmitted commands. Out-of-band data is sent and
+                    received using the <code class="literal">MSG_OOB</code> flag in calls to
+                        <span class="emphasis"><em>send()</em></span> and <span class="emphasis"><em>recv()</em></span>. When a socket
+                    receives notification of the availability of out-of-band data, the kernel
+                    generates the <code class="literal">SIGURG</code> signal for the socket
+                    owner (normally the process using the socket), as set by the
+                        <span class="emphasis"><em>fcntl()</em></span>
+                    <code class="literal">F_SETOWN</code> operation.<a id="IDX-CHP-61-8106" class="indexterm"/><a id="IDX-CHP-61-8107" class="indexterm"/><a id="IDX-CHP-61-8108" class="indexterm"/></p><p>When employed with TCP sockets, at most 1 byte of data may be marked as being
+                    out-of-band at any one time. If the sender transmits an additional byte of
+                    out-of-band data before the receiver has processed the previous byte, then the
+                    indication for the earlier out-of-band byte is lost.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>TCP’s limitation of out-of-band data to a single byte is an artifact of
+                        the mismatch between the generic out-of-band model of the sockets API and
+                        its specific implementation using TCP’s <span class="emphasis"><em>urgent mode</em></span>. We
+                        touched on TCP’s urgent mode when looking at the format of TCP segments in
+                            <a class="xref" href="ch61.html#format_of_a_tcp_segment" title="Format of a TCP Segment">Format of a TCP Segment</a>. TCP indicates the presence of
+                        urgent (out-of-band) data by setting the URG bit in the TCP header and
+                        setting the urgent pointer field to point to the urgent data. However, TCP
+                        has no way of indicating the length of an urgent data sequence, so the
+                        urgent data is considered to consist of a single byte.<a id="IDX-CHP-61-8109" class="indexterm"/></p><p>Further information about TCP urgent data can be found in RFC
+                            793.<a id="IDX-CHP-61-8110" class="indexterm"/></p></div><p>Under some UNIX implementations, out-of-band data is supported for UNIX domain
+                    stream sockets. Linux doesn’t support this.</p><p>The use of out-of-band data is nowadays discouraged, and it may be unreliable
+                    in some circumstances (see [Gont &amp; Yourtchenko, 2009]). An alternative
+                    is to maintain a pair of stream sockets for communication. One of these is used
+                    for normal communication, while the other is used for high-priority
+                    communication. An application can monitor both channels using one of the
+                    techniques described in <a class="xref" href="ch63.html" title="Chapter 63. Alternative I/O Models">Chapter 63</a>. This
+                    approach allows multiple bytes of priority data to be transmitted. Furthermore,
+                    it can be employed with stream sockets in any communication domain (e.g., UNIX
+                    domain sockets).</p></div><div class="sect2" title="The sendmsg() and recvmsg() System Calls"><div class="titlepage"><div><div><h3 class="title" id="the_sendmsg_open_parenthesis_close_paren">The <span class="emphasis"><em>sendmsg()</em></span> and <span class="emphasis"><em>recvmsg()</em></span> System
+                    Calls</h3></div></div></div><p>The <span class="emphasis"><em>sendmsg()</em></span> and <span class="emphasis"><em>recvmsg()</em></span> system
+                    calls are the most general purpose of the socket I/O system calls. The
+                        <span class="emphasis"><em>sendmsg()</em></span> system call can do everything that is done by
+                        <span class="emphasis"><em>write()</em></span>, <span class="emphasis"><em>send()</em></span>, and
+                        <span class="emphasis"><em>sendto()</em></span>; the <span class="emphasis"><em>recvmsg()</em></span> system
+                    call can do everything that is done by <span class="emphasis"><em>read()</em></span>,
+                        <span class="emphasis"><em>recv()</em></span>, and <span class="emphasis"><em>recvfrom()</em></span>. In
+                    addition, these calls allow the following:<a id="IDX-CHP-61-8111" class="indexterm"/><a id="IDX-CHP-61-8112" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>We can perform scatter-gather I/O, as with
+                                <span class="emphasis"><em>readv()</em></span> and <span class="emphasis"><em>writev()</em></span>
+                                (<a class="xref" href="ch05.html#scatter-gather_i_solidus_o_colon_readv_o" title="Scatter-Gather I/O: readv() and writev()">Scatter-Gather I/O: <span class="emphasis"><em>readv()</em></span> and
+                    <span class="emphasis"><em>writev()</em></span></a>). When
+                            we use <span class="emphasis"><em>sendmsg()</em></span> to perform gather output on a
+                            datagram socket (or <span class="emphasis"><em>writev()</em></span> on a connected
+                            datagram socket), a single datagram is generated. Conversely,
+                                <span class="emphasis"><em>recvmsg()</em></span> (and <span class="emphasis"><em>readv()</em></span>)
+                            can be used to perform scatter input on a datagram socket, dispersing
+                            the bytes of a single datagram into multiple user-space buffers.</p></li><li class="listitem"><p>We can transmit messages containing domain-specific
+                                <span class="emphasis"><em>ancillary data</em></span> (also known as control
+                            information). Ancillary data can be passed via both stream and datagram
+                            sockets. We describe some examples of ancillary data below.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>Linux 2.6.33 adds a new system call, <span class="emphasis"><em>recvmmsg()</em></span>. This
+                        system call is similar to <span class="emphasis"><em>recvmsg()</em></span>, but allows
+                        multiple datagrams to be received in a single system call. This reduces the
+                        system-call overhead in applications that deal with high levels of network
+                        traffic. An analogous <span class="emphasis"><em>sendmmsg()</em></span> system call is likely
+                        to be added in a future kernel version.<a id="IDX-CHP-61-8113" class="indexterm"/><a id="IDX-CHP-61-8114" class="indexterm"/></p></div></div><div class="sect2" title="Passing File Descriptors"><div class="titlepage"><div><div><h3 class="title" id="passing_file_descriptors">Passing File Descriptors</h3></div></div></div><p>Using <span class="emphasis"><em>sendmsg()</em></span> and <span class="emphasis"><em>recvmsg()</em></span>, we
+                    can pass ancillary data containing a file descriptor from one process to another
+                    process on the same host via a UNIX domain socket. Any type of file descriptor
+                    can be passed in this manner—for example, one obtained from a call to
+                        <span class="emphasis"><em>open()</em></span> or <span class="emphasis"><em>pipe()</em></span>. An example that
+                    is more relevant to sockets is that a master server could accept a client
+                    connection on a TCP listening socket and pass that descriptor to one of the
+                    members of a pool of server child processes (<a class="xref" href="ch60.html#other_concurrent_server_designs" title="Other Concurrent Server Designs">Other Concurrent Server Designs</a>), which would then respond to
+                    the client request.<a id="IDX-CHP-61-8115" class="indexterm"/><a id="IDX-CHP-61-8116" class="indexterm"/><a id="IDX-CHP-61-8117" class="indexterm"/><a id="IDX-CHP-61-8118" class="indexterm"/></p><p>Although this technique is commonly referred to as passing a file descriptor,
+                    what is really being passed between the two processes is a reference to the same
+                    open file description (<a class="xref" href="ch05.html#relationship_between_file_descriptors_co" title="Figure 5-2. Relationship between file descriptors, open file descriptions, and i-nodes">Figure 5-2</a>, in <a class="xref" href="ch05.html#relationship_between_file_descriptors_an" title="Relationship Between File Descriptors and Open Files">Relationship Between File Descriptors and Open Files</a>). The file
+                    descriptor number employed in the receiving process would typically be different
+                    from the number employed in the sender.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>An example of passing file descriptors is provided in the files <code class="literal">scm_rights_send.c</code> and <code class="literal">scm_rights_recv.c</code> in the <code class="literal">sockets</code> subdirectory in the source code distribution for this
+                            book.<a id="IDX-CHP-61-8119" class="indexterm"/><a id="IDX-CHP-61-8120" class="indexterm"/></p></div></div><div class="sect2" title="Receiving Sender Credentials"><div class="titlepage"><div><div><h3 class="title" id="receiving_sender_credentials">Receiving Sender Credentials</h3></div></div></div><p>Another example of the use of ancillary data is for receiving sender
+                    credentials via a UNIX domain socket. These credentials consist of the user ID,
+                    the group ID, and the process ID of the sending process. The sender may specify
+                    its user and group IDs as the corresponding real, effective, or saved set IDs.
+                    This allows the receiving process to authenticate a sender on the same host. For
+                    further details, see the <span class="emphasis"><em>socket(7)</em></span> and
+                        <span class="emphasis"><em>unix(7)</em></span> manual pages.</p><p>Unlike passing file credentials, passing sender credentials is not specified
+                    in SUSv3. Aside from Linux, this feature is implemented in some of the modern
+                    BSDs (where the credentials structure contains somewhat more information than on
+                    Linux), but is available on few other UNIX implementations. The details of
+                    credential passing on FreeBSD are described in [Stevens et al., 2004].</p><p>On Linux, a privileged process can fake the user ID, group ID, and process ID
+                    that are passed as credentials if it has, respectively, the <code class="literal">CAP_SETUID</code>, <code class="literal">CAP_SETGID</code>, and <code class="literal">CAP_SYS_ADMIN</code>
+                    capabilities.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>An example of passing credentials is provided in the files <code class="literal">scm_cred_send.c</code> and <code class="literal">scm_cred_recv.c</code> in the <code class="literal">sockets</code> subdirectory in the source code distribution for this
+                            book.<a id="IDX-CHP-61-8121" class="indexterm"/><a id="IDX-CHP-61-8122" class="indexterm"/></p></div></div><div class="sect2" title="Sequenced-Packet Sockets"><div class="titlepage"><div><div><h3 class="title" id="sequenced-packet_sockets">Sequenced-Packet Sockets</h3></div></div></div><p>Sequenced-packet sockets combine features of both stream and datagram
+                        sockets:<a id="IDX-CHP-61-8123" class="indexterm"/><a id="IDX-CHP-61-8124" class="indexterm"/><a id="IDX-CHP-61-8125" class="indexterm"/><a id="IDX-CHP-61-8126" class="indexterm"/><a id="IDX-CHP-61-8127" class="indexterm"/><a id="IDX-CHP-61-8128" class="indexterm"/><a id="IDX-CHP-61-8129" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Like stream sockets, sequenced-packet sockets are connection-oriented.
+                            Connections are established in the same way as for stream sockets, using
+                                <span class="emphasis"><em>bind()</em></span>, <span class="emphasis"><em>listen()</em></span>,
+                                <span class="emphasis"><em>accept()</em></span>, and
+                                <span class="emphasis"><em>connect()</em></span>.<a id="IDX-CHP-61-8130" class="indexterm"/></p></li><li class="listitem"><p>Like datagram sockets, message boundaries are preserved. A
+                                <span class="emphasis"><em>read()</em></span> from a sequenced-packet socket returns
+                            exactly one message (as written by the peer). If the message is longer
+                            than the buffer supplied by the caller, the excess bytes are
+                            discarded.</p></li><li class="listitem"><p>Like stream sockets, and unlike datagram sockets, communication via
+                            sequenced-packet sockets is reliable. Messages are delivered to the peer
+                            application error-free, in order, and unduplicated, and they are
+                            guaranteed to arrive (assuming that there is not a system or application
+                            crash, or a network outage).</p></li></ul></div><p>A sequenced-packet socket is created by calling <span class="emphasis"><em>socket()</em></span>
+                    with the <span class="emphasis"><em>type</em></span> argument specified as <code class="literal">SOCK_SEQPACKET</code>.</p><p>Historically, Linux, like most UNIX implementations, did not support
+                    sequenced-packet sockets in either the UNIX or the Internet domains. However,
+                    starting with kernel 2.6.4, Linux supports <code class="literal">SOCK_SEQPACKET</code> for UNIX domain sockets.</p><p>In the Internet domain, the UDP and TCP protocols do not support <code class="literal">SOCK_SEQPACKET</code>, but the SCTP protocol (described
+                    in the next section) does.</p><p>We don’t show an example of the use of sequenced-packet sockets in this book,
+                    but, other than the preservation of message boundaries, their use is very
+                    similar to stream sockets.</p></div><div class="sect2" title="SCTP and DCCP Transport-Layer Protocols"><div class="titlepage"><div><div><h3 class="title" id="sctp_and_dccp_transport-layer_protocols">SCTP and DCCP Transport-Layer Protocols</h3></div></div></div><p>SCTP and DCCP are two newer transport-layer protocols that are likely to
+                    become increasingly common in the future.</p><p>The <span class="emphasis"><em>Stream Control Transmission Protocol</em></span> (SCTP, <a class="ulink" href="http://www.sctp.org/" target="_top">http://www.sctp.org/</a>) was designed to support telephony signaling in
+                    particular, but is also general purpose. Like TCP, SCTP provides reliable,
+                    bidirectional, connection-oriented transport. Unlike TCP, SCTP preserves message
+                    boundaries. One of the distinctive features of SCTP is multistream support,
+                    which allows multiple logical data streams to be employed over a single
+                    connection.</p><p>SCTP is described in [Stewart &amp; Xie, 2001], [Stevens et al., 2004],
+                    and in RFCs 4960, 3257, and 3286.</p><p>SCTP is available on Linux since kernel 2.6. Further information about this
+                    implementation can be found at <a class="ulink" href="http://lksctp.sourceforge.net/" target="_top">http://lksctp.sourceforge.net/</a>.</p><p>Throughout the preceding chapters that describe the sockets API, we equated
+                    Internet domain stream sockets with TCP. However, SCTP provides an alternative
+                    protocol for implementing stream sockets, created using the following
+                    call:</p><a id="I_programlisting61_d1e159850"/><pre class="programlisting">socket(AF_INET, SOCK_STREAM, IPPROTO_SCTP);</pre><p>Starting in kernel 2.6.14, Linux supports a new datagram protocol, the
+                        <span class="emphasis"><em>Datagram Congestion Control Protocol</em></span> (DCCP). Like TCP,
+                    DCCP provides congestion control (removing the need to implement congestion
+                    control at the application level) to prevent a fast transmitter from
+                    overwhelming the network. (We explained congestion control when describing TCP
+                    in <a class="xref" href="ch58.html#transmission_control_protocol_open_paren" title="Transmission Control Protocol (TCP)">Transmission Control Protocol (TCP)</a>.) However, unlike
+                    TCP (but like UDP), DCCP doesn’t provide guarantees about reliable or in-order
+                    delivery, and thus allows applications that don’t need these features to avoid
+                    the delays that they can incur. Information about DCCP can be found at <a class="ulink" href="http://www.read.cs.ucla.edu/dccp/" target="_top">http://www.read.cs.ucla.edu/dccp/</a> and RFCs 4336 and 4340.</p></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id60">Summary</h2></div></div></div><p>In various circumstances, partial reads and writes can occur when performing I/O
+                on stream sockets. We showed the implementation of two functions,
+                    <span class="emphasis"><em>readn()</em></span> and <span class="emphasis"><em>writen()</em></span>, that can be used
+                to ensure a complete buffer of data is read or written.<a id="IDX-CHP-61-8131" class="indexterm"/><a id="IDX-CHP-61-8132" class="indexterm"/><a id="IDX-CHP-61-8133" class="indexterm"/><a id="IDX-CHP-61-8134" class="indexterm"/><a id="IDX-CHP-61-8135" class="indexterm"/><a id="IDX-CHP-61-8136" class="indexterm"/><a id="IDX-CHP-61-8137" class="indexterm"/><a id="IDX-CHP-61-8138" class="indexterm"/><a id="IDX-CHP-61-8139" class="indexterm"/><a id="IDX-CHP-61-8140" class="indexterm"/></p><p>The <span class="emphasis"><em>shutdown()</em></span> system call provides more precise control over
+                connection termination. Using <span class="emphasis"><em>shutdown()</em></span>, we can forcibly shut
+                down either or both halves of a bidirectional communication stream, regardless of
+                whether there are other open file descriptors referring to the socket.</p><p>Like <span class="emphasis"><em>read()</em></span> and <span class="emphasis"><em>write()</em></span>,
+                    <span class="emphasis"><em>recv()</em></span> and <span class="emphasis"><em>send()</em></span> can be used to
+                perform I/O on a socket, but calls provide an extra argument,
+                    <span class="emphasis"><em>flags</em></span>, that controls socket-specific I/O
+                functionality.</p><p>The <span class="emphasis"><em>sendfile()</em></span> system call allows us to efficiently copy the
+                contents of a file to a socket. This efficiency is gained because we don’t need to
+                copy the file data to and from user memory, as would be required with calls to
+                    <span class="emphasis"><em>read()</em></span> and <span class="emphasis"><em>write()</em></span>.</p><p>The <span class="emphasis"><em>getsockname()</em></span> and <span class="emphasis"><em>getpeername()</em></span>
+                system calls retrieve, respectively, the local address to which a socket is bound
+                and the address of the peer to which that socket is connected.</p><p>We considered some details of the operation of TCP, including TCP states and the
+                TCP state transition diagram, and TCP connection establishment and termination. As
+                part of this discussion, we saw why the TIME_WAIT state is an important part of
+                TCP’s reliability guarantee. Although this state can lead to the “Address already in
+                use” error when restarting a server, we later saw that the <code class="literal">SO_REUSEADDR</code> socket option can be used to avoid this error, while
+                nevertheless allowing the TIME_WAIT state to serve its intended purpose.</p><p>The <span class="emphasis"><em>netstat</em></span> and <span class="emphasis"><em>tcpdump</em></span> commands are
+                useful tools for monitoring and debugging applications that use sockets.</p><p>The <span class="emphasis"><em>getsockopt()</em></span> and <span class="emphasis"><em>setsockopt()</em></span> system
+                calls retrieve and modify options affecting the operation of a socket.</p><p>On Linux, when a new socket is created by <span class="emphasis"><em>accept()</em></span>, it does
+                not inherit the listening sockets open file status flags, file descriptor flags, or
+                file descriptor attributes related to signal-driven I/O. However, it does inherit
+                the settings of socket options. We noted that SUSv3 is silent on these details,
+                which vary across implementations.</p><p>Although UDP doesn’t provide the reliability guarantees of TCP, we saw that there
+                are nevertheless reasons why UDP can be preferable for some applications.</p><p>Finally, we outlined a few advanced features of sockets programming that we don’t
+                describe in detail in this book.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id84"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id85">Further information</h4></div></div></div><p>Refer to the sources of further information listed in <a class="xref" href="ch59.html#further_information-id81" title="Further Information">Further Information</a>.</p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id42">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Suppose that the program in <a class="xref" href="ch61.html#a_client_for_the_echo_service" title="Example 61-2. A client for the echo service">Example 61-2</a> (<code class="literal">is_echo_cl.c</code>) was modified so that,
+                        instead of using <span class="emphasis"><em>fork()</em></span> to create two processes that
+                        operate concurrently, it instead used just one process that first copies its
+                        standard input to the socket and then reads the server’s response. What
+                        problem might occur when running this client? (Look at <a class="xref" href="ch58.html#connected_tcp_sockets" title="Figure 58-8. Connected TCP sockets">Figure 58-8</a>, in <a class="xref" href="ch58.html#selecting_a_udp_datagram_size_to_avoid_i" title="Selecting a UDP datagram size to avoid IP fragmentation">Selecting a UDP datagram size to avoid IP fragmentation</a>.)<a id="IDX-CHP-61-8141" class="indexterm"/><a id="IDX-CHP-61-8142" class="indexterm"/><a id="IDX-CHP-61-8143" class="indexterm"/><a id="IDX-CHP-61-8144" class="indexterm"/><a id="IDX-CHP-61-8145" class="indexterm"/></p></li><li class="listitem"><p>Implement <span class="emphasis"><em>pipe()</em></span> in terms of
+                            <span class="emphasis"><em>socketpair()</em></span>. Use <span class="emphasis"><em>shutdown()</em></span>
+                        to ensure that the resulting pipe is unidirectional.</p></li><li class="listitem"><p>Implement a replacement for <span class="emphasis"><em>sendfile()</em></span> using
+                            <span class="emphasis"><em>read()</em></span>, <span class="emphasis"><em>write()</em></span>, and
+                            <span class="emphasis"><em>lseek()</em></span>.</p></li><li class="listitem"><p>Write a program that uses <span class="emphasis"><em>getsockname()</em></span> to show that,
+                        if we call <span class="emphasis"><em>listen()</em></span> on a TCP socket without first
+                        calling <span class="emphasis"><em>bind()</em></span>, the socket is assigned an ephemeral
+                        port number.</p></li><li class="listitem"><p>Write a client and a server that permit the client to execute arbitrary
+                        shell commands on the server host. (If you don’t implement any security
+                        mechanism in this application, you should ensure that the server is
+                        operating under a user account where it can do no damage if invoked by
+                        malicious users.) The client should be executed with two command-line
+                        arguments:</p><a id="I_programlisting61_d1e160075"/><pre class="programlisting">$ <strong class="userinput"><code>./is_shell_cl</code></strong> <strong class="userinput"><code><em class="replaceable"><code>server-host</code></em></code></strong><strong class="userinput"><code>'</code></strong><strong class="userinput"><code><em class="replaceable"><code>some-shell-command</code></em></code></strong><strong class="userinput"><code>'</code></strong></pre><p>After connecting to the server, the client sends the given command to the
+                        server, and then closes its writing half of the socket using
+                            <span class="emphasis"><em>shutdown()</em></span>, so that the server sees end-of-file.
+                        The server should handle each incoming connection in a separate child
+                        process (i.e., a concurrent design). For each incoming connection, the
+                        server should read the command from the socket (until end-of-file), and then
+                        exec a shell to perform the command. Here are a couple hints:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>See the implementation of <span class="emphasis"><em>system()</em></span> in <a class="xref" href="ch27.html#implementing_system_open_parenthesis_clo" title="Implementing system()">Implementing <span class="emphasis"><em>system()</em></span></a> for an
+                                example of how to execute a shell command.</p></li><li class="listitem"><p>By using <span class="emphasis"><em>dup2()</em></span> to duplicate the socket on
+                                standard output and standard error, the execed command will
+                                automatically write to the socket.</p></li></ul></div></li><li class="listitem"><p><a class="xref" href="ch61.html#out-of-band_data" title="Out-of-Band Data">Out-of-Band Data</a> noted that an alternative to
+                        out-of-band data would be to create two socket connections between the
+                        client and server: one for normal data and one for priority data. Write
+                        client and server programs that implement this framework. Here are a few
+                            hints:<a id="IDX-CHP-61-8146" class="indexterm"/><a id="IDX-CHP-61-8147" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The server needs some way of knowing which two sockets belong to
+                                the same client. One way to do this is to have the client first
+                                create a listening socket using an ephemeral port (i.e., binding to
+                                port 0). After obtaining the ephemeral port number of its listening
+                                socket (using <span class="emphasis"><em>getsockname()</em></span>), the client
+                                connects its “normal” socket to the server’s listening socket and
+                                sends a message containing the port number of the client’s listening
+                                socket. The client then waits for the server to use the client’s
+                                listening socket to make a connection in the opposite direction for
+                                the “priority” socket. (The server can obtain the client’s IP
+                                address during the <span class="emphasis"><em>accept()</em></span> of the normal
+                                connection.)</p></li><li class="listitem"><p>Implement some type of security mechanism to prevent a rogue
+                                process from trying to connect to the client’s listening socket. To
+                                do this, the client could send a cookie (i.e., some type of unique
+                                message) to the server using the normal socket. The server would
+                                then return this cookie via the priority socket so that the client
+                                could verify it.</p></li><li class="listitem"><p>In order to experiment with transmitting normal and priority data
+                                from the client to the server, you will need to code the server to
+                                multiplex the input from the two sockets using
+                                    <span class="emphasis"><em>select()</em></span> or <span class="emphasis"><em>poll()</em></span>
+                                (described in <a class="xref" href="ch63.html#i_solidus_o_multiplexing" title="I/O Multiplexing">I/O Multiplexing</a>).</p></li></ul></div></li></ol></div></div></section></body></html>

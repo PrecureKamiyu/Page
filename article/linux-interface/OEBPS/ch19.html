@@ -1,0 +1,630 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 19. Monitoring File Events</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch18.html" title="Chapter 18. Directories and Links"/><link rel="next" href="ch20.html" title="Chapter 20. Signals: Fundamental Concepts"/></head><body><section class="chapter" title="Chapter 19. Monitoring File Events" epub:type="chapter" id="monitoring_file_events"><div class="titlepage"><div><div><h2 class="title">Chapter 19. Monitoring File Events</h2></div></div></div><p>Some applications need to be able to monitor files or directories in order to
+            determine whether events have occurred for the monitored objects. For example, a
+            graphical file manager needs to be able to determine when files are added or removed
+            from the directory that is currently being displayed, or a daemon may want to monitor
+            its configuration file in order to know if the file has been changed.</p><p>Starting with kernel 2.6.13, Linux provides the <span class="emphasis"><em>inotify</em></span>
+            mechanism, which allows an application to monitor file events. This chapter describes
+            the use of <span class="emphasis"><em>inotify</em></span>.</p><p>The <span class="emphasis"><em>inotify</em></span> mechanism replaces an older mechanism,
+                <span class="emphasis"><em>dnotify</em></span>, which provided a subset of the functionality of
+                <span class="emphasis"><em>inotify</em></span>. We describe <span class="emphasis"><em>dnotify</em></span> briefly at
+            the end of this chapter, focusing on why <span class="emphasis"><em>inotify</em></span> is better.</p><p>The <span class="emphasis"><em>inotify</em></span> and <span class="emphasis"><em>dnotify</em></span> mechanisms are
+            Linux-specific. (A few other systems provide similar mechanisms. For example, the BSDs
+            provide the <span class="emphasis"><em>kqueue</em></span> API.)</p><div class="note" title="Note"><h3 class="title">Note</h3><p>A few libraries provide an API that is more abstract and portable than
+                    <span class="emphasis"><em>inotify</em></span> and <span class="emphasis"><em>dnotify</em></span>. The use of these
+                libraries may be preferable for some applications. Some of these libraries employ
+                    <span class="emphasis"><em>inotify</em></span> or <span class="emphasis"><em>dnotify</em></span>, on systems where
+                they are available. Two such libraries are FAM (File Alteration Monitor, <a class="ulink" href="http://oss.sgi.com/projects/fam/" target="_top">http://oss.sgi.com/projects/fam/</a>) and Gamin (<a class="ulink" href="http://www.gnome.org/~veillard/gamin/" target="_top">http://www.gnome.org/~veillard/gamin/</a>).<a id="IDX-CHP-19-2639" class="indexterm"/></p></div><div class="sect1" title="Overview"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="overview-id5">Overview</h2></div></div></div><p>The key steps in the use of the <span class="emphasis"><em>inotify</em></span> API are as
+                follows:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>The application uses <span class="emphasis"><em>inotify_init()</em></span> to create an
+                            <span class="emphasis"><em>inotify instance</em></span>. This system call returns a file
+                        descriptor that is used to refer to the <span class="emphasis"><em>inotify</em></span>
+                        instance in later operations.<a id="IDX-CHP-19-2640" class="indexterm"/></p></li><li class="listitem"><p>The application informs the kernel about which files are of interest by
+                        using <span class="emphasis"><em>inotify_add_watch()</em></span> to add items to the watch
+                        list of the <span class="emphasis"><em>inotify</em></span> instance created in the previous
+                        step. Each watch item consists of a pathname and an associated bit mask. The
+                        bit mask specifies the set of events to be monitored for the pathname. As
+                        its function result, <span class="emphasis"><em>inotify_add_watch()</em></span> returns a
+                            <span class="emphasis"><em>watch descriptor</em></span>, which is used to refer to the
+                        watch in later operations. (The <span class="emphasis"><em>inotify_rm_watch()</em></span>
+                        system call performs the converse task, removing a watch that was previously
+                        added to an <span class="emphasis"><em>inotify</em></span> instance.)<a id="IDX-CHP-19-2641" class="indexterm"/><a id="IDX-CHP-19-2642" class="indexterm"/></p></li><li class="listitem"><p>In order to obtain event notifications, the application performs
+                            <span class="emphasis"><em>read()</em></span> operations on the
+                            <span class="emphasis"><em>inotify</em></span> file descriptor. Each successful
+                            <span class="emphasis"><em>read()</em></span> returns one or more
+                            <span class="emphasis"><em>inotify_event</em></span> structures, each containing
+                        information about an event that occurred on one of the pathnames being
+                        watched via this <span class="emphasis"><em>inotify</em></span> instance.</p></li><li class="listitem"><p>When the application has finished monitoring, it closes the
+                            <span class="emphasis"><em>inotify</em></span> file descriptor. This automatically removes
+                        all watch items associated with the <span class="emphasis"><em>inotify</em></span>
+                        instance.</p></li></ol></div><p>The <span class="emphasis"><em>inotify</em></span> mechanism can be used to monitor files or
+                directories. When monitoring a directory, the application will be informed about
+                events for the directory itself and for files inside the directory.</p><p>The <span class="emphasis"><em>inotify</em></span> monitoring mechanism is not recursive. If an
+                application wants to monitor events within an entire directory subtree, it must
+                issue <span class="emphasis"><em>inotify_add_watch()</em></span> calls for each directory in the
+                tree.</p><p>An <span class="emphasis"><em>inotify</em></span> file descriptor can be monitored using
+                    <span class="emphasis"><em>select()</em></span>, <span class="emphasis"><em>poll()</em></span>,
+                    <span class="emphasis"><em>epoll</em></span>, and, since Linux 2.6.25, signal-driven I/O. If
+                events are available to be read, then these interfaces indicate the
+                    <span class="emphasis"><em>inotify</em></span> file descriptor as being readable. See <a class="xref" href="ch63.html" title="Chapter 63. Alternative I/O Models">Chapter 63</a> for further details of these
+                interfaces.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>inotify</em></span> mechanism is an optional Linux kernel
+                    component that is configured via the options <code class="literal">CONFIG_INOTIFY</code> and <code class="literal">CONFIG_INOTIFY_USER</code>.</p></div></div><div class="sect1" title="The inotify API"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_inotify_api">The <span class="emphasis"><em>inotify</em></span> API</h2></div></div></div><p>The <span class="emphasis"><em>inotify_init()</em></span> system call creates a new
+                    <span class="emphasis"><em>inotify</em></span> instance.<a id="IDX-CHP-19-2643" class="indexterm"/><a id="IDX-CHP-19-2644" class="indexterm"/><a id="IDX-CHP-19-2645" class="indexterm"/><a id="IDX-CHP-19-2646" class="indexterm"/><a id="IDX-CHP-19-2647" class="indexterm"/><a id="IDX-CHP-19-2648" class="indexterm"/><a id="IDX-CHP-19-2649" class="indexterm"/><a id="IDX-CHP-19-2650" class="indexterm"/><a id="IDX-CHP-19-2651" class="indexterm"/><a id="IDX-CHP-19-2652" class="indexterm"/><a id="IDX-CHP-19-2653" class="indexterm"/></p><a id="I_programlisting19_d1e50097"/><pre class="programlisting">#include &lt;sys/inotify.h&gt;
+
+int <strong class="userinput"><code>inotify_init</code></strong>(void);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns file descriptor on success, or -1 on error</p></div><p>As its function result, <span class="emphasis"><em>inotify_init()</em></span> returns a file
+                descriptor. This file descriptor is the handle that is used to refer to the
+                    <span class="emphasis"><em>inotify</em></span> instance in subsequent operations.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Starting with kernel 2.6.27, Linux supports a new, nonstandard system call,
+                        <span class="emphasis"><em>inotify_init1()</em></span>. This system call performs the same
+                    task as <span class="emphasis"><em>inotify_init()</em></span>, but provides an additional
+                    argument, <span class="emphasis"><em>flags</em></span>, that can be used to modify the behavior of
+                    the system call. Two flags are supported. The <code class="literal">IN_CLOEXEC</code> flag causes the kernel to enable the close-on-exec
+                    flag (<code class="literal">FD_CLOEXEC</code>) for the new file
+                    descriptor. This flag is useful for the same reasons as the
+                        <span class="emphasis"><em>open()</em></span>
+                    <code class="literal">O_CLOEXEC</code> flag described in <a class="xref" href="ch04.html#file_descriptor_number_returned_by-id1" title="File descriptor number returned by open()">File descriptor number returned by <span class="emphasis"><em>open()</em></span></a>. The <code class="literal">IN_NONBLOCK</code> flag causes the kernel to enable the <code class="literal">O_NONBLOCK</code> flag on the underlying open file
+                    description, so that future reads will be nonblocking. This saves additional
+                    calls to <span class="emphasis"><em>fcntl()</em></span> to achieve the same result.<a id="IDX-CHP-19-2654" class="indexterm"/><a id="IDX-CHP-19-2655" class="indexterm"/></p></div><p>The <span class="emphasis"><em>inotify_add_watch()</em></span> system call either adds a new watch
+                item to or modifies an existing watch item in the watch list for the
+                    <span class="emphasis"><em>inotify</em></span> instance referred to by the file descriptor
+                    <span class="emphasis"><em>fd</em></span>. (Refer to <a class="xref" href="ch19.html#an_inotify_instance_and_associated_kerne" title="Figure 19-1. An inotify instance and associated kernel data structures">Figure 19-1</a>.)<a id="IDX-CHP-19-2656" class="indexterm"/></p><a id="I_programlisting19_d1e50174"/><pre class="programlisting">#include &lt;sys/inotify.h&gt;
+
+int <strong class="userinput"><code>inotify_add_watch</code></strong>(int <span class="emphasis"><em>fd</em></span>, const char *<span class="emphasis"><em>pathname</em></span>, uint32_t <span class="emphasis"><em>mask</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns watch descriptor on success, or -1 on error</p></div><div class="figure"><a id="an_inotify_instance_and_associated_kerne"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject19_d1e50197"/><img src="figs/web/19-1_INOTIFY-inotify-instance-scale90.png.jpg" alt="An inotify instance and associated kernel data structures"/></div></div><div class="figure-title">Figure 19-1. An <span class="emphasis"><em>inotify</em></span> instance and associated kernel data
+                    structures</div></div><p>The <span class="emphasis"><em>pathname</em></span> argument identifies the file for which a watch
+                item is to be created or modified. The caller must have read permission for this
+                file. (The file permission check is performed once, at the time of the
+                    <span class="emphasis"><em>inotify_add_watch()</em></span> call. As long as the watch item
+                continues to exist, the caller will continue to receive file notifications even if
+                the file permissions are later changed so that the caller no longer has read
+                permission on the file.)</p><p>The <span class="emphasis"><em>mask</em></span> argument is a bit mask that specifies the events to
+                be monitored for <span class="emphasis"><em>pathname</em></span>. We say more about the bit values
+                that can be specified in <span class="emphasis"><em>mask</em></span> shortly.</p><p>If <span class="emphasis"><em>pathname</em></span> has not previously been added to the watch list
+                for <span class="emphasis"><em>fd</em></span>, then <span class="emphasis"><em>inotify_add_watch()</em></span> creates a
+                new watch item in the list and returns a new, nonnegative watch descriptor, which is
+                used to refer to the watch item in later operations. This watch descriptor is unique
+                for this <span class="emphasis"><em>inotify</em></span> instance.</p><p>If <span class="emphasis"><em>pathname</em></span> has previously been added to the watch list for
+                    <span class="emphasis"><em>fd</em></span>, then <span class="emphasis"><em>inotify_add_watch()</em></span> modifies
+                the mask of the existing watch item for <span class="emphasis"><em>pathname</em></span> and returns
+                the watch descriptor for that item. (This watch descriptor will be the same as that
+                returned by the <span class="emphasis"><em>inotify_add_watch()</em></span> call that initially added
+                    <span class="emphasis"><em>pathname</em></span> to this watch list.) We say more about how the
+                mask may be modified when we describe the <code class="literal">IN_MASK_ADD</code> flag in the next section.</p><p>The <span class="emphasis"><em>inotify_rm_watch()</em></span> system call removes the watch item
+                specified by <span class="emphasis"><em>wd</em></span> from the <span class="emphasis"><em>inotify</em></span> instance
+                referred to by the file descriptor <span class="emphasis"><em>fd</em></span>.<a id="IDX-CHP-19-2657" class="indexterm"/></p><a id="I_programlisting19_d1e50278"/><pre class="programlisting">#include &lt;sys/inotify.h&gt;
+
+int <strong class="userinput"><code>inotify_rm_watch</code></strong>(int <span class="emphasis"><em>fd</em></span>, int <span class="emphasis"><em>wd</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>wd</em></span> argument is a watch descriptor returned by a previous
+                call to <span class="emphasis"><em>inotify_add_watch()</em></span>.</p><p>Removing a watch causes an <code class="literal">IN_IGNORED</code> event to
+                be generated for this watch descriptor. We say more about this event shortly.</p></div><div class="sect1" title="inotify Events"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="inotify_events"><span class="emphasis"><em>inotify</em></span> Events</h2></div></div></div><p>When we create or modify a watch using <span class="emphasis"><em>inotify_add_watch()</em></span>,
+                the <span class="emphasis"><em>mask</em></span> bit-mask argument identifies the events to be
+                monitored for the given <span class="emphasis"><em>pathname</em></span>. The event bits that may be
+                specified in <span class="emphasis"><em>mask</em></span> are indicated by the <span class="emphasis"><em>In</em></span>
+                column of <a class="xref" href="ch19.html#inotify_events-id1" title="Table 19-1. inotify events">Table 19-1</a>.<a id="IDX-CHP-19-2658" class="indexterm"/><a id="IDX-CHP-19-2659" class="indexterm"/><a id="IDX-CHP-19-2660" class="indexterm"/><a id="IDX-CHP-19-2661" class="indexterm"/><a id="IDX-CHP-19-2662" class="indexterm"/><a id="IDX-CHP-19-2663" class="indexterm"/><a id="IDX-CHP-19-2664" class="indexterm"/><a id="IDX-CHP-19-2665" class="indexterm"/><a id="IDX-CHP-19-2666" class="indexterm"/><a id="IDX-CHP-19-2667" class="indexterm"/><a id="IDX-CHP-19-2668" class="indexterm"/><a id="IDX-CHP-19-2669" class="indexterm"/><a id="IDX-CHP-19-2670" class="indexterm"/><a id="IDX-CHP-19-2671" class="indexterm"/><a id="IDX-CHP-19-2672" class="indexterm"/><a id="IDX-CHP-19-2673" class="indexterm"/><a id="IDX-CHP-19-2674" class="indexterm"/><a id="IDX-CHP-19-2675" class="indexterm"/><a id="IDX-CHP-19-2676" class="indexterm"/><a id="IDX-CHP-19-2677" class="indexterm"/><a id="IDX-CHP-19-2678" class="indexterm"/><a id="IDX-CHP-19-2679" class="indexterm"/><a id="IDX-CHP-19-2680" class="indexterm"/><a id="IDX-CHP-19-2681" class="indexterm"/></p><div class="table"><a id="inotify_events-id1"/><div class="table-title">Table 19-1. <span class="emphasis"><em>inotify</em></span> events</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/><col class="col4"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Bit value</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>In</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Out</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>Description</p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_ACCESS</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>File was accessed (<span class="emphasis"><em>read()</em></span>)</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_ATTRIB</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>File metadata changed</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_CLOSE_WRITE</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>File opened for writing was closed</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_CLOSE_NOWRITE</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>File opened read-only was closed</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_CREATE</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>File/directory created inside watched directory</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_DELETE</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>File/directory deleted from within watched directory</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_DELETE_SELF</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Watched file/directory was itself deleted</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_MODIFY</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>File was modified</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_MOVE_SELF</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Watched file/directory was itself moved</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_MOVED_FROM</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>File moved out of watched directory</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_MOVED_TO</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>File moved into watched directory</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_OPEN</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>File was opened</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_ALL_EVENTS</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Shorthand for all of the above input events</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_MOVE</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Shorthand for <code class="literal">IN_MOVED_FROM |
+                                        IN_MOVED_TO</code></p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_CLOSE</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Shorthand for <code class="literal">IN_CLOSE_WRITE |
+                                        IN_CLOSE_NOWRITE</code></p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_DONT_FOLLOW</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Don’t dereference symbolic link (since Linux 2.6.15)</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_MASK_ADD</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Add events to current watch mask for
+                                        <span class="emphasis"><em>pathname</em></span></p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_ONESHOT</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Monitor <span class="emphasis"><em>pathname</em></span> for just one
+                                    event</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_ONLYDIR</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Fail if <span class="emphasis"><em>pathname</em></span> is not a directory
+                                    (since Linux 2.6.15)</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_IGNORED</code>
+                                </p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Watch was removed by application or by kernel</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_ISDIR</code>
+                                </p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Filename returned in <span class="emphasis"><em>name</em></span> is a
+                                    directory</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_Q_OVERFLOW</code>
+                                </p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Overflow on event queue</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">IN_UNMOUNT</code>
+                                </p>
+                            </td><td style="border-right: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>File system containing object was unmounted</p>
+                            </td></tr></tbody></table></div></div><p>The meanings of most of the bits in <a class="xref" href="ch19.html#inotify_events-id1" title="Table 19-1. inotify events">Table 19-1</a> are
+                evident from their names. The following list clarifies a few details:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <code class="literal">IN_ATTRIB</code> event occurs when file
+                        metadata such as permissions, ownership, link count, extended attributes,
+                        user ID, or group ID, is changed.</p></li><li class="listitem"><p>The <code class="literal">IN_DELETE_SELF</code> event occurs when an
+                        object (i.e., a file or a directory) that is being monitored is deleted. The
+                            <code class="literal">IN_DELETE</code> event occurs when the
+                        monitored object is a directory and one of the files that it contains is
+                        deleted.</p></li><li class="listitem"><p>The <code class="literal">IN_MOVE_SELF</code> event occurs when an
+                        object that is being monitored is renamed. The <code class="literal">IN_MOVED_FROM</code> and <code class="literal">IN_MOVED_TO</code> events occur when an object is renamed within
+                        monitored directories. The former event occurs for the directory containing
+                        the old name, and the latter event occurs for the directory containing the
+                        new name.</p></li><li class="listitem"><p>The <code class="literal">IN_DONT_FOLLOW</code>, <code class="literal">IN_MASK_ADD</code>, <code class="literal">IN_ONESHOT</code>, and <code class="literal">IN_ONLYDIR</code>
+                        bits don’t specify events to be monitored. Instead, they control the
+                        operation of the <span class="emphasis"><em>inotify_add_watch()</em></span> call.</p></li><li class="listitem"><p><code class="literal">IN_DONT_FOLLOW</code> specifies that
+                            <span class="emphasis"><em>pathname</em></span> should not be dereferenced if it is a
+                        symbolic link. This permits an application to monitor a symbolic link,
+                        rather than the file to which it refers.</p></li><li class="listitem"><p>If we perform an <span class="emphasis"><em>inotify_add_watch()</em></span> call that
+                        specifies a pathname that is already being watched via this
+                            <span class="emphasis"><em>inotify</em></span> file descriptor, then, by default, the
+                        given <span class="emphasis"><em>mask</em></span> is used to replace the current mask for this
+                        watch item. If <code class="literal">IN_MASK_ADD</code> is specified,
+                        then the current mask is instead modified by ORing it with the value given
+                        in <span class="emphasis"><em>mask</em></span>.</p></li><li class="listitem"><p><code class="literal">IN_ONESHOT</code> permits an application to
+                        monitor <span class="emphasis"><em>pathname</em></span> for a single event. After that event,
+                        the watch item is automatically removed from the watch list.</p></li><li class="listitem"><p><code class="literal">IN_ONLYDIR</code> permits an application to
+                        monitor a pathname only if it is a directory. If
+                            <span class="emphasis"><em>pathname</em></span> is not a directory, then
+                            <span class="emphasis"><em>inotify_add_watch()</em></span> fails with the error <code class="literal">ENOTDIR</code>. Using this flag prevents race
+                        conditions that could otherwise occur if we wanted to ensure that we are
+                        monitoring a directory.</p></li></ul></div></div><div class="sect1" title="Reading inotify Events"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="reading_inotify_events">Reading <span class="emphasis"><em>inotify</em></span> Events</h2></div></div></div><p>Having registered items in the watch list, an application can determine which
+                events have occurred by using <span class="emphasis"><em>read()</em></span> to read events from the
+                    <span class="emphasis"><em>inotify</em></span> file descriptor. If no events have occurred so far,
+                then <span class="emphasis"><em>read()</em></span> blocks until an event occurs (unless the <code class="literal">O_NONBLOCK</code> status flag has been set for the file
+                descriptor, in which case the <span class="emphasis"><em>read()</em></span> fails immediately with the
+                error <code class="literal">EAGAIN</code> if no events are
+                    available).<a id="IDX-CHP-19-2682" class="indexterm"/><a id="IDX-CHP-19-2683" class="indexterm"/><a id="IDX-CHP-19-2684" class="indexterm"/><a id="IDX-CHP-19-2685" class="indexterm"/><a id="IDX-CHP-19-2686" class="indexterm"/><a id="IDX-CHP-19-2687" class="indexterm"/><a id="IDX-CHP-19-2688" class="indexterm"/><a id="IDX-CHP-19-2689" class="indexterm"/><a id="IDX-CHP-19-2690" class="indexterm"/><a id="IDX-CHP-19-2691" class="indexterm"/><a id="IDX-CHP-19-2692" class="indexterm"/><a id="IDX-CHP-19-2693" class="indexterm"/><a id="IDX-CHP-19-2694" class="indexterm"/><a id="IDX-CHP-19-2695" class="indexterm"/><a id="IDX-CHP-19-2696" class="indexterm"/><a id="IDX-CHP-19-2697" class="indexterm"/><a id="IDX-CHP-19-2698" class="indexterm"/><a id="IDX-CHP-19-2699" class="indexterm"/><a id="IDX-CHP-19-2700" class="indexterm"/><a id="IDX-CHP-19-2701" class="indexterm"/><a id="IDX-CHP-19-2702" class="indexterm"/><a id="IDX-CHP-19-2703" class="indexterm"/><a id="IDX-CHP-19-2704" class="indexterm"/><a id="IDX-CHP-19-2705" class="indexterm"/></p><p>After events have occurred, each <span class="emphasis"><em>read()</em></span> returns a buffer (see
+                    <a class="xref" href="ch19.html#an_input_buffer_containing_three_inotify" title="Figure 19-2. An input buffer containing three inotify_event structures">Figure 19-2</a>) containing one or
+                more structures of the following type:</p><a id="I_programlisting19_d1e51059"/><pre class="programlisting">struct inotify_event {
+    int      wd;          /* Watch descriptor on which event occurred */
+    uint32_t mask;        /* Bits describing event that occurred */
+    uint32_t cookie;      /* Cookie for related events (for rename()) */
+    uint32_t len;         /* Size of 'name' field */
+    char     name[];      /* Optional null-terminated filename */
+};</pre><div class="figure"><a id="an_input_buffer_containing_three_inotify"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject19_d1e51067"/><img src="figs/web/19-2_INOTIFY-inotify_event-buffer-scale90.png.jpg" alt="An input buffer containing three inotify_event structures"/></div></div><div class="figure-title">Figure 19-2. An input buffer containing three <span class="emphasis"><em>inotify_event</em></span>
+                    structures</div></div><p>The <span class="emphasis"><em>wd</em></span> field tells us the watch descriptor for which this
+                event occurred. This field contains one of the values returned by a previous call to
+                    <span class="emphasis"><em>inotify_add_watch()</em></span>. The <span class="emphasis"><em>wd</em></span> field is
+                useful when an application is monitoring multiple files or directories via the same
+                    <span class="emphasis"><em>inotify</em></span> file descriptor. It provides the link that allows
+                the application to determine the particular file or directory for which the event
+                occurred. (To do this, the application must maintain a bookkeeping data structure
+                that relates watch descriptors to pathnames.)</p><p>The <span class="emphasis"><em>mask</em></span> field returns a bit mask that describes the event.
+                The range of bits that can appear in <span class="emphasis"><em>mask</em></span> is indicated via the
+                    <span class="emphasis"><em>Out</em></span> column of <a class="xref" href="ch19.html#inotify_events-id1" title="Table 19-1. inotify events">Table 19-1</a>. Note
+                the following additional details about specific bits:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>An <code class="literal">IN_IGNORED</code> event is generated when a
+                        watch is removed. This can occur for two reasons: the application used an
+                            <span class="emphasis"><em>inotify_rm_watch()</em></span> call to explicitly remove the
+                        watch, or the watch was implicitly removed by the kernel because the
+                        monitored object was deleted or the file system where it resides was
+                        unmounted. An <code class="literal">IN_IGNORED</code> event is not
+                        generated when a watch that was established with <code class="literal">IN_ONESHOT</code> is automatically removed because an event was
+                        triggered.</p></li><li class="listitem"><p>If the subject of the event is a directory, then, in addition to some
+                        other bit, the <code class="literal">IN_ISDIR</code> bit will be set
+                        in <span class="emphasis"><em>mask</em></span>.</p></li><li class="listitem"><p>The <code class="literal">IN_UNMOUNT</code> event informs the
+                        application that the file system containing the monitored object has been
+                        unmounted. After this event, a further event containing the <code class="literal">IN_IGNORED</code> bit will be delivered.</p></li><li class="listitem"><p>We describe the <code class="literal">IN_Q_OVERFLOW</code> in <a class="xref" href="ch19.html#queue_limits_and_solidus_proc_files" title="Queue Limits and /proc Files">Queue Limits and <code class="literal">/proc</code> Files</a>, which discusses limits
+                        on queued <span class="emphasis"><em>inotify</em></span> events.</p></li></ul></div><p>The <span class="emphasis"><em>cookie</em></span> field is used to tie related events together.
+                Currently, this field is used only when a file is renamed. When this happens, an
+                    <code class="literal">IN_MOVED_FROM</code> event is generated for the
+                directory from which the file is renamed, and then an <code class="literal">IN_MOVED_TO</code> is generated for the directory to which the file is
+                renamed. (If a file is given a new name within the same directory, then both events
+                occur for the same directory.) These two events will have the same unique value in
+                their <span class="emphasis"><em>cookie</em></span> field, thus allowing the application to associate
+                them.</p><p>When an event occurs for a file within a monitored directory, the
+                    <span class="emphasis"><em>name</em></span> field is used to return a null-terminated string that
+                identifies the file. If the event occurs for the monitored object itself, then the
+                    <span class="emphasis"><em>name</em></span> field is unused, and the <span class="emphasis"><em>len</em></span>
+                field will contain 0.</p><p>The <span class="emphasis"><em>len</em></span> field indicates how many bytes are actually allocated
+                for the <span class="emphasis"><em>name</em></span> field. This field is necessary because there may
+                be additional padding bytes between the end of the string stored in
+                    <span class="emphasis"><em>name</em></span> and the start of the next
+                    <span class="emphasis"><em>inotify_event</em></span> structure contained in the buffer returned by
+                    <span class="emphasis"><em>read()</em></span> (see <a class="xref" href="ch19.html#an_input_buffer_containing_three_inotify" title="Figure 19-2. An input buffer containing three inotify_event structures">Figure 19-2</a>). The length of an
+                individual <span class="emphasis"><em>inotify</em></span> event is thus <span class="emphasis"><em>sizeof(struct
+                    inotify_event) + len</em></span>.</p><p>If the buffer passed to <span class="emphasis"><em>read()</em></span> is too small to hold the next
+                    <span class="emphasis"><em>inotify_event</em></span> structure, then <span class="emphasis"><em>read()</em></span>
+                fails with the error <code class="literal">EINVAL</code> to warn the
+                application of this fact. (In kernels before 2.6.21, <span class="emphasis"><em>read()</em></span>
+                returned 0 for this case. The change to the use of an <code class="literal">EINVAL</code> error provides a clearer indication that a programming error
+                has been made.) The application could respond by performing another
+                    <span class="emphasis"><em>read()</em></span> with a larger buffer. However, the problem can be
+                avoided altogether by ensuring that the buffer is always large enough to hold at
+                least one event: the buffer given to <span class="emphasis"><em>read()</em></span> should be at least
+                    <span class="emphasis"><em>(sizeof(struct inotify_event) + NAME_MAX + 1)</em></span> bytes, where
+                    <code class="literal">NAME_MAX</code> is the maximum length of a filename,
+                plus one for the terminating null byte.<a id="IDX-CHP-19-2706" class="indexterm"/></p><p>Using a larger buffer size than the minimum allows an application to efficiently
+                retrieve multiple events with a single <span class="emphasis"><em>read()</em></span>. A
+                    <span class="emphasis"><em>read()</em></span> from an <span class="emphasis"><em>inotify</em></span> file descriptor
+                returns the minimum of the number of events that are available and the number of
+                events that will fit in the supplied buffer.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The call <span class="emphasis"><em>ioctl(fd, FIONREAD, &amp;numbytes)</em></span> returns
+                    the number of bytes that are currently available to read from the
+                        <span class="emphasis"><em>inotify</em></span> instance referred to by the file descriptor
+                        <span class="emphasis"><em>fd</em></span>.</p></div><p>The events read from an <span class="emphasis"><em>inotify</em></span> file descriptor form an
+                ordered queue. Thus, for example, it is guaranteed that when a file is renamed, the
+                    <code class="literal">IN_MOVED_FROM</code> event will be read before the
+                    <code class="literal">IN_MOVED_TO</code> event.</p><p>When appending a new event to the end of the event queue, the kernel will coalesce
+                that event with the event at the tail of the queue (so that the new event is not in
+                fact queued), if the two events have the same values for <span class="emphasis"><em>wd</em></span>,
+                    <span class="emphasis"><em>mask</em></span>, <span class="emphasis"><em>cookie</em></span>, and
+                    <span class="emphasis"><em>name</em></span>. This is done because many applications don’t need to
+                know about repeated instances of the same event, and dropping the excess events
+                reduces the amount of (kernel) memory required for the event queue. However, this
+                means we can’t use <span class="emphasis"><em>inotify</em></span> to reliably determine how many times
+                or how often a recurrent event occurs.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="example_program-id19"/></div></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id20">Example program</h4></div></div></div><p>Although there is a lot of detail in the preceding description, the
+                            <span class="emphasis"><em>inotify</em></span> API is actually quite simple to use. <a class="xref" href="ch19.html#using_the_inotify_api" title="Example 19-1. Using the inotify API">Example 19-1</a> demonstrates the use of
+                            <span class="emphasis"><em>inotify</em></span>.<a id="IDX-CHP-19-2707" class="indexterm"/><a id="IDX-CHP-19-2708" class="indexterm"/><a id="IDX-CHP-19-2709" class="indexterm"/><a id="IDX-CHP-19-2710" class="indexterm"/></p><div class="example"><a id="using_the_inotify_api"/><div class="example-title">Example 19-1. Using the <span class="emphasis"><em>inotify</em></span> API</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>inotify/demo_inotify.c</code></strong>
+    #include &lt;sys/inotify.h&gt;
+    #include &lt;limits.h&gt;
+    #include "tlpi_hdr.h"
+
+    static void             /* Display information from inotify_event structure */
+    displayInotifyEvent(struct inotify_event *i)
+    {
+        printf("    wd =%2d; ", i-&gt;wd);
+        if (i-&gt;cookie &gt; 0)
+            printf("cookie =%4d; ", i-&gt;cookie);
+
+        printf("mask = ");
+        if (i-&gt;mask &amp; IN_ACCESS)        printf("IN_ACCESS ");
+        if (i-&gt;mask &amp; IN_ATTRIB)        printf("IN_ATTRIB ");
+        if (i-&gt;mask &amp; IN_CLOSE_NOWRITE) printf("IN_CLOSE_NOWRITE ");
+        if (i-&gt;mask &amp; IN_CLOSE_WRITE)   printf("IN_CLOSE_WRITE ");
+        if (i-&gt;mask &amp; IN_CREATE)        printf("IN_CREATE ");
+        if (i-&gt;mask &amp; IN_DELETE)        printf("IN_DELETE ");
+        if (i-&gt;mask &amp; IN_DELETE_SELF)   printf("IN_DELETE_SELF ");
+        if (i-&gt;mask &amp; IN_IGNORED)       printf("IN_IGNORED ");
+        if (i-&gt;mask &amp; IN_ISDIR)         printf("IN_ISDIR ");
+        if (i-&gt;mask &amp; IN_MODIFY)        printf("IN_MODIFY ");
+        if (i-&gt;mask &amp; IN_MOVE_SELF)     printf("IN_MOVE_SELF ");
+        if (i-&gt;mask &amp; IN_MOVED_FROM)    printf("IN_MOVED_FROM ");
+        if (i-&gt;mask &amp; IN_MOVED_TO)      printf("IN_MOVED_TO ");
+        if (i-&gt;mask &amp; IN_OPEN)          printf("IN_OPEN ");
+        if (i-&gt;mask &amp; IN_Q_OVERFLOW)    printf("IN_Q_OVERFLOW ");
+        if (i-&gt;mask &amp; IN_UNMOUNT)       printf("IN_UNMOUNT ");
+        printf("\n");
+
+        if (i-&gt;len &gt; 0)
+            printf("        name = %s\n", i-&gt;name);
+    }
+
+    #define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
+
+    int
+    main(int argc, char *argv[])
+    {
+        int inotifyFd, wd, j;
+        char buf[BUF_LEN];
+        ssize_t numRead;
+        char *p;
+        struct inotify_event *event;
+
+        if (argc &lt; 2 || strcmp(argv[1], "--help") == 0)
+            usageErr("%s pathname... \n", argv[0]);
+
+<img src="figs/web/U001.png" alt=""/>     inotifyFd = inotify_init();                 /* Create inotify instance */
+        if (inotifyFd == -1)
+            errExit("inotify_init");
+
+        for (j = 1; j &lt; argc; j++) {
+<img src="figs/web/U002.png" alt=""/>         wd = inotify_add_watch(inotifyFd, argv[j], IN_ALL_EVENTS);
+            if (wd == -1)
+                errExit("inotify_add_watch");
+
+            printf("Watching %s using wd %d\n", argv[j], wd);
+        }
+
+        for (;;) {                                  /* Read events forever */
+<img src="figs/web/U003.png" alt=""/>         numRead = read(inotifyFd, buf, BUF_LEN);
+            if (numRead == 0)
+                fatal("read() from inotify fd returned 0!");
+
+            if (numRead == -1)
+                errExit("read");
+
+            printf("Read %ld bytes from inotify fd\n", (long) numRead);
+
+            /* Process all of the events in buffer returned by read() */
+
+            for (p = buf; p &lt; buf + numRead; ) {
+                event = (struct inotify_event *) p;
+<img src="figs/web/U004.png" alt=""/>             displayInotifyEvent(event);
+
+                p += sizeof(struct inotify_event) + event-&gt;len;
+            }
+        }
+
+        exit(EXIT_SUCCESS);
+    }
+         <strong class="userinput"><code>inotify/demo_inotify.c</code></strong></pre></div></div><p>The program in <a class="xref" href="ch19.html#using_the_inotify_api" title="Example 19-1. Using the inotify API">Example 19-1</a> performs the
+                        following steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Use <span class="emphasis"><em>inotify_init()</em></span> to create an
+                                    <span class="emphasis"><em>inotify</em></span> file descriptor <span class="inlinemediaobject"><a id="I_inlinemediaobject19_d1e51376"/><img src="figs/web/U001.png" alt=""/></span>.</p></li><li class="listitem"><p>Use <span class="emphasis"><em>inotify_add_watch()</em></span> to add a watch item
+                                for each of the files named in the command-line argument of the
+                                program <span class="inlinemediaobject"><a id="I_inlinemediaobject19_d1e51388"/><img src="figs/web/U002.png" alt=""/></span>. Each watch item watches for all possible
+                                events.</p></li><li class="listitem"><p>Execute an infinite loop that:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Reads a buffer of events from the
+                                            <span class="emphasis"><em>inotify</em></span> file descriptor
+                                            <span class="inlinemediaobject"><a id="I_inlinemediaobject19_d1e51404"/><img src="figs/web/U003.png" alt=""/></span>.</p></li><li class="listitem"><p>Calls the <span class="emphasis"><em>displayInotifyEvent()</em></span>
+                                        function to display the contents of each of the
+                                            <span class="emphasis"><em>inotify_event</em></span> structures within
+                                        that buffer <span class="inlinemediaobject"><a id="I_inlinemediaobject19_d1e51419"/><img src="figs/web/U004.png" alt=""/></span>.</p></li></ul></div></li></ul></div><p>The following shell session demonstrates the use of the program in <a class="xref" href="ch19.html#using_the_inotify_api" title="Example 19-1. Using the inotify API">Example 19-1</a>. We start an instance of the program
+                        that runs in the background monitoring two directories:</p><a id="I_programlisting19_d1e51429"/><pre class="programlisting">$ <strong class="userinput"><code>./demo_inotify dir1 dir2 &amp;</code></strong>
+[1] 5386
+Watching dir1 using wd 1
+Watching dir2 using wd 2</pre><p>Then we execute commands that generate events in the two directories. We
+                        begin by creating a file using <span class="emphasis"><em>cat(1)</em></span>:</p><a id="I_programlisting19_d1e51439"/><pre class="programlisting">$<strong class="userinput"><code>cat &gt; dir1/aaa</code></strong>
+Read 64 bytes from inotify fd
+    wd = 1; mask = IN_CREATE
+        name = aaa
+    wd = 1; mask = IN_OPEN
+        name = aaa</pre><p>The above output produced by the background program shows that
+                            <span class="emphasis"><em>read()</em></span> fetched a buffer containing two events. We
+                        continue by typing some input for the file and then the terminal
+                            <span class="emphasis"><em>end-of-file</em></span> character:</p><a id="I_programlisting19_d1e51452"/><pre class="programlisting"><strong class="userinput"><code>Hello world</code></strong>
+Read 32 bytes from inotify fd
+    wd = 1; mask = IN_MODIFY
+        name = aaa
+<em class="lineannotation"><span class="lineannotation">Type Control-D</span></em>
+Read 32 bytes from inotify fd
+    wd = 1; mask = IN_CLOSE_WRITE
+        name = aaa</pre><p>We then rename the file into the other monitored directory. This results
+                        in two events, one for the directory from which the file moves (watch
+                        descriptor 1), and the other for the destination directory (watch descriptor
+                        2):</p><a id="I_programlisting19_d1e51462"/><pre class="programlisting">$ <strong class="userinput"><code>mv dir1/aaa dir2/bbb</code></strong>
+Read 64 bytes from inotify fd
+    wd = 1; cookie = 548; mask = IN_MOVED_FROM
+        name = aaa
+    wd = 2; cookie = 548; mask = IN_MOVED_TO
+        name = bbb</pre><p>These two events share the same <span class="emphasis"><em>cookie</em></span> value,
+                        allowing the application to link them.</p><p>When we create a subdirectory under one of the monitored directories, the
+                        mask in the resulting event includes the <code class="literal">IN_ISDIR</code> bit, indicating that the subject of the event is a
+                        directory:</p><a id="I_programlisting19_d1e51477"/><pre class="programlisting">$ <strong class="userinput"><code>mkdir dir2/ddd</code></strong>
+Read 32 bytes from inotify fd
+    wd = 1; mask = IN_CREATE IN_ISDIR
+        name = ddd</pre><p>At this point, it is worth repeating that <span class="emphasis"><em>inotify</em></span>
+                        monitoring is not recursive. If the application wanted to monitor events in
+                        the newly created subdirectory, then it would need to issue a further
+                            <span class="emphasis"><em>inotify_add_watch()</em></span> call specifying the pathname of
+                        the subdirectory.</p><p>Finally, we remove one of the monitored directories:</p><a id="I_programlisting19_d1e51492"/><pre class="programlisting">$ <strong class="userinput"><code>rmdir dir1</code></strong>
+Read 32 bytes from inotify fd
+    wd = 1; mask = IN_DELETE_SELF
+    wd = 1; mask = IN_IGNORED</pre><p>The last event, <code class="literal">IN_IGNORED</code>, was
+                        generated to inform the application that the kernel has removed this watch
+                        item from the watch list.</p></div></div></div><div class="sect1" title="Queue Limits and /proc Files"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="queue_limits_and_solidus_proc_files">Queue Limits and <code class="literal">/proc</code> Files</h2></div></div></div><p>Queuing <span class="emphasis"><em>inotify</em></span> events requires kernel memory. For this
+                reason, the kernel places various limits on the operation of the
+                    <span class="emphasis"><em>inotify</em></span> mechanism. The superuser can configure these limits
+                via three files in the directory <code class="literal">/proc/sys/fs/inotify</code>:<a id="IDX-CHP-19-2711" class="indexterm"/><a id="IDX-CHP-19-2712" class="indexterm"/><a id="IDX-CHP-19-2713" class="indexterm"/><a id="IDX-CHP-19-2714" class="indexterm"/></p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">max_queued_events</code>
+                    </span></dt><dd><p>When <span class="emphasis"><em>inotify_init()</em></span> is called, this value is used
+                            to set an upper limit on the number of events that can be queued on the
+                            new <span class="emphasis"><em>inotify</em></span> instance. If this limit is reached,
+                            then an <code class="literal">IN_Q_OVERFLOW</code> event is
+                            generated and excess events are discarded. The <span class="emphasis"><em>wd</em></span>
+                            field for the overflow event will have the value -1.</p></dd><dt><span class="term">
+                        <code class="literal">max_user_instances</code>
+                    </span></dt><dd><p>This is a limit on the number of <span class="emphasis"><em>inotify</em></span>
+                            instances that can be created per real user ID.</p></dd><dt><span class="term">
+                        <code class="literal">max_user_watches</code>
+                    </span></dt><dd><p>This is a limit on the number of watch items that can be created per
+                            real user ID.</p><p>Typical default values for these three files are 16,384, 128, and
+                            8192, respectively.</p></dd></dl></div></div><div class="sect1" title="An Older System for Monitoring File Events: dnotify"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="an_older_system_for_monitoring_file_even">An Older System for Monitoring File Events: <span class="emphasis"><em>dnotify</em></span></h2></div></div></div><p>Linux provides another mechanism for monitoring file events. This mechanism, known
+                as <span class="emphasis"><em>dnotify</em></span>, has been available since kernel 2.4, but has been
+                made obsolete by <span class="emphasis"><em>inotify</em></span>. The <span class="emphasis"><em>dnotify</em></span>
+                mechanism suffers a number of limitations compared with
+                <span class="emphasis"><em>inotify</em></span>:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>dnotify</em></span> mechanism provides notification of events
+                        by sending signals to the application. Using signals as a notification
+                        mechanism complicates application design (<a class="xref" href="ch22.html#interprocess_communication_with_signals" title="Interprocess Communication with Signals">Interprocess Communication with Signals</a>). It also makes the
+                        use of <span class="emphasis"><em>dnotify</em></span> within a library difficult, since the
+                        calling program might change the disposition of the notification signal(s).
+                        The <span class="emphasis"><em>inotify</em></span> mechanism doesn’t use signals.</p></li><li class="listitem"><p>The monitoring unit of <span class="emphasis"><em>dnotify</em></span> is a directory. The
+                        application is informed when an operation is performed on any file in that
+                        directory. By contrast, <span class="emphasis"><em>inotify</em></span> can be used to monitor
+                        directories or individual files.</p></li><li class="listitem"><p>In order to monitor a directory, <span class="emphasis"><em>dnotify</em></span> requires the
+                        application to open a file descriptor for that directory. The use of file
+                        descriptors causes two problems. First, because it is busy, the file system
+                        containing the directory can’t be unmounted. Second, because one file
+                        descriptor is required for each directory, an application can end up
+                        consuming a large number of file descriptors. Because
+                            <span class="emphasis"><em>inotify</em></span> doesn’t use file descriptors, it avoids
+                        these problems.</p></li><li class="listitem"><p>The information provided by <span class="emphasis"><em>dnotify</em></span> about file events
+                        is less precise than that provided by <span class="emphasis"><em>inotify</em></span>. When a
+                        file is changed inside a monitored directory, <span class="emphasis"><em>dnotify</em></span>
+                        tells us that an event has occurred, but doesn’t tell us which file was
+                        involved in the event. The application must determine this by caching
+                        information about the directory contents. Furthermore,
+                            <span class="emphasis"><em>inotify</em></span> provides more detailed information than
+                            <span class="emphasis"><em>dnotify</em></span> about the type of event that has
+                        occurred.</p></li><li class="listitem"><p>In some circumstances, <span class="emphasis"><em>dnotify</em></span> doesn’t provide
+                        reliable notification of file events.</p></li></ul></div><p>Further information about <span class="emphasis"><em>dnotify</em></span> can be found under the
+                description of the <code class="literal">F_NOTIFY</code> operation in the
+                    <span class="emphasis"><em>fcntl(2)</em></span> manual page, and in the kernel source file
+                    <code class="literal">Documentation/dnotify.txt</code>.</p></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id18">Summary</h2></div></div></div><p>The Linux-specific <span class="emphasis"><em>inotify</em></span> mechanism allows an application to
+                obtain notifications when events (files are opened, closed, created, deleted,
+                modified, renamed, and so on) occur for a set of monitored files and directories.
+                The <span class="emphasis"><em>inotify</em></span> mechanism supersedes the older
+                    <span class="emphasis"><em>dnotify</em></span> mechanism.<a id="IDX-CHP-19-2715" class="indexterm"/><a id="IDX-CHP-19-2716" class="indexterm"/></p></div><div class="sect1" title="Exercise"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercise-id6">Exercise</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Write a program that logs all file creations, deletions, and renames under
+                        the directory named in its command-line argument. The program should monitor
+                        events in all of the subdirectories under the specified directory. To obtain
+                        a list of all of these subdirectories, you will need to make use of
+                            <span class="emphasis"><em>nftw()</em></span> (<a class="xref" href="ch18.html#file_tree_walking_colon_nftw_open_parent" title="File Tree Walking: nftw()">File Tree Walking: <span class="emphasis"><em>nftw()</em></span></a>). When a new
+                        subdirectory is added under the tree or a directory is deleted, the set of
+                        monitored subdirectories should be updated accordingly.</p></li></ol></div></div></section></body></html>

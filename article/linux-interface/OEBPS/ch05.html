@@ -1,0 +1,803 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 5. File I/O: Further Details</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch04.html" title="Chapter 4. File I/O: The Universal I/O Model"/><link rel="next" href="ch06.html" title="Chapter 6. Processes"/></head><body><section class="chapter" title="Chapter 5. File I/O: Further Details" epub:type="chapter" id="file_i_solidus_o_colon_further_details"><div class="titlepage"><div><div><h2 class="title">Chapter 5. File I/O: Further Details</h2></div></div></div><p>In this chapter, we extend the discussion of file I/O that we started in the previous
+            chapter.</p><p>In continuing the discussion of the <span class="emphasis"><em>open()</em></span> system call, we
+            explain the concept of <span class="emphasis"><em>atomicity</em></span>—the notion that the actions
+            performed by a system call are executed as a single uninterruptible step. This is a
+            necessary requirement for the correct operation of many system calls.</p><p>We introduce another file-related system call, the multipurpose
+                <span class="emphasis"><em>fcntl()</em></span>, and show one of its uses: fetching and setting open
+            file status flags.</p><p>Next, we look at the kernel data structures used to represent file descriptors and
+            open files. Understanding the relationship between these structures clarifies some of
+            the subtleties of file I/O discussed in subsequent chapters. Building on this model, we
+            then explain how to duplicate file descriptors.</p><p>We then consider some system calls that provide extended read and write functionality.
+            These system calls allow us to perform I/O at a specific location in a file without
+            changing the file offset, and to transfer data to and from multiple buffers in a
+            program.</p><p>We briefly introduce the concept of nonblocking I/O, and describe some extensions
+            provided to support I/O on very large files.</p><p>Since temporary files are used by many system programs, we’ll also look at some
+            library functions that allow us to create and use temporary files with randomly
+            generated unique names.</p><div class="sect1" title="Atomicity and Race Conditions"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="atomicity_and_race_conditions">Atomicity and Race Conditions</h2></div></div></div><p>Atomicity is a concept that we’ll encounter repeatedly when discussing the
+                operation of system calls. All system calls are executed atomically. By this, we
+                mean that the kernel guarantees that all of the steps in a system call are completed
+                as a single operation, without being interrupted by another process or
+                thread.</p><p>Atomicity is essential to the successful completion of some operations. In
+                particular, it allows us to avoid <span class="emphasis"><em>race conditions</em></span> (sometimes
+                known as <span class="emphasis"><em>race hazards</em></span>). A race condition is a situation where
+                the result produced by two processes (or threads) operating on shared resources
+                depends in an unexpected way on the relative order in which the processes gain
+                access to the CPU(s).<a id="IDX-CHP-5-0702" class="indexterm"/></p><p>In the next few pages, we look at two situations involving file I/O where race
+                conditions occur, and show how these conditions are eliminated through the use of
+                    <span class="emphasis"><em>open()</em></span> flags that guarantee the atomicity of the relevant
+                file operations.<a id="IDX-CHP-5-0703" class="indexterm"/></p><p>We revisit the topic of race conditions when we describe
+                    <span class="emphasis"><em>sigsuspend()</em></span> in <a class="xref" href="ch22.html#waiting_for_a_signal_using_a_mask_colon" title="Waiting for a Signal Using a Mask: sigsuspend()">Waiting for a Signal Using a Mask: <span class="emphasis"><em>sigsuspend()</em></span></a> and
+                    <span class="emphasis"><em>fork()</em></span> in Section 24.4.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="creating_a_file_exclusively"/></div></div></div><div class="sect3" title="Creating a file exclusively"><div class="titlepage"><div><div><h4 class="title" id="creating_a_file_exclusively-id1">Creating a file exclusively</h4></div></div></div><p>In <a class="xref" href="ch04.html#file_descriptor_number_returned_by-id1" title="File descriptor number returned by open()">File descriptor number returned by <span class="emphasis"><em>open()</em></span></a>, we noted that
+                        specifying <code class="literal">O_EXCL</code> in conjunction with
+                            <code class="literal">O_CREAT</code> causes
+                            <span class="emphasis"><em>open()</em></span> to return an error if the file already
+                        exists. This provides a way for a process to ensure that it is the creator
+                        of a file. The check on the prior existence of the file and the creation of
+                        the file are performed atomically. To see why this is important, consider
+                        the code shown in <a class="xref" href="ch05.html#incorrect_code_to_exclusively_open_a_fil" title="Example 5-1. Incorrect code to exclusively open a file">Example 5-1</a>, which we might resort to in the absence of the <code class="literal">O_EXCL</code> flag. (In this code, we display the process ID
+                        returned by the <span class="emphasis"><em>getpid()</em></span> system call, which enables us
+                        to distinguish the output of two different runs of this program.)<a id="IDX-CHP-5-0704" class="indexterm"/><a id="IDX-CHP-5-0705" class="indexterm"/><a id="IDX-CHP-5-0706" class="indexterm"/><a id="IDX-CHP-5-0707" class="indexterm"/></p><div class="example"><a id="incorrect_code_to_exclusively_open_a_fil"/><div class="example-title">Example 5-1. Incorrect code to exclusively open a file</div><div class="example-contents"><pre class="programlisting"><span class="emphasis"><em>from</em></span> <strong class="userinput"><code>fileio/bad_exclusive_open.c</code></strong>
+fd = open(argv[1], O_WRONLY);       /* Open 1: check if file exists */
+    if (fd != -1) {                     /* Open succeeded */
+        printf("[PID %ld] File \"%s\" already exists\n",
+                (long) getpid(), argv[1]);
+        close(fd);
+    } else {
+        if (errno != ENOENT) {          /* Failed for unexpected reason */
+            errExit("open");
+        } else {
+            /* WINDOW FOR FAILURE */
+            fd = open(argv[1], O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR);
+            if (fd == -1)
+                errExit("open");
+
+            printf("[PID %ld] Created file \"%s\" exclusively\n",
+                    (long) getpid(), argv[1]);          /* MAY NOT BE TRUE! */
+        }
+    }
+      <em class="lineannotation"><span class="lineannotation">from</span></em> <strong class="userinput"><code>fileio/bad_exclusive_open.c</code></strong></pre></div></div><p>Aside from the long-winded use of two calls to
+                        <span class="emphasis"><em>open()</em></span>, the code in <a class="xref" href="ch05.html#incorrect_code_to_exclusively_open_a_fil" title="Example 5-1. Incorrect code to exclusively open a file">Example 5-1</a> also contains a
+                        bug. Suppose that when our process first called <span class="emphasis"><em>open()</em></span>,
+                        the file did not exist, but by the time of the second
+                            <span class="emphasis"><em>open()</em></span>, some other process had created the file.
+                        This could happen if the kernel scheduler decided that the process’s time
+                        slice had expired and gave control to another process, as shown in <a class="xref" href="ch05.html#failing_to_exclusively_create_a_file" title="Figure 5-1. Failing to exclusively create a file">Figure 5-1</a>, or if the two
+                        processes were running at the same time on a multiprocessor system. <a class="xref" href="ch05.html#failing_to_exclusively_create_a_file" title="Figure 5-1. Failing to exclusively create a file">Figure 5-1</a> portrays the case where
+                        two processes are both executing the code shown in <a class="xref" href="ch05.html#incorrect_code_to_exclusively_open_a_fil" title="Example 5-1. Incorrect code to exclusively open a file">Example 5-1</a>. In this scenario,
+                        process A would wrongly conclude that it had created the file, since the
+                        second <span class="emphasis"><em>open()</em></span> succeeds whether or not the file
+                        exists.</p><p>While the chance of the process wrongly believing it was the creator of
+                        the file is relatively small, the possibility that it may occur nevertheless
+                        renders this code unreliable. The fact that the outcome of these operations
+                        depends on the order of scheduling of the two processes means that this is a
+                        race condition.</p><div class="figure"><a id="failing_to_exclusively_create_a_file"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject5_d1e10700"/><img src="figs/web/05-1_FILEIO-B-non-atomic-open-scale90.png.jpg" alt="Failing to exclusively create a file"/></div></div><div class="figure-title">Figure 5-1. Failing to exclusively create a file</div></div><p>To demonstrate that there is indeed a problem with this code, we could
+                        replace the commented line <code class="literal">WINDOW FOR
+                            FAILURE</code> in <a class="xref" href="ch05.html#incorrect_code_to_exclusively_open_a_fil" title="Example 5-1. Incorrect code to exclusively open a file">Example 5-1</a> with a piece of
+                        code that creates an artificially long delay between the check for file
+                        existence and the creation of the file:</p><a id="I_programlisting5_d1e10712"/><pre class="programlisting">printf("[PID %ld] File \"%s\" doesn't exist yet\n", (long) getpid(), argv[1]);
+if (argc &gt; 2) {                 /* Delay between check and create */
+    sleep(5);                   /* Suspend execution for 5 seconds */
+    printf("[PID %ld] Done sleeping\n", (long) getpid());
+}</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>sleep()</em></span> library function suspends the
+                            execution of a process for a specified number of seconds. We discuss
+                            this function in Section 23.4.</p></div><p>If we run two simultaneous instances of the program in <a class="xref" href="ch05.html#incorrect_code_to_exclusively_open_a_fil" title="Example 5-1. Incorrect code to exclusively open a file">Example 5-1</a>, we see that they
+                        both claim to have exclusively created the file:</p><a id="I_programlisting5_d1e10724"/><pre class="programlisting">$ <strong class="userinput"><code>./bad_exclusive_open tfile sleep &amp;</code></strong>
+[PID 3317] File "tfile" doesn't exist yet
+[1] 3317
+$ <strong class="userinput"><code>./bad_exclusive_open tfile</code></strong>
+[PID 3318] File "tfile" doesn't exist yet
+[PID 3318] Created file "tfile" exclusively
+$ [PID 3317] Done sleeping
+[PID 3317] Created file "tfile" exclusively                 <em class="lineannotation"><span class="lineannotation">Not true</span></em></pre><div class="note" title="Note"><h3 class="title">Note</h3><p>In the penultimate line of the above output, we see the shell prompt
+                            mixed with output from the first instance of the test program.</p></div><p>Both processes claim to have created the file because the code of the
+                        first process was interrupted between the existence check and the creation
+                        of the file. Using a single <span class="emphasis"><em>open()</em></span> call that specifies
+                        the <code class="literal">O_CREAT</code> and <code class="literal">O_EXCL</code> flags prevents this possibility by guaranteeing that
+                        the check and creation steps are carried out as a single atomic (i.e.,
+                        uninterruptible) operation.</p></div><div class="sect3" title="Appending data to a file"><div class="titlepage"><div><div><h4 class="title" id="appending_data_to_a_file">Appending data to a file</h4></div></div></div><p>A second example of the need for atomicity is when we have multiple
+                        processes appending data to the same file (e.g., a global log file). For
+                        this purpose, we might consider using a piece of code such as the following
+                        in each of our writers:<a id="IDX-CHP-5-0708" class="indexterm"/><a id="IDX-CHP-5-0709" class="indexterm"/></p><a id="I_programlisting5_d1e10764"/><pre class="programlisting">if (lseek(fd, 0, SEEK_END) == -1)
+    errExit("lseek");
+if (write(fd, buf, len) != len)
+    fatal("Partial/failed write");</pre><p>However, this code suffers the same defect as the previous example. If the
+                        first process executing the code is interrupted between the
+                            <span class="emphasis"><em>lseek()</em></span> and <span class="emphasis"><em>write()</em></span> calls by a
+                        second process doing the same thing, then both processes will set their file
+                        offset to the same location before writing, and when the first process is
+                        rescheduled, it will overwrite the data already written by the second
+                        process. Again, this is a race condition because the results depend on the
+                        order of scheduling of the two processes.</p><p>Avoiding this problem requires that the seek to the next byte past the end
+                        of the file and the write operation happen atomically. This is what opening
+                        a file with the <code class="literal">O_APPEND</code> flag
+                        guarantees.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Some file systems (e.g., NFS) don’t support <code class="literal">O_APPEND</code>. In this case, the kernel reverts to the
+                            nonatomic sequence of calls shown above, with the consequent possibility
+                            of file corruption as just described.</p></div></div></div></div><div class="sect1" title="File Control Operations: fcntl()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="file_control_operations_colon_fcntl_open">File Control Operations: <span class="emphasis"><em>fcntl()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>fcntl()</em></span> system call performs a range of control
+                operations on an open file descriptor.<a id="IDX-CHP-5-0710" class="indexterm"/><a id="IDX-CHP-5-0711" class="indexterm"/></p><a id="I_programlisting5_d1e10804"/><pre class="programlisting">#include &lt;fcntl.h&gt;
+
+int <strong class="userinput"><code>fcntl</code></strong>(int <span class="emphasis"><em>fd</em></span>, int <span class="emphasis"><em>cmd</em></span>, ...);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Return on success depends on <span class="emphasis"><em>cmd</em></span>, or -1 on error</p></div><p>The <span class="emphasis"><em>cmd</em></span> argument can specify a wide range of operations. We
+                examine some of them in the following sections, and delay examination of others
+                until later chapters.</p><p>As indicated by the ellipsis, the third argument to <span class="emphasis"><em>fcntl()</em></span>
+                can be of different types, or it can be omitted. The kernel uses the value of the
+                    <span class="emphasis"><em>cmd</em></span> argument to determine the data type (if any) to expect
+                for this argument.</p></div><div class="sect1" title="Open File Status Flags"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="open_file_status_flags">Open File Status Flags</h2></div></div></div><p>One use of <span class="emphasis"><em>fcntl()</em></span> is to retrieve or modify the access mode
+                and open file status flags of an open file. (These are the values set by the
+                    <span class="emphasis"><em>flags</em></span> argument specified in the call to
+                    <span class="emphasis"><em>open()</em></span>.) To retrieve these settings, we specify
+                    <span class="emphasis"><em>cmd</em></span> as <code class="literal">F_GETFL</code>:<a id="IDX-CHP-5-0712" class="indexterm"/><a id="IDX-CHP-5-0713" class="indexterm"/><a id="IDX-CHP-5-0714" class="indexterm"/><a id="IDX-CHP-5-0715" class="indexterm"/><a id="IDX-CHP-5-0716" class="indexterm"/><a id="IDX-CHP-5-0717" class="indexterm"/><a id="IDX-CHP-5-0718" class="indexterm"/><a id="IDX-CHP-5-0719" class="indexterm"/><a id="IDX-CHP-5-0720" class="indexterm"/><a id="IDX-CHP-5-0721" class="indexterm"/><a id="IDX-CHP-5-0722" class="indexterm"/><a id="IDX-CHP-5-0723" class="indexterm"/><a id="IDX-CHP-5-0724" class="indexterm"/><a id="IDX-CHP-5-0725" class="indexterm"/><a id="IDX-CHP-5-0726" class="indexterm"/><a id="IDX-CHP-5-0727" class="indexterm"/></p><a id="I_programlisting5_d1e10931"/><pre class="programlisting">int flags, accessMode;
+
+flags = fcntl(fd, F_GETFL);         /* Third argument is not required */
+if (flags == -1)
+    errExit("fcntl");</pre><p>After the above piece of code, we could test if the file was opened for
+                synchronized writes as follows:</p><a id="I_programlisting5_d1e10935"/><pre class="programlisting">if (flags &amp; O_SYNC)
+    printf("writes are synchronized\n");</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv3 requires that only status flags that were specified during an
+                        <span class="emphasis"><em>open()</em></span> or a later <span class="emphasis"><em>fcntl()</em></span>
+                    <code class="literal">F_SETFL</code> should be set on an open file.
+                    However, Linux deviates from this in one respect: if an application was compiled
+                    using one of the techniques described in <a class="xref" href="ch05.html#i_solidus_o_on_large_files" title="I/O on Large Files">I/O on Large Files</a> for opening large files, then
+                        <code class="literal">O_LARGEFILE</code> will always be set in the
+                    flags retrieved by <code class="literal">F_GETFL</code>.</p></div><p>Checking the access mode of the file is slightly more complex, since the <code class="literal">O_RDONLY</code> (0), <code class="literal">O_WRONLY</code> (1), and <code class="literal">O_RDWR</code> (2)
+                constants don’t correspond to single bits in the open file status flags. Therefore,
+                to make this check, we mask the <span class="emphasis"><em>flags</em></span> value with the constant
+                    <code class="literal">O_ACCMODE</code>, and then test for equality with
+                one of the constants:</p><a id="I_programlisting5_d1e10975"/><pre class="programlisting">accessMode = flags &amp; O_ACCMODE;
+if (accessMode == O_WRONLY || accessMode == O_RDWR)
+    printf("file is writable\n");</pre><p>We can use the <span class="emphasis"><em>fcntl()</em></span>
+                <code class="literal">F_SETFL</code> command to modify some of the open file
+                status flags. The flags that can be modified are <code class="literal">O_APPEND</code>, <code class="literal">O_NONBLOCK</code>, <code class="literal">O_NOATIME</code>, <code class="literal">O_ASYNC</code>,
+                and <code class="literal">O_DIRECT</code>. Attempts to modify other flags are
+                ignored. (Some other UNIX implementations allow <span class="emphasis"><em>fcntl()</em></span> to
+                modify other flags, such as <code class="literal">O_SYNC</code>.)</p><p>Using <span class="emphasis"><em>fcntl()</em></span> to modify open file status flags is
+                particularly useful in the following cases:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The file was not opened by the calling program, so that it had no control
+                        over the flags used in the <span class="emphasis"><em>open()</em></span> call (e.g., the file
+                        may be one of the three standard descriptors that are opened before the
+                        program is started).</p></li><li class="listitem"><p>The file descriptor was obtained from a system call other than
+                            <span class="emphasis"><em>open()</em></span>. Examples of such system calls are
+                            <span class="emphasis"><em>pipe()</em></span>, which creates a pipe and returns two file
+                        descriptors referring to either end of the pipe, and
+                            <span class="emphasis"><em>socket()</em></span>, which creates a socket and returns a file
+                        descriptor referring to the socket.<a id="IDX-CHP-5-0728" class="indexterm"/></p></li></ul></div><p>To modify the open file status flags, we use <span class="emphasis"><em>fcntl()</em></span> to
+                retrieve a copy of the existing flags, then modify the bits we wish to change, and
+                finally make a further call to <span class="emphasis"><em>fcntl()</em></span> to update the flags.
+                Thus, to enable the <code class="literal">O_APPEND</code> flag, we would write
+                the following:</p><a id="I_programlisting5_d1e11046"/><pre class="programlisting">int flags;
+
+flags = fcntl(fd, F_GETFL);
+if (flags == -1)
+    errExit("fcntl");
+flags |= O_APPEND;
+if (fcntl(fd, F_SETFL, flags) == -1)
+    errExit("fcntl");</pre></div><div class="sect1" title="Relationship Between File Descriptors and Open Files"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="relationship_between_file_descriptors_an">Relationship Between File Descriptors and Open Files</h2></div></div></div><p>Up until now, it may have appeared that there is a one-to-one correspondence
+                between a file descriptor and an open file. However, this is not the case. It is
+                possible—and useful—to have multiple descriptors referring to the same open file.
+                These file descriptors may be open in the same process or in different
+                    processes.<a id="IDX-CHP-5-0729" class="indexterm"/><a id="IDX-CHP-5-0730" class="indexterm"/><a id="IDX-CHP-5-0731" class="indexterm"/><a id="IDX-CHP-5-0732" class="indexterm"/><a id="IDX-CHP-5-0733" class="indexterm"/><a id="IDX-CHP-5-0734" class="indexterm"/><a id="IDX-CHP-5-0735" class="indexterm"/><a id="IDX-CHP-5-0736" class="indexterm"/></p><p>To understand what is going on, we need to examine three data structures
+                maintained by the kernel:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>the per-process file descriptor table;</p></li><li class="listitem"><p>the system-wide table of open file descriptions; and</p></li><li class="listitem"><p>the file system i-node table.</p></li></ul></div><p>For each process, the kernel maintains a table of <span class="emphasis"><em>open file
+                    descriptors</em></span>. Each entry in this table records information about a
+                single file descriptor, including:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>a set of flags controlling the operation of the file descriptor (there is
+                        just one such flag, the close-on-exec flag, which we describe in <a class="xref" href="ch27.html#file_descriptors_and_exec_open_parenthes" title="File Descriptors and exec()">File Descriptors and <span class="emphasis"><em>exec()</em></span></a>); and</p></li><li class="listitem"><p>a reference to the open file description.<a id="IDX-CHP-5-0737" class="indexterm"/></p></li></ul></div><p>The kernel maintains a system-wide table of all <span class="emphasis"><em>open file
+                    descriptions</em></span>. (This table is sometimes referred to as the
+                    <span class="emphasis"><em>open file table</em></span>, and its entries are sometimes called
+                    <span class="emphasis"><em>open file handles</em></span>.) An open file description stores all
+                information relating to an open file, including:<a id="IDX-CHP-5-0738" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>the current file offset (as updated by <span class="emphasis"><em>read()</em></span> and
+                            <span class="emphasis"><em>write()</em></span>, or explicitly modified using
+                            <span class="emphasis"><em>lseek()</em></span>);<a id="IDX-CHP-5-0739" class="indexterm"/></p></li><li class="listitem"><p>status flags specified when opening the file (i.e., the
+                            <span class="emphasis"><em>flags</em></span> argument to
+                        <span class="emphasis"><em>open()</em></span>);</p></li><li class="listitem"><p>the file access mode (read-only, write-only, or read-write, as specified
+                        in <span class="emphasis"><em>open()</em></span>);<a id="IDX-CHP-5-0740" class="indexterm"/></p></li><li class="listitem"><p>settings relating to signal-driven I/O (<a class="xref" href="ch63.html#signal-driven_i_solidus_o" title="Signal-Driven I/O">Signal-Driven I/O</a>); and<a id="IDX-CHP-5-0741" class="indexterm"/></p></li><li class="listitem"><p>a reference to the <span class="emphasis"><em>i-node</em></span> object for this
+                            file.<a id="IDX-CHP-5-0742" class="indexterm"/></p></li></ul></div><p>Each file system has a table of <span class="emphasis"><em>i-nodes</em></span> for all files
+                residing in the file system. The i-node structure, and file systems in general, are
+                discussed in more detail in <a class="xref" href="ch14.html" title="Chapter 14. File Systems">Chapter 14</a>. For now, we note that
+                the i-node for each file includes the following information:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>file type (e.g., regular file, socket, or FIFO) and permissions;<a id="IDX-CHP-5-0743" class="indexterm"/></p></li><li class="listitem"><p>a pointer to a list of locks held on this file; and</p></li><li class="listitem"><p>various properties of the file, including its size and timestamps relating
+                        to different types of file operations.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>Here, we are overlooking the distinction between on-disk and in-memory
+                    representations of an i-node. The on-disk i-node records the persistent
+                    attributes of a file, such as its type, permissions, and timestamps. When a file
+                    is accessed, an in-memory copy of the i-node is created, and this version of the
+                    i-node records a count of the open file descriptions referring to the i-node and
+                    the major and minor IDs of the device from which the i-node was copied. The
+                    in-memory i-node also records various ephemeral attributes that are associated
+                    with a file while it is open, such as file locks.</p></div><p><a class="xref" href="ch05.html#relationship_between_file_descriptors_co" title="Figure 5-2. Relationship between file descriptors, open file descriptions, and i-nodes">Figure 5-2</a> illustrates the
+                relationship between file descriptors, open file descriptions, and i-nodes. In this
+                diagram, two processes have a number of open file descriptors.</p><div class="figure"><a id="relationship_between_file_descriptors_co"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject5_d1e11217"/><img src="figs/web/05-2_FILEIO-B-open-files.png.jpg" alt="Relationship between file descriptors, open file descriptions, and i-nodes"/></div></div><div class="figure-title">Figure 5-2. Relationship between file descriptors, open file descriptions, and
+                    i-nodes</div></div><p>In process A, descriptors 1 and 20 both refer to the same open file description
+                (labeled 23). This situation may arise as a result of a call to
+                    <span class="emphasis"><em>dup()</em></span>, <span class="emphasis"><em>dup2()</em></span>, or
+                    <span class="emphasis"><em>fcntl()</em></span> (see <a class="xref" href="ch05.html#duplicating_file_descriptors" title="Duplicating File Descriptors">Duplicating File Descriptors</a>).</p><p>Descriptor 2 of process A and descriptor 2 of process B refer to a single open
+                file description (73). This scenario could occur after a call to
+                    <span class="emphasis"><em>fork()</em></span> (i.e., process A is the parent of process B, or vice
+                versa), or if one process passed an open descriptor to another process using a UNIX
+                domain socket (<a class="xref" href="ch61.html#passing_file_descriptors" title="Passing File Descriptors">Passing File Descriptors</a>).</p><p>Finally, we see that descriptor 0 of process A and descriptor 3 of process B refer
+                to different open file descriptions, but that these descriptions refer to the same
+                i-node table entry (1976)—in other words, to the same file. This occurs because each
+                process independently called <span class="emphasis"><em>open()</em></span> for the same file. A
+                similar situation could occur if a single process opened the same file
+                    twice.<a id="IDX-CHP-5-0744" class="indexterm"/></p><p>We can draw a number of implications from the preceding discussion:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Two different file descriptors that refer to the same open file
+                        description share a file offset value. Therefore, if the file offset is
+                        changed via one file descriptor (as a consequence of calls to
+                            <span class="emphasis"><em>read()</em></span>, <span class="emphasis"><em>write()</em></span>, or
+                            <span class="emphasis"><em>lseek()</em></span>), this change is visible through the other
+                        file descriptor. This applies both when the two file descriptors belong to
+                        the same process and when they belong to different processes.<a id="IDX-CHP-5-0745" class="indexterm"/></p></li><li class="listitem"><p>Similar scope rules apply when retrieving and changing the open file
+                        status flags (e.g., <code class="literal">O_APPEND</code>, <code class="literal">O_NONBLOCK</code>, and <code class="literal">O_ASYNC</code>) using the <span class="emphasis"><em>fcntl()</em></span>
+                        <code class="literal">F_GETFL</code> and <code class="literal">F_SETFL</code> operations.<a id="IDX-CHP-5-0746" class="indexterm"/></p></li><li class="listitem"><p>By contrast, the file descriptor flags (i.e., the close-on-exec flag) are
+                        private to the process and file descriptor. Modifying these flags does not
+                        affect other file descriptors in the same process or a different
+                            process.<a id="IDX-CHP-5-0747" class="indexterm"/></p></li></ul></div></div><div class="sect1" title="Duplicating File Descriptors"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="duplicating_file_descriptors">Duplicating File Descriptors</h2></div></div></div><p>Using the (Bourne shell) I/O redirection syntax <code class="literal">2&gt;&amp;1</code> informs the shell that we wish to have standard
+                error (file descriptor 2) redirected to the same place to which standard output
+                (file descriptor 1) is being sent. Thus, the following command would (since the
+                shell evaluates I/O directions from left to right) send both standard output and
+                standard error to the file <code class="literal">results.log</code>:<a id="IDX-CHP-5-0748" class="indexterm"/><a id="IDX-CHP-5-0749" class="indexterm"/><a id="IDX-CHP-5-0750" class="indexterm"/><a id="IDX-CHP-5-0751" class="indexterm"/><a id="IDX-CHP-5-0752" class="indexterm"/><a id="IDX-CHP-5-0753" class="indexterm"/><a id="IDX-CHP-5-0754" class="indexterm"/><a id="IDX-CHP-5-0755" class="indexterm"/><a id="IDX-CHP-5-0756" class="indexterm"/><a id="IDX-CHP-5-0757" class="indexterm"/></p><a id="I_programlisting5_d1e11366"/><pre class="programlisting">$ <strong class="userinput"><code>./myscript &gt; results.log 2&gt;&amp;1</code></strong></pre><p>The shell achieves the redirection of standard error by duplicating file
+                descriptor 2 so that it refers to the same open file description as file descriptor
+                1 (in the same way that descriptors 1 and 20 of process A refer to the same open
+                file description in <a class="xref" href="ch05.html#relationship_between_file_descriptors_co" title="Figure 5-2. Relationship between file descriptors, open file descriptions, and i-nodes">Figure 5-2</a>).
+                This effect can be achieved using the <span class="emphasis"><em>dup()</em></span> and
+                    <span class="emphasis"><em>dup2()</em></span> system calls.<a id="IDX-CHP-5-0758" class="indexterm"/></p><p>Note that it is not sufficient for the shell simply to open the <code class="literal">results.log</code> file twice: once on descriptor 1 and once
+                on descriptor 2. One reason for this is that the two file descriptors would not
+                share a file offset pointer, and hence could end up overwriting each other’s output.
+                Another reason is that the file may not be a disk file. Consider the following
+                command, which sends standard error down the same pipe as standard output:</p><a id="I_programlisting5_d1e11390"/><pre class="programlisting">$ <strong class="userinput"><code>./myscript 2&gt;&amp;1 | less</code></strong></pre><p>The <span class="emphasis"><em>dup()</em></span> call takes <span class="emphasis"><em>oldfd</em></span>, an open file
+                descriptor, and returns a new descriptor that refers to the same open file
+                description. The new descriptor is guaranteed to be the lowest unused file
+                    descriptor.<a id="IDX-CHP-5-0759" class="indexterm"/></p><a id="I_programlisting5_d1e11406"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+int <strong class="userinput"><code>dup</code></strong>(int <span class="emphasis"><em>oldfd</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns (new) file descriptor on success, or -1 on error</p></div><p>Suppose we make the following call:</p><a id="I_programlisting5_d1e11419"/><pre class="programlisting">newfd = dup(1);</pre><p>Assuming the normal situation where the shell has opened file descriptors 0, 1,
+                and 2 on the program’s behalf, and no other descriptors are in use,
+                    <span class="emphasis"><em>dup()</em></span> will create the duplicate of descriptor 1 using file
+                3.</p><p>If we wanted the duplicate to be descriptor 2, we could use the following
+                technique:</p><a id="I_programlisting5_d1e11429"/><pre class="programlisting">close(2);               /* Frees file descriptor 2 */
+newfd = dup(1);         /* Should reuse file descriptor 2 */</pre><p>This code works only if descriptor 0 was open. To make the above code simpler, and
+                to ensure we always get the file descriptor we want, we can use
+                    <span class="emphasis"><em>dup2()</em></span>.<a id="IDX-CHP-5-0760" class="indexterm"/></p><a id="I_programlisting5_d1e11440"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+int <strong class="userinput"><code>dup2</code></strong>(int <span class="emphasis"><em>oldfd</em></span>, int <span class="emphasis"><em>newfd</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns (new) file descriptor on success, or -1 on error</p></div><p>The <span class="emphasis"><em>dup2()</em></span> system call makes a duplicate of the file
+                descriptor given in <span class="emphasis"><em>oldfd</em></span> using the descriptor number supplied
+                in <span class="emphasis"><em>newfd</em></span>. If the file descriptor specified in
+                    <span class="emphasis"><em>newfd</em></span> is already open, <span class="emphasis"><em>dup2()</em></span> closes
+                it first. (Any error that occurs during this close is silently ignored; safer
+                programming practice is to explicitly <span class="emphasis"><em>close() newfd</em></span> if it is
+                open before the call to <span class="emphasis"><em>dup2()</em></span>.)</p><p>We could simplify the preceding calls to <span class="emphasis"><em>close()</em></span> and
+                    <span class="emphasis"><em>dup()</em></span> to the following:</p><a id="I_programlisting5_d1e11486"/><pre class="programlisting">dup2(1, 2);</pre><p>A successful <span class="emphasis"><em>dup2()</em></span> call returns the number of the duplicate
+                descriptor (i.e., the value passed in <span class="emphasis"><em>newfd</em></span>).</p><p>If <span class="emphasis"><em>oldfd</em></span> is not a valid file descriptor, then
+                    <span class="emphasis"><em>dup2()</em></span> fails with the error <code class="literal">EBADF</code> and <span class="emphasis"><em>newfd</em></span> is not closed. If
+                    <span class="emphasis"><em>oldfd</em></span> is a valid file descriptor, and
+                    <span class="emphasis"><em>oldfd</em></span> and <span class="emphasis"><em>newfd</em></span> have the same value,
+                then <span class="emphasis"><em>dup2()</em></span> does nothing—<span class="emphasis"><em>newfd</em></span> is not
+                closed, and <span class="emphasis"><em>dup2()</em></span> returns the <span class="emphasis"><em>newfd</em></span> as
+                its function result.</p><p>A further interface that provides some extra flexibility for duplicating file
+                descriptors is the <span class="emphasis"><em>fcntl()</em></span>
+                <code class="literal">F_DUPFD</code> operation:<a id="IDX-CHP-5-0761" class="indexterm"/></p><a id="I_programlisting5_d1e11547"/><pre class="programlisting">newfd = fcntl(oldfd, F_DUPFD, startfd);</pre><p>This call makes a duplicate of <span class="emphasis"><em>oldfd</em></span> by using the lowest
+                unused file descriptor greater than or equal to <span class="emphasis"><em>startfd</em></span>. This
+                is useful if we want a guarantee that the new descriptor
+                (<span class="emphasis"><em>newfd</em></span>) falls in a certain range of values. Calls to
+                    <span class="emphasis"><em>dup()</em></span> and <span class="emphasis"><em>dup2()</em></span> can always be recoded
+                as calls to <span class="emphasis"><em>close()</em></span> and <span class="emphasis"><em>fcntl()</em></span>, although
+                the former calls are more concise. (Note also that some of the
+                    <span class="emphasis"><em>errno</em></span> error codes returned by <span class="emphasis"><em>dup2()</em></span>
+                and <span class="emphasis"><em>fcntl()</em></span> differ, as described in the manual pages.)</p><p>From <a class="xref" href="ch05.html#relationship_between_file_descriptors_co" title="Figure 5-2. Relationship between file descriptors, open file descriptions, and i-nodes">Figure 5-2</a>, we can see that
+                duplicate file descriptors share the same file offset value and status flags in
+                their shared open file description. However, the new file descriptor has its own set
+                of file descriptor flags, and its close-on-exec flag (<code class="literal">FD_CLOEXEC</code>) is always turned off. The interfaces that we describe
+                next allow explicit control of the new file descriptor’s close-on-exec
+                    flag.<a id="IDX-CHP-5-0762" class="indexterm"/></p><p>The <span class="emphasis"><em>dup3()</em></span> system call performs the same task as
+                    <span class="emphasis"><em>dup2()</em></span>, but adds an additional argument,
+                    <span class="emphasis"><em>flags</em></span>, that is a bit mask that modifies the behavior of the
+                system call.<a id="IDX-CHP-5-0763" class="indexterm"/></p><a id="I_programlisting5_d1e11607"/><pre class="programlisting">#define _GNU_SOURCE
+#include &lt;unistd.h&gt;
+
+int <strong class="userinput"><code>dup3</code></strong>(int <span class="emphasis"><em>oldfd</em></span>, int <span class="emphasis"><em>newfd</em></span>, int <span class="emphasis"><em>flags</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns (new) file descriptor on success, or -1 on error</p></div><p>Currently, <span class="emphasis"><em>dup3()</em></span> supports one flag, <code class="literal">O_CLOEXEC</code>, which causes the kernel to enable the close-on-exec flag
+                    (<code class="literal">FD_CLOEXEC</code>) for the new file descriptor.
+                This flag is useful for the same reasons as the <span class="emphasis"><em>open()</em></span>
+                <code class="literal">O_CLOEXEC</code> flag described in <a class="xref" href="ch04.html#file_descriptor_number_returned_by-id1" title="File descriptor number returned by open()">File descriptor number returned by <span class="emphasis"><em>open()</em></span></a>.</p><p>The <span class="emphasis"><em>dup3()</em></span> system call is new in Linux 2.6.27, and is
+                Linux-specific.</p><p>Since Linux 2.6.24, Linux also supports an additional <span class="emphasis"><em>fcntl()</em></span>
+                operation for duplicating file descriptors: <code class="literal">F_DUPFD_CLOEXEC</code>. This flag does the same thing as <code class="literal">F_DUPFD</code>, but additionally sets the close-on-exec flag
+                    (<code class="literal">FD_CLOEXEC</code>) for the new file descriptor.
+                Again, this operation is useful for the same reasons as the
+                    <span class="emphasis"><em>open()</em></span>
+                <code class="literal">O_CLOEXEC</code> flag. <code class="literal">F_DUPFD_CLOEXEC</code> is not specified in SUSv3, but is specified in
+                SUSv4.</p></div><div class="sect1" title="File I/O at a Specified Offset: pread() and pwrite()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="file_i_solidus_o_at_a_specified_offset_c">File I/O at a Specified Offset: <span class="emphasis"><em>pread()</em></span> and
+                    <span class="emphasis"><em>pwrite()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>pread()</em></span> and <span class="emphasis"><em>pwrite()</em></span> system calls
+                operate just like <span class="emphasis"><em>read()</em></span> and <span class="emphasis"><em>write()</em></span>,
+                except that the file I/O is performed at the location specified by
+                    <span class="emphasis"><em>offset</em></span>, rather than at the current file offset. The file
+                offset is left unchanged by these calls.<a id="IDX-CHP-5-0766" class="indexterm"/><a id="IDX-CHP-5-0767" class="indexterm"/><a id="IDX-CHP-5-0768" class="indexterm"/><a id="IDX-CHP-5-0769" class="indexterm"/><a id="IDX-CHP-5-0770" class="indexterm"/><a id="IDX-CHP-5-0771" class="indexterm"/><a id="IDX-CHP-5-0772" class="indexterm"/><a id="IDX-CHP-5-0773" class="indexterm"/><a id="IDX-CHP-5-0774" class="indexterm"/><a id="IDX-CHP-5-0775" class="indexterm"/><a id="IDX-CHP-5-0764" class="indexterm"/><a id="IDX-CHP-5-0765" class="indexterm"/></p><a id="I_programlisting5_d1e11764"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+ssize_t <strong class="userinput"><code>pread</code></strong>(int <span class="emphasis"><em>fd</em></span>, void *<span class="emphasis"><em>buf</em></span>, size_t <span class="emphasis"><em>count</em></span>, off_t <span class="emphasis"><em>offset</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns number of bytes read, 0 on EOF, or -1 on error</p></div><a id="I_programlisting5_d1e11784"/><pre class="programlisting">ssize_t <strong class="userinput"><code>pwrite</code></strong>(int <span class="emphasis"><em>fd</em></span>, const void *<span class="emphasis"><em>buf</em></span>, size_t <span class="emphasis"><em>count</em></span>, off_t <span class="emphasis"><em>offset</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns number of bytes written, or -1 on error</p></div><p>Calling <span class="emphasis"><em>pread()</em></span> is equivalent to
+                    <span class="emphasis"><em>atomically</em></span> performing the following calls:</p><a id="I_programlisting5_d1e11812"/><pre class="programlisting">off_t orig;
+
+orig = lseek(fd, 0, SEEK_CUR);    /* Save current offset */
+lseek(fd, offset, SEEK_SET);
+s = read(fd, buf, len);
+lseek(fd, orig, SEEK_SET);        /* Restore original file offset */</pre><p>For both <span class="emphasis"><em>pread()</em></span> and <span class="emphasis"><em>pwrite()</em></span>, the file
+                referred to by <span class="emphasis"><em>fd</em></span> must be seekable (i.e., a file descriptor on
+                which it is permissible to call <span class="emphasis"><em>lseek()</em></span>).</p><p>These system calls can be particularly useful in multithreaded applications. As
+                we’ll see in <a class="xref" href="ch29.html" title="Chapter 29. Threads: Introduction">Chapter 29</a>, all of the threads in a
+                process share the same file descriptor table. This means that the file offset for
+                each open file is global to all threads. Using <span class="emphasis"><em>pread()</em></span> or
+                    <span class="emphasis"><em>pwrite()</em></span>, multiple threads can simultaneously perform I/O
+                on the same file descriptor without being affected by changes made to the file
+                offset by other threads. If we attempted to use <span class="emphasis"><em>lseek()</em></span> plus
+                    <span class="emphasis"><em>read()</em></span> (or <span class="emphasis"><em>write()</em></span>) instead, then we
+                would create a race condition similar to the one that we described when discussing
+                the <code class="literal">O_APPEND</code> flag in Section 5.1. (The
+                    <span class="emphasis"><em>pread()</em></span> and <span class="emphasis"><em>pwrite()</em></span> system calls can
+                similarly be useful for avoiding race conditions in applications where multiple
+                processes have file descriptors referring to the same open file description.)</p><div class="note" title="Note"><h3 class="title">Note</h3><p>If we are repeatedly performing <span class="emphasis"><em>lseek()</em></span> calls followed by
+                    file I/O, then the <span class="emphasis"><em>pread()</em></span> and
+                        <span class="emphasis"><em>pwrite()</em></span> system calls can also offer a performance
+                    advantage in some cases. This is because the cost of a single
+                        <span class="emphasis"><em>pread()</em></span> (or <span class="emphasis"><em>pwrite()</em></span>) system call
+                    is less than the cost of two system calls: <span class="emphasis"><em>lseek()</em></span> and
+                        <span class="emphasis"><em>read()</em></span> (or <span class="emphasis"><em>write()</em></span>). However, the
+                    cost of system calls is usually dwarfed by the time required to actually perform
+                    I/O.</p></div></div><div class="sect1" title="Scatter-Gather I/O: readv() and writev()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="scatter-gather_i_solidus_o_colon_readv_o">Scatter-Gather I/O: <span class="emphasis"><em>readv()</em></span> and
+                    <span class="emphasis"><em>writev()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>readv()</em></span> and <span class="emphasis"><em>writev()</em></span> system calls
+                perform scatter-gather I/O.<a id="IDX-CHP-5-0778" class="indexterm"/><a id="IDX-CHP-5-0779" class="indexterm"/><a id="IDX-CHP-5-0780" class="indexterm"/><a id="IDX-CHP-5-0781" class="indexterm"/><a id="IDX-CHP-5-0782" class="indexterm"/><a id="IDX-CHP-5-0783" class="indexterm"/><a id="IDX-CHP-5-0776" class="indexterm"/><a id="IDX-CHP-5-0777" class="indexterm"/><a id="IDX-CHP-5-0784" class="indexterm"/><a id="IDX-CHP-5-0785" class="indexterm"/></p><a id="I_programlisting5_d1e11955"/><pre class="programlisting">#include &lt;sys/uio.h&gt;
+
+ssize_t <strong class="userinput"><code>readv</code></strong>(int <span class="emphasis"><em>fd</em></span>, const struct iovec *<span class="emphasis"><em>iov</em></span>, int <span class="emphasis"><em>iovcnt</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns number of bytes read, 0 on EOF, or -1 on error</p></div><a id="I_programlisting5_d1e11972"/><pre class="programlisting">ssize_t <strong class="userinput"><code>writev</code></strong>(int <span class="emphasis"><em>fd</em></span>, const struct iovec *<span class="emphasis"><em>iov</em></span>, int <span class="emphasis"><em>iovcnt</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns number of bytes written, or -1 on error</p></div><p>Instead of accepting a single buffer of data to be read or written, these
+                functions transfer multiple buffers of data in a single system call. The set of
+                buffers to be transferred is defined by the array <span class="emphasis"><em>iov</em></span>. The
+                integer <span class="emphasis"><em>iovcnt</em></span> specifies the number of elements in
+                    <span class="emphasis"><em>iov</em></span>. Each element of <span class="emphasis"><em>iov</em></span> is a
+                structure of the following form:</p><a id="I_programlisting5_d1e12003"/><pre class="programlisting">struct iovec {
+    void  *iov_base;        /* Start address of buffer */
+    size_t iov_len;         /* Number of bytes to transfer to/from buffer */
+};</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv3 allows an implementation to place a limit on the number of elements in
+                        <span class="emphasis"><em>iov</em></span>. An implementation can advertise its limit by
+                    defining <code class="literal">IOV_MAX</code> in <code class="literal">&lt;limits.h&gt;</code> or at run time via the return from the
+                    call <span class="emphasis"><em>sysconf(_SC_IOV_MAX)</em></span>. (We describe
+                        <span class="emphasis"><em>sysconf()</em></span> in Section 11.2.) SUSv3 requires that this
+                    limit be at least 16. On Linux, <code class="literal">IOV_MAX</code> is
+                    defined as 1024, which corresponds to the kernel’s limit on the size of this
+                    vector (defined by the kernel constant <code class="literal">UIO_MAXIOV</code>).</p><p>However, the <span class="emphasis"><em>glibc</em></span> wrapper functions for
+                        <span class="emphasis"><em>readv()</em></span> and <span class="emphasis"><em>writev()</em></span> silently do
+                    some extra work. If the system call fails because <span class="emphasis"><em>iovcnt</em></span> is
+                    too large, then the wrapper function temporarily allocates a single buffer large
+                    enough to hold all of the items described by <span class="emphasis"><em>iov</em></span> and
+                    performs a <span class="emphasis"><em>read()</em></span> or <span class="emphasis"><em>write()</em></span> call (see
+                    the discussion below of how <span class="emphasis"><em>writev()</em></span> could be implemented
+                    in terms of <span class="emphasis"><em>write()</em></span>).</p></div><p><a class="xref" href="ch05.html#example_of_an_iovec_array_and_associated" title="Figure 5-3. Example of an iovec array and associated buffers">Figure 5-3</a> shows an example of the
+                relationship between the <span class="emphasis"><em>iov</em></span> and <span class="emphasis"><em>iovcnt</em></span>
+                arguments, and the buffers to which they refer.</p><div class="figure"><a id="example_of_an_iovec_array_and_associated"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject5_d1e12075"/><img src="figs/web/05-3_FILEIO-B-iov-scale90.png.jpg" alt="Example of an iovec array and associated buffers"/></div></div><div class="figure-title">Figure 5-3. Example of an <span class="emphasis"><em>iovec</em></span> array and associated buffers</div></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="scatter_input"/></div></div></div><div class="sect3" title="Scatter input"><div class="titlepage"><div><div><h4 class="title" id="scatter_input-id1">Scatter input</h4></div></div></div><p>The <span class="emphasis"><em>readv()</em></span> system call performs <span class="emphasis"><em>scatter
+                            input</em></span>: it reads a contiguous sequence of bytes from the file
+                        referred to by the file descriptor <span class="emphasis"><em>fd</em></span> and places
+                        (“scatters”) these bytes into the buffers specified by
+                            <span class="emphasis"><em>iov</em></span>. Each of the buffers, starting with the one
+                        defined by <span class="emphasis"><em>iov[0]</em></span>, is completely filled before
+                            <span class="emphasis"><em>readv()</em></span> proceeds to the next buffer.<a id="IDX-CHP-5-0786" class="indexterm"/><a id="IDX-CHP-5-0787" class="indexterm"/><a id="IDX-CHP-5-0788" class="indexterm"/><a id="IDX-CHP-5-0789" class="indexterm"/><a id="IDX-CHP-5-0790" class="indexterm"/></p><p>An important property of <span class="emphasis"><em>readv()</em></span> is that it completes
+                        atomically; that is, from the point of view of the calling process, the
+                        kernel performs a single data transfer between the file referred to by
+                            <span class="emphasis"><em>fd</em></span> and user memory. This means, for example, that
+                        when reading from a file, we can be sure that the range of bytes read is
+                        contiguous, even if another process (or thread) sharing the same file offset
+                        attempts to manipulate the offset at the same time as the
+                            <span class="emphasis"><em>readv()</em></span> call.</p><p>On successful completion, <span class="emphasis"><em>readv()</em></span> returns the number
+                        of bytes read, or 0 if end-of-file was encountered. The caller must examine
+                        this count to verify whether all requested bytes were read. If insufficient
+                        data was available, then only some of the buffers may have been filled, and
+                        the last of these may be only partially filled.</p><p><a class="xref" href="ch05.html#performing_scatter_input_with_readv_open" title="Example 5-2. Performing scatter input with readv()">Example 5-2</a> demonstrates
+                        the use of <span class="emphasis"><em>readv()</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Using the prefix <code class="literal">t_</code> followed by a
+                            function name as the name of an example program (e.g., <code class="literal">t_readv.c</code> in <a class="xref" href="ch05.html#performing_scatter_input_with_readv_open" title="Example 5-2. Performing scatter input with readv()">Example 5-2</a>) is our way of
+                            indicating that the program primarily demonstrates the use of a single
+                            system call or library function.</p></div><div class="example"><a id="performing_scatter_input_with_readv_open"/><div class="example-title">Example 5-2. Performing scatter input with <span class="emphasis"><em>readv()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>fileio/t_readv.c</code></strong>
+#include &lt;sys/stat.h&gt;
+#include &lt;sys/uio.h&gt;
+#include &lt;fcntl.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int fd;
+    struct iovec iov[3];
+    struct stat myStruct;       /* First buffer */
+    int x;                      /* Second buffer */
+#define STR_SIZE 100
+    char str[STR_SIZE];         /* Third buffer */
+    ssize_t numRead, totRequired;
+
+    if (argc != 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s file\n", argv[0]);
+
+    fd = open(argv[1], O_RDONLY);
+    if (fd == -1)
+        errExit("open");
+
+    totRequired = 0;
+
+    iov[0].iov_base = &amp;myStruct;
+    iov[0].iov_len = sizeof(struct stat);
+    totRequired += iov[0].iov_len;
+
+    iov[1].iov_base = &amp;x;
+    iov[1].iov_len = sizeof(x);
+    totRequired += iov[1].iov_len;
+
+    iov[2].iov_base = str;
+    iov[2].iov_len = STR_SIZE;
+    totRequired += iov[2].iov_len;
+
+    numRead = readv(fd, iov, 3);
+    if (numRead == -1)
+        errExit("readv");
+
+    if (numRead &lt; totRequired)
+        printf("Read fewer bytes than requested\n");
+
+    printf("total bytes requested: %ld; bytes read: %ld\n",
+            (long) totRequired, (long) numRead);
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>fileio/t_readv.c</code></strong></pre></div></div></div><div class="sect3" title="Gather output"><div class="titlepage"><div><div><h4 class="title" id="gather_output">Gather output</h4></div></div></div><p>The <span class="emphasis"><em>writev()</em></span> system call performs <span class="emphasis"><em>gather
+                            output</em></span>. It concatenates (“gathers”) data from all of the
+                        buffers specified by <span class="emphasis"><em>iov</em></span> and writes them as a sequence
+                        of contiguous bytes to the file referred to by the file descriptor
+                            <span class="emphasis"><em>fd</em></span>. The buffers are gathered in array order,
+                        starting with the buffer defined by <span class="emphasis"><em>iov[0]</em></span>.<a id="IDX-CHP-5-0791" class="indexterm"/><a id="IDX-CHP-5-0792" class="indexterm"/></p><p>Like <span class="emphasis"><em>readv()</em></span>, <span class="emphasis"><em>writev()</em></span> completes
+                        atomically, with all data being transferred in a single operation from user
+                        memory to the file referred to by <span class="emphasis"><em>fd</em></span>. Thus, when
+                        writing to a regular file, we can be sure that all of the requested data is
+                        written contiguously to the file, rather than being interspersed with writes
+                        by other processes (or threads).</p><p>As with <span class="emphasis"><em>write()</em></span>, a partial write is possible.
+                        Therefore, we must check the return value from <span class="emphasis"><em>writev()</em></span>
+                        to see if all requested bytes were written.</p><p>The primary advantages of <span class="emphasis"><em>readv()</em></span> and
+                            <span class="emphasis"><em>writev()</em></span> are convenience and speed. For example, we
+                        could replace a call to <span class="emphasis"><em>writev()</em></span> by either:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>code that allocates a single large buffer, copies the data to be
+                                written from other locations in the process’s address space into
+                                that buffer, and then calls <span class="emphasis"><em>write()</em></span> to output
+                                the buffer; or</p></li><li class="listitem"><p>a series of <span class="emphasis"><em>write()</em></span> calls that output the
+                                buffers individually.</p></li></ul></div><p>The first of these options, while semantically equivalent to using
+                            <span class="emphasis"><em>writev()</em></span>, leaves us with the inconvenience (and
+                        inefficiency) of allocating buffers and copying data in user space.</p><p>The second option is not semantically equivalent to a single call to
+                            <span class="emphasis"><em>writev()</em></span>, since the <span class="emphasis"><em>write()</em></span>
+                        calls are not performed atomically. Furthermore, performing a single
+                            <span class="emphasis"><em>writev()</em></span> system call is cheaper than performing
+                        multiple <span class="emphasis"><em>write()</em></span> calls (refer to the discussion of
+                        system calls in <a class="xref" href="ch03.html#system_calls" title="System Calls">System Calls</a>).</p></div><div class="sect3" title="Performing scatter-gather I/O at a specified offset"><div class="titlepage"><div><div><h4 class="title" id="performing_scatter-gather_i_solidus_o_at">Performing scatter-gather I/O at a specified offset</h4></div></div></div><p>Linux 2.6.30 adds two new system calls that combine scatter-gather I/O
+                        functionality with the ability to perform the I/O at a specified offset:
+                            <span class="emphasis"><em>preadv()</em></span> and <span class="emphasis"><em>pwritev()</em></span>. These
+                        system calls are nonstandard, but are also available on the modern
+                            BSDs.<a id="IDX-CHP-5-0793" class="indexterm"/><a id="IDX-CHP-5-0794" class="indexterm"/><a id="IDX-CHP-5-0795" class="indexterm"/><a id="IDX-CHP-5-0796" class="indexterm"/><a id="IDX-CHP-5-0797" class="indexterm"/><a id="IDX-CHP-5-0798" class="indexterm"/><a id="IDX-CHP-5-0799" class="indexterm"/></p><a id="I_programlisting5_d1e12313"/><pre class="programlisting">#define _BSD_SOURCE
+#include &lt;sys/uio.h&gt;
+
+ssize_t <strong class="userinput"><code>preadv</code></strong>(int <span class="emphasis"><em>fd</em></span>, const struct iovec *<span class="emphasis"><em>iov</em></span>, int <span class="emphasis"><em>iovcnt</em></span>, off_t <span class="emphasis"><em>offset</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns number of bytes read, 0 on EOF, or -1 on error</p></div><a id="I_programlisting5_d1e12333"/><pre class="programlisting">ssize_t <strong class="userinput"><code>pwritev</code></strong>(int <span class="emphasis"><em>fd</em></span>, const struct iovec *<span class="emphasis"><em>iov</em></span>, int <span class="emphasis"><em>iovcnt</em></span>, off_t <span class="emphasis"><em>offset</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns number of bytes written, or -1 on error</p></div><p>The <span class="emphasis"><em>preadv()</em></span> and <span class="emphasis"><em>pwritev()</em></span>
+                        system calls perform the same task as <span class="emphasis"><em>readv()</em></span> and
+                            <span class="emphasis"><em>writev()</em></span>, but perform the I/O at the file location
+                        specified by <span class="emphasis"><em>offset</em></span> (like <span class="emphasis"><em>pread()</em></span>
+                        and <span class="emphasis"><em>pwrite()</em></span>).</p><p>These system calls are useful for applications (e.g., multithreaded
+                        applications) that want to combine the benefits of scatter-gather I/O with
+                        the ability to perform I/O at a location that is independent of the current
+                        file offset.</p></div></div></div><div class="sect1" title="Truncating a File: truncate() and ftruncate()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="truncating_a_file_colon_truncate_open_pa">Truncating a File: <span class="emphasis"><em>truncate()</em></span> and
+                    <span class="emphasis"><em>ftruncate()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>truncate()</em></span> and <span class="emphasis"><em>ftruncate()</em></span> system
+                calls set the size of a file to the value specified by
+                    <span class="emphasis"><em>length</em></span>.<a id="IDX-CHP-5-0800" class="indexterm"/><a id="IDX-CHP-5-0801" class="indexterm"/></p><a id="I_programlisting5_d1e12406"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+int <strong class="userinput"><code>truncate</code></strong>(const char *<span class="emphasis"><em>pathname</em></span>, off_t <span class="emphasis"><em>length</em></span>);
+int <strong class="userinput"><code>ftruncate</code></strong>(int <span class="emphasis"><em>fd</em></span>, off_t <span class="emphasis"><em>length</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Both return 0 on success, or -1 on error</p></div><p>If the file is longer than <span class="emphasis"><em>length</em></span>, the excess data is lost.
+                If the file is currently shorter than <span class="emphasis"><em>length</em></span>, it is extended by
+                padding with a sequence of null bytes or a hole.</p><p>The difference between the two system calls lies in how the file is specified.
+                With <span class="emphasis"><em>truncate()</em></span>, the file, which must be accessible and
+                writable, is specified as a pathname string. If <span class="emphasis"><em>pathname</em></span> is a
+                symbolic link, it is dereferenced. The <span class="emphasis"><em>ftruncate()</em></span> system call
+                takes a descriptor for a file that has been opened for writing. It doesn’t change
+                the file offset for the file.</p><p>If the <span class="emphasis"><em>length</em></span> argument to <span class="emphasis"><em>ftruncate()</em></span>
+                exceeds the current file size, SUSv3 allows two possible behaviors: either the file
+                is extended (as on Linux) or the system call returns an error. XSI-conformant
+                systems must adopt the former behavior. SUSv3 requires that
+                    <span class="emphasis"><em>truncate()</em></span> always extend the file if
+                    <span class="emphasis"><em>length</em></span> is greater than the current file size.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>truncate()</em></span> system call is unique in being the only
+                    system call that can change the contents of a file without first obtaining a
+                    descriptor for the file via <span class="emphasis"><em>open()</em></span> (or by some other
+                    means).</p></div></div><div class="sect1" title="Nonblocking I/O"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="nonblocking_i_solidus_o">Nonblocking I/O</h2></div></div></div><p>Specifying the <code class="literal">O_NONBLOCK</code> flag when opening a
+                file serves two purposes:<a id="IDX-CHP-5-0802" class="indexterm"/><a id="IDX-CHP-5-0803" class="indexterm"/><a id="IDX-CHP-5-0804" class="indexterm"/><a id="IDX-CHP-5-0805" class="indexterm"/><a id="IDX-CHP-5-0806" class="indexterm"/><a id="IDX-CHP-5-0807" class="indexterm"/><a id="IDX-CHP-5-0808" class="indexterm"/><a id="IDX-CHP-5-0809" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If the file can’t be opened immediately, then <span class="emphasis"><em>open()</em></span>
+                        returns an error instead of blocking. One case where
+                            <span class="emphasis"><em>open()</em></span> can block is with FIFOs (<a class="xref" href="ch44.html#fifos" title="FIFOs">FIFOs</a>).</p></li><li class="listitem"><p>After a successful <span class="emphasis"><em>open()</em></span>, subsequent I/O operations
+                        are also nonblocking. If an I/O system call can’t complete immediately, then
+                        either a partial data transfer is performed or the system call fails with
+                        one of the errors <code class="literal">EAGAIN</code> or <code class="literal">EWOULDBLOCK</code>. Which error is returned depends
+                        on the system call. On Linux, as on many UNIX implementations, these two
+                        error constants are synonymous.<a id="IDX-CHP-5-0810" class="indexterm"/></p></li></ul></div><p>Nonblocking mode can be used with devices (e.g., terminals and pseudoterminals),
+                pipes, FIFOs, and sockets. (Because file descriptors for pipes and sockets are not
+                obtained using <span class="emphasis"><em>open()</em></span>, we must enable this flag using the
+                    <span class="emphasis"><em>fcntl()</em></span>
+                <code class="literal">F_SETFL</code> operation described in Section
+                5.3.)</p><p><code class="literal">O_NONBLOCK</code> is generally ignored for regular
+                files, because the kernel buffer cache ensures that I/O on regular files does not
+                block, as described in Section 13.1. However, <code class="literal">O_NONBLOCK</code> does have an effect for regular files when mandatory file
+                locking is employed (<a class="xref" href="ch55.html#mandatory_locking" title="Mandatory Locking">Mandatory Locking</a>).</p><p>We say more about nonblocking I/O in <a class="xref" href="ch44.html#nonblocking_i_solidus_o-id1" title="Nonblocking I/O">Nonblocking I/O</a>
+                and in <a class="xref" href="ch63.html" title="Chapter 63. Alternative I/O Models">Chapter 63</a>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Historically, System V-derived implementations provided the <code class="literal">O_NDELAY</code> flag, with similar semantics to <code class="literal">O_NONBLOCK</code>. The main difference was that a
+                    nonblocking <span class="emphasis"><em>write()</em></span> on System V returned 0 if a
+                        <span class="emphasis"><em>write()</em></span> could not be completed or if no input was
+                    available to satisfy a <span class="emphasis"><em>read()</em></span>. This behavior was
+                    problematic for <span class="emphasis"><em>read()</em></span> because it was indistinguishable
+                    from an end-of-file condition, and so the first POSIX.1 standard introduced
+                        <code class="literal">O_NONBLOCK</code>. Some UNIX implementations
+                    continue to provide the <code class="literal">O_NDELAY</code> flag with
+                    the old semantics. On Linux, the <code class="literal">O_NDELAY</code>
+                    constant is defined, but it is synonymous with <code class="literal">O_NONBLOCK</code>.<a id="IDX-CHP-5-0811" class="indexterm"/></p></div></div><div class="sect1" title="I/O on Large Files"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="i_solidus_o_on_large_files">I/O on Large Files</h2></div></div></div><p>The <span class="emphasis"><em>off_t</em></span> data type used to hold a file offset is typically
+                implemented as a signed long integer. (A signed data type is required because the
+                value -1 is used for representing error conditions.) On 32-bit architectures (such
+                as x86-32) this would limit the size of files to 2<sup>31</sup>–1
+                bytes (i.e., 2 GB).<a id="IDX-CHP-5-0812" class="indexterm"/><a id="IDX-CHP-5-0813" class="indexterm"/><a id="IDX-CHP-5-0814" class="indexterm"/><a id="IDX-CHP-5-0815" class="indexterm"/><a id="IDX-CHP-5-0816" class="indexterm"/></p><p>However, the capacity of disk drives long ago exceeded this limit, and thus the
+                need arose for 32-bit UNIX implementations to handle files larger than this size.
+                Since this is a problem common to many implementations, a consortium of UNIX vendors
+                cooperated on the <span class="emphasis"><em>Large File Summit</em></span> (LFS), to enhance the SUSv2
+                specification with the extra functionality required to access large files. We
+                outline the LFS enhancements in this section. (The complete LFS specification,
+                finalized in 1996, can be found at <a class="ulink" href="http://opengroup.org/platform/lfs.html" target="_top">http://opengroup.org/platform/lfs.html</a>.)<a id="IDX-CHP-5-0817" class="indexterm"/></p><p>Linux has provided LFS support on 32-bit systems since kernel 2.4
+                    (<span class="emphasis"><em>glibc</em></span> 2.2 or later is also required). In addition, the
+                corresponding file system must also support large files. Most native Linux file
+                systems provide this support, but some nonnative file systems do not (notable
+                examples are Microsoft’s VFAT and NFSv2, both of which impose hard limits of 2 GB,
+                regardless of whether the LFS extensions are employed).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Because long integers use 64 bits on 64-bit architectures (e.g., Alpha,
+                    IA-64), these architectures generally don’t suffer the limitations that the LFS
+                    enhancements were designed to address. Nevertheless, the implementation details
+                    of some native Linux file systems mean that the theoretical maximum size of a
+                    file may be less than 2<sup>63</sup>–1, even on 64-bit systems.
+                    In most cases, these limits are much higher than current disk sizes, so they
+                    don’t impose a practical limitation on file sizes.</p></div><p>We can write applications requiring LFS functionality in one of two ways:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Use an alternative API that supports large files. This API was designed by
+                        the LFS as a “transitional extension” to the Single UNIX Specification.
+                        Thus, this API is not required to be present on systems conforming to SUSv2
+                        or SUSv3, but many conforming systems do provide it. This approach is now
+                        obsolete.</p></li><li class="listitem"><p>Define the <code class="literal">_FILE_OFFSET_BITS</code> macro with
+                        the value 64 when compiling our programs. This is the preferred approach,
+                        because it allows conforming applications to obtain LFS functionality
+                        without making any source code changes.<a id="IDX-CHP-5-0818" class="indexterm"/></p></li></ul></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="the_transitional_lfs_api"/></div></div></div><div class="sect3" title="The transitional LFS API"><div class="titlepage"><div><div><h4 class="title" id="the_transitional_lfs_api-id1">The transitional LFS API</h4></div></div></div><p>To use the transitional LFS API, we must define the <code class="literal">_LARGEFILE64_SOURCE</code> feature test macro when
+                        compiling our program, either on the command line, or within the source file
+                        before including any header files. This API provides functions capable of
+                        handling 64-bit file sizes and offsets. These functions have the same names
+                        as their 32-bit counterparts, but have the suffix <span class="emphasis"><em>64</em></span>
+                        appended to the function name. Among these functions are
+                            <span class="emphasis"><em>fopen64()</em></span>, <span class="emphasis"><em>open64()</em></span>,
+                            <span class="emphasis"><em>lseek64()</em></span>, <span class="emphasis"><em>truncate64()</em></span>,
+                            <span class="emphasis"><em>stat64()</em></span>, <span class="emphasis"><em>mmap64()</em></span>, and
+                            <span class="emphasis"><em>setrlimit64()</em></span>. (We’ve already described some of the
+                        32-bit counterparts of these functions; others are described in later
+                            chapters.)<a id="IDX-CHP-5-0819" class="indexterm"/><a id="IDX-CHP-5-0820" class="indexterm"/><a id="IDX-CHP-5-0821" class="indexterm"/><a id="IDX-CHP-5-0822" class="indexterm"/><a id="IDX-CHP-5-0823" class="indexterm"/><a id="IDX-CHP-5-0824" class="indexterm"/><a id="IDX-CHP-5-0825" class="indexterm"/><a id="IDX-CHP-5-0826" class="indexterm"/><a id="IDX-CHP-5-0827" class="indexterm"/><a id="IDX-CHP-5-0828" class="indexterm"/><a id="IDX-CHP-5-0829" class="indexterm"/></p><p>In order to access a large file, we simply use the 64-bit version of the
+                        function. For example, to open a large file, we could write the
+                        following:</p><a id="I_programlisting5_d1e12771"/><pre class="programlisting">fd = open64(name, O_CREAT | O_RDWR, mode);
+if (fd == -1)
+    errExit("open");</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Calling <span class="emphasis"><em>open64()</em></span> is equivalent to specifying the
+                                <code class="literal">O_LARGEFILE</code> flag when calling
+                                <span class="emphasis"><em>open()</em></span>. Attempts to open a file larger than 2
+                            GB by calling <span class="emphasis"><em>open()</em></span> without this flag return an
+                            error.</p></div><p>In addition to the aforementioned functions, the transitional LFS API adds
+                        some new data types, including:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>struct stat64</em></span>: an analog of the
+                                    <span class="emphasis"><em>stat</em></span> structure (<a class="xref" href="ch15.html#retrieving_file_information_colon_stat_o" title="Retrieving File Information: stat()">Retrieving File Information: <span class="emphasis"><em>stat()</em></span></a>) allowing
+                                for large file sizes.</p></li><li class="listitem"><p><span class="emphasis"><em>off64_t</em></span>: a 64-bit type for representing file
+                                offsets.</p></li></ul></div><p>The <span class="emphasis"><em>off64_t</em></span> data type is used with (among others) the
+                            <span class="emphasis"><em>lseek64()</em></span> function, as shown in <a class="xref" href="ch05.html#accessing_large_files" title="Example 5-3. Accessing large files">Example 5-3</a>. This program takes two command-line
+                        arguments: the name of a file to be opened and an integer value specifying a
+                        file offset. The program opens the specified file, seeks to the given file
+                        offset, and then writes a string. The following shell session demonstrates
+                        the use of the program to seek to a very large offset in the file (greater
+                        than 10 GB) and then write some bytes:<a id="IDX-CHP-5-0830" class="indexterm"/></p><a id="I_programlisting5_d1e12821"/><pre class="programlisting">$ <strong class="userinput"><code>./large_file x 10111222333</code></strong>
+$ <strong class="userinput"><code>ls -l x</code></strong>                                   <em class="lineannotation"><span class="lineannotation">Check size of resulting file</span></em>
+-rw-------    1 mtk      users    10111222337 Mar  4 13:34 x</pre><div class="example"><a id="accessing_large_files"/><div class="example-title">Example 5-3. Accessing large files</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>fileio/large_file.c</code></strong>
+#define _LARGEFILE64_SOURCE
+#include &lt;sys/stat.h&gt;
+#include &lt;fcntl.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int fd;
+    off64_t off;
+
+    if (argc != 3 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s pathname offset\n", argv[0]);
+
+    fd = open64(argv[1], O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+    if (fd == -1)
+        errExit("open64");
+
+    off = atoll(argv[2]);
+    if (lseek64(fd, off, SEEK_SET) == -1)
+        errExit("lseek64");
+
+    if (write(fd, "test", 4) == -1)
+        errExit("write");
+    exit(EXIT_SUCCESS);
+}
+      <strong class="userinput"><code>fileio/large_file.c</code></strong></pre></div></div></div><div class="sect3" title="The _FILE_OFFSET_BITS macro"><div class="titlepage"><div><div><h4 class="title" id="the_underscore_file_underscore_offset_un">The <code class="literal">_FILE_OFFSET_BITS</code> macro</h4></div></div></div><p>The recommended method of obtaining LFS functionality is to define the
+                        macro <code class="literal">_FILE_OFFSET_BITS</code> with the value 64
+                        when compiling a program. One way to do this is via a command-line option to
+                        the C compiler:<a id="IDX-CHP-5-0832" class="indexterm"/><a id="IDX-CHP-5-0831" class="indexterm"/></p><a id="I_programlisting5_d1e12862"/><pre class="programlisting">$ <strong class="userinput"><code>cc -D_FILE_OFFSET_BITS=64 prog.c</code></strong></pre><p>Alternatively, we can define this macro in the C source before including
+                        any header files:</p><a id="I_programlisting5_d1e12868"/><pre class="programlisting">#define _FILE_OFFSET_BITS 64</pre><p>This automatically converts all of the relevant 32-bit functions and data
+                        types into their 64-bit counterparts. Thus, for example, calls to
+                            <span class="emphasis"><em>open()</em></span> are actually converted into calls to
+                            <span class="emphasis"><em>open64()</em></span>, and the <span class="emphasis"><em>off_t</em></span> data
+                        type is defined to be 64 bits long. In other words, we can recompile an
+                        existing program to handle large files without needing to make any changes
+                        to the source code.<a id="IDX-CHP-5-0833" class="indexterm"/></p><p>Using <code class="literal">_FILE_OFFSET_BITS</code> is clearly
+                        simpler than using the transitional LFS API, but this approach relies on
+                        applications being cleanly written (e.g., correctly using
+                            <span class="emphasis"><em>off_t</em></span> to declare variables holding file offsets,
+                        rather than using a native C integer type).</p><p>The <code class="literal">_FILE_OFFSET_BITS</code> macro is not
+                        required by the LFS specification, which merely mentions this macro as an
+                        optional method of specifying the size of the <span class="emphasis"><em>off_t</em></span>
+                        data type. Some UNIX implementations use a different feature test macro to
+                        obtain this functionality.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>If we attempt to access a large file using 32-bit functions (i.e.,
+                            from a program compiled without setting <code class="literal">_FILE_OFFSET_BITS</code> to 64), then we may encounter the error
+                                <code class="literal">EOVERFLOW</code>. For example, this
+                            error can occur if we attempt to use the 32-bit version of
+                                <span class="emphasis"><em>stat()</em></span> (<a class="xref" href="ch15.html#retrieving_file_information_colon_stat_o" title="Retrieving File Information: stat()">Retrieving File Information: <span class="emphasis"><em>stat()</em></span></a>) to retrieve
+                            information about a file whose size exceeds 2 GB.<a id="IDX-CHP-5-0834" class="indexterm"/></p></div></div><div class="sect3" title="Passing off_t values to printf()"><div class="titlepage"><div><div><h4 class="title" id="passing_off_underscore_t_values_to_print">Passing <span class="emphasis"><em>off_t</em></span> values to
+                            <span class="emphasis"><em>printf()</em></span></h4></div></div></div><p>One problem that the LFS extensions don’t solve for us is how to pass
+                            <span class="emphasis"><em>off_t</em></span> values to <span class="emphasis"><em>printf()</em></span>
+                        calls. In <a class="xref" href="ch03.html#system_data_types" title="System Data Types">System Data Types</a>, we noted that the portable
+                        method of displaying values of one of the predefined system data types
+                        (e.g., <span class="emphasis"><em>pid_t</em></span> or <span class="emphasis"><em>uid_t</em></span>) was to cast
+                        that value to <span class="emphasis"><em>long</em></span>, and use the <code class="literal">%ld</code>
+                        <span class="emphasis"><em>printf()</em></span> specifier. However, if we are employing the
+                        LFS extensions, then this is often not sufficient for the
+                            <span class="emphasis"><em>off_t</em></span> data type, because it may be defined as a
+                        type larger than <span class="emphasis"><em>long</em></span>, typically <span class="emphasis"><em>long
+                            long</em></span>. Therefore, to display a value of type
+                            <span class="emphasis"><em>off_t</em></span>, we cast it to <span class="emphasis"><em>long long</em></span>
+                        and use the <code class="literal">%lld</code>
+                        <span class="emphasis"><em>printf()</em></span> specifier, as in the following:</p><a id="I_programlisting5_d1e12976"/><pre class="programlisting">#define _FILE_OFFSET_BITS 64
+
+off_t offset;           /* Will be 64 bits, the size of 'long long' */
+
+/* Other code assigning a value to 'offset' */
+
+printf("offset=%lld\n", (long long) offset);</pre><p>Similar remarks also apply for the related <span class="emphasis"><em>blkcnt_t</em></span>
+                        data type, which is employed in the <span class="emphasis"><em>stat</em></span> structure
+                        (described in <a class="xref" href="ch15.html#retrieving_file_information_colon_stat_o" title="Retrieving File Information: stat()">Retrieving File Information: <span class="emphasis"><em>stat()</em></span></a>).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>If we are passing function arguments of the types
+                                <span class="emphasis"><em>off_t</em></span> or <span class="emphasis"><em>stat</em></span> between
+                            separately compiled modules, then we need to ensure that both modules
+                            use the same sizes for these types (i.e., either both were compiled with
+                                <code class="literal">_FILE_OFFSET_BITS</code> set to 64 or
+                            both were compiled without this setting).</p></div></div></div></div><div class="sect1" title="The /dev/fd Directory"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_solidus_dev_solidus_fd_directory">The <code class="literal">/dev/fd</code> Directory</h2></div></div></div><p>For each process, the kernel provides the special virtual directory <code class="literal">/dev/fd</code>. This directory contains filenames of the form
+                    <code class="literal">/dev/fd/</code><span class="emphasis"><em>n</em></span>, where
+                    <span class="emphasis"><em>n</em></span> is a number corresponding to one of the open file
+                descriptors for the process. Thus, for example, <code class="literal">/dev/fd/0</code> is standard input for the process. (The <code class="literal">/dev/fd</code> feature is not specified by SUSv3, but several
+                other UNIX implementations provide this feature.)<a id="IDX-CHP-5-0835" class="indexterm"/><a id="IDX-CHP-5-0836" class="indexterm"/><a id="IDX-CHP-5-0837" class="indexterm"/><a id="IDX-CHP-5-0838" class="indexterm"/></p><p>Opening one of the files in the <code class="literal">/dev/fd</code>
+                directory is equivalent to duplicating the corresponding file descriptor. Thus, the
+                following statements are equivalent:<a id="IDX-CHP-5-0839" class="indexterm"/></p><a id="I_programlisting5_d1e13070"/><pre class="programlisting">fd = open("/dev/fd/1", O_WRONLY);
+fd = dup(1);                        /* Duplicate standard output */</pre><p>The <span class="emphasis"><em>flags</em></span> argument of the <span class="emphasis"><em>open()</em></span> call
+                    <span class="emphasis"><em>is</em></span> interpreted, so that we should take care to specify the
+                same access mode as was used by the original descriptor. Specifying other flags,
+                such as <code class="literal">O_CREAT</code>, is meaningless (and ignored) in
+                this context.</p><div class="note" title="Note"><h3 class="title">Note</h3><p><code class="literal">/dev/fd</code> is actually a symbolic link to the
+                    Linux-specific <code class="literal">/proc/self/fd</code> directory. The
+                    latter directory is a special case of the Linux-specific <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/fd</code> directories, each of which contains symbolic
+                    links corresponding to all of the files held open by a process.</p></div><p>The files in the <code class="literal">/dev/fd</code> directory are rarely
+                used within programs. Their most common use is in the shell. Many user-level
+                commands take filename arguments, and sometimes we would like to put them in a
+                pipeline and have one of the arguments be standard input or output instead. For this
+                purpose, some programs (e.g., <span class="emphasis"><em>diff</em></span>, <span class="emphasis"><em>ed</em></span>,
+                    <span class="emphasis"><em>tar</em></span>, and <span class="emphasis"><em>comm</em></span>) have evolved the hack
+                of using an argument consisting of a single hyphen (<code class="literal">-</code>) to mean “use standard input or output (as appropriate) for this
+                filename argument.” Thus, to compare a file list from <span class="emphasis"><em>ls</em></span>
+                against a previously built file list, we might write the following:</p><a id="I_programlisting5_d1e13125"/><pre class="programlisting">$ <strong class="userinput"><code>ls | diff - oldfilelist</code></strong></pre><p>This approach has various problems. First, it requires specific interpretation of
+                the hyphen character on the part of each program, and many programs don’t perform
+                such interpretation; they are written to work only with filename arguments, and they
+                have no means of specifying standard input or output as the files with which they
+                are to work. Second, some programs instead interpret a single hyphen as a delimiter
+                marking the end of command-line options.</p><p>Using <code class="literal">/dev/fd</code> eliminates these difficulties,
+                allowing the specification of standard input, output, and error as filename
+                arguments to any program requiring them. Thus, we can write the previous shell
+                command as follows:</p><a id="I_programlisting5_d1e13136"/><pre class="programlisting">$ <strong class="userinput"><code>ls | diff /dev/fd/0 oldfilelist</code></strong></pre><p>As a convenience, the names <code class="literal">/dev/stdin</code>,
+                    <code class="literal">/dev/stdout</code>, and <code class="literal">/dev/stderr</code> are provided as symbolic links to, respectively, <code class="literal">/dev/fd/0</code>, <code class="literal">/dev/fd/1</code>, and <code class="literal">/dev/fd/2</code>.<a id="IDX-CHP-5-0840" class="indexterm"/><a id="IDX-CHP-5-0841" class="indexterm"/><a id="IDX-CHP-5-0842" class="indexterm"/></p></div><div class="sect1" title="Creating Temporary Files"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="creating_temporary_files">Creating Temporary Files</h2></div></div></div><p>Some programs need to create temporary files that are used only while the program
+                is running, and these files should be removed when the program terminates. For
+                example, many compilers create temporary files during the compilation process. The
+                GNU C library provides a range of library functions for this purpose. (The variety
+                is, in part, a consequence of inheritance from various other UNIX implementations.)
+                Here, we describe two of these functions: <span class="emphasis"><em>mkstemp()</em></span> and
+                    <span class="emphasis"><em>tmpfile()</em></span>.<a id="IDX-CHP-5-0843" class="indexterm"/><a id="IDX-CHP-5-0844" class="indexterm"/><a id="IDX-CHP-5-0845" class="indexterm"/><a id="IDX-CHP-5-0846" class="indexterm"/></p><p>The <span class="emphasis"><em>mkstemp()</em></span> function generates a unique filename based on a
+                template supplied by the caller and opens the file, returning a file descriptor that
+                can be used with I/O system calls.</p><a id="I_programlisting5_d1e13209"/><pre class="programlisting">#include &lt;stdlib.h&gt;
+
+int <strong class="userinput"><code>mkstemp</code></strong>(char *<span class="emphasis"><em>template</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns file descriptor on success, or -1 on error</p></div><p>The <span class="emphasis"><em>template</em></span> argument takes the form of a pathname in which
+                the last 6 characters must be <code class="literal">XXXXXX</code>. These 6
+                characters are replaced with a string that makes the filename unique, and this
+                modified string is returned via the <span class="emphasis"><em>template</em></span> argument. Because
+                    <span class="emphasis"><em>template</em></span> is modified, it must be specified as a character
+                array, rather than as a string constant.</p><p>The <span class="emphasis"><em>mkstemp()</em></span> function creates the file with read and write
+                permissions for the file owner (and no permissions for other users), and opens it
+                with the <code class="literal">O_EXCL</code> flag, guaranteeing that the
+                caller has exclusive access to the file.</p><p>Typically, a temporary file is unlinked (deleted) soon after it is opened, using
+                the <span class="emphasis"><em>unlink()</em></span> system call (<a class="xref" href="ch18.html#creating_and_removing_open_parenthesis_h" title="Creating and Removing (Hard) Links: link() and unlink()">Creating and Removing (Hard) Links: <span class="emphasis"><em>link</em></span>() and
+                    <span class="emphasis"><em>unlink</em></span>()</a>). Thus, we could employ
+                    <span class="emphasis"><em>mkstemp()</em></span> as follows:<a id="IDX-CHP-5-0847" class="indexterm"/></p><a id="I_programlisting5_d1e13256"/><pre class="programlisting">int fd;
+char template[] = "/tmp/somestringXXXXXX";
+
+fd = mkstemp(template);
+if (fd == -1)
+    errExit("mkstemp");
+printf("Generated filename was: %s\n", template);
+unlink(template);     /* Name disappears immediately, but the file
+                         is removed only after close() */
+
+/* Use file I/O system calls - read(), write(), and so on */
+
+if (close(fd) == -1)
+    errExit("close");</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>tmpnam()</em></span>, <span class="emphasis"><em>tempnam()</em></span>, and
+                        <span class="emphasis"><em>mktemp()</em></span> functions can also be used to generate unique
+                    filenames. However, these functions should be avoided because they can create
+                    security holes in an application. See the manual pages for further details on
+                    these functions.<a id="IDX-CHP-5-0848" class="indexterm"/><a id="IDX-CHP-5-0849" class="indexterm"/><a id="IDX-CHP-5-0850" class="indexterm"/></p><p>The <span class="emphasis"><em>tmpfile()</em></span> function creates a uniquely named temporary
+                    file that is opened for reading and writing. (The file is opened with the
+                        <code class="literal">O_EXCL</code> flag to guard against the unlikely
+                    possibility that another process has already created a file with the same
+                        name.)<a id="IDX-CHP-5-0851" class="indexterm"/></p></div><a id="I_programlisting5_d1e13294"/><pre class="programlisting">#include &lt;stdio.h&gt;
+
+FILE *<strong class="userinput"><code>tmpfile</code></strong>(void);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns file pointer on success, or <code class="literal">NULL</code> on
+                    error</p></div><p>On success, <span class="emphasis"><em>tmpfile()</em></span> returns a file stream that can be used
+                with the <span class="emphasis"><em>stdio</em></span> library functions. The temporary file is
+                automatically deleted when it is closed. To do this, <span class="emphasis"><em>tmpfile()</em></span>
+                makes an internal call to <span class="emphasis"><em>unlink()</em></span> to remove the filename
+                immediately after opening the file.</p></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id4">Summary</h2></div></div></div><p>In the course of this chapter, we introduced the concept of atomicity, which is
+                crucial to the correct operation of some system calls. In particular, the
+                    <span class="emphasis"><em>open()</em></span>
+                <code class="literal">O_EXCL</code> flag allows the caller to ensure that it
+                is the creator of a file, and the <span class="emphasis"><em>open()</em></span>
+                <code class="literal">O_APPEND</code> flag ensures that multiple processes
+                appending data to the same file don’t overwrite each other’s output.<a id="IDX-CHP-5-0852" class="indexterm"/><a id="IDX-CHP-5-0853" class="indexterm"/></p><p>The <span class="emphasis"><em>fcntl()</em></span> system call performs a variety of file control
+                operations, including changing open file status flags and duplicating file
+                descriptors. Duplicating file descriptors is also possible using
+                    <span class="emphasis"><em>dup()</em></span> and <span class="emphasis"><em>dup2()</em></span>.</p><p>We looked at the relationship between file descriptors, open file descriptions,
+                and file i-nodes, and noted that different information is associated with each of
+                these three objects. Duplicate file descriptors refer to the same open file
+                description, and thus share open file status flags and the file offset.</p><p>We described a number of system calls that extend the functionality of the
+                conventional <span class="emphasis"><em>read()</em></span> and <span class="emphasis"><em>write()</em></span> system
+                calls. The <span class="emphasis"><em>pread()</em></span> and <span class="emphasis"><em>pwrite()</em></span> system
+                calls perform I/O at a specified file location without changing the file offset. The
+                    <span class="emphasis"><em>readv()</em></span> and <span class="emphasis"><em>writev()</em></span> calls perform
+                scatter-gather I/O. The <span class="emphasis"><em>preadv()</em></span> and
+                    <span class="emphasis"><em>pwritev()</em></span> calls combine scatter-gather I/O functionality
+                with the ability to perform I/O at a specified file location.</p><p>The <span class="emphasis"><em>truncate()</em></span> and <span class="emphasis"><em>ftruncate()</em></span> system
+                calls can be used to decrease the size of a file, discarding the excess bytes, or to
+                increase the size, padding with a zero-filled file hole.</p><p>We briefly introduced the concept of nonblocking I/O, and we’ll return to it in
+                later chapters.</p><p>The LFS specification defines a set of extensions that allow processes running on
+                32-bit systems to perform operations on files whose size is too large to be
+                represented in 32 bits.</p><p>The numbered files in the <code class="literal">/dev/fd</code> virtual
+                directory allow a process to access its own open files via file descriptor numbers,
+                which can be particularly useful in shell commands.</p><p>The <span class="emphasis"><em>mkstemp()</em></span> and <span class="emphasis"><em>tmpfile()</em></span> functions
+                allow an application to create temporary files.</p></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id2">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Modify the program in <a class="xref" href="ch05.html#accessing_large_files" title="Example 5-3. Accessing large files">Example 5-3</a> to use
+                        standard file I/O system calls (<span class="emphasis"><em>open()</em></span> and
+                            <span class="emphasis"><em>lseek()</em></span>) and the <span class="emphasis"><em>off_t</em></span> data
+                        type. Compile the program with the <code class="literal">_FILE_OFFSET_BITS</code> macro set to 64, and test it to show that a
+                        large file can be successfully created.<a id="IDX-CHP-5-0854" class="indexterm"/></p></li><li class="listitem"><p>Write a program that opens an existing file for writing with the <code class="literal">O_APPEND</code> flag, and then seeks to the beginning
+                        of the file before writing some data. Where does the data appear in the
+                        file? Why?</p></li><li class="listitem"><p>This exercise is designed to demonstrate why the atomicity guaranteed by
+                        opening a file with the <code class="literal">O_APPEND</code> flag is
+                        necessary. Write a program that takes up to three command-line
+                        arguments:</p><a id="I_programlisting5_d1e13453"/><pre class="programlisting">$ <strong class="userinput"><code>atomic_append</code></strong> <em class="replaceable"><code>filename num-bytes</code></em> [<em class="replaceable"><code>x</code></em>]</pre><p>This program should open the specified filename (creating it if necessary)
+                        and append <span class="emphasis"><em>num-bytes</em></span> bytes to the file by using
+                            <span class="emphasis"><em>write()</em></span> to write a byte at a time. By default, the
+                        program should open the file with the <code class="literal">O_APPEND</code> flag, but if a third command-line argument
+                            (<span class="emphasis"><em>x</em></span>) is supplied, then the <code class="literal">O_APPEND</code> flag should be omitted, and instead the program
+                        should perform an <span class="emphasis"><em>lseek(fd, 0, SEEK_END)</em></span> call before
+                        each <span class="emphasis"><em>write()</em></span>. Run two instances of this program at the
+                        same time without the <span class="emphasis"><em>x</em></span> argument to write 1 million
+                        bytes to the same file:</p><a id="I_programlisting5_d1e13491"/><pre class="programlisting">$ <strong class="userinput"><code>atomic_append f1 1000000 &amp; atomic_append f1 1000000</code></strong></pre><p>Repeat the same steps, writing to a different file, but this time
+                        specifying the <span class="emphasis"><em>x</em></span> argument:</p><a id="I_programlisting5_d1e13500"/><pre class="programlisting">$ <strong class="userinput"><code>atomic_append f2 1000000 x &amp; atomic_append f2 1000000 x</code></strong></pre><p>List the sizes of the files <code class="literal">f1</code> and
+                            <code class="literal">f2</code> using <span class="emphasis"><em>ls -l</em></span>
+                        and explain the difference.</p></li><li class="listitem"><p>Implement <span class="emphasis"><em>dup()</em></span> and <span class="emphasis"><em>dup2()</em></span> using
+                            <span class="emphasis"><em>fcntl()</em></span> and, where necessary,
+                            <span class="emphasis"><em>close()</em></span>. (You may ignore the fact that
+                            <span class="emphasis"><em>dup2()</em></span> and <span class="emphasis"><em>fcntl()</em></span> return
+                        different <span class="emphasis"><em>errno</em></span> values for some error cases.) For
+                            <span class="emphasis"><em>dup2()</em></span>, remember to handle the special case where
+                            <span class="emphasis"><em>oldfd</em></span> equals <span class="emphasis"><em>newfd</em></span>. In this
+                        case, you should check whether <span class="emphasis"><em>oldfd</em></span> is valid, which
+                        can be done by, for example, checking if <span class="emphasis"><em>fcntl(oldfd,
+                            F_GETFL)</em></span> succeeds. If <span class="emphasis"><em>oldfd</em></span> is not
+                        valid, then the function should return -1 with <span class="emphasis"><em>errno</em></span>
+                        set to <code class="literal">EBADF</code>.</p></li><li class="listitem"><p>Write a program to verify that duplicated file descriptors share a file
+                        offset value and open file status flags.</p></li><li class="listitem"><p>After each of the calls to <span class="emphasis"><em>write()</em></span> in the following
+                        code, explain what the content of the output file would be, and why:</p><a id="I_programlisting5_d1e13574"/><pre class="programlisting">fd1 = open(file, O_RDWR | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+fd2 = dup(fd1);
+fd3 = open(file, O_RDWR);
+write(fd1, "Hello,", 6);
+write(fd2, " world", 6);
+lseek(fd2, 0, SEEK_SET);
+write(fd1, "HELLO,", 6);
+write(fd3, "Gidday", 6);</pre></li><li class="listitem"><p>Implement <span class="emphasis"><em>readv()</em></span> and <span class="emphasis"><em>writev()</em></span>
+                        using <span class="emphasis"><em>read()</em></span>, <span class="emphasis"><em>write()</em></span>, and
+                        suitable functions from the <span class="emphasis"><em>malloc</em></span> package (<a class="xref" href="ch07.html#allocating_memory_on_the_heap_colon_mall" title="Allocating Memory on the Heap: malloc() and free()">Allocating Memory on the Heap: <span class="emphasis"><em>malloc()</em></span> and
+                        <span class="emphasis"><em>free()</em></span></a>).</p></li></ol></div></div></section></body></html>

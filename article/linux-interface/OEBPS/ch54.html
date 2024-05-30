@@ -1,0 +1,393 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 54. POSIX Shared Memory</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch53.html" title="Chapter 53. POSIX Semaphores"/><link rel="next" href="ch55.html" title="Chapter 55. File Locking"/></head><body><section class="chapter" title="Chapter 54. POSIX Shared Memory" epub:type="chapter" id="posix_shared_memory"><div class="titlepage"><div><div><h2 class="title">Chapter 54. POSIX Shared Memory</h2></div></div></div><p>In previous chapters, we looked at two techniques that allow unrelated processes to
+            share memory regions in order to perform IPC: System V shared memory (<a class="xref" href="ch48.html" title="Chapter 48. System V Shared Memory">Chapter 48</a>) and shared file mappings (<a class="xref" href="ch49.html#shared_file_mappings" title="Shared File Mappings">Shared File Mappings</a>). Both of these techniques have potential
+            drawbacks:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The System V shared memory model, which uses keys and identifiers, is not
+                    consistent with the standard UNIX I/O model, which uses filenames and
+                    descriptors. This difference means that we require an entirely new set of system
+                    calls and commands for working with System V shared memory segments.</p></li><li class="listitem"><p>Using a shared file mapping for IPC requires the creation of a disk file, even
+                    if we are not interested in having a persistent backing store for the shared
+                    region. Aside from the inconvenience of needing to create the file, this
+                    technique incurs some file I/O overhead.</p></li></ul></div><p>Because of these drawbacks, POSIX.1b defined a new shared memory API: POSIX shared
+            memory, which is the subject of this chapter.<a id="IDX-CHP-54-7140" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>POSIX talks about shared memory <span class="emphasis"><em>objects</em></span>, while System V talks
+                about shared memory <span class="emphasis"><em>segments</em></span>. These differences in terminology
+                are historical—both terms are used for referring to regions of memory shared between
+                processes.</p></div><div class="sect1" title="Overview"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="overview-id17">Overview</h2></div></div></div><p>POSIX shared memory allows to us to share a mapped region between unrelated
+                processes without needing to create a corresponding mapped file. POSIX shared memory
+                is supported on Linux since kernel 2.4.</p><p>SUSv3 doesn’t specify any of the details of how POSIX shared memory is to be
+                implemented. In particular, there is no requirement for the use of a (real or
+                virtual) file system to identify shared memory objects, although many UNIX
+                implementations do employ a file system for this purpose. Some UNIX implementations
+                create the names for shared memory objects as files in a special location in the
+                standard file system. Linux uses a dedicated <span class="emphasis"><em>tmpfs</em></span> file system
+                    (<a class="xref" href="ch14.html#a_virtual_memory_file_system_colon_tmpfs" title="A Virtual Memory File System: tmpfs">A Virtual Memory File System: <span class="emphasis"><em>tmpfs</em></span></a>) mounted under the
+                directory <code class="literal">/dev/shm</code>. This file system has kernel
+                persistence--the shared memory objects that it contains will persist even if no
+                process currently has them open, but they will be lost if the system is shut
+                    down.<a id="IDX-CHP-54-7141" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The total amount of memory in all POSIX shared memory regions on the system is
+                    limited by the size of the underlying <span class="emphasis"><em>tmpfs</em></span> file system.
+                    This file system is typically mounted at boot time with some default size (e.g.,
+                    256 MB). If necessary, the superuser can change the size of the file system by
+                    remounting it using the command <span class="emphasis"><em>mount -o
+                        remount,size=&lt;num-bytes&gt;</em></span>.</p></div><p>To use a POSIX shared memory object, we perform two steps:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Use the <span class="emphasis"><em>shm_open()</em></span> function to open an object with a
+                        specified name. (We described the rules governing the naming of POSIX shared
+                        memory objects in Section 51.1.) The <span class="emphasis"><em>shm_open()</em></span>
+                        function is analogous to the <span class="emphasis"><em>open()</em></span> system call. It
+                        either creates a new shared memory object or opens an existing object. As
+                        its function result, <span class="emphasis"><em>shm_open()</em></span> returns a file
+                        descriptor referring to the object.</p></li><li class="listitem"><p>Pass the file descriptor obtained in the previous step in a call to
+                            <span class="emphasis"><em>mmap()</em></span> that specifies <code class="literal">MAP_SHARED</code> in the <span class="emphasis"><em>flags</em></span> argument. This
+                        maps the shared memory object into the process’s virtual address space. As
+                        with other uses of <span class="emphasis"><em>mmap()</em></span>, once we have mapped the
+                        object, we can close the file descriptor without affecting the mapping.
+                        However, we may need to keep the file descriptor open for subsequent use in
+                        calls to <span class="emphasis"><em>fstat()</em></span> and <span class="emphasis"><em>ftruncate()</em></span>
+                        (see <a class="xref" href="ch54.html#creating_shared_memory_objects" title="Creating Shared Memory Objects">Creating Shared Memory Objects</a>).</p></li></ol></div><div class="note" title="Note"><h3 class="title">Note</h3><p>The relationship between <span class="emphasis"><em>shm_open()</em></span> and
+                        <span class="emphasis"><em>mmap()</em></span> for POSIX shared memory is analogous to that
+                    between <span class="emphasis"><em>shmget()</em></span> and <span class="emphasis"><em>shmat()</em></span> for
+                    System V shared memory. The origin of the two-step process
+                        (<span class="emphasis"><em>shm_open()</em></span> plus <span class="emphasis"><em>mmap()</em></span>) for using
+                    POSIX shared memory objects instead of the use of a single function that
+                    performs both tasks is historical. When the POSIX committee added this feature,
+                    the <span class="emphasis"><em>mmap()</em></span> call already existed ([Stevens, 1999]). In
+                    effect, all that we are doing is replacing calls to <span class="emphasis"><em>open()</em></span>
+                    with calls to <span class="emphasis"><em>shm_open()</em></span>, with the difference that using
+                        <span class="emphasis"><em>shm_open()</em></span> doesn’t require the creation of a file in a
+                    disk-based file system.</p></div><p>Since a shared memory object is referred to using a file descriptor, we can
+                usefully employ various file descriptor system calls already defined in the UNIX
+                system (e.g., <span class="emphasis"><em>ftruncate()</em></span>), rather than needing new
+                special-purpose system calls (as is required for System V shared memory).</p></div><div class="sect1" title="Creating Shared Memory Objects"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="creating_shared_memory_objects">Creating Shared Memory Objects</h2></div></div></div><p>The <span class="emphasis"><em>shm_open()</em></span> function creates and opens a new shared memory
+                object or opens an existing object. The arguments to <span class="emphasis"><em>shm_open()</em></span>
+                are analogous to those for <span class="emphasis"><em>open()</em></span>.<a id="IDX-CHP-54-7142" class="indexterm"/><a id="IDX-CHP-54-7143" class="indexterm"/><a id="IDX-CHP-54-7144" class="indexterm"/><a id="IDX-CHP-54-7145" class="indexterm"/><a id="IDX-CHP-54-7146" class="indexterm"/><a id="IDX-CHP-54-7147" class="indexterm"/><a id="IDX-CHP-54-7148" class="indexterm"/><a id="IDX-CHP-54-7149" class="indexterm"/><a id="IDX-CHP-54-7150" class="indexterm"/></p><a id="I_programlisting54_d1e140705"/><pre class="programlisting">#include &lt;fcntl.h&gt;            /* Defines O_* constants */
+#include &lt;sys/stat.h&gt;         /* Defines mode constants */
+#include &lt;sys/mman.h&gt;
+
+int <strong class="userinput"><code>shm_open</code></strong>(const char *<span class="emphasis"><em>name</em></span>, int <span class="emphasis"><em>oflag</em></span>, mode_t <span class="emphasis"><em>mode</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns file descriptor on success, or -1 on error</p></div><p>The <span class="emphasis"><em>name</em></span> argument identifies the shared memory object to be
+                created or opened. The <span class="emphasis"><em>oflag</em></span> argument is a mask of bits that
+                modify the behavior of the call. The values that can be included in this mask are
+                summarized in <a class="xref" href="ch54.html#bit_values_for_the_shm_underscore_open_o" title="Table 54-1. Bit values for the shm_open() oflag argument">Table 54-1</a>.</p><div class="table"><a id="bit_values_for_the_shm_underscore_open_o"/><div class="table-title">Table 54-1. Bit values for the <span class="emphasis"><em>shm_open() oflag</em></span> argument</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Flag</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>Description</p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">O_CREAT</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Create object if it doesn’t already exist</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">O_EXCL</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>With <code class="literal">O_CREAT</code>, create object
+                                    exclusively</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">O_RDONLY</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Open for read-only access</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">O_RDWR</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Open for read-write access</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">O_TRUNC</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>Truncate object to zero length</p>
+                            </td></tr></tbody></table></div></div><p>One of the purposes of the <span class="emphasis"><em>oflag</em></span> argument is to determine
+                whether we are opening an existing shared memory object or creating and opening a
+                new object. If <span class="emphasis"><em>oflag</em></span> doesn’t include <code class="literal">O_CREAT</code>, we are opening an existing object. If O_CREAT is specified,
+                then the object is created if it doesn’t already exist. Specifying <code class="literal">O_EXCL</code> in conjunction with <code class="literal">O_CREAT</code> is a request to ensure that the caller is the creator of the
+                object; if the object already exists, an error results (<code class="literal">EEXIST</code>).<a id="IDX-CHP-54-7151" class="indexterm"/></p><p>The <span class="emphasis"><em>oflag</em></span> argument also indicates the kind of access that the
+                calling process will make to the shared memory object, by specifying exactly one of
+                the values <code class="literal">O_RDONLY</code> or <code class="literal">O_RDWR</code>.</p><p>The remaining flag value, <code class="literal">O_TRUNC</code>, causes a
+                successful open of an existing shared memory object to truncate the object to a
+                length of zero.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On Linux, truncation occurs even on a read-only open. However, SUSv3 says that
+                    results of using <code class="literal">O_TRUNC</code> with a read-only
+                    open is undefined, so we can’t portably rely on a specific behavior in this
+                    case.</p></div><p>When a new shared memory object is created, its ownership and group ownership are
+                taken from the effective user and group IDs of the process calling
+                    <span class="emphasis"><em>shm_open()</em></span>, and the object permissions are set according to
+                the value supplied in the <span class="emphasis"><em>mode</em></span> bit-mask argument. The bit
+                values for <span class="emphasis"><em>mode</em></span> are the same as for files (<a class="xref" href="ch15.html#constants_for_file_permission_bits" title="Table 15-4. Constants for file permission bits">Table 15-4</a>, in <a class="xref" href="ch15.html#permissions_on_regular_files" title="Permissions on Regular Files">Permissions on Regular Files</a>). As with the
+                    <span class="emphasis"><em>open()</em></span> system call, the permissions mask in
+                    <span class="emphasis"><em>mode</em></span> is masked against the process umask (<a class="xref" href="ch15.html#the_process_file_mode_creation_mask_colo" title="The Process File Mode Creation Mask: umask()">The Process File Mode Creation Mask: <span class="emphasis"><em>umask()</em></span></a>). Unlike
+                    <span class="emphasis"><em>open()</em></span>, the <span class="emphasis"><em>mode</em></span> argument is always
+                required for a call to <span class="emphasis"><em>shm_open()</em></span>; if we are not creating a new
+                object, this argument should be specified as 0.<a id="IDX-CHP-54-7152" class="indexterm"/></p><p>The close-on-exec flag (<code class="literal">FD_CLOEXEC</code>, <a class="xref" href="ch27.html#file_descriptors_and_exec_open_parenthes" title="File Descriptors and exec()">File Descriptors and <span class="emphasis"><em>exec()</em></span></a>) is set on the file
+                descriptor returned by <span class="emphasis"><em>shm_open()</em></span>, so that the file descriptor
+                is automatically closed if the process performs an <span class="emphasis"><em>exec()</em></span>.
+                (This is consistent with the fact that mappings are unmapped when an
+                    <span class="emphasis"><em>exec()</em></span> is performed.)<a id="IDX-CHP-54-7153" class="indexterm"/></p><p>When a new shared memory object is created, it initially has zero length. This
+                means that, after creating a new shared memory object, we normally call
+                    <span class="emphasis"><em>ftruncate()</em></span> (<a class="xref" href="ch05.html#truncating_a_file_colon_truncate_open_pa" title="Truncating a File: truncate() and ftruncate()">Truncating a File: <span class="emphasis"><em>truncate()</em></span> and
+                    <span class="emphasis"><em>ftruncate()</em></span></a>) to set the size of the
+                object before calling <span class="emphasis"><em>mmap()</em></span>. Following the
+                    <span class="emphasis"><em>mmap()</em></span> call, we may also use
+                    <span class="emphasis"><em>ftruncate()</em></span> to expand or shrink the shared memory object as
+                desired, bearing in mind the points discussed in <a class="xref" href="ch49.html#boundary_cases" title="Boundary Cases">Boundary Cases</a>.</p><p>When a shared memory object is extended, the newly added bytes are automatically
+                initialized to 0.</p><p>At any point, we can apply <span class="emphasis"><em>fstat()</em></span> (<a class="xref" href="ch15.html#retrieving_file_information_colon_stat_o" title="Retrieving File Information: stat()">Retrieving File Information: <span class="emphasis"><em>stat()</em></span></a>) to the file descriptor
+                returned by <span class="emphasis"><em>shm_open()</em></span> in order to obtain a
+                    <span class="emphasis"><em>stat</em></span> structure whose fields contain information about the
+                shared memory object, including its size <span class="emphasis"><em>(st_size)</em></span>, permissions
+                    <span class="emphasis"><em>(st_mode)</em></span>, owner <span class="emphasis"><em>(st_uid)</em></span>, and group
+                    <span class="emphasis"><em>(st_gid)</em></span>. (These are the only fields that SUSv3 requires
+                    <span class="emphasis"><em>fstat()</em></span> to set in the <span class="emphasis"><em>stat</em></span> structure,
+                although Linux also returns meaningful information in the time fields, as well as
+                various other less useful information in the remaining fields.)<a id="IDX-CHP-54-7154" class="indexterm"/></p><p>The permissions and ownership of a shared memory object can be changed using
+                    <span class="emphasis"><em>fchmod()</em></span> and <span class="emphasis"><em>fchown()</em></span>,
+                    respectively.<a id="IDX-CHP-54-7155" class="indexterm"/><a id="IDX-CHP-54-7156" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="example_program-id70"/></div></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id71">Example program</h4></div></div></div><p><a class="xref" href="ch54.html#creating_a_posix_shared_memory_object" title="Example 54-1. Creating a POSIX shared memory object">Example 54-1</a> provides a simple
+                        example of the use of <span class="emphasis"><em>shm_open()</em></span>,
+                            <span class="emphasis"><em>ftruncate()</em></span>, and <span class="emphasis"><em>mmap()</em></span>. This
+                        program creates a shared memory object whose size is specified by a
+                        command-line argument, and maps the object into the process’s virtual
+                        address space. (The mapping step is redundant, since we don’t actually do
+                        anything with the shared memory, but it serves to demonstrate the use of
+                            <span class="emphasis"><em>mmap()</em></span>.) The program permits the use of
+                        command-line options to select flags (<code class="literal">O_CREAT</code> and <code class="literal">O_EXCL</code>) for
+                        the <span class="emphasis"><em>shm_open()</em></span> call.<a id="IDX-CHP-54-7157" class="indexterm"/><a id="IDX-CHP-54-7158" class="indexterm"/><a id="IDX-CHP-54-7159" class="indexterm"/><a id="IDX-CHP-54-7160" class="indexterm"/></p><p>In the following example, we use this program to create a 10,000-byte
+                        shared memory object, and then use <span class="emphasis"><em>ls</em></span> to show this
+                        object in <code class="literal">/dev/shm</code>:</p><a id="I_programlisting54_d1e141030"/><pre class="programlisting">$ <strong class="userinput"><code>./pshm_create -c /demo_shm 10000</code></strong>
+$ <strong class="userinput"><code>ls -l /dev/shm</code></strong>
+total 0
+-rw-------    1 mtk      users       10000 Jun 20 11:31 demo_shm</pre><div class="example"><a id="creating_a_posix_shared_memory_object"/><div class="example-title">Example 54-1. Creating a POSIX shared memory object</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pshm/pshm_create.c</code></strong>
+#include &lt;sys/stat.h&gt;
+#include &lt;fcntl.h&gt;
+#include &lt;sys/mman.h&gt;
+#include "tlpi_hdr.h"
+
+static void
+usageError(const char *progName)
+{
+    fprintf(stderr, "Usage: %s [-cx] name size [octal-perms]\n", progName);
+    fprintf(stderr, "    -c   Create shared memory (O_CREAT)\n");
+    fprintf(stderr, "    -x   Create exclusively (O_EXCL)\n");
+    exit(EXIT_FAILURE);
+}
+
+int
+main(int argc, char *argv[])
+{
+    int flags, opt, fd;
+    mode_t perms;
+    size_t size;
+    void *addr;
+
+    flags = O_RDWR;
+    while ((opt = getopt(argc, argv, "cx")) != -1) {
+        switch (opt) {
+        case 'c':   flags |= O_CREAT;           break;
+        case 'x':   flags |= O_EXCL;            break;
+        default:    usageError(argv[0]);
+        }
+    }
+
+    if (optind + 1 &gt;= argc)
+        usageError(argv[0]);
+
+    size = getLong(argv[optind + 1], GN_ANY_BASE, "size");
+    perms = (argc &lt;= optind + 2) ? (S_IRUSR | S_IWUSR) :
+                getLong(argv[optind + 2], GN_BASE_8, "octal-perms");
+
+    /* Create shared memory object and set its size */
+
+    fd = shm_open(argv[optind], flags, perms);
+    if (fd == -1)
+        errExit("shm_open");
+
+    if (ftruncate(fd, size) == -1)
+        errExit("ftruncate");
+
+    /* Map shared memory object */
+
+    addr = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (addr == MAP_FAILED)
+        errExit("mmap");
+
+    exit(EXIT_SUCCESS);
+}
+    <strong class="userinput"><code>pshm/pshm_create.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Using Shared Memory Objects"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="using_shared_memory_objects">Using Shared Memory Objects</h2></div></div></div><p><a class="xref" href="ch54.html#copying_data_into_a_posix_shared_memory" title="Example 54-2. Copying data into a POSIX shared memory object">Example 54-2</a> and <a class="xref" href="ch54.html#copying_data_from_a_posix_shared_memory" title="Example 54-3. Copying data from a POSIX shared memory object">Example 54-3</a> demonstrate the use of a
+                shared memory object to transfer data from one process to another. The program in
+                    <a class="xref" href="ch54.html#copying_data_into_a_posix_shared_memory" title="Example 54-2. Copying data into a POSIX shared memory object">Example 54-2</a> copies the string
+                contained in its second command-line argument into the existing shared memory object
+                named in its first command-line argument. Before mapping the object and performing
+                the copy, the program uses <span class="emphasis"><em>ftruncate()</em></span> to resize the shared
+                memory object to be the same length as the string that is to be copied.<a id="IDX-CHP-54-7161" class="indexterm"/><a id="IDX-CHP-54-7162" class="indexterm"/><a id="IDX-CHP-54-7163" class="indexterm"/><a id="IDX-CHP-54-7164" class="indexterm"/><a id="IDX-CHP-54-7165" class="indexterm"/><a id="IDX-CHP-54-7166" class="indexterm"/><a id="IDX-CHP-54-7167" class="indexterm"/><a id="IDX-CHP-54-7168" class="indexterm"/></p><div class="example"><a id="copying_data_into_a_posix_shared_memory"/><div class="example-title">Example 54-2. Copying data into a POSIX shared memory object</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pshm/pshm_write.c</code></strong>
+#include &lt;fcntl.h&gt;
+#include &lt;sys/mman.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int fd;
+    size_t len;                 /* Size of shared memory object */
+    char *addr;
+
+    if (argc != 3 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s shm-name string\n", argv[0]);
+
+    fd = shm_open(argv[1], O_RDWR, 0);      /* Open existing object */
+    if (fd == -1)
+        errExit("shm_open");
+
+    len = strlen(argv[2]);
+    if (ftruncate(fd, len) == -1)           /* Resize object to hold string */
+        errExit("ftruncate");
+    printf("Resized to %ld bytes\n", (long) len);
+
+    addr = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (addr == MAP_FAILED)
+        errExit("mmap");
+
+    if (close(fd) == -1)
+        errExit("close");                   /* 'fd' is no longer needed */
+
+    printf("copying %ld bytes\n", (long) len);
+    memcpy(addr, argv[2], len);             /* Copy string to shared memory */
+    exit(EXIT_SUCCESS);
+}
+    <strong class="userinput"><code>pshm/pshm_write.c</code></strong></pre></div></div><p>The program in <a class="xref" href="ch54.html#copying_data_from_a_posix_shared_memory" title="Example 54-3. Copying data from a POSIX shared memory object">Example 54-3</a> displays
+                the string in the existing shared memory object named in its command-line argument
+                on standard output. After calling <span class="emphasis"><em>shm_open()</em></span>, the program uses
+                    <span class="emphasis"><em>fstat()</em></span> to determine the size of the shared memory and uses
+                that size in the call to <span class="emphasis"><em>mmap()</em></span> that maps the object and in the
+                    <span class="emphasis"><em>write()</em></span> call that prints the string.</p><div class="example"><a id="copying_data_from_a_posix_shared_memory"/><div class="example-title">Example 54-3. Copying data from a POSIX shared memory object</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pshm/pshm_read.c</code></strong>
+#include &lt;fcntl.h&gt;
+#include &lt;sys/mman.h&gt;
+#include &lt;sys/stat.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int fd;
+    char *addr;
+    struct stat sb;
+
+    if (argc != 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s shm-name\n", argv[0]);
+
+    fd = shm_open(argv[1], O_RDONLY, 0);    /* Open existing object */
+    if (fd == -1)
+        errExit("shm_open");
+
+    /* Use shared memory object size as length argument for mmap()
+       and as number of bytes to write() */
+
+    if (fstat(fd, &amp;sb) == -1)
+        errExit("fstat");
+
+    addr = mmap(NULL, sb.st_size, PROT_READ, MAP_SHARED, fd, 0);
+    if (addr == MAP_FAILED)
+        errExit("mmap");
+
+    if (close(fd) == -1);                   /* 'fd' is no longer needed */
+        errExit("close");
+
+    write(STDOUT_FILENO, addr, sb.st_size);
+    printf("\n");
+    exit(EXIT_SUCCESS);
+}
+    <strong class="userinput"><code>pshm/pshm_read.c</code></strong></pre></div></div><p>The following shell session demonstrates the use of the programs in <a class="xref" href="ch54.html#copying_data_into_a_posix_shared_memory" title="Example 54-2. Copying data into a POSIX shared memory object">Example 54-2</a> and <a class="xref" href="ch54.html#copying_data_from_a_posix_shared_memory" title="Example 54-3. Copying data from a POSIX shared memory object">Example 54-3</a>. We first create a
+                zero-length shared memory object using the program in <a class="xref" href="ch54.html#creating_a_posix_shared_memory_object" title="Example 54-1. Creating a POSIX shared memory object">Example 54-1</a>.</p><a id="I_programlisting54_d1e141153"/><pre class="programlisting">$ <strong class="userinput"><code>./pshm_create -c /demo_shm 0</code></strong>
+$ <strong class="userinput"><code>ls -l /dev/shm</code></strong>                        <em class="lineannotation"><span class="lineannotation">Check the size of object</span></em>
+total 4
+-rw-------    1 mtk    users    0 Jun 21 13:33 demo_shm</pre><p>We then use the program in <a class="xref" href="ch54.html#copying_data_into_a_posix_shared_memory" title="Example 54-2. Copying data into a POSIX shared memory object">Example 54-2</a> to copy a string into the shared memory object:</p><a id="I_programlisting54_d1e141168"/><pre class="programlisting">$ <strong class="userinput"><code>./pshm_write /demo_shm 'hello'</code></strong>
+$ <strong class="userinput"><code>ls -l /dev/shm</code></strong>                        <em class="lineannotation"><span class="lineannotation">Check that object has changed in size</span></em>
+total 4
+-rw-------    1 mtk    users    5 Jun 21 13:33 demo_shm</pre><p>From the output, we can see that the program resized the shared memory object so
+                that it is large enough to hold the specified string.</p><p>Finally, we use the program in <a class="xref" href="ch54.html#copying_data_from_a_posix_shared_memory" title="Example 54-3. Copying data from a POSIX shared memory object">Example 54-3</a> to display the string in the
+                shared memory object:</p><a id="I_programlisting54_d1e141186"/><pre class="programlisting">$ <strong class="userinput"><code>./pshm_read /demo_shm</code></strong>
+hello</pre><p>Applications must typically use some synchronization technique to allow processes
+                to coordinate their access to shared memory. In the example shell session shown
+                here, the coordination was provided by the user running the programs one after the
+                other. Typically, applications would instead use a synchronization primitive (e.g.,
+                semaphores) to coordinate access to a shared memory object.</p></div><div class="sect1" title="Removing Shared Memory Objects"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="removing_shared_memory_objects">Removing Shared Memory Objects</h2></div></div></div><p>SUSv3 requires that POSIX shared memory objects have at least kernel persistence;
+                that is, they continue to exist until they are explicitly removed or the system is
+                rebooted. When a shared memory object is no longer required, it should be removed
+                using <span class="emphasis"><em>shm_unlink()</em></span>.<a id="IDX-CHP-54-7169" class="indexterm"/><a id="IDX-CHP-54-7170" class="indexterm"/><a id="IDX-CHP-54-7171" class="indexterm"/><a id="IDX-CHP-54-7172" class="indexterm"/><a id="IDX-CHP-54-7173" class="indexterm"/></p><a id="I_programlisting54_d1e141228"/><pre class="programlisting">#include &lt;sys/mman.h&gt;
+
+int <strong class="userinput"><code>shm_unlink</code></strong>(const char *<span class="emphasis"><em>name</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>shm_unlink()</em></span> function removes the shared memory object
+                specified by <span class="emphasis"><em>name</em></span>. Removing a shared memory object doesn’t
+                affect existing mappings of the object (which will remain in effect until the
+                corresponding processes call <span class="emphasis"><em>munmap()</em></span> or terminate), but
+                prevents further <span class="emphasis"><em>shm_open()</em></span> calls from opening the object. Once
+                all processes have unmapped the object, the object is removed, and its contents are
+                lost.</p><p>The program in <a class="xref" href="ch54.html#using_shm_underscore_unlink_open_parenth" title="Example 54-4. Using shm_unlink() to unlink a POSIX shared memory object">Example 54-4</a> uses
+                    <span class="emphasis"><em>shm_unlink()</em></span> to remove the shared memory object specified
+                in the program’s command-line argument.</p><div class="example"><a id="using_shm_underscore_unlink_open_parenth"/><div class="example-title">Example 54-4. Using <span class="emphasis"><em>shm_unlink()</em></span> to unlink a POSIX shared memory
+                    object</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pshm/pshm_unlink.c</code></strong>
+#include &lt;fcntl.h&gt;
+#include &lt;sys/mman.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    if (argc != 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s shm-name\n", argv[0]);
+    if (shm_unlink(argv[1]) == -1)
+        errExit("shm_unlink");
+    exit(EXIT_SUCCESS);
+}
+    <strong class="userinput"><code>pshm/pshm_unlink.c</code></strong></pre></div></div></div><div class="sect1" title="Comparisons Between Shared Memory APIs"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="comparisons_between_shared_memory_apis">Comparisons Between Shared Memory APIs</h2></div></div></div><p>By now, we have considered a number of different techniques for sharing memory
+                regions between unrelated processes:<a id="IDX-CHP-54-7174" class="indexterm"/><a id="IDX-CHP-54-7175" class="indexterm"/><a id="IDX-CHP-54-7176" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>System V shared memory (<a class="xref" href="ch48.html" title="Chapter 48. System V Shared Memory">Chapter 48</a>);</p></li><li class="listitem"><p>shared file mappings (<a class="xref" href="ch49.html#shared_file_mappings" title="Shared File Mappings">Shared File Mappings</a>); and</p></li><li class="listitem"><p>POSIX shared memory objects (the subject of this chapter).</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>Many of the points that we make in this section are also relevant for shared
+                    anonymous mappings (<a class="xref" href="ch49.html#anonymous_mappings" title="Anonymous Mappings">Anonymous Mappings</a>), which are used for
+                    sharing memory between processes that are related via
+                        <span class="emphasis"><em>fork()</em></span>.</p></div><p>A number of points apply to all of these techniques:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>They provide fast IPC, and applications typically must use a semaphore (or
+                        other synchronization primitive) to synchronize access to the shared
+                        region.</p></li><li class="listitem"><p>Once the shared memory region has been mapped into the process’s virtual
+                        address space, it looks just like any other part of the process’s memory
+                        space.</p></li><li class="listitem"><p>The system places the shared memory regions within the process virtual
+                        address space in a similar manner. We outlined this placement while
+                        describing System V shared memory in Section 48.5. The Linux-specific
+                            <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/maps</code> file lists information about all types of shared memory
+                            regions.<a id="IDX-CHP-54-7177" class="indexterm"/></p></li><li class="listitem"><p>Assuming that we don’t attempt to map a shared memory region at a fixed
+                        address, we should ensure that all references to locations in the region are
+                        calculated as offsets (rather than pointers), since the region may be
+                        located at different virtual addresses within different processes (<a class="xref" href="ch48.html#storing_pointers_in_shared_memory" title="Storing Pointers in Shared Memory">Storing Pointers in Shared Memory</a>).</p></li><li class="listitem"><p>The functions described in <a class="xref" href="ch50.html" title="Chapter 50. Virtual Memory Operations">Chapter 50</a>
+                        that operate on regions of virtual memory can be applied to shared memory
+                        regions created using any of these techniques.</p></li></ul></div><p>There are also a few notable differences between the techniques for shared
+                memory:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The fact that the contents of a shared file mapping are synchronized with
+                        the underlying mapped file means that the data stored in a shared memory
+                        region can persist across system restarts.</p></li><li class="listitem"><p>System V and POSIX shared memory use different mechanisms to identify and
+                        refer to a shared memory object. System V uses its own scheme of keys and
+                        identifiers, which doesn’t fit with the standard UNIX I/O model and requires
+                        separate system calls (e.g., <span class="emphasis"><em>shmctl()</em></span>) and commands
+                            (<span class="emphasis"><em>ipcs</em></span> and <span class="emphasis"><em>ipcrm</em></span>). By contrast,
+                        POSIX shared memory employs names and file descriptors, and consequently
+                        shared memory objects can be examined and manipulated using a variety of
+                        existing UNIX system calls (e.g., <span class="emphasis"><em>fstat()</em></span> and
+                            <span class="emphasis"><em>fchmod()</em></span>).</p></li><li class="listitem"><p>The size of a System V shared memory segment is fixed at the time of
+                        creation (via <span class="emphasis"><em>shmget()</em></span>). By contrast, for a mapping
+                        backed by a file or by a POSIX shared memory object, we can use
+                            <span class="emphasis"><em>ftruncate()</em></span> to adjust the size of the underlying
+                        object, and then re-create the mapping using <span class="emphasis"><em>munmap()</em></span>
+                        and <span class="emphasis"><em>mmap()</em></span> (or the Linux-specific
+                            <span class="emphasis"><em>mremap()</em></span>).</p></li><li class="listitem"><p>Historically, System V shared memory was more widely available than
+                            <span class="emphasis"><em>mmap()</em></span> and POSIX shared memory, although most UNIX
+                        implementations now provide all of these techniques.</p></li></ul></div><p>With the exception of the final point regarding portability, the differences
+                listed above are advantages in favor of shared file mappings and POSIX shared memory
+                objects. Thus, in new applications, one of these interfaces may be preferable to
+                System V shared memory. Which one we choose depends on whether or not we require a
+                persistent backing store. Shared file mappings provide such a store; POSIX shared
+                memory objects allow us to avoid the overhead of using a disk file when a backing
+                store is not required.</p></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id53">Summary</h2></div></div></div><p>A POSIX shared memory object is used to share a region of memory between unrelated
+                processes without creating an underlying disk file. To do this, we replace the call
+                to <span class="emphasis"><em>open()</em></span> that normally precedes <span class="emphasis"><em>mmap()</em></span>
+                with a call to <span class="emphasis"><em>shm_open()</em></span>. The <span class="emphasis"><em>shm_open()</em></span>
+                call creates a file in a memory-based file system, and we can employ traditional
+                file descriptor system calls to perform various operations on this virtual file. In
+                particular, <span class="emphasis"><em>ftruncate()</em></span> must be used to set the size of the
+                shared memory object, since initially it has a length of zero.</p><p>We have now described three techniques for sharing memory regions between
+                unrelated processes: System V shared memory, shared file mappings, and POSIX shared
+                memory objects. There are several similarities between the three techniques. There
+                are also some important differences, and, except for the issue of portability, these
+                differences favor shared file mappings and POSIX shared memory objects.</p></div><div class="sect1" title="Exercise"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercise-id13">Exercise</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Rewrite the programs in <a class="xref" href="ch48.html#transfer_blocks_of_data_from_stdin_to_a" title="Example 48-2. Transfer blocks of data from stdin to a System V shared memory segment">Example 48-2</a> (<code class="literal">svshm_xfr_writer.c</code>) and <a class="xref" href="ch48.html#transfer_blocks_of_data_from_a_system_v" title="Example 48-3. Transfer blocks of data from a System V shared memory segment to stdout">Example 48-3</a> (<code class="literal">svshm_xfr_reader.c</code>) to use POSIX shared memory
+                        objects instead of System V shared memory.</p></li></ol></div></div></section></body></html>

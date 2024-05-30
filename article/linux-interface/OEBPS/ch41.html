@@ -1,0 +1,824 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 41. Fundamentals of Shared Libraries</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch40.html" title="Chapter 40. Login Accounting"/><link rel="next" href="ch42.html" title="Chapter 42. Advanced Features of Shared Libraries"/></head><body><section class="chapter" title="Chapter 41. Fundamentals of Shared Libraries" epub:type="chapter" id="fundamentals_of_shared_libraries"><div class="titlepage"><div><div><h2 class="title">Chapter 41. Fundamentals of Shared Libraries</h2></div></div></div><p>Shared libraries are a technique for placing library functions into a single unit that
+            can be shared by multiple processes at run time. This technique can save both disk space
+            and RAM. This chapter covers the fundamentals of shared libraries. The next chapter
+            covers a number of advanced features of shared libraries.</p><div class="sect1" title="Object Libraries"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="object_libraries">Object Libraries</h2></div></div></div><p>One way of building a program is simply to compile each of its source files to
+                produce corresponding object files, and then link all of these object files together
+                to produce the executable program, like so:<a id="IDX-CHP-41-5881" class="indexterm"/></p><a id="I_programlisting41_d1e110630"/><pre class="programlisting">$ <strong class="userinput"><code>cc -g -c prog.c mod1.c mod2.c mod3.c</code></strong>
+$ <strong class="userinput"><code>cc -g -o prog_nolib prog.o mod1.o mod2.o mod3.o</code></strong></pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Linking is actually performed by the separate linker program,
+                        <span class="emphasis"><em>ld</em></span>. When we link a program using the
+                        <span class="emphasis"><em>cc</em></span> (or <span class="emphasis"><em>gcc</em></span>) command, the compiler
+                    invokes <span class="emphasis"><em>ld</em></span> behind the scenes. On Linux, the linker should
+                    always be invoked indirectly via <span class="emphasis"><em>gcc</em></span>, since
+                        <span class="emphasis"><em>gcc</em></span> ensures that <span class="emphasis"><em>ld</em></span> is invoked
+                    with the correct options and links the program against the correct library
+                        files.<a id="IDX-CHP-41-5882" class="indexterm"/></p></div><p>In many cases, however, we may have source files that are used by several
+                programs. As a first step toward saving ourselves some work, we could compile these
+                source files just once, and then link them into different executables as required.
+                Although this technique saves us compilation time, it still suffers from the
+                disadvantage that we must name all of the object files during the link phase.
+                Furthermore, our directories may be inconveniently cluttered with a large number of
+                object files.</p><p>To get around these problems, we can group a set of object files into a single
+                unit, known as an <span class="emphasis"><em>object library</em></span>. Object libraries are of two
+                types: <span class="emphasis"><em>static</em></span> and <span class="emphasis"><em>shared</em></span>. Shared libraries
+                are the more modern type of object library, and provide several advantages over
+                static libraries, as we describe in Section 41.3.<a id="IDX-CHP-41-5883" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="an_aside_colon_including_debugger"/></div></div></div><div class="sect3" title="An aside: including debugger information when compiling a program"><div class="titlepage"><div><div><h4 class="title" id="an_aside_colon_including_debugger-id1">An aside: including debugger information when compiling a program</h4></div></div></div><p>In the <span class="emphasis"><em>cc</em></span> command shown above, we used the
+                            <span class="emphasis"><em>-g</em></span> option to include debugging information in the
+                        compiled program. In general, it is a good idea to always create programs
+                        and libraries that allow debugging. (In earlier times, debugging information
+                        was sometimes omitted so that the resulting executable used less disk and
+                        RAM, but nowadays disk and RAM are cheap.)<a id="IDX-CHP-41-5884" class="indexterm"/><a id="IDX-CHP-41-5885" class="indexterm"/></p><p>In addition, on some architectures, such as x86-32, the
+                            <span class="emphasis"><em>-fomit-frame-pointer</em></span> option should not be specified
+                        because this makes debugging impossible. (On some architectures, such as
+                        x86-64, this option is enabled by default since it doesn’t prevent
+                        debugging.) For the same reason, executables and libraries should not be
+                        stripped of debugging information using
+                        <span class="emphasis"><em>strip(1)</em></span>.</p></div></div></div><div class="sect1" title="Static Libraries"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="static_libraries-id2">Static Libraries</h2></div></div></div><p>Before starting our discussion of shared libraries, we begin with a brief
+                description of static libraries in order to make clear the differences and
+                advantages of shared libraries.</p><p>Static libraries, also known as <span class="emphasis"><em>archives</em></span>, were the first type
+                of library to be provided on UNIX systems. They provide the following
+                benefits:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>We can place a set of commonly used object files into a single library
+                        file that can then be used to build multiple executables, without needing to
+                        recompile the original source files when building each application.</p></li><li class="listitem"><p>Link commands become simpler. Instead of listing a long series of object
+                        files on the link command line, we specify just the name of the static
+                        library. The linker knows how to search the static library and extract the
+                        objects required by the executable.<a id="IDX-CHP-41-5886" class="indexterm"/></p></li></ul></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="creating_and_maintaining_a_static"/></div></div></div><div class="sect3" title="Creating and maintaining a static library"><div class="titlepage"><div><div><h4 class="title" id="creating_and_maintaining_a_static-id1">Creating and maintaining a static library</h4></div></div></div><p>In effect, a static library is simply a file holding copies of all of the
+                        object files added to it. The archive also records various attributes of
+                        each of the component object files, including file permissions, numeric user
+                        and group IDs, and last modification time. By convention, static libraries
+                        have names of the form <code class="literal">lib</code><span class="emphasis"><em>name</em></span><code class="literal">.a</code>.<a id="IDX-CHP-41-5887" class="indexterm"/></p><p>A static library is created and maintained using the
+                            <span class="emphasis"><em>ar(1)</em></span> command, which has the following general
+                        form:</p><a id="I_programlisting41_d1e110754"/><pre class="programlisting">$ <strong class="userinput"><code>ar</code></strong> <strong class="userinput"><code><em class="replaceable"><code>options archive object-file</code></em></code></strong>...</pre><p>The <span class="emphasis"><em>options</em></span> argument consists of a series of letters,
+                        one of which is the <span class="emphasis"><em>operation code</em></span>, while the others
+                        are <span class="emphasis"><em>modifiers</em></span> that influence the way the operation is
+                        carried out. Some commonly used operation codes are the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>r</em></span> (replace): Insert an object file into the
+                                archive, replacing any previous object file of the same name. This
+                                is the standard method for creating and updating an archive. Thus,
+                                we might build an archive with the following commands:</p><a id="I_programlisting41_d1e110780"/><pre class="programlisting">$ <strong class="userinput"><code>cc -g -c mod1.c mod2.c mod3.c</code></strong>
+$ <strong class="userinput"><code>ar r libdemo.a mod1.o mod2.o mod3.o</code></strong>
+$ <strong class="userinput"><code>rm mod1.o mod2.o mod3.o</code></strong></pre><p>As shown above, after building the library, we can delete the
+                                original object files if desired, since they are no longer
+                                required.</p></li><li class="listitem"><p><span class="emphasis"><em>t</em></span> (table of contents): Display a table of
+                                contents of the archive. By default, this lists just the names of
+                                the object files in the archive. By adding the
+                                    <span class="emphasis"><em>v</em></span> (verbose) modifier, we additionally see
+                                all of the other attributes recorded in the archive for each object
+                                file, as in the following example:</p><a id="I_programlisting41_d1e110800"/><pre class="programlisting">$ <strong class="userinput"><code>ar tv libdemo.a</code></strong>
+rw-r--r-- 1000/100 1001016 Nov 15 12:26 2009 mod1.o
+rw-r--r-- 1000/100 406668 Nov 15 12:21 2009 mod2.o
+rw-r--r-- 1000/100  46672 Nov 15 12:21 2009 mod3.o</pre><p>The additional attributes that we see for each object are, from
+                                left to right, its permissions when it was added to the archive, its
+                                user ID and group ID, its size, and the date and time when it was
+                                last modified.</p></li><li class="listitem"><p><span class="emphasis"><em>d</em></span> (delete): Delete a named module from the
+                                archive, as in this example:</p><a id="I_programlisting41_d1e110812"/><pre class="programlisting">$ <strong class="userinput"><code>ar d libdemo.a mod3.o</code></strong></pre></li></ul></div></div><div class="sect3" title="Using a static library"><div class="titlepage"><div><div><h4 class="title" id="using_a_static_library">Using a static library</h4></div></div></div><p>We can link a program against a static library in two ways. The first is
+                        to name the static library as part of the link command, as in the
+                        following:</p><a id="I_programlisting41_d1e110821"/><pre class="programlisting">$ <strong class="userinput"><code>cc -g -c prog.c</code></strong>
+$ <strong class="userinput"><code>cc -g -o prog prog.o libdemo.a</code></strong></pre><p>Alternatively, we can place the library in one of the standard directories
+                        searched by the linker (e.g., <code class="literal">/usr/lib</code>),
+                        and then specify the library name (i.e., the filename of the library without
+                        the <code class="literal">lib</code> prefix and <code class="literal">.a</code> suffix) using the <span class="emphasis"><em>-l</em></span>
+                        option:</p><a id="I_programlisting41_d1e110842"/><pre class="programlisting">$ <strong class="userinput"><code>cc -g -o prog prog.o -ldemo</code></strong></pre><p>If the library resides in a directory not normally searched by the linker,
+                        we can specify that the linker should search this additional directory using
+                        the <span class="emphasis"><em>-L</em></span> option:</p><a id="I_programlisting41_d1e110851"/><pre class="programlisting">$ <strong class="userinput"><code>cc -g -o prog prog.o -L</code></strong><strong class="userinput"><code><em class="replaceable"><code>mylibdir</code></em></code></strong> <strong class="userinput"><code>-ldemo</code></strong></pre><p>Although a static library may contain many object modules, the linker
+                        includes only those modules that the program requires.</p><p>Having linked the program, we can run it in the usual way:</p><a id="I_programlisting41_d1e110865"/><pre class="programlisting">$ <strong class="userinput"><code>./prog</code></strong>
+Called mod1-x1
+Called mod2-x2</pre></div></div></div><div class="sect1" title="Overview of Shared Libraries"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="overview_of_shared_libraries">Overview of Shared Libraries</h2></div></div></div><p>When a program is built by linking against a static library (or, for that matter,
+                without using a library at all), the resulting executable file includes copies of
+                all of the object files that were linked into the program. Thus, when several
+                different executables use the same object modules, each executable has its own copy
+                of the object modules. This redundancy of code has several disadvantages:<a id="IDX-CHP-41-5888" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Disk space is wasted storing multiple copies of the same object modules.
+                        Such wastage can be considerable.</p></li><li class="listitem"><p>If several different programs using the same modules are running at the
+                        same time, then each holds separate copies of the object modules in virtual
+                        memory, thus increasing the overall virtual memory demands on the
+                        system.</p></li><li class="listitem"><p>If a change is required (perhaps a security or bug fix) to an object
+                        module in a static library, then all executables using that module must be
+                        relinked in order to incorporate the change. This disadvantage is further
+                        compounded by the fact that the system administrator needs to be aware of
+                        which applications were linked against the library.</p></li></ul></div><p>Shared libraries were designed to address these shortcomings. The key idea of a
+                shared library is that a single copy of the object modules is shared by all programs
+                requiring the modules. The object modules are not copied into the linked executable;
+                instead, a single copy of the library is loaded into memory at run time, when the
+                first program requiring modules from the shared library is started. When other
+                programs using the same shared library are later executed, they use the copy of the
+                library that is already loaded into memory. The use of shared libraries means that
+                executable programs require less space on disk and (when running) in virtual
+                memory.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Although the code of a shared library is shared among multiple processes, its
+                    variables are not. Each process that uses the library has its own copies of the
+                    global and static variables that are defined within the library.</p></div><p>Shared libraries provide the following further advantages:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Because overall program size is smaller, in some cases, programs can be
+                        loaded into memory and started more quickly. This point holds true only for
+                        large shared libraries that are already in use by another program. The first
+                        program to load a shared library will actually take longer to start, since
+                        the shared library must be found and loaded into memory.</p></li><li class="listitem"><p>Since object modules are not copied into the executable files, but instead
+                        maintained centrally in the shared library, it is possible (subject to
+                        limitations described in <a class="xref" href="ch41.html#compatible_versus_incompatible_libraries" title="Compatible Versus Incompatible Libraries">Compatible Versus Incompatible Libraries</a>) to make changes to
+                        the object modules without requiring programs to be relinked in order to see
+                        the changes. Such changes can be carried out even while running programs are
+                        using an existing version of the shared library.</p></li></ul></div><p>The principal costs of this added functionality are the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Shared libraries are more complex than static libraries, both at the
+                        conceptual level, and at the practical level of creating shared libraries
+                        and building the programs that use them.<a id="IDX-CHP-41-5889" class="indexterm"/></p></li><li class="listitem"><p>Shared libraries must be compiled to use position-independent code
+                        (described in <a class="xref" href="ch41.html#position-independent_code" title="Position-Independent Code">Position-Independent Code</a>), which has a
+                        performance overhead on most architectures because it requires the use of an
+                        extra register ([Hubicka, 2003]).<a id="IDX-CHP-41-5890" class="indexterm"/></p></li><li class="listitem"><p><span class="emphasis"><em>Symbol relocation</em></span> must be performed at run time.
+                        During symbol relocation, references to each symbol (a variable or function)
+                        in a shared library need to be modified to correspond to the actual run-time
+                        location at which the symbol is placed in virtual memory. Because of this
+                        relocation process, a program using a shared library may take a little more
+                        time to execute than its statically linked equivalent.<a id="IDX-CHP-41-5891" class="indexterm"/></p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>One further use of shared libraries is as a building block in the
+                        <span class="emphasis"><em>Java Native Interface</em></span> (JNI), which allows Java code to
+                    directly access features of the underlying operating system by calling C
+                    functions within a shared library. For further information, see [Liang, 1999]
+                    and [Rochkind, 2004].</p></div></div><div class="sect1" title="Creating and Using Shared Libraries—A First Pass"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="creating_and_using_shared_librariesma_fi">Creating and Using Shared Libraries—A First Pass</h2></div></div></div><p>To begin understanding how shared libraries operate, we look at the minimum
+                sequence of steps required to build and use a shared library. For the moment, we’ll
+                ignore the convention that is normally used to name shared library files. This
+                convention, described in <a class="xref" href="ch41.html#shared_library_versions_and_naming_conve" title="Shared Library Versions and Naming Conventions">Shared Library Versions and Naming Conventions</a>,
+                allows programs to automatically load the most up-to-date version of the libraries
+                they require, and also allows multiple incompatible versions (so-called
+                    <span class="emphasis"><em>major versions</em></span>) of a library to coexist
+                    peacefully.<a id="IDX-CHP-41-5892" class="indexterm"/><a id="IDX-CHP-41-5893" class="indexterm"/><a id="IDX-CHP-41-5894" class="indexterm"/><a id="IDX-CHP-41-5895" class="indexterm"/><a id="IDX-CHP-41-5896" class="indexterm"/><a id="IDX-CHP-41-5897" class="indexterm"/><a id="IDX-CHP-41-5898" class="indexterm"/></p><p>In this chapter, we concern ourselves only with Executable and Linking Format
+                (ELF) shared libraries, since ELF is the format employed for executables and shared
+                libraries in modern versions of Linux, as well as in many other UNIX
+                    implementations.<a id="IDX-CHP-41-5899" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>ELF supersedes the older <span class="emphasis"><em>a.out</em></span> and
+                        <span class="emphasis"><em>COFF</em></span> formats.</p></div><div class="sect2" title="Creating a Shared Library"><div class="titlepage"><div><div><h3 class="title" id="creating_a_shared_library">Creating a Shared Library</h3></div></div></div><p>In order to build a shared version of the static library we created earlier,
+                    we perform the following steps:</p><a id="I_programlisting41_d1e110990"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -g -c -fPIC -Wall mod1.c mod2.c mod3.c</code></strong>
+$ <strong class="userinput"><code>gcc -g -shared -o libfoo.so mod1.o mod2.o mod3.o</code></strong></pre><p>The first of these commands creates the three object modules that are to be
+                    put into the library. (We explain the <span class="emphasis"><em>cc -fPIC</em></span> option in
+                    the next section.) The <span class="emphasis"><em>cc -shared</em></span> command creates a shared
+                    library containing the three object modules.</p><p>By convention, shared libraries have the prefix <code class="literal">lib</code> and the suffix <code class="literal">.so</code> (for
+                        <span class="emphasis"><em>shared object</em></span>).</p><p>In our examples, we use the <span class="emphasis"><em>gcc</em></span> command, rather than the
+                    equivalent <span class="emphasis"><em>cc</em></span> command, to emphasize that the command-line
+                    options we are using to create shared libraries are compiler-dependent. Using a
+                    different C compiler on another UNIX implementation will probably require
+                    different options.</p><p>Note that it is possible to compile the source files and create the shared
+                    library in a single command:</p><a id="I_programlisting41_d1e111026"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -g -fPIC -Wall mod1.c mod2.c mod3.c -shared -o libfoo.so</code></strong></pre><p>However, to clearly distinguish the compilation and library building steps,
+                    we’ll write the two as separate commands in the examples shown in this
+                    chapter.</p><p>Unlike static libraries, it is not possible to add or remove individual object
+                    modules from a previously built shared library. As with normal executables, the
+                    object files within a shared library no longer maintain distinct
+                    identities.</p></div><div class="sect2" title="Position-Independent Code"><div class="titlepage"><div><div><h3 class="title" id="position-independent_code">Position-Independent Code</h3></div></div></div><p>The <span class="emphasis"><em>cc -fPIC</em></span> option specifies that the compiler should
+                    generate <span class="emphasis"><em>position-independent code</em></span>. This changes the way
+                    that the compiler generates code for operations such as accessing global,
+                    static, and external variables; accessing string constants; and taking the
+                    addresses of functions. These changes allow the code to be located at any
+                    virtual address at run time. This is necessary for shared libraries, since there
+                    is no way of knowing at link time where the shared library code will be located
+                    in memory. (The run-time memory location of a shared library depends on various
+                    factors, such as the amount of memory already taken up by the program that is
+                    loading the library and which other shared libraries the program has already
+                        loaded.)<a id="IDX-CHP-41-5900" class="indexterm"/></p><p>On Linux/x86-32, it is possible to create a shared library using modules
+                    compiled without the <span class="emphasis"><em>-fPIC</em></span> option. However, doing so loses
+                    some of the benefits of shared libraries, since pages of program text containing
+                    position-dependent memory references are not shared across processes. On some
+                    architectures, it is impossible to build shared libraries without the
+                        <span class="emphasis"><em>-fPIC</em></span> option.</p><p>In order to determine whether an existing object file has been compiled with
+                    the <span class="emphasis"><em>-fPIC</em></span> option, we can check for the presence of the name
+                        <code class="literal">_GLOBAL_OFFSET_TABLE_</code> in the object
+                    file’s symbol table, using either of the following commands:</p><a id="I_programlisting41_d1e111064"/><pre class="programlisting">$ <strong class="userinput"><code>nm mod1.o | grep _GLOBAL_OFFSET_TABLE_</code></strong>
+$ <strong class="userinput"><code>readelf -s mod1.o | grep _GLOBAL_OFFSET_TABLE_</code></strong></pre><p>Conversely, if either of the following equivalent commands yields any output,
+                    then the specified shared library includes at least one object module that was
+                    not compiled with <span class="emphasis"><em>-fPIC</em></span>:</p><a id="I_programlisting41_d1e111076"/><pre class="programlisting">$ <strong class="userinput"><code>objdump --all-headers libfoo.so | grep TEXTREL</code></strong>
+$ <strong class="userinput"><code>readelf -d libfoo.so | grep TEXTREL</code></strong></pre><p>The string <code class="literal">TEXTREL</code> indicates the presence
+                    of an object module whose text segment contains a reference that requires
+                    run-time relocation.</p><p>We say more about the <span class="emphasis"><em>nm</em></span>, <span class="emphasis"><em>readelf</em></span>,
+                    and <span class="emphasis"><em>objdump</em></span> commands in Section 41.5.</p></div><div class="sect2" title="Using a Shared Library"><div class="titlepage"><div><div><h3 class="title" id="using_a_shared_library">Using a Shared Library</h3></div></div></div><p>In order to use a shared library, two steps must occur that are not required
+                    for programs that use static libraries:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Since the executable file no longer contains copies of the object
+                            files that it requires, it must have some mechanism for identifying the
+                            shared library that it needs at run time. This is done by embedding the
+                            name of the shared library inside the executable during the link phase.
+                            (In ELF parlance, the library dependency is recorded in a <code class="literal">DT_NEEDED</code> tag in the executable.) The list
+                            of all of a program’s shared library dependencies is referred to as its
+                                <span class="emphasis"><em>dynamic dependency list</em></span>.<a id="IDX-CHP-41-5901" class="indexterm"/></p></li><li class="listitem"><p>At run time, there must be some mechanism for resolving the embedded
+                            library name—that is, for finding the shared library file corresponding
+                            to the name specified in the executable file—and then loading the
+                            library into memory, if it is not already present.</p></li></ul></div><p>Embedding the name of the library inside the executable happens automatically
+                    when we link our program with a shared library:</p><a id="I_programlisting41_d1e111124"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -g -Wall -o prog prog.c libfoo.so</code></strong></pre><p>If we now attempt to run our program, we receive the following error
+                    message:</p><a id="I_programlisting41_d1e111130"/><pre class="programlisting">$ <strong class="userinput"><code>./prog</code></strong>
+./prog: error in loading shared libraries: libfoo.so: cannot
+open shared object file: No such file or directory</pre><p>This brings us to the second required step: <span class="emphasis"><em>dynamic
+                        linking</em></span>, which is the task of resolving the embedded library name
+                    at run time. This task is performed by the <span class="emphasis"><em>dynamic linker</em></span>
+                    (also called the <span class="emphasis"><em>dynamic linking loader</em></span> or the
+                        <span class="emphasis"><em>run-time linker</em></span>). The dynamic linker is itself a shared
+                    library, named <code class="literal">/lib/ld-linux.so.2</code>, which is
+                    employed by every ELF executable that uses shared libraries.<a id="IDX-CHP-41-5902" class="indexterm"/><a id="IDX-CHP-41-5903" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The pathname <code class="literal">/lib/ld-linux.so.2</code> is
+                        normally a symbolic link pointing to the dynamic linker executable file.
+                        This file has the name <code class="literal">ld-</code><span class="emphasis"><em>version</em></span><code class="literal">.so</code>, where <span class="emphasis"><em>version</em></span> is the
+                            <span class="emphasis"><em>glibc</em></span> version installed on the system—for example,
+                            <code class="literal">ld-2.11.so</code>. The pathname of the
+                        dynamic linker differs on some architectures. For example, on IA-64, the
+                        dynamic linker symbolic link is named <code class="literal">/lib/ld-linux-ia64.so.2</code>.</p></div><p>The dynamic linker examines the list of shared libraries required by a program
+                    and uses a set of predefined rules in order to find the library files in the
+                    file system. Some of these rules specify a set of standard directories in which
+                    shared libraries normally reside. For example, many shared libraries reside in
+                        <code class="literal">/lib</code> and <code class="literal">/usr/lib</code>. The error message above occurs because our library
+                    resides in the current working directory, which is not part of the standard list
+                    searched by the dynamic linker.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Some architectures (e.g., zSeries, PowerPC64, and x86-64) support
+                        execution of both 32-bit and 64-bit programs. On such systems, the 32-bit
+                        libraries reside in <code class="literal">*/lib</code> subdirectories,
+                        and the 64-bit libraries reside in <code class="literal">*/lib64</code> subdirectories.</p></div><div class="sect3" title="The LD_LIBRARY_PATH environment variable"><div class="titlepage"><div><div><h4 class="title" id="the_ld_underscore_library_underscore_pat">The <code class="literal">LD_LIBRARY_PATH</code> environment
+                        variable</h4></div></div></div><p>One way of informing the dynamic linker that a shared library resides in a
+                        nonstandard directory is to specify that directory as part of a
+                        colon-separated list of directories in the <code class="literal">LD_LIBRARY_PATH</code> environment variable. (Semicolons can also be
+                        used to separate the directories, in which case the list must be quoted to
+                        prevent the shell from interpreting the semicolons.) If <code class="literal">LD_LIBRARY_PATH</code> is defined, then the dynamic
+                        linker searches for the shared library in the directories it lists before
+                        looking in the standard library directories. (Later, we’ll see that a
+                        production application should never rely on <code class="literal">LD_LIBRARY_PATH</code>, but for now, this variable provides us with
+                        a simple way of getting started with shared libraries.) Thus, we can run our
+                        program with the following command:<a id="IDX-CHP-41-5904" class="indexterm"/></p><a id="I_programlisting41_d1e111225"/><pre class="programlisting">$ <strong class="userinput"><code>LD_LIBRARY_PATH=. ./prog</code></strong>
+Called mod1-x1
+Called mod2-x2</pre><p>The (<span class="emphasis"><em>bash</em></span>, Korn, and Bourne) shell syntax used in the
+                        above command creates an environment variable definition within the process
+                        executing <span class="emphasis"><em>prog</em></span>. This definition tells the dynamic
+                        linker to search for shared libraries in <code class="literal">.</code>, the current working directory.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>An empty directory specification in the <code class="literal">LD_LIBRARY_PATH</code> list (e.g., the middle specification in
+                                <span class="emphasis"><em>dirx::diry</em></span>) is equivalent to <code class="literal">.</code>, the current working directory (but note
+                            that setting <code class="literal">LD_LIBRARY_PATH</code> to an
+                            empty string does not achieve the same result). We avoid this usage
+                            (SUSv3 discourages the corresponding usage in the <code class="literal">PATH</code> environment variable).</p></div></div><div class="sect3" title="Static linking and dynamic linking contrasted"><div class="titlepage"><div><div><h4 class="title" id="static_linking_and_dynamic_linking_contr">Static linking and dynamic linking contrasted</h4></div></div></div><p>Commonly, the term <span class="emphasis"><em>linking</em></span> is used to describe the
+                        use of the linker, <span class="emphasis"><em>ld</em></span>, to combine one or more compiled
+                        object files into a single executable file. Sometimes, the term
+                            <span class="emphasis"><em>static</em></span> linking is used to distinguish this step
+                        from <span class="emphasis"><em>dynamic</em></span> linking, the run-time loading of the
+                        shared libraries used by an executable. (Static linking is sometimes also
+                        referred to as <span class="emphasis"><em>link editing</em></span>, and a static linker such
+                        as <span class="emphasis"><em>ld</em></span> is sometimes referred to as a link editor.) Every
+                        program—including those that use shared libraries—goes through a
+                        static-linking phase. At run time, a program that employs shared libraries
+                        additionally undergoes dynamic linking.<a id="IDX-CHP-41-5907" class="indexterm"/><a id="IDX-CHP-41-5908" class="indexterm"/><a id="IDX-CHP-41-5909" class="indexterm"/><a id="IDX-CHP-41-5905" class="indexterm"/><a id="IDX-CHP-41-5906" class="indexterm"/><a id="IDX-CHP-41-5910" class="indexterm"/></p></div></div><div class="sect2" title="The Shared Library Soname"><div class="titlepage"><div><div><h3 class="title" id="the_shared_library_soname">The Shared Library Soname</h3></div></div></div><p>In the example presented so far, the name that was embedded in the executable
+                    and sought by the dynamic linker at run time was the actual name of the shared
+                    library file. This is referred to as the library’s <span class="emphasis"><em>real
+                        name</em></span>. However, it is possible—in fact, usual—to create a shared
+                    library with a kind of alias, called a <span class="emphasis"><em>soname</em></span> (the <code class="literal">DT_SONAME</code> tag in ELF parlance).<a id="IDX-CHP-41-5911" class="indexterm"/><a id="IDX-CHP-41-5912" class="indexterm"/><a id="IDX-CHP-41-5913" class="indexterm"/><a id="IDX-CHP-41-5914" class="indexterm"/><a id="IDX-CHP-41-5915" class="indexterm"/></p><p>If a shared library has a soname, then, during static linking, the soname is
+                    embedded in the executable file instead of the real name, and subsequently used
+                    by the dynamic linker when searching for the library at run time. The purpose of
+                    the soname is to provide a level of indirection that permits an executable to
+                    use, at run time, a version of the shared library that is different from (but
+                    compatible with) the library against which it was linked.</p><p>In <a class="xref" href="ch41.html#shared_library_versions_and_naming_conve" title="Shared Library Versions and Naming Conventions">Shared Library Versions and Naming Conventions</a>, we’ll look at
+                    the conventions used for the shared library real name and soname. For now, we
+                    show a simplified example to demonstrate the principles.</p><p>The first step in using a soname is to specify it when the shared library is
+                    created:</p><a id="I_programlisting41_d1e111358"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -g -c -fPIC -Wall mod1.c mod2.c mod3.c</code></strong>
+$ <strong class="userinput"><code>gcc -g -shared -Wl,-soname,libbar.so -o libfoo.so mod1.o mod2.o mod3.o</code></strong></pre><p>The <span class="emphasis"><em>-Wl,-soname,libbar.so</em></span> option is an instruction to the
+                    linker to mark the shared library <code class="literal">libfoo.so</code>
+                    with the soname <code class="literal">libbar.so</code>.</p><p>If we want to determine the soname of an existing shared library, we can use
+                    either of the following commands:</p><a id="I_programlisting41_d1e111378"/><pre class="programlisting">$ <strong class="userinput"><code>objdump -p libfoo.so | grep SONAME</code></strong>
+  SONAME      libbar.so
+$ <strong class="userinput"><code>readelf -d libfoo.so | grep SONAME</code></strong>
+ 0x0000000e (SONAME)      Library soname: [libbar.so]</pre><p>Having created a shared library with a soname, we then create the executable
+                    as usual:</p><a id="I_programlisting41_d1e111388"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -g -Wall -o prog prog.c libfoo.so</code></strong></pre><p>However, this time, the linker detects that the library <code class="literal">libfoo.so</code> contains the soname <code class="literal">libbar.so</code> and embeds the latter name inside the
+                    executable.</p><p>Now when we attempt to run the program, this is what we see:</p><a id="I_programlisting41_d1e111403"/><pre class="programlisting">$ <strong class="userinput"><code>LD_LIBRARY_PATH=. ./prog</code></strong>
+prog: error in loading shared libraries: libbar.so: cannot open
+shared object file: No such file or directory</pre><p>The problem here is that the dynamic linker can’t find anything named <code class="literal">libbar.so</code>. When using a soname, one further step
+                    is required: we must create a symbolic link from the soname to the real name of
+                    the library. This symbolic link must be created in one of the directories
+                    searched by the dynamic linker. Thus, we could run our program as
+                    follows:</p><a id="I_programlisting41_d1e111413"/><pre class="programlisting">$ <strong class="userinput"><code>ln -s libfoo.so libbar.so</code></strong>
+         <em class="lineannotation"><span class="lineannotation">Create soname symbolic link in current directory</span></em>
+$ <strong class="userinput"><code>LD_LIBRARY_PATH=. ./prog</code></strong>
+Called mod1-x1
+Called mod2-x2</pre><p><a class="xref" href="ch41.html#creating_a_shared_library_and_linking_a" title="Figure 41-1. Creating a shared library and linking a program against it">Figure 41-1</a> shows the
+                    compilation and linking steps involved in producing a shared library with an
+                    embedded soname, linking a program against that shared library, and creating the
+                    soname symbolic link needed to run the program.</p><div class="figure"><a id="creating_a_shared_library_and_linking_a"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject41_d1e111430"/><img src="figs/web/41-1_SHLIBS-A-shlib-create.png.jpg" alt="Creating a shared library and linking a program against it"/></div></div><div class="figure-title">Figure 41-1. Creating a shared library and linking a program against it</div></div><p><a class="xref" href="ch41.html#execution_of_a_program_that_loads_a_shar" title="Figure 41-2. Execution of a program that loads a shared library">Figure 41-2</a> shows the steps
+                    that occur when the program created in <a class="xref" href="ch41.html#creating_a_shared_library_and_linking_a" title="Figure 41-1. Creating a shared library and linking a program against it">Figure 41-1</a> is loaded into memory in
+                    preparation for execution.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>To find out which shared libraries a process is currently using, we can
+                        list the contents of the corresponding Linux-specific <code class="literal">/proc/</code><span class="emphasis"><em>PID/</em></span><code class="literal">maps</code> file (<a class="xref" href="ch48.html#location_of_shared_memory_in_virtual_mem" title="Location of Shared Memory in Virtual Memory">Location of Shared Memory in Virtual Memory</a>).</p></div><div class="figure"><a id="execution_of_a_program_that_loads_a_shar"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject41_d1e111455"/><img src="figs/web/41-2_SHLIBS-A-shlib-load.png.jpg" alt="Execution of a program that loads a shared library"/></div></div><div class="figure-title">Figure 41-2. Execution of a program that loads a shared library</div></div></div></div><div class="sect1" title="Useful Tools for Working with Shared Libraries"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="useful_tools_for_working_with_shared_lib">Useful Tools for Working with Shared Libraries</h2></div></div></div><p>In this section, we briefly describe a few tools that are useful for analyzing
+                shared libraries, executable files, and compiled object (<code class="literal">.o</code>) files.<a id="IDX-CHP-41-5916" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="the_ldd_command"/></div></div></div><div class="sect3" title="The ldd command"><div class="titlepage"><div><div><h4 class="title" id="the_ldd_command-id1">The <span class="emphasis"><em>ldd</em></span> command</h4></div></div></div><p>The <span class="emphasis"><em>ldd(1)</em></span> (list dynamic dependencies) command
+                        displays the shared libraries that a program (or a shared library) requires
+                        to run. Here’s an example:<a id="IDX-CHP-41-5917" class="indexterm"/></p><a id="I_programlisting41_d1e111493"/><pre class="programlisting">$ <strong class="userinput"><code>ldd prog</code></strong>
+         libdemo.so.1 =&gt; /usr/lib/libdemo.so.1 (0x40019000)
+         libc.so.6 =&gt; /lib/tls/libc.so.6 (0x4017b000)
+         /lib/ld-linux.so.2 =&gt; /lib/ld-linux.so.2 (0x40000000)</pre><p>The <span class="emphasis"><em>ldd</em></span> command resolves each library reference
+                        (employing the same search conventions as the dynamic linker) and displays
+                        the results in the following form:</p><a id="I_programlisting41_d1e111503"/><pre class="programlisting"><span class="emphasis"><em>library-name</em></span> =&gt; <span class="emphasis"><em>resolves-to-path</em></span></pre><p>For most ELF executables, <span class="emphasis"><em>ldd</em></span> will list entries for
+                        at least <code class="literal">ld-linux.so.2</code>, the dynamic
+                        linker, and <code class="literal">libc.so.6</code>, the standard C
+                        library.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The name of the C library is different on some architectures. For
+                            example, this library is named <code class="literal">libc.so.6.1</code> on IA-64 and Alpha.</p></div></div><div class="sect3" title="The objdump and readelf commands"><div class="titlepage"><div><div><h4 class="title" id="the_objdump_and_readelf_commands">The <span class="emphasis"><em>objdump</em></span> and <span class="emphasis"><em>readelf</em></span>
+                        commands</h4></div></div></div><p>The <span class="emphasis"><em>objdump</em></span> command can be used to obtain various
+                        information—including disassembled binary machine code—from an executable
+                        file, compiled object, or shared library. It can also be used to display
+                        information from the headers of the various ELF sections of these files; in
+                        this usage, it resembles <span class="emphasis"><em>readelf</em></span>, which displays
+                        similar information, but in a different format. Sources of further
+                        information about <span class="emphasis"><em>objdump</em></span> and
+                            <span class="emphasis"><em>readelf</em></span> are listed at the end of this
+                            chapter.<a id="IDX-CHP-41-5918" class="indexterm"/><a id="IDX-CHP-41-5919" class="indexterm"/><a id="IDX-CHP-41-5920" class="indexterm"/><a id="IDX-CHP-41-5921" class="indexterm"/><a id="IDX-CHP-41-5922" class="indexterm"/><a id="IDX-CHP-41-5923" class="indexterm"/></p></div><div class="sect3" title="The nm command"><div class="titlepage"><div><div><h4 class="title" id="the_nm_command">The <span class="emphasis"><em>nm</em></span> command</h4></div></div></div><p>The <span class="emphasis"><em>nm</em></span> command lists the set of symbols defined
+                        within an object library or executable program. One use of this command is
+                        to find out which of several libraries defines a symbol. For example, to
+                        find out which library defines the <span class="emphasis"><em>crypt()</em></span> function, we
+                        could do the following:<a id="IDX-CHP-41-5924" class="indexterm"/></p><a id="I_programlisting41_d1e111602"/><pre class="programlisting">$ <strong class="userinput"><code>nm -A /usr/lib/lib*.so 2&gt; /dev/null | grep ' crypt$'</code></strong>
+/usr/lib/libcrypt.so:00007080 W crypt</pre><p>The <span class="emphasis"><em>-A</em></span> option to <span class="emphasis"><em>nm</em></span> specifies
+                        that the library name should be listed at the start of each line displaying
+                        a symbol. This is necessary because, by default, <span class="emphasis"><em>nm</em></span>
+                        lists the library name once, and then, on subsequent lines, all of the
+                        symbols it contains, which isn’t useful for the kind of filtering shown in
+                        the above example. In addition, we discard standard error output in order to
+                        hide error messages about files in formats unrecognized by
+                            <span class="emphasis"><em>nm</em></span>. From the above output, we can see that
+                            <span class="emphasis"><em>crypt()</em></span> is defined in the
+                            <span class="emphasis"><em>libcrypt</em></span> library.</p></div></div></div><div class="sect1" title="Shared Library Versions and Naming Conventions"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="shared_library_versions_and_naming_conve">Shared Library Versions and Naming Conventions</h2></div></div></div><p>Let’s consider what is entailed by shared library versioning. Typically,
+                successive versions of a shared library are compatible with one another, meaning
+                that the functions in each module present the same calling interface and are
+                semantically equivalent (i.e., they achieve identical results). Such differing but
+                compatible versions are referred to as <span class="emphasis"><em>minor versions</em></span> of a
+                shared library. Occasionally, however, it is necessary to create a new
+                    <span class="emphasis"><em>major version</em></span> of a library—one that is incompatible with a
+                previous version. (In <a class="xref" href="ch41.html#compatible_versus_incompatible_libraries" title="Compatible Versus Incompatible Libraries">Compatible Versus Incompatible Libraries</a>,
+                we’ll see more precisely what may cause such incompatibilities.) At the same time,
+                it must still be possible to continue running programs that require the older
+                version of the library.<a id="IDX-CHP-41-5925" class="indexterm"/></p><p>To deal with these versioning requirements, a standard naming convention is
+                employed for shared library real names and sonames.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="real_names_comma_sonames_comma_and"/></div></div></div><div class="sect3" title="Real names, sonames, and linker names"><div class="titlepage"><div><div><h4 class="title" id="real_names_comma_sonames_comma_and-id1">Real names, sonames, and linker names</h4></div></div></div><p>Each incompatible version of a shared library is distinguished by a unique
+                            <span class="emphasis"><em>major version identifier</em></span>, which forms part of its
+                        real name. By convention, the major version identifier takes the form of a
+                        number that is sequentially incremented with each incompatible release of
+                        the library. In addition to the major version identifier, the real name also
+                        includes a <span class="emphasis"><em>minor version identifier</em></span>, which
+                        distinguishes compatible minor versions within the library major version.
+                        The real name employs the format convention <code class="literal">lib</code><span class="emphasis"><em>name</em></span><code class="literal">.so.</code><span class="emphasis"><em>major-id</em></span><code class="literal">.</code><span class="emphasis"><em>minor-id</em></span>.</p><p>Like the major version identifier, the minor version identifier can be any
+                        string, but, by convention, it is either a number, or two numbers separated
+                        by a dot, with the first number identifying the minor version, and the
+                        second number indicating a patch level or revision number within the minor
+                        version. Some examples of real names of shared libraries are the
+                        following:</p><a id="I_programlisting41_d1e111676"/><pre class="programlisting">libdemo.so.1.0.1
+libdemo.so.1.0.2              <em class="lineannotation"><span class="lineannotation">Minor version, compatible with version 1.0.1</span></em>
+libdemo.so.2.0.0              <em class="lineannotation"><span class="lineannotation">New major version, incompatible with version 1.*</span></em>
+libreadline.so.5.0</pre><p>The soname of the shared library includes the same major version
+                        identifier as its corresponding real library name, but excludes the minor
+                        version identifier. Thus, the soname has the form <code class="literal">lib</code><span class="emphasis"><em>name</em></span><code class="literal">.so.</code><span class="emphasis"><em>major-id</em></span>.</p><p>Usually, the soname is created as a relative symbolic link in the
+                        directory that contains the real name. The following are some examples of
+                        sonames, along with the real names to which they might be symbolically
+                        linked:</p><a id="I_programlisting41_d1e111697"/><pre class="programlisting">libdemo.so.1        -&gt; libdemo.so.1.0.2
+libdemo.so.2        -&gt; libdemo.so.2.0.0
+libreadline.so.5    -&gt; libreadline.so.5.0</pre><p>For a particular major version of a shared library, there may be several
+                        library files distinguished by different minor version identifiers.
+                        Normally, the soname corresponding to each major library version points to
+                        the most recent minor version within the major version (as shown in the
+                        above examples for <code class="literal">libdemo.so</code>). This
+                        setup allows for the correct versioning semantics during the run-time
+                        operation of shared libraries. Because the static-linking phase embeds a
+                        copy of the (minor version-independent) soname in the executable, and the
+                        soname symbolic link may subsequently be modified to point to a newer
+                        (minor) version of the shared library, it is possible to ensure that an
+                        executable loads the most up-to-date minor version of the library at run
+                        time. Furthermore, since different major versions of a library have
+                        different sonames, they can happily coexist and be accessed by the programs
+                        that require them.</p><p>In addition to the real name and soname, a third name is usually defined
+                        for each shared library: the <span class="emphasis"><em>linker name</em></span>, which is used
+                        when linking an executable against the shared library. The linker name is a
+                        symbolic link containing just the library name without the major or minor
+                        version identifiers, and thus has the form <code class="literal">lib</code><span class="emphasis"><em>name</em></span>.<code class="literal">so</code>. The linker name allows us to construct
+                        version-independent link commands that automatically operate with the
+                        correct (i.e., most up-to-date) version of the shared library.<a id="IDX-CHP-41-5926" class="indexterm"/></p><p>Typically, the linker name is created in the same directory as the file to
+                        which it refers. It can be linked either to the real name or to the soname
+                        of the most recent major version of the library. Usually, a link to the
+                        soname is preferable, so that changes to the soname are automatically
+                        reflected in the linker name. (In <a class="xref" href="ch41.html#installing_shared_libraries" title="Installing Shared Libraries">Installing Shared Libraries</a>, we’ll see that the
+                            <span class="emphasis"><em>ldconfig</em></span> program automates the task of keeping
+                        sonames up to date, and thus implicitly maintains linker names if we use the
+                        convention just described.)<a id="IDX-CHP-41-5927" class="indexterm"/><a id="IDX-CHP-41-5928" class="indexterm"/><a id="IDX-CHP-41-5929" class="indexterm"/><a id="IDX-CHP-41-5930" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>If we want to link a program against an older major version of a
+                            shared library, we can’t use the linker name. Instead, as part of the
+                            link command, we would need to indicate the required (major) version by
+                            specifying a particular real name or soname.</p></div><p>The following are some examples of linker names:</p><a id="I_programlisting41_d1e111755"/><pre class="programlisting">libdemo.so           -&gt; libdemo.so.2
+libreadline.so       -&gt; libreadline.so.5</pre><p><a class="xref" href="ch41.html#summary_of_shared_library_names" title="Table 41-1. Summary of shared library names">Table 41-1</a> summarizes information
+                        about the shared library real name, soname, and linker name, and <a class="xref" href="ch41.html#conventional_arrangement_of_shared_libra" title="Figure 41-3. Conventional arrangement of shared library names">Figure 41-3</a> portrays the
+                        relationship between these names.</p><div class="table"><a id="summary_of_shared_library_names"/><div class="table-title">Table 41-1. Summary of shared library names</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Name</p>
+                                    </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Format</p>
+                                    </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                        <p>Description</p>
+                                    </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>real name</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">lib</code>
+                                            <span class="emphasis"><em>name</em></span>
+                                            <code class="literal">.so.</code>
+                                            <span class="emphasis"><em>maj</em></span>
+                                            <code class="literal">.</code>
+                                            <span class="emphasis"><em>min</em></span>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>File holding library code; one instance per
+                                            major-plus-minor version of the library.</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>soname</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">lib</code>
+                                            <span class="emphasis"><em>name</em></span>
+                                            <code class="literal">.so.</code>
+                                            <span class="emphasis"><em>maj</em></span>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>One instance per major version of library; embedded in
+                                            executable at link time; used at run time to find
+                                            library via a symbolic link with same name that points
+                                            to corresponding (most up-to-date) real name.</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>linker name</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">lib</code>
+                                            <span class="emphasis"><em>name</em></span>
+                                            <code class="literal">.so</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; ">
+                                        <p>Symbolic link to latest real name or (more usually)
+                                            latest soname; single instance; allows construction of
+                                            version-independent link commands.</p>
+                                    </td></tr></tbody></table></div></div><div class="figure"><a id="conventional_arrangement_of_shared_libra"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject41_d1e111837"/><img src="figs/web/41-3_SHLIBS-A-shlib-names-scale90.png.jpg" alt="Conventional arrangement of shared library names"/></div></div><div class="figure-title">Figure 41-3. Conventional arrangement of shared library names</div></div></div><div class="sect3" title="Creating a shared library using standard conventions"><div class="titlepage"><div><div><h4 class="title" id="creating_a_shared_library_using_standard">Creating a shared library using standard conventions</h4></div></div></div><p>Putting all of the above information together, we now show how to build
+                        our demonstration library following the standard conventions. First, we
+                        create the object files:<a id="IDX-CHP-41-5931" class="indexterm"/><a id="IDX-CHP-41-5932" class="indexterm"/></p><a id="I_programlisting41_d1e111858"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -g -c -fPIC -Wall mod1.c mod2.c mod3.c</code></strong></pre><p>Then we create the shared library with the real name <code class="literal">libdemo.so.1.0.1</code> and the soname <code class="literal">libdemo.so.1</code>.</p><a id="I_programlisting41_d1e111870"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -g -shared -Wl,-soname,libdemo.so.1 -o libdemo.so.1.0.1 \</code></strong>
+<strong class="userinput"><code>         mod1.o mod2.o mod3.o</code></strong></pre><p>Next, we create appropriate symbolic links for the soname and linker
+                        name:</p><a id="I_programlisting41_d1e111879"/><pre class="programlisting">$ <strong class="userinput"><code>ln -s libdemo.so.1.0.1 libdemo.so.1</code></strong>
+$ <strong class="userinput"><code>ln -s libdemo.so.1 libdemo.so</code></strong></pre><p>We can employ <span class="emphasis"><em>ls</em></span> to verify the setup (with
+                            <span class="emphasis"><em>awk</em></span> used to select the fields of interest):</p><a id="I_programlisting41_d1e111894"/><pre class="programlisting">$ <strong class="userinput"><code>ls -l libdemo.so* | awk '{print $1, $9, $10, $11}'</code></strong>
+lrwxrwxrwx libdemo.so -&gt; libdemo.so.1
+lrwxrwxrwx libdemo.so.1 -&gt; libdemo.so.1.0.1
+-rwxr-xr-x libdemo.so.1.0.1</pre><p>Then we can build our executable using the linker name (note that the link
+                        command makes no mention of version numbers), and run the program as
+                        usual:</p><a id="I_programlisting41_d1e111901"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -g -Wall -o prog prog.c -L. -ldemo</code></strong>
+$ <strong class="userinput"><code>LD_LIBRARY_PATH=. ./prog</code></strong>
+Called mod1-x1
+Called mod2-x2</pre></div></div></div><div class="sect1" title="Installing Shared Libraries"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="installing_shared_libraries">Installing Shared Libraries</h2></div></div></div><p>In the examples up to now, we created a shared library in a user-private
+                directory, and then used the <code class="literal">LD_LIBRARY_PATH</code>
+                environment variable to ensure that the dynamic linker searched that directory. Both
+                privileged and unprivileged users may use this technique. However, this technique
+                should not be employed in production applications. More usually, a shared library
+                and its associated symbolic links are installed in one of a number of standard
+                library directories, in particular, one of the following:<a id="IDX-CHP-41-5933" class="indexterm"/><a id="IDX-CHP-41-5934" class="indexterm"/><a id="IDX-CHP-41-5935" class="indexterm"/><a id="IDX-CHP-41-5936" class="indexterm"/><a id="IDX-CHP-41-5937" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><code class="literal">/usr/lib</code>, the directory in which most
+                        standard libraries are installed;</p></li><li class="listitem"><p><code class="literal">/lib</code>, the directory into which
+                        libraries required during system startup should be installed (since, during
+                        system startup, <code class="literal">/usr/lib</code> may not be
+                        mounted yet);</p></li><li class="listitem"><p><code class="literal">/usr/local/lib</code>, the directory into
+                        which nonstandard or experimental libraries should be installed (placing
+                        libraries in this directory is also useful if <code class="literal">/usr/lib</code> is a network mount shared among multiple systems and
+                        we want to install a library just for use on this system); or</p></li><li class="listitem"><p>one of the directories listed in <code class="literal">/etc/ld.so.conf</code> (described shortly).</p></li></ul></div><p>In most cases, copying a file into one of these directories requires superuser
+                privilege.</p><p>After installation, the symbolic links for the soname and linker name must be
+                created, usually as relative symbolic links in the same directory as the library
+                file. Thus, to install our demonstration library in <code class="literal">/usr/lib</code> (whose permissions only allow updates by
+                    <span class="emphasis"><em>root</em></span>), we would do the following:</p><a id="I_programlisting41_d1e111980"/><pre class="programlisting">$ <strong class="userinput"><code>su</code></strong>
+Password:
+# <strong class="userinput"><code>mv libdemo.so.1.0.1 /usr/lib</code></strong>
+# <strong class="userinput"><code>cd /usr/lib</code></strong>
+# <strong class="userinput"><code>ln -s libdemo.so.1.0.1 libdemo.so.1</code></strong>
+# <strong class="userinput"><code>ln -s libdemo.so.1 libdemo.so</code></strong></pre><p>The last two lines in this shell session create the soname and linker name
+                symbolic links.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="ldconfig"/></div></div></div><div class="sect3" title="ldconfig"><div class="titlepage"><div><div><h4 class="title" id="ldconfig-id1">
+                        <span class="emphasis"><em>ldconfig</em></span>
+                    </h4></div></div></div><p>The <span class="emphasis"><em>ldconfig(8)</em></span> program addresses two potential
+                        problems with shared libraries:<a id="IDX-CHP-41-5938" class="indexterm"/><a id="IDX-CHP-41-5939" class="indexterm"/><a id="IDX-CHP-41-5940" class="indexterm"/><a id="IDX-CHP-41-5941" class="indexterm"/><a id="IDX-CHP-41-5942" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Shared libraries can reside in a variety of directories. If the
+                                dynamic linker needed to search all of these directories in order to
+                                find a library, then loading libraries could be very slow.</p></li><li class="listitem"><p>As new versions of libraries are installed or old versions are
+                                removed, the soname symbolic links may become out of date.</p></li></ul></div><p>The <span class="emphasis"><em>ldconfig</em></span> program solves these problems by
+                        performing two tasks:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>It searches a standard set of directories and creates or updates a
+                                cache file, <code class="literal">/etc/ld.so.cache</code>, to
+                                contain a list of the (latest minor versions of each of the) major
+                                library versions in all of these directories. The dynamic linker in
+                                turn uses this cache file when resolving library names at run time.
+                                To build the cache, <span class="emphasis"><em>ldconfig</em></span> searches the
+                                directories specified in the file <code class="literal">/etc/ld.so.conf</code> and then <code class="literal">/lib</code> and <code class="literal">/usr/lib</code>.
+                                The <code class="literal">/etc/ld.so.conf</code> file consists
+                                of a list of directory pathnames (these should be specified as
+                                absolute pathnames), separated by newlines, spaces, tabs, commas, or
+                                colons. In some distributions, the directory <code class="literal">/usr/local/lib</code> is included in this
+                                list. (If not, we may need to add it manually.)<a id="IDX-CHP-41-5943" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The command <span class="emphasis"><em>ldconfig -p</em></span> displays the
+                                    current contents of <code class="literal">/etc/ld.so.cache</code>.</p></div></li><li class="listitem"><p>It examines the latest minor version (i.e., the version with the
+                                highest minor number) of each major version of each library to find
+                                the embedded soname and then creates (or updates) relative symbolic
+                                links for each soname in the same directory.</p></li></ol></div><p>In order to correctly perform these actions, <span class="emphasis"><em>ldconfig</em></span>
+                        expects libraries to be named according to the conventions described earlier
+                        (i.e., library real names include major and minor identifiers that increase
+                        appropriately from one library version to the next).</p><p>By default, <span class="emphasis"><em>ldconfig</em></span> performs both of the above
+                        actions. Command-line options can be used to selectively inhibit either
+                        action: the <span class="emphasis"><em>-N</em></span> option prevents rebuilding of the cache,
+                        and the <span class="emphasis"><em>-X</em></span> option inhibits the creation of the soname
+                        symbolic links. In addition, the <span class="emphasis"><em>-v</em></span>
+                            (<span class="emphasis"><em>verbose</em></span>) option causes
+                            <span class="emphasis"><em>ldconfig</em></span> to display output describing its
+                        actions.</p><p>We should run <span class="emphasis"><em>ldconfig</em></span> whenever a new library is
+                        installed, an existing library is updated or removed, or the list of
+                        directories in <code class="literal">/etc/ld.so.conf</code> is
+                        changed.</p><p>As an example of the operation of <span class="emphasis"><em>ldconfig</em></span>, suppose
+                        we wanted to install two different major versions of a library. We would do
+                        this as follows:</p><a id="I_programlisting41_d1e112128"/><pre class="programlisting">$ <strong class="userinput"><code>su</code></strong>
+Password:
+# <strong class="userinput"><code>mv libdemo.so.1.0.1 libdemo.so.2.0.0 /usr/lib</code></strong>
+# <strong class="userinput"><code>ldconfig -v | grep libdemo</code></strong>
+        libdemo.so.1 -&gt; libdemo.so.1.0.1 (changed)
+        libdemo.so.2 -&gt; libdemo.so.2.0.0 (changed)</pre><p>Above, we filter the output of <span class="emphasis"><em>ldconfig</em></span>, so that we
+                        see just the information relating to libraries named <code class="literal">libdemo</code>.</p><p>Next, we list the files named <code class="literal">libdemo</code>
+                        in <code class="literal">/usr/lib</code> to verify the setup of the
+                        soname symbolic links:</p><a id="I_programlisting41_d1e112156"/><pre class="programlisting"># <strong class="userinput"><code>cd /usr/lib</code></strong>
+# <strong class="userinput"><code>ls -l libdemo* | awk '{print $1, $9, $10, $11}'</code></strong>
+lrwxrwxrwx libdemo.so.1 -&gt; libdemo.so.1.0.1
+-rwxr-xr-x libdemo.so.1.0.1
+lrwxrwxrwx libdemo.so.2 -&gt; libdemo.so.2.0.0
+-rwxr-xr-x libdemo.so.2.0.0</pre><p>We must still create the symbolic link for the linker name, as shown in
+                        the next command:</p><a id="I_programlisting41_d1e112166"/><pre class="programlisting"># <strong class="userinput"><code>ln -s libdemo.so.2 libdemo.so</code></strong></pre><p>However, if we install a new 2.<span class="emphasis"><em>x</em></span> minor version of our
+                        library, then, since the linker name points to the latest soname,
+                            <span class="emphasis"><em>ldconfig</em></span> has the effect of also keeping the linker
+                        name up to date, as the following example shows:</p><a id="I_programlisting41_d1e112178"/><pre class="programlisting"># <strong class="userinput"><code>mv libdemo.so.2.0.1 /usr/lib</code></strong>
+# <strong class="userinput"><code>ldconfig -v | grep libdemo</code></strong>
+        libdemo.so.1 -&gt; libdemo.so.1.0.1
+        libdemo.so.2 -&gt; libdemo.so.2.0.1 (changed)</pre><p>If we are building and using a private library (i.e., one that is not
+                        installed in one of the standard directories), we can have
+                            <span class="emphasis"><em>ldconfig</em></span> create the soname symbolic link for us by
+                        using the <span class="emphasis"><em>-n</em></span> option. This specifies that
+                            <span class="emphasis"><em>ldconfig</em></span> should process only libraries in the
+                        directories on the command line and should not update the cache file. In the
+                        following example, we use <span class="emphasis"><em>ldconfig</em></span> to process libraries
+                        in the current working directory:</p><a id="I_programlisting41_d1e112200"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -g -c -fPIC -Wall mod1.c mod2.c mod3.c</code></strong>
+$ <strong class="userinput"><code>gcc -g -shared -Wl,-soname,libdemo.so.1 -o libdemo.so.1.0.1 \</code></strong>
+<strong class="userinput"><code>          mod1.o mod2.o mod3.o</code></strong>
+$ <strong class="userinput"><code>/sbin/ldconfig -nv .</code></strong>
+.:
+        libdemo.so.1 -&gt; libdemo.so.1.0.1
+$ <strong class="userinput"><code>ls -l libdemo.so* | awk '{print $1, $9, $10, $11}'</code></strong>
+lrwxrwxrwx libdemo.so.1 -&gt; libdemo.so.1.0.1
+-rwxr-xr-x libdemo.so.1.0.1</pre><p>In the above example, we specified the full pathname when running
+                            <span class="emphasis"><em>ldconfig</em></span>, because we were using an unprivileged
+                        account whose <code class="literal">PATH</code> environment variable
+                        did not include the <code class="literal">/sbin</code>
+                        directory.</p></div></div></div><div class="sect1" title="Compatible Versus Incompatible Libraries"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="compatible_versus_incompatible_libraries">Compatible Versus Incompatible Libraries</h2></div></div></div><p>Over time, we may need to make changes to the code of a shared library. Such
+                changes result in a new version of the library that is either
+                    <span class="emphasis"><em>compatible</em></span> with previous version(s), meaning that we need
+                to change only the minor version identifier of the library’s real name, or
+                    <span class="emphasis"><em>incompatible</em></span>, meaning that we must define a new major
+                version of the library.</p><p>A change to a library is compatible with an existing library version if
+                    <span class="emphasis"><em>all</em></span> of the following conditions hold true:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The semantics of each public function and variable in the library remain
+                        unchanged. In other words, each function keeps the same argument list, and
+                        continues to produce its specified effect on global variables and returned
+                        arguments, and returns the same result value. Thus, changes that result in
+                        an improvement in performance or fix a bug (resulting in closer conformance
+                        to specified behavior) can be regarded as compatible changes.</p></li><li class="listitem"><p>No function or variable in the library’s public API is removed. It is,
+                        however, compatible to add new functions and variables to the public
+                        API.</p></li><li class="listitem"><p>Structures allocated within and returned by each function remain
+                        unchanged. Similarly, public structures exported by the library remain
+                        unchanged. One exception to this rule is that, under certain circumstances,
+                        new items may be added to the end of an existing structure, though even this
+                        may be subject to pitfalls if, for example, the calling program tries to
+                        allocate arrays of this structure type. Library designers sometimes
+                        circumvent this limitation by defining exported structures to be larger than
+                        is required in the initial release of the library, with some extra padding
+                        fields being “reserved for future use.”</p></li></ul></div><p>If none of these conditions is violated, then the new library name can be updated
+                by adjusting the minor version of the existing name. Otherwise, a new major version
+                of the library should be created.</p></div><div class="sect1" title="Upgrading Shared Libraries"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="upgrading_shared_libraries">Upgrading Shared Libraries</h2></div></div></div><p>One of the advantages of shared libraries is that a new major or minor version of
+                a library can be installed even while running programs are using an existing
+                version. All that we need to do is create the new library version, install it in the
+                appropriate directory, and update the soname and linker name symbolic links as
+                required (or, more usually, have <span class="emphasis"><em>ldconfig</em></span> do the job for us).
+                To produce a new minor version (i.e., a compatible upgrade) of the shared library
+                    <code class="literal">/usr/lib/libdemo.1.0.1</code>, we would do the
+                    following:<a id="IDX-CHP-41-5944" class="indexterm"/><a id="IDX-CHP-41-5945" class="indexterm"/></p><a id="I_programlisting41_d1e112277"/><pre class="programlisting">$ <strong class="userinput"><code>su</code></strong>
+Password:
+# <strong class="userinput"><code>gcc -g -c -fPIC -Wall mod1.c mod2.c mod3.c</code></strong>
+# <strong class="userinput"><code>gcc -g -shared -Wl,-soname,libdemo.so.1 -o libdemo.so.1.0.2 \</code></strong>
+<strong class="userinput"><code>       mod1.o mod2.o mod3.o</code></strong>
+# <strong class="userinput"><code>mv libdemo.so.1.0.2 /usr/lib</code></strong>
+# <strong class="userinput"><code>ldconfig -v | grep libdemo</code></strong>
+        libdemo.so.1 -&gt; libdemo.so.1.0.2 (changed)</pre><p>Assuming the linker name was already correctly set up (i.e., to point to the
+                library soname), we would not need to modify it.</p><p>Already running programs will continue to use the previous minor version of the
+                shared library. Only when they are terminated and restarted will they too use the
+                new minor version of the shared library.</p><p>If we subsequently wanted to create a new major version (2.0.0) of the shared
+                library, we would do the following:</p><a id="I_programlisting41_d1e112304"/><pre class="programlisting"># <strong class="userinput"><code>gcc -g -c -fPIC -Wall mod1.c mod2.c mod3.c</code></strong>
+# <strong class="userinput"><code>gcc -g -shared -Wl,-soname,libdemo.so.2 -o libdemo.so.2.0.0 \</code></strong>
+<strong class="userinput"><code>       mod1.o mod2.o mod3.o</code></strong>
+# <strong class="userinput"><code>mv libdemo.so.2.0.0 /usr/lib</code></strong>
+# <strong class="userinput"><code>ldconfig -v | grep libdemo</code></strong>
+        libdemo.so.1 -&gt; libdemo.so.1.0.2
+        libdemo.so.2 -&gt; libdemo.so.2.0.0 (changed)
+# <strong class="userinput"><code>cd /usr/lib</code></strong>
+# <strong class="userinput"><code>ln -sf libdemo.so.2 libdemo.so</code></strong></pre><p>As can be seen in the above output, <span class="emphasis"><em>ldconfig</em></span> automatically
+                creates a soname symbolic link for the new major version. However, as the last
+                command shows, we must manually update the linker name symbolic link.</p></div><div class="sect1" title="Specifying Library Search Directories in an Object File"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="specifying_library_search_directories_in">Specifying Library Search Directories in an Object File</h2></div></div></div><p>We have already seen two ways of informing the dynamic linker of the location of
+                shared libraries: using the <code class="literal">LD_LIBRARY_PATH</code>
+                environment variable and installing a shared library into one of the standard
+                library directories (<code class="literal">/lib</code>, <code class="literal">/usr/lib</code>, or one of the directories listed in <code class="literal">/etc/ld.so.conf</code>).</p><p>There is a third way: during the static editing phase, we can insert into the
+                executable a list of directories that should be searched at run time for shared
+                libraries. This is useful if we have libraries that reside in fixed locations that
+                are not among the standard locations searched by the dynamic linker. To do this, we
+                employ the <span class="emphasis"><em>-rpath</em></span> linker option when creating an
+                    executable:<a id="IDX-CHP-41-5946" class="indexterm"/></p><a id="I_programlisting41_d1e112362"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -g -Wall -Wl,-rpath,/home/mtk/pdir -o prog prog.c libdemo.so</code></strong></pre><p>The above command copies the string <span class="emphasis"><em>/home/mtk/pdir</em></span> into the
+                run-time library path (<span class="emphasis"><em>rpath</em></span>) list of the executable
+                    <span class="emphasis"><em>prog</em></span>, so, that when the program is run, the dynamic linker
+                will also search this directory when resolving shared library references.</p><p>If necessary, the <span class="emphasis"><em>-rpath</em></span> option can be specified multiple
+                times; all of the directories are concatenated into a single ordered
+                    <span class="emphasis"><em>rpath</em></span> list placed in the executable file. Alternatively,
+                multiple directories can be specified as a colon-separated list within a single
+                    <span class="emphasis"><em>-rpath</em></span> option. At run time, the dynamic linker searches the
+                directories in the order they were specified in the <span class="emphasis"><em>-rpath</em></span>
+                option(s).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>An alternative to the <span class="emphasis"><em>-rpath</em></span> option is the <code class="literal">LD_RUN_PATH</code> environment variable. This variable
+                    can be assigned a string containing a series of colon-separated directories that
+                    are to be used as the <span class="emphasis"><em>rpath</em></span> list when building the
+                    executable file. <code class="literal">LD_RUN_PATH</code> is employed only
+                    if the <span class="emphasis"><em>-rpath</em></span> option is not specified when building the
+                        executable.<a id="IDX-CHP-41-5947" class="indexterm"/></p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="using_the_-rpath_linker_option_when"/></div></div></div><div class="sect3" title="Using the -rpath linker option when building a shared library"><div class="titlepage"><div><div><h4 class="title" id="using_the_-rpath_linker_option_when-id1">Using the <span class="emphasis"><em>-rpath</em></span> linker option when building a
+                        shared library</h4></div></div></div><p>The <span class="emphasis"><em>-rpath</em></span> linker option can also be useful when
+                        building a shared library. Suppose we have one shared library, <code class="literal">libx1.so</code>, that depends on another, <code class="literal">libx2.so</code>, as shown in <a class="xref" href="ch41.html#a_shared_library_that_depends_on_another" title="Figure 41-4. A shared library that depends on another shared library">Figure 41-4</a>. Suppose also that
+                        these libraries reside in the nonstandard directories <code class="literal">d1</code> and <code class="literal">d2</code>,
+                        respectively. We now go through the steps required to build these libraries
+                        and the program that uses them.<a id="IDX-CHP-41-5948" class="indexterm"/></p><div class="figure"><a id="a_shared_library_that_depends_on_another"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject41_d1e112454"/><img src="figs/web/41-4_SHLIBS-A-shlib-interdep.png.jpg" alt="A shared library that depends on another shared library"/></div></div><div class="figure-title">Figure 41-4. A shared library that depends on another shared library</div></div><p>First, we build <code class="literal">libx2.so</code>, in the
+                        directory <code class="literal">pdir/d2</code>. (To keep the example
+                        simple, we dispense with library version numbering and explicit
+                        sonames.)</p><a id="I_programlisting41_d1e112467"/><pre class="programlisting">$ <strong class="userinput"><code>cd /home/mtk/pdir/d2</code></strong>
+$ <strong class="userinput"><code>gcc -g -c -fPIC -Wall modx2.c</code></strong>
+$ <strong class="userinput"><code>gcc -g -shared -o libx2.so modx2.o</code></strong></pre><p>Next, we build <code class="literal">libx1.so</code>, in the
+                        directory <code class="literal">pdir/d1</code>. Since <code class="literal">libx1.so</code> depends on <code class="literal">libx2.so</code>, which is not in a standard directory, we specify
+                        the latter’s run-time location with the <span class="emphasis"><em>-rpath</em></span> linker
+                        option. This could be different from the link-time location of the library
+                        (specified by the <span class="emphasis"><em>-L</em></span> option), although in this case the
+                        two locations are the same.</p><a id="I_programlisting41_d1e112498"/><pre class="programlisting">$ <strong class="userinput"><code>cd /home/mtk/pdir/d1</code></strong>
+$ <strong class="userinput"><code>gcc -g -c -Wall -fPIC modx1.c</code></strong>
+$ <strong class="userinput"><code>gcc -g -shared -o libx1.so modx1.o -Wl,-rpath,/home/mtk/pdir/d2 \</code></strong>
+            <strong class="userinput"><code>-L/home/mtk/pdir/d2 -lx2</code></strong></pre><p>Finally, we build the main program, in the <code class="literal">pdir</code> directory. Since the main program makes use of <code class="literal">libx1.so</code>, and this library resides in a
+                        nonstandard directory, we again employ the <span class="emphasis"><em>-rpath</em></span>
+                        linker option:</p><a id="I_programlisting41_d1e112522"/><pre class="programlisting">$ <strong class="userinput"><code>cd /home/mtk/pdir</code></strong>
+$ <strong class="userinput"><code>gcc -g -Wall -o prog prog.c -Wl,-rpath,/home/mtk/pdir/d1 \</code></strong>
+<strong class="userinput"><code>           -L/home/mtk/pdir/d1 -lx1</code></strong></pre><p>Note that we did not need to mention <code class="literal">libx2.so</code> when linking the main program. Since the linker is
+                        capable of analyzing the <span class="emphasis"><em>rpath</em></span> list in <code class="literal">libx1.so</code>, it can find <code class="literal">libx2.so</code>, and thus is able to satisfy the requirement that
+                        all symbols can be resolved at static link time.</p><p>We can use the following commands to examine <code class="literal">prog</code> and <code class="literal">libx1.so</code> in order
+                        to see the contents of their <span class="emphasis"><em>rpath</em></span> lists:</p><a id="I_programlisting41_d1e112558"/><pre class="programlisting">$ <strong class="userinput"><code>objdump -p prog | grep PATH</code></strong>
+  RPATH       /home/mtk/pdir/d1         libx1.so <em class="lineannotation"><span class="lineannotation">will be sought here at run time</span></em>
+$ <strong class="userinput"><code>objdump -p d1/libx1.so | grep PATH</code></strong>
+  RPATH       /home/mtk/pdir/d2         libx2.so <em class="lineannotation"><span class="lineannotation">will be sought here at run time</span></em></pre><div class="note" title="Note"><h3 class="title">Note</h3><p>We can also view the <span class="emphasis"><em>rpath</em></span> lists by grepping the
+                            output of the <span class="emphasis"><em>readelf --dynamic</em></span> (or, equivalently,
+                                <span class="emphasis"><em>readelf -d</em></span>) command.</p></div><p>We can use the <span class="emphasis"><em>ldd</em></span> command to show the complete set
+                        of dynamic dependencies of <code class="literal">prog</code>:</p><a id="I_programlisting41_d1e112591"/><pre class="programlisting">$ <strong class="userinput"><code>ldd prog</code></strong>
+        libx1.so =&gt; /home/mtk/pdir/d1/libx1.so (0x40017000)
+        libc.so.6 =&gt; /lib/tls/libc.so.6 (0x40024000)
+        libx2.so =&gt; /home/mtk/pdir/d2/libx2.so (0x4014c000)
+        /lib/ld-linux.so.2 =&gt; /lib/ld-linux.so.2 (0x40000000)</pre></div><div class="sect3" title="The ELF DT_RPATH and DT_RUNPATH entries"><div class="titlepage"><div><div><h4 class="title" id="the_elf_dt_underscore_rpath_and_dt_under">The ELF <code class="literal">DT_RPATH</code> and <code class="literal">DT_RUNPATH</code> entries</h4></div></div></div><p>In the original ELF specification, only one type of
+                            <span class="emphasis"><em>rpath</em></span> list could be embedded in an executable or
+                        shared library. This corresponded to the <code class="literal">DT_RPATH</code> tag in an ELF file. Later ELF specifications
+                        deprecated <code class="literal">DT_RPATH</code>, and introduced a new
+                        tag, <code class="literal">DT_RUNPATH</code>, for representing
+                            <span class="emphasis"><em>rpath</em></span> lists. The difference between these two types
+                        of <span class="emphasis"><em>rpath</em></span> lists is their relative precedence with
+                        respect to the <code class="literal">LD_LIBRARY_PATH</code>
+                        environment variable when the dynamic linker searches for shared libraries
+                        at run time: <code class="literal">DT_RPATH</code> has higher
+                        precedence, while <code class="literal">DT_RUNPATH</code> has lower
+                        precedence (refer to <a class="xref" href="ch41.html#finding_shared_libraries_at_run_time" title="Finding Shared Libraries at Run Time">Finding Shared Libraries at Run Time</a>).<a id="IDX-CHP-41-5949" class="indexterm"/><a id="IDX-CHP-41-5950" class="indexterm"/><a id="IDX-CHP-41-5951" class="indexterm"/><a id="IDX-CHP-41-5952" class="indexterm"/></p><p>By default, the linker creates the <span class="emphasis"><em>rpath</em></span> list as a
+                            <code class="literal">DT_RPATH</code> tag. To have the linker
+                        instead create the <span class="emphasis"><em>rpath</em></span> list as a <code class="literal">DT_RUNPATH</code> entry, we must additionally employ
+                        the <span class="emphasis"><em>—enable-new-dtags (enable new dynamic tags)</em></span> linker
+                        option. If we rebuild our program using this option, and inspect the
+                        resulting executable file with <span class="emphasis"><em>objdump</em></span>, we see the
+                        following:</p><a id="I_programlisting41_d1e112682"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -g -Wall -o prog prog.c -Wl,--enable-new-dtags \</code></strong>
+        <strong class="userinput"><code>-Wl,-rpath,/home/mtk/pdir/d1 -L/home/mtk/pdir/d1 -lx1</code></strong>
+$ <strong class="userinput"><code>objdump -p prog | grep PATH</code></strong>
+  RPATH       /home/mtk/pdir/d1
+  RUNPATH     /home/mtk/pdir/d1</pre><p>As can be seen, the executable contains both <code class="literal">DT_RPATH</code> and <code class="literal">DT_RUNPATH</code>
+                        tags. The linker duplicates the <span class="emphasis"><em>rpath</em></span> list in this way
+                        for the benefit of older dynamic linkers that may not understand the
+                            <code class="literal">DT_RUNPATH</code> tag. (Support for <code class="literal">DT_RUNPATH</code> was added in version 2.2 of
+                            <span class="emphasis"><em>glibc</em></span>.) Dynamic linkers that understand the
+                            <code class="literal">DT_RUNPATH</code> tag ignore the <code class="literal">DT_RPATH</code> tag (see <a class="xref" href="ch41.html#finding_shared_libraries_at_run_time" title="Finding Shared Libraries at Run Time">Finding Shared Libraries at Run Time</a>).</p></div><div class="sect3" title="Using $ORIGIN in rpath"><div class="titlepage"><div><div><h4 class="title" id="using_dollar_origin_in_rpath">Using <code class="literal">$ORIGIN</code> in
+                            <span class="emphasis"><em>rpath</em></span></h4></div></div></div><p>Suppose that we want to distribute an application that uses some of its
+                        own shared libraries, but we don’t want to require the user to install the
+                        libraries in one of the standard directories. Instead, we would like to
+                        allow the user to unpack the application under an arbitrary directory of
+                        their choice and then immediately be able to run the application. The
+                        problem is that the application has no way of determining where its shared
+                        libraries are located, unless it requests the user to set <code class="literal">LD_LIBRARY_PATH</code> or we require the user to run
+                        some sort of installation script that identifies the required directories.
+                        Neither of these approaches is desirable.</p><p>To get around this problem, the dynamic linker is built to understand a
+                        special string, <code class="literal">$ORIGIN</code> (or,
+                        equivalently, <code class="literal">${ORIGIN}</code>), in an
+                            <span class="emphasis"><em>rpath</em></span> specification. The dynamic linker interprets
+                        this string to mean “the directory containing the application.” This means
+                        that we can, for example, build an application with the following
+                        command:</p><a id="I_programlisting41_d1e112746"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -Wl,-rpath,'$ORIGIN'/lib</code></strong> ...</pre><p>This presumes that at run time the application’s shared libraries will
+                        reside in the subdirectory <code class="literal">lib</code> under the
+                        directory that contains the application executable. We can then provide the
+                        user with a simple installation package that contains the application and
+                        associated libraries, and the user can install the package in any location
+                        and then run the application (i.e., a so-called “turn-key
+                        application”).</p></div></div></div><div class="sect1" title="Finding Shared Libraries at Run Time"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="finding_shared_libraries_at_run_time">Finding Shared Libraries at Run Time</h2></div></div></div><p>When resolving library dependencies, the dynamic linker first inspects each
+                dependency string to see if it contains a slash (<code class="literal">/</code>), which can occur if we specified an explicit library pathname when
+                linking the executable. If a slash is found, then the dependency string is
+                interpreted as a pathname (either absolute or relative), and the library is loaded
+                using that pathname. Otherwise, the dynamic linker searches for the shared library
+                using the following rules:<a id="IDX-CHP-41-5953" class="indexterm"/><a id="IDX-CHP-41-5954" class="indexterm"/><a id="IDX-CHP-41-5955" class="indexterm"/><a id="IDX-CHP-41-5956" class="indexterm"/><a id="IDX-CHP-41-5957" class="indexterm"/><a id="IDX-CHP-41-5958" class="indexterm"/><a id="IDX-CHP-41-5959" class="indexterm"/><a id="IDX-CHP-41-5960" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>If the executable has any directories listed in its <code class="literal">DT_RPATH</code> run-time library path list
+                            (<span class="emphasis"><em>rpath</em></span>) and the executable does
+                            <span class="emphasis"><em>not</em></span> contain a <code class="literal">DT_RUNPATH</code> list, then these directories are searched (in the
+                        order that they were supplied when linking the program).</p></li><li class="listitem"><p>If the <code class="literal">LD_LIBRARY_PATH</code> environment
+                        variable is defined, then each of the colon-separated directories listed in
+                        its value is searched in turn. If the executable is a set-user-ID or
+                        set-group-ID program, then <code class="literal">LD_LIBRARY_PATH</code> is ignored. This is a security measure to
+                        prevent users from tricking the dynamic linker into loading a private
+                        version of a library with the same name as a library required by the
+                            executable.<a id="IDX-CHP-41-5961" class="indexterm"/><a id="IDX-CHP-41-5962" class="indexterm"/></p></li><li class="listitem"><p>If the executable has any directories listed in its <code class="literal">DT_RUNPATH</code> run-time library path list, then
+                        these directories are searched (in the order that they were supplied when
+                        linking the program).</p></li><li class="listitem"><p>The file <code class="literal">/etc/ld.so.cache</code> is checked to
+                        see if it contains an entry for the library.</p></li><li class="listitem"><p>The directories <code class="literal">/lib</code> and <code class="literal">/usr/lib</code> are searched (in that order).</p></li></ol></div></div><div class="sect1" title="Run-Time Symbol Resolution"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="run-time_symbol_resolution">Run-Time Symbol Resolution</h2></div></div></div><p>Suppose that a global symbol (i.e., a function or variable) is defined in multiple
+                locations, such as in an executable and in a shared library, or in multiple shared
+                libraries. How is a reference to that symbol resolved?</p><p>For example, suppose that we have a main program and a shared library, both of
+                which define a global function, <span class="emphasis"><em>xyz()</em></span>, and another function
+                within the shared library calls <span class="emphasis"><em>xyz()</em></span>, as shown in <a class="xref" href="ch41.html#resolving_a_global_symbol_reference" title="Figure 41-5. Resolving a global symbol reference">Figure 41-5</a>.</p><div class="figure"><a id="resolving_a_global_symbol_reference"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject41_d1e112874"/><img src="figs/web/41-5_SHLIBS-A-symbol-res.png.jpg" alt="Resolving a global symbol reference"/></div></div><div class="figure-title">Figure 41-5. Resolving a global symbol reference</div></div><p>When we build the shared library and the executable program, and then run the
+                program, this is what we see:</p><a id="I_programlisting41_d1e112881"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -g -c -fPIC -Wall -c foo.c</code></strong>
+$ <strong class="userinput"><code>gcc -g -shared -o libfoo.so foo.o</code></strong>
+$ <strong class="userinput"><code>gcc -g -o prog prog.c libfoo.so</code></strong>
+$<strong class="userinput"><code>LD_LIBRARY_PATH=. ./prog</code></strong>
+main-xyz</pre><p>From the last line of output, we can see that the definition of
+                    <span class="emphasis"><em>xyz()</em></span> in the main program overrides (interposes) the one in
+                the shared library.</p><p>Although this may at first appear surprising, there is a good historical reason
+                why things are done this way. The first shared library implementations were designed
+                so that the default semantics for symbol resolution exactly mirrored those of
+                applications linked against static equivalents of the same libraries. This means
+                that the following semantics apply:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>A definition of a global symbol in the main program overrides a definition
+                        in a library.</p></li><li class="listitem"><p>If a global symbol is defined in multiple libraries, then a reference to
+                        that symbol is bound to the first definition found by scanning libraries in
+                        the left-to-right order in which they were listed on the static link command
+                        line.</p></li></ul></div><p>Although these semantics make the transition from static to shared libraries
+                relatively straightforward, they can cause some problems. The most significant
+                problem is that these semantics conflict with the model of a shared library as
+                implementing a self-contained subsystem. By default, a shared library can’t
+                guarantee that a reference to one of its own global symbols will actually be bound
+                to the library’s definition of that symbol. Consequently, the properties of a shared
+                library can change when it is aggregated into a larger unit. This can lead to
+                applications breaking in unexpected ways, and also makes it difficult to perform
+                divide-and-conquer debugging (i.e., trying to reproduce a problem using fewer or
+                different shared libraries).</p><p>In the above scenario, if we wanted to ensure that the invocation of
+                    <span class="emphasis"><em>xyz()</em></span> in the shared library actually called the version of
+                the function defined within the library, then we could use the
+                    <span class="emphasis"><em>-Bsymbolic</em></span> linker option when building the shared
+                library:</p><a id="I_programlisting41_d1e112920"/><pre class="programlisting">$ <strong class="userinput"><code>gcc -g -c -fPIC -Wall -c foo.c</code></strong>
+$ <strong class="userinput"><code>gcc -g -shared -Wl,-Bsymbolic -o libfoo.so foo.o</code></strong>
+$ <strong class="userinput"><code>gcc -g -o prog prog.c libfoo.so</code></strong>
+$<strong class="userinput"><code>LD_LIBRARY_PATH=. ./prog</code></strong>
+foo-xyz</pre><p>The <span class="emphasis"><em>-Bsymbolic</em></span> linker option specifies that references to
+                global symbols within a shared library should be preferentially bound to definitions
+                (if they exist) within that library. (Note that, regardless of this option, calling
+                    <span class="emphasis"><em>xyz()</em></span> from the main program would always invoke the version
+                of <span class="emphasis"><em>xyz()</em></span> defined in the main program.)</p></div><div class="sect1" title="Using a Static Library Instead of a Shared Library"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="using_a_static_library_instead_of_a_shar">Using a Static Library Instead of a Shared Library</h2></div></div></div><p>Although it is almost always preferable to use shared libraries, there are
+                occasional situations where static libraries may be appropriate. In particular, the
+                fact that a statically linked application contains all of the code that it requires
+                at run time can be advantageous. For example, static linking is useful if the user
+                can’t, or doesn’t wish to, install a shared library on the system where the program
+                is to be used, or if the program is to be run in an environment (perhaps a
+                    <span class="emphasis"><em>chroot</em></span> jail, for example) where shared libraries are
+                unavailable. In addition, even a compatible shared library upgrade may
+                unintentionally introduce a bug that breaks an application. By linking an
+                application statically, we can ensure that it is immune to changes in the shared
+                libraries on a system and that it has all of the code it requires to run (at the
+                expense of a larger program size, and consequent increased disk and memory
+                    requirements).<a id="IDX-CHP-41-5963" class="indexterm"/><a id="IDX-CHP-41-5964" class="indexterm"/></p><p>By default, where the linker has a choice of a shared and a static library of the
+                same name (e.g., we link using <span class="emphasis"><em>-Lsomedir -ldemo</em></span>, and both
+                    <code class="literal">libdemo.so</code> and <code class="literal">libdemo.a</code> exist), the shared version of the library is used. To force
+                usage of the static version of the library, we may do one of the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Specify the pathname of the static library (including the <code class="literal">.a</code> extension) on the <span class="emphasis"><em>gcc</em></span>
+                        command line.</p></li><li class="listitem"><p>Specify the <span class="emphasis"><em>-static</em></span> option to
+                            <span class="emphasis"><em>gcc</em></span>.</p></li><li class="listitem"><p>Use the <span class="emphasis"><em>gcc</em></span> options <span class="emphasis"><em>-Wl,-Bstatic</em></span>
+                        and <span class="emphasis"><em>-Wl,-Bdynamic</em></span> to explicitly toggle the linker’s
+                        choice between static and shared libraries. These options can be
+                        intermingled with <span class="emphasis"><em>-l</em></span> options on the
+                            <span class="emphasis"><em>gcc</em></span> command line. The linker processes the options
+                        in the order in which they are specified.</p></li></ul></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id40">Summary</h2></div></div></div><p>An object library is an aggregation of compiled object modules that can be
+                employed by programs that are linked against the library. Like other UNIX
+                implementations, Linux provides two types of object libraries: static libraries,
+                which were the only type of library available under early UNIX systems, and the more
+                modern shared libraries.</p><p>Because they provide several advantages over static libraries, shared libraries
+                are the predominant type of library in use on contemporary UNIX systems. The
+                advantages of shared libraries spring primarily from the fact that when a program is
+                linked against the library, copies of the object modules required by the program are
+                not included in the resulting executable. Instead, the (static) linker merely
+                includes information in the executable file about the shared libraries that are
+                required at run time. When the file is executed, the dynamic linker uses this
+                information to load the required shared libraries. At run time, all programs using
+                the same shared library share a single copy of that library in memory. Since shared
+                libraries are not copied into executable files, and a single memory-resident copy of
+                the shared library is employed by all programs at run time, shared libraries reduce
+                the amount of disk space and memory required by the system.</p><p>The shared library soname provides a level of indirection in resolving shared
+                library references at run time. If a shared library has a soname, then this name,
+                rather than the library’s real name, is recorded in the resulting executable
+                produced by the static linker. A versioning scheme, whereby a shared library is
+                given a real name of the form <code class="literal">lib</code><span class="emphasis"><em>name.so.major-id.minor-id</em></span>, while the soname
+                has the form <code class="literal">lib</code><span class="emphasis"><em>name.so.major-id</em></span>, allows for the creation of
+                programs that automatically employ the latest minor version of the shared library
+                (without requiring the programs to be relinked), while also allowing for the
+                creation of new, incompatible major versions of the library.</p><p>In order to find a shared library at run time, the dynamic linker follows a
+                standard set of search rules, which include searching a set of directories (e.g.,
+                    /<code class="literal">lib</code> and /<code class="literal">usr/lib</code>) in which most shared libraries are installed.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id55"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id56">Further information</h4></div></div></div><p>Various information related to static and shared libraries can be found in
+                        the <span class="emphasis"><em>ar(1)</em></span>, <span class="emphasis"><em>gcc(1)</em></span>,
+                            <span class="emphasis"><em>ld(1)</em></span>, <span class="emphasis"><em>ldconfig(8)</em></span>,
+                            <span class="emphasis"><em>ld.so(8)</em></span>, <span class="emphasis"><em>dlopen(3)</em></span>, and
+                            <span class="emphasis"><em>objdump(1)</em></span> manual pages and in the
+                            <span class="emphasis"><em>info</em></span> documentation for <span class="emphasis"><em>ld</em></span> and
+                            <span class="emphasis"><em>readelf</em></span>. [Drepper, 2004 (b)] covers many of the
+                        finer details of writing shared libraries on Linux. Further useful
+                        information can also be found in David Wheeler’s <span class="emphasis"><em>Program Library
+                            HOWTO</em></span>, which is online at the LDP web site, <a class="ulink" href="http://www.tldp.org/" target="_top">http://www.tldp.org/</a>. The GNU shared library scheme has many
+                        similarities to that implemented in Solaris, and therefore it is worth
+                        reading Sun’s <span class="emphasis"><em>Linker and Libraries Guide</em></span> (available at
+                            <a class="ulink" href="http://docs.sun.com/" target="_top">http://docs.sun.com/</a>) for further information and
+                        examples. [Levine, 2000] provides an introduction to the operation of static
+                        and dynamic linkers.<a id="IDX-CHP-41-5965" class="indexterm"/><a id="IDX-CHP-41-5966" class="indexterm"/><a id="IDX-CHP-41-5967" class="indexterm"/><a id="IDX-CHP-41-5968" class="indexterm"/><a id="IDX-CHP-41-5969" class="indexterm"/><a id="IDX-CHP-41-5970" class="indexterm"/></p><p>Information about GNU <span class="emphasis"><em>Libtool</em></span>, a tool that shields
+                        the programmer from the implementation-specific details of building shared
+                        libraries, can be found online at <a class="ulink" href="http://www.gnu.org/software/libtool" target="_top">http://www.gnu.org/software/libtool</a> and in [Vaughan et al.,
+                        2000].</p><p>The document <span class="emphasis"><em>Executable and Linking Format</em></span>, from the
+                            <span class="emphasis"><em>Tools Interface Standards</em></span> committee, provides
+                        details on ELF. This document can be found online at <a class="ulink" href="http://refspecs.freestandards.org/elf/elf.pdf" target="_top">http://refspecs.freestandards.org/elf/elf.pdf</a>. [Lu, 1995] also
+                        provides a lot of useful detail on ELF.</p></div></div></div><div class="sect1" title="Exercise"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercise-id12">Exercise</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Try compiling a program with and without the <span class="emphasis"><em>-static</em></span>
+                        option, to see the difference in size between an executable dynamically
+                        linked with the C library and one that is linked against the static version
+                        of the C library.</p></li></ol></div></div></section></body></html>

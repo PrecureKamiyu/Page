@@ -1,0 +1,925 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 64. Pseudoterminals</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch63.html" title="Chapter 63. Alternative I/O Models"/><link rel="next" href="apa.html" title="Appendix A. Tracing System Calls"/></head><body><section class="chapter" title="Chapter 64. Pseudoterminals" epub:type="chapter" id="pseudoterminals-id1"><div class="titlepage"><div><div><h2 class="title">Chapter 64. Pseudoterminals</h2></div></div></div><p>A <span class="emphasis"><em>pseudoterminal</em></span> is a virtual device that provides an IPC
+            channel. On one end of the channel is a program that expects to be connected to a
+            terminal device. On the other end is a program that drives the terminal-oriented program
+            by using the channel to send it input and read its output.<a id="IDX-CHP-64-8785" class="indexterm"/></p><p>This chapter describes the use of pseudoterminals, showing how they are employed in
+            applications such as terminal emulators, the <span class="emphasis"><em>script(1)</em></span> program, and
+            programs such as <span class="emphasis"><em>ssh</em></span>, which provide network login services.</p><div class="sect1" title="Overview"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="overview-id22">Overview</h2></div></div></div><p><a class="xref" href="ch64.html#the_problem_colon_how_to_operate_a_termi" title="Figure 64-1. The problem: how to operate a terminal-oriented program over a network?">Figure 64-1</a> illustrates one of the
+                problems that pseudoterminals help us solve: how can we enable a user on one host to
+                operate a terminal-oriented program (e.g., <span class="emphasis"><em>vi</em></span>) on another host
+                connected via a network?</p><p>As shown in the diagram, by permitting communication over a network, sockets
+                provide part of the machinery needed to solve this problem. However, we can’t
+                connect the standard input, output, and error of a terminal-oriented program
+                directly to a socket. This is because a terminal-oriented program expects to be
+                connected to a terminal—to be able to perform the terminal-oriented operations
+                described in <a class="xref" href="ch34.html" title="Chapter 34. Process Groups, Sessions, and Job Control">Chapter 34</a> and <a class="xref" href="ch62.html" title="Chapter 62. Terminals">Chapter 62</a>. Such operations include placing the terminal in
+                noncanonical mode, turning echoing on and off, and setting the terminal foreground
+                process group. If a program tries to perform these operations on a socket, then the
+                relevant system calls will fail.</p><p>Furthermore, a terminal-oriented program expects a terminal driver to perform
+                certain kinds of processing of its input and output. For example, in canonical mode,
+                when the terminal driver sees the end-of-file character (normally
+                    <span class="emphasis"><em>Control-D</em></span>) at the start of a line, it causes the next
+                    <span class="emphasis"><em>read()</em></span> to return no data.</p><p>Finally, a terminal-oriented program must have a controlling terminal. This allows
+                the program to obtain a file descriptor for the controlling terminal by opening
+                    <code class="literal">/dev/tty</code>, and also makes it possible to
+                generate job-control and terminal-related signals (e.g., <code class="literal">SIGTSTP</code>, <code class="literal">SIGTTIN</code>, and <code class="literal">SIGINT</code>) for the program.</p><p>From this description, it should be clear that the definition of a
+                terminal-oriented program is quite broad. It encompasses a wide range of programs
+                that we would normally run in an interactive terminal session.</p><div class="figure"><a id="the_problem_colon_how_to_operate_a_termi"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject64_d1e173841"/><img src="figs/web/64-1_PTY-problem.png.jpg" alt="The problem: how to operate a terminal-oriented program over a network?"/></div></div><div class="figure-title">Figure 64-1. The problem: how to operate a terminal-oriented program over a
+                    network?</div></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="the_pseudoterminal_master_and_slave"/></div></div></div><div class="sect3" title="The pseudoterminal master and slave devices"><div class="titlepage"><div><div><h4 class="title" id="the_pseudoterminal_master_and_slave-id1">The pseudoterminal master and slave devices</h4></div></div></div><p>A pseudoterminal provides the missing link for creating a network
+                        connection to a terminal-oriented program. A pseudoterminal is a pair of
+                        connected virtual devices: a <span class="emphasis"><em>pseudoterminal master</em></span> and
+                        a <span class="emphasis"><em>pseudoterminal slave</em></span>, sometimes jointly referred to
+                        as a <span class="emphasis"><em>pseudoterminal pair</em></span>. A pseudoterminal pair
+                        provides an IPC channel somewhat like a bidirectional pipe—two processes can
+                        open the master and slave and then transfer data in either direction through
+                        the pseudoterminal.<a id="IDX-CHP-64-8788" class="indexterm"/><a id="IDX-CHP-64-8786" class="indexterm"/><a id="IDX-CHP-64-8787" class="indexterm"/></p><p>The key point about a pseudoterminal is that the slave device appears just
+                        like a standard terminal. All of the operations that can be applied to a
+                        terminal device can also be applied to a pseudoterminal slave device. Some
+                        of these operations aren’t meaningful for a pseudoterminal (e.g., setting
+                        the terminal line speed or parity), but that’s okay, because the
+                        pseudoterminal slave silently ignores them.</p></div><div class="sect3" title="How programs use pseudoterminals"><div class="titlepage"><div><div><h4 class="title" id="how_programs_use_pseudoterminals">How programs use pseudoterminals</h4></div></div></div><p><a class="xref" href="ch64.html#two_programs_communicating_via_a_pseudot" title="Figure 64-2. Two programs communicating via a pseudoterminal">Figure 64-2</a> shows how two
+                        programs typically employ a pseudoterminal. (The abbreviation
+                            <span class="emphasis"><em>pty</em></span> in this diagram is a commonly used shorthand
+                        for <span class="emphasis"><em>pseudoterminal</em></span>, and we employ this abbreviation in
+                        various diagrams and function names in this chapter.) The standard input,
+                        output, and error of the terminal-oriented program are connected to the
+                        pseudoterminal slave, which is also the controlling terminal for the
+                        program. On the other side of the pseudoterminal, a driver program acts as a
+                        proxy for the user, supplying input to the terminal-oriented program and
+                        reading that program’s output.<a id="IDX-CHP-64-8789" class="indexterm"/><a id="IDX-CHP-64-8790" class="indexterm"/><a id="IDX-CHP-64-8791" class="indexterm"/><a id="IDX-CHP-64-8792" class="indexterm"/></p><div class="figure"><a id="two_programs_communicating_via_a_pseudot"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject64_d1e173914"/><img src="figs/web/64-2_PTY-pty-scale90.png.jpg" alt="Two programs communicating via a pseudoterminal"/></div></div><div class="figure-title">Figure 64-2. Two programs communicating via a pseudoterminal</div></div><p>Typically, the driver program is simultaneously reading from and writing
+                        to another I/O channel. It is acting as a relay, passing data in both
+                        directions between the pseudoterminal and another program. In order to do
+                        this, the driver program must simultaneously monitor input arriving from
+                        either direction. Typically, this is done using I/O multiplexing
+                            (<span class="emphasis"><em>select()</em></span> or <span class="emphasis"><em>poll()</em></span>), or using
+                        a pair of processes or threads to perform data transfer in each
+                        direction.</p><p>An application that uses a pseudoterminal typically does so as
+                        follows:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>The driver program opens the pseudoterminal master device.</p></li><li class="listitem"><p>The driver program calls <span class="emphasis"><em>fork()</em></span> to create a
+                                child process. The child performs the following steps:</p><div class="orderedlist"><ol class="orderedlist" type="a"><li class="listitem"><p>Call <span class="emphasis"><em>setsid()</em></span> to start a new session,
+                                        of which the child is the session leader (Section 34.3).
+                                        This step also causes the child to lose its controlling
+                                            terminal.<a id="IDX-CHP-64-8793" class="indexterm"/></p></li><li class="listitem"><p>Open the pseudoterminal slave device that corresponds to
+                                        the master device. Since the child process is a session
+                                        leader, and it doesn’t have a controlling terminal, the
+                                        pseudoterminal slave becomes the controlling terminal for
+                                        the child process.</p></li><li class="listitem"><p>Use <span class="emphasis"><em>dup()</em></span> (or similar) to duplicate
+                                        the file descriptor for the slave device on standard input,
+                                        output, and error.</p></li><li class="listitem"><p>Call <span class="emphasis"><em>exec()</em></span> to start the
+                                        terminal-oriented program that is to be connected to the
+                                        pseudoterminal slave.</p></li></ol></div></li></ol></div><p>At this point, the two programs can now communicate via the
+                        pseudoterminal. Anything that the driver program writes to the master
+                        appears as input to the terminal-oriented program on the slave, and anything
+                        that the terminal-oriented program writes to the slave can be read by the
+                        driver program on the master. We consider further details of pseudoterminal
+                        I/O in Section 64.5.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Pseudoterminals can also be used to connect an arbitrary pair of
+                            processes (i.e., not necessarily a parent and child). All that is
+                            required is that the process that opens the pseudoterminal master
+                            informs the other process of the name of the corresponding slave device,
+                            perhaps by writing that name to a file or by transmitting it using some
+                            other IPC mechanism. (When we use <span class="emphasis"><em>fork()</em></span> in the
+                            manner described above, the child automatically inherits sufficient
+                            information from the parent to enable it to determine the name of the
+                            slave.)</p></div><p>So far, our discussion of the use of pseudoterminals has been abstract.
+                            <a class="xref" href="ch64.html#how_ssh_uses_a_pseudoterminal" title="Figure 64-3. How ssh uses a pseudoterminal">Figure 64-3</a> shows a specific
+                        example: the use of a pseudoterminal by <span class="emphasis"><em>ssh</em></span>, an
+                        application that allows a user to securely run a login session on a remote
+                        system connected via a network. (In effect, this diagram combines the
+                        information from <a class="xref" href="ch64.html#the_problem_colon_how_to_operate_a_termi" title="Figure 64-1. The problem: how to operate a terminal-oriented program over a network?">Figure 64-1</a>
+                        and <a class="xref" href="ch64.html#two_programs_communicating_via_a_pseudot" title="Figure 64-2. Two programs communicating via a pseudoterminal">Figure 64-2</a>.) On the
+                        remote host, the driver program for the pseudoterminal master is the
+                            <span class="emphasis"><em>ssh</em></span> server (<span class="emphasis"><em>sshd</em></span>), and the
+                        terminal-oriented program connected to the pseudoterminal slave is the login
+                        shell. The <span class="emphasis"><em>ssh</em></span> server is the glue that connects the
+                        pseudoterminal via a socket to the <span class="emphasis"><em>ssh</em></span> client. Once all
+                        of the details of logging in have been completed, the primary purpose of the
+                            <span class="emphasis"><em>ssh</em></span> server and client is to relay characters in
+                        either direction between the user’s terminal on the local host and the shell
+                        on the remote host.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>We omit describing many details of the <span class="emphasis"><em>ssh</em></span> client
+                            and server. For example, these programs encrypt the data transmitted in
+                            either direction across the network. We show a single
+                                <span class="emphasis"><em>ssh</em></span> server process on the remote host, but, in
+                            fact, the <span class="emphasis"><em>ssh</em></span> server is a concurrent network
+                            server. It becomes a daemon and creates a passive TCP socket to listen
+                            for incoming connections from <span class="emphasis"><em>ssh</em></span> clients. For each
+                            connection, the master <span class="emphasis"><em>ssh</em></span> server forks a child
+                            process that handles all of the details for a single client login
+                            session. (We refer to this child process as the <span class="emphasis"><em>ssh</em></span>
+                            server in <a class="xref" href="ch64.html#how_ssh_uses_a_pseudoterminal" title="Figure 64-3. How ssh uses a pseudoterminal">Figure 64-3</a>.) Aside from
+                            the details of pseudoterminal setup described above, the
+                                <span class="emphasis"><em>ssh</em></span> server child authenticates the user,
+                            updates the login accounting files on the remote host (as described in
+                                <a class="xref" href="ch40.html" title="Chapter 40. Login Accounting">Chapter 40</a>), and then execs the login
+                            shell.</p></div><div class="figure"><a id="how_ssh_uses_a_pseudoterminal"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject64_d1e174035"/><img src="figs/web/64-3_PTY-ssh-login.png.jpg" alt="How ssh uses a pseudoterminal"/></div></div><div class="figure-title">Figure 64-3. How <span class="emphasis"><em>ssh</em></span> uses a pseudoterminal</div></div><p>In some cases, multiple processes may be connected to the slave side of
+                        the pseudoterminal. Our <span class="emphasis"><em>ssh</em></span> example illustrates this
+                        point. The session leader for the slave is a shell, which creates process
+                        groups to execute the commands entered by the remote user. All of these
+                        processes have the pseudoterminal slave as their controlling terminal. As
+                        with a conventional terminal, one of these process groups can be the
+                        foreground process group for the pseudoterminal slave, and only this process
+                        group is allowed to read from the slave and (if the <code class="literal">TOSTOP</code> bit has been set) write to it.</p></div><div class="sect3" title="Applications of pseudoterminals"><div class="titlepage"><div><div><h4 class="title" id="applications_of_pseudoterminals">Applications of pseudoterminals</h4></div></div></div><p>Pseudoterminals are also used in many applications other than network
+                        services. Examples include the following:<a id="IDX-CHP-64-8794" class="indexterm"/><a id="IDX-CHP-64-8795" class="indexterm"/><a id="IDX-CHP-64-8796" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>expect(1)</em></span> program uses a pseudoterminal
+                                to allow an interactive terminal-oriented program to be driven from
+                                a script file.</p></li><li class="listitem"><p>Terminal emulators such as <span class="emphasis"><em>xterm</em></span> employ
+                                pseudoterminals to provide the terminal-related functionality that
+                                goes with a terminal window.</p></li><li class="listitem"><p>The <span class="emphasis"><em>screen(1)</em></span> program uses pseudoterminals to
+                                multiplex a single physical terminal (or terminal window) between
+                                multiple processes (e.g., multiple shell sessions).</p></li><li class="listitem"><p>Pseudoterminals are used in the <span class="emphasis"><em>script(1)</em></span>
+                                program, which records all of the input and output that occurs
+                                during a shell session.</p></li><li class="listitem"><p>Sometimes a pseudoterminal is useful to circumvent the default
+                                block buffering performed by the <span class="emphasis"><em>stdio</em></span>
+                                functions when writing output to a disk file or pipe, as opposed to
+                                the line buffering used for terminal output. (We consider this point
+                                further in Exercise 64-7.)</p></li></ul></div></div><div class="sect3" title="System V (UNIX 98) and BSD pseudoterminals"><div class="titlepage"><div><div><h4 class="title" id="system_v_open_parenthesis_unix_98_close">System V (UNIX 98) and BSD pseudoterminals</h4></div></div></div><p>BSD and System V provided different interfaces for finding and opening the
+                        two halves of a pseudoterminal pair. The BSD pseudoterminal implementation
+                        was historically the better known, since it was used with many sockets-based
+                        network applications. For compatibility reasons, many UNIX implementations
+                        eventually came to support both styles of pseudoterminals.<a id="IDX-CHP-64-8797" class="indexterm"/><a id="IDX-CHP-64-8798" class="indexterm"/></p><p>The System V interface is somewhat simpler to use than the BSD interface,
+                        and the SUSv3 specification of pseudoterminals is based on the System V
+                        interface. (A pseudoterminal specification first appeared in SUSv1.) For
+                        historical reasons, on Linux systems, this type of pseudoterminal is
+                        commonly referred to as a <span class="emphasis"><em>UNIX 98</em></span> pseudoterminal, even
+                        though the UNIX 98 standard (i.e., SUSv2) required pseudoterminals to be
+                        STREAMS-based, and the Linux implementation of pseudoterminals is not.
+                        (SUSv3 doesn’t require a STREAMS-based implementation.)</p><p>Early versions of Linux supported only BSD-style pseudoterminals, but,
+                        since kernel 2.2, Linux has supported both types of pseudoterminals. In this
+                        chapter, we focus on UNIX 98 pseudoterminals. We describe the differences
+                        for BSD pseudoterminals in Section 64.8.</p></div></div></div><div class="sect1" title="UNIX 98 Pseudoterminals"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="unix_98_pseudoterminals">UNIX 98 Pseudoterminals</h2></div></div></div><p>Bit by bit, we’ll work toward the development of a function,
+                    <span class="emphasis"><em>ptyFork()</em></span>, that does most of the work to create the setup
+                shown in <a class="xref" href="ch64.html#two_programs_communicating_via_a_pseudot" title="Figure 64-2. Two programs communicating via a pseudoterminal">Figure 64-2</a>. We’ll then use
+                this function to implement the <span class="emphasis"><em>script(1)</em></span> program. Before doing
+                this though, we look at the various library functions used with UNIX 98
+                    pseudoterminals:<a id="IDX-CHP-64-8799" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>posix_openpt()</em></span> function opens an unused
+                        pseudoterminal master device, returning a file descriptor that is used to
+                        refer to the device in later calls.<a id="IDX-CHP-64-8800" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>grantpt()</em></span> function changes the ownership and
+                        permissions of the slave device corresponding to a pseudoterminal master
+                            device.<a id="IDX-CHP-64-8801" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>unlockpt()</em></span> function unlocks the slave device
+                        corresponding to a pseudoterminal master device, so that the slave device
+                        can be opened.<a id="IDX-CHP-64-8802" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>ptsname()</em></span> function returns the name of the slave
+                        device corresponding to a pseudoterminal master device. The slave device can
+                        then be opened using <span class="emphasis"><em>open()</em></span>.<a id="IDX-CHP-64-8803" class="indexterm"/></p></li></ul></div><div class="sect2" title="Opening an Unused Master: posix_openpt()"><div class="titlepage"><div><div><h3 class="title" id="opening_an_unused_master_colon_posix_und">Opening an Unused Master: <span class="emphasis"><em>posix_openpt()</em></span></h3></div></div></div><p>The <span class="emphasis"><em>posix_openpt()</em></span> function finds and opens an unused
+                    pseudoterminal master device, and returns a file descriptor that can later be
+                    used to refer to this device.<a id="IDX-CHP-64-8804" class="indexterm"/><a id="IDX-CHP-64-8805" class="indexterm"/><a id="IDX-CHP-64-8806" class="indexterm"/></p><a id="I_programlisting64_d1e174211"/><pre class="programlisting">#define _XOPEN_SOURCE 600
+#include &lt;stdlib.h&gt;
+#include &lt;fcntl.h&gt;
+
+int <strong class="userinput"><code>posix_openpt</code></strong>(int <span class="emphasis"><em>flags</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns file descriptor on success, or -1 on error</p></div><p>The <span class="emphasis"><em>flags</em></span> argument is constructed by ORing zero or more
+                    of the following constants together:</p><div class="variablelist"><dl><dt><span class="term">
+                            <code class="literal">O_RDWR</code>
+                        </span></dt><dd><p>Open the device for both reading and writing. Normally, we would
+                                always include this constant in <span class="emphasis"><em>flags</em></span>.</p></dd><dt><span class="term">
+                            <code class="literal">O_NOCTTY</code>
+                        </span></dt><dd><p>Don’t make this terminal the controlling terminal for the process.
+                                On Linux, a pseudoterminal master can’t become a controlling
+                                terminal for a process, regardless of whether the <code class="literal">O_NOCTTY</code> flag is specified when
+                                calling <span class="emphasis"><em>posix_openpt()</em></span>. (This makes sense
+                                because the pseudoterminal master isn’t really a terminal; it is the
+                                other side of a terminal to which the slave is connected.) However,
+                                on some implementations, <code class="literal">O_NOCTTY</code>
+                                is required if we want to prevent a process from acquiring a
+                                controlling terminal as a consequence of opening a pseudoterminal
+                                master device.<a id="IDX-CHP-64-8807" class="indexterm"/><a id="IDX-CHP-64-8808" class="indexterm"/></p></dd></dl></div><p>Like <span class="emphasis"><em>open()</em></span>, <span class="emphasis"><em>posix_openpt()</em></span> uses the
+                    lowest available file descriptor to open the pseudoterminal master.</p><p>Calling <span class="emphasis"><em>posix_openpt()</em></span> also results in the creation of a
+                    corresponding pseudoterminal slave device file in the <code class="literal">/dev/pts</code> directory. We say more about this file when we describe
+                    the <span class="emphasis"><em>ptsname()</em></span> function below.<a id="IDX-CHP-64-8809" class="indexterm"/></p><p>The <span class="emphasis"><em>posix_openpt()</em></span> function is new in SUSv3, and was an
+                    invention of the POSIX committee. In the original System V pseudoterminal
+                    implementation, obtaining an available pseudoterminal master was accomplished by
+                    opening the <span class="emphasis"><em>pseudoterminal master clone device</em></span>, <code class="literal">/dev/ptmx</code>. Opening this virtual device
+                    automatically locates and opens the next unused pseudoterminal master, and
+                    returns a file descriptor for it. This device is provided on Linux, where
+                        <span class="emphasis"><em>posix_openpt()</em></span> is implemented as follows:<a id="IDX-CHP-64-8810" class="indexterm"/></p><a id="I_programlisting64_d1e174307"/><pre class="programlisting">int
+posix_openpt(int flags)
+{
+    return open("/dev/ptmx", flags);
+}</pre><div class="sect3" title="Limits on the number of UNIX 98 pseudoterminals"><div class="titlepage"><div><div><h4 class="title" id="limits_on_the_number_of_unix_98_pseudote">Limits on the number of UNIX 98 pseudoterminals</h4></div></div></div><p>Because each pseudoterminal pair in use consumes a small amount of
+                        nonswappable kernel memory, the kernel imposes a limit on the number of UNIX
+                        98 pseudoterminal pairs on the system. In kernels up to 2.6.3, this limit is
+                        controlled by a kernel configuration option (<code class="literal">CONFIG_UNIX98_PTYS</code>). The default value for this option is
+                        256, but we can change the limit to any value in the range 0 to
+                            2048.<a id="IDX-CHP-64-8811" class="indexterm"/><a id="IDX-CHP-64-8812" class="indexterm"/><a id="IDX-CHP-64-8813" class="indexterm"/><a id="IDX-CHP-64-8814" class="indexterm"/><a id="IDX-CHP-64-8815" class="indexterm"/><a id="IDX-CHP-64-8816" class="indexterm"/></p><p>From Linux 2.6.4 onward, the <code class="literal">CONFIG_UNIX98_PTYS</code> kernel configuration option is discarded
+                        in favor of a more flexible approach. Instead, the limit on the number of
+                        pseudoterminals is defined by the value in the Linux-specific <code class="literal">/proc/sys/kernel/pty/max</code> file. The default
+                        value for this file is 4096, and it can be set to any value up to 1,048,576.
+                        A related read-only file, <code class="literal">/proc/sys/kernel/pty/nr</code>, shows how many UNIX 98
+                        pseudoterminals are currently in use.<a id="IDX-CHP-64-8817" class="indexterm"/></p></div></div><div class="sect2" title="Changing Slave Ownership and Permissions: grantpt()"><div class="titlepage"><div><div><h3 class="title" id="changing_slave_ownership_and_permissions">Changing Slave Ownership and Permissions:
+                    <span class="emphasis"><em>grantpt()</em></span></h3></div></div></div><p>SUSv3 specifies the use of <span class="emphasis"><em>grantpt()</em></span> to change the
+                    ownership and permissions of the slave device that corresponds to the
+                    pseudoterminal master referred to by the file descriptor
+                        <span class="emphasis"><em>mfd</em></span>. On Linux, calling <span class="emphasis"><em>grantpt()</em></span>
+                    is not actually necessary. However, the use of <span class="emphasis"><em>grantpt()</em></span> is
+                    required on some implementations, and portable applications should call it after
+                    calling <span class="emphasis"><em>posix_openpt()</em></span>.</p><a id="I_programlisting64_d1e174389"/><pre class="programlisting">#define _XOPEN_SOURCE 500
+#include &lt;stdlib.h&gt;
+
+int <strong class="userinput"><code>grantpt</code></strong>(int <span class="emphasis"><em>mfd</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>On systems where <span class="emphasis"><em>grantpt()</em></span> is required, this function
+                    creates a child process that executes a set-user-ID-<span class="emphasis"><em>root</em></span>
+                    program. This program, usually called <span class="emphasis"><em>pt_chown</em></span>, performs
+                    the following operations on the pseudoterminal slave device:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>change the ownership of the slave to be the same as the effective user
+                            ID of the calling process;</p></li><li class="listitem"><p>change the group of the slave to <span class="emphasis"><em>tty</em></span>; and</p></li><li class="listitem"><p>change the permissions on the slave so that the owner has read and
+                            write permissions, and group has write permission.</p></li></ul></div><p>The reason for changing the group of the terminal to <span class="emphasis"><em>tty</em></span>
+                    and enabling group write permission is that the <span class="emphasis"><em>wall(1)</em></span> and
+                        <span class="emphasis"><em>write(1)</em></span> programs are set-group-ID programs owned by
+                    the <span class="emphasis"><em>tty</em></span> group.</p><p>On Linux, a pseudoterminal slave is automatically configured in the above
+                    manner, which is why calling <span class="emphasis"><em>grantpt()</em></span> isn’t needed (but
+                    still should be done).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Because it may create a child process, SUSv3 says that the behavior of
+                            <span class="emphasis"><em>grantpt()</em></span> is unspecified if the calling program has
+                        installed a handler for <code class="literal">SIGCHLD</code>.</p></div></div><div class="sect2" title="Unlocking the Slave: unlockpt()"><div class="titlepage"><div><div><h3 class="title" id="unlocking_the_slave_colon_unlockpt_open">Unlocking the Slave: <span class="emphasis"><em>unlockpt()</em></span></h3></div></div></div><p>The <span class="emphasis"><em>unlockpt()</em></span> function removes an internal lock on the
+                    slave corresponding to the pseudoterminal master referred to by the file
+                    descriptor <span class="emphasis"><em>mfd</em></span>. The purpose of this locking mechanism is to
+                    allow the calling process to perform whatever initialization is required for the
+                    pseudoterminal slave (e.g., calling <span class="emphasis"><em>grantpt()</em></span>) before
+                    another process is allowed to open it.<a id="IDX-CHP-64-8819" class="indexterm"/><a id="IDX-CHP-64-8820" class="indexterm"/><a id="IDX-CHP-64-8821" class="indexterm"/><a id="IDX-CHP-64-8822" class="indexterm"/><a id="IDX-CHP-64-8823" class="indexterm"/><a id="IDX-CHP-64-8824" class="indexterm"/><a id="IDX-CHP-64-8818" class="indexterm"/></p><a id="I_programlisting64_d1e174511"/><pre class="programlisting">#define _XOPEN_SOURCE
+#include &lt;stdlib.h&gt;
+
+int <strong class="userinput"><code>unlockpt</code></strong>(int <span class="emphasis"><em>mfd</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>An attempt to open a pseudoterminal slave before it has been unlocked with
+                        <span class="emphasis"><em>unlockpt()</em></span> fails with the error <code class="literal">EIO</code>.</p></div><div class="sect2" title="Obtaining the Name of the Slave: ptsname()"><div class="titlepage"><div><div><h3 class="title" id="obtaining_the_name_of_the_slave_colon_pt">Obtaining the Name of the Slave: <span class="emphasis"><em>ptsname()</em></span></h3></div></div></div><p>The <span class="emphasis"><em>ptsname()</em></span> function returns the name of the
+                    pseudoterminal slave corresponding to the pseudoterminal master referred to by
+                    the file descriptor <span class="emphasis"><em>mfd</em></span>.<a id="IDX-CHP-64-8825" class="indexterm"/></p><a id="I_programlisting64_d1e174547"/><pre class="programlisting">#define _XOPEN_SOURCE
+#include &lt;stdlib.h&gt;
+
+char *<strong class="userinput"><code>ptsname</code></strong>(int <span class="emphasis"><em>mfd</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns pointer to (possibly statically allocated) string on success, or
+                        NULL on error</p></div><p>On Linux (as on most implementations), <span class="emphasis"><em>ptsname()</em></span> returns
+                    a name of the form /<code class="literal">dev/pts/</code><span class="emphasis"><em>nn</em></span>, where <span class="emphasis"><em>nn</em></span> is
+                    replaced by a number that uniquely identifies this pseudoterminal slave.</p><p>The buffer used to return the slave name is normally statically allocated. It
+                    is thus overwritten by subsequent calls to
+                    <span class="emphasis"><em>ptsname()</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The GNU C library provides a reentrant analog of
+                            <span class="emphasis"><em>ptsname()</em></span> in the form of <span class="emphasis"><em>ptsname_r(mfd,
+                            strbuf, buflen)</em></span>. However, this function is nonstandard and is
+                        available on few other UNIX implementations. The <code class="literal">_GNU_SOURCE</code> feature test macro must be defined in order to
+                        obtain the declaration of <span class="emphasis"><em>ptsname_r()</em></span> from <code class="literal">&lt;stdlib.h&gt;</code>.<a id="IDX-CHP-64-8826" class="indexterm"/></p></div><p>Once we have unlocked the slave device with <span class="emphasis"><em>unlockpt()</em></span>,
+                    we can open it using the traditional <span class="emphasis"><em>open()</em></span> system
+                    call.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On System V derivatives that employ STREAMS, it may be necessary to
+                        perform some further steps (pushing STREAMS modules onto the slave device
+                        after opening it). An example of how to perform these steps can be found in
+                        [Stevens &amp; Rago, 2005].<a id="IDX-CHP-64-8827" class="indexterm"/><a id="IDX-CHP-64-8828" class="indexterm"/></p></div></div></div><div class="sect1" title="Opening a Master: ptyMasterOpen()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="opening_a_master_colon_ptymasteropen_ope">Opening a Master: <span class="emphasis"><em>ptyMasterOpen()</em></span></h2></div></div></div><p>We now present a function, <span class="emphasis"><em>ptyMasterOpen()</em></span>, that employs the
+                functions described in the previous sections to open a pseudoterminal master and
+                obtain the name of the corresponding pseudoterminal slave. Our reasons for providing
+                such a function are twofold:<a id="IDX-CHP-64-8830" class="indexterm"/><a id="IDX-CHP-64-8831" class="indexterm"/><a id="IDX-CHP-64-8829" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Most programs perform these steps in exactly the same way, so it is
+                        convenient to encapsulate them in a single function.</p></li><li class="listitem"><p>Our <span class="emphasis"><em>ptyMasterOpen()</em></span> function hides all of the details
+                        that are specific to UNIX 98 pseudoterminals. In Section 64.8, we present a
+                        reimplementation of this function that uses BSD-style pseudoterminals. All
+                        of the code that we present in the remainder of this chapter can work with
+                        either of these implementations.</p></li></ul></div><a id="I_programlisting64_d1e174658"/><pre class="programlisting">#include "pty_master_open.h"
+
+int <strong class="userinput"><code>ptyMasterOpen</code></strong>(char *<span class="emphasis"><em>slaveName</em></span>, size_t <span class="emphasis"><em>snLen</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns file descriptor on success, or -1 on error</p></div><p>The <span class="emphasis"><em>ptyMasterOpen()</em></span> function opens an unused pseudoterminal
+                master, calls <span class="emphasis"><em>grantpt()</em></span> and <span class="emphasis"><em>unlockpt()</em></span> on
+                it, and copies the name of the corresponding pseudoterminal slave into the buffer
+                pointed to by <span class="emphasis"><em>slaveName</em></span>. The caller must specify the amount of
+                space available in this buffer in the argument <span class="emphasis"><em>snLen</em></span>. We show
+                the implementation of this function in <a class="xref" href="ch64.html#implementation_of_ptymasteropen_open_par" title="Example 64-1. Implementation of ptyMasterOpen()">Example 64-1</a>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>It would be equally possible to omit the use of the
+                        <span class="emphasis"><em>slaveName</em></span> and <span class="emphasis"><em>snLen</em></span> arguments, and
+                    have the caller of <span class="emphasis"><em>ptyMasterOpen()</em></span> call
+                        <span class="emphasis"><em>ptsname()</em></span> directly in order to obtain the name of the
+                    pseudoterminal slave. However, we employ the <span class="emphasis"><em>slaveName</em></span> and
+                        <span class="emphasis"><em>snLen</em></span> arguments because BSD pseudoterminals don’t
+                    provide an equivalent of the <span class="emphasis"><em>ptsname()</em></span> function, and our
+                    implementation of the equivalent function for BSD-style pseudoterminals (<a class="xref" href="ch64.html#implementation_of_ptymasteropen_open" title="Example 64-4. Implementation of ptyMasterOpen() using BSD pseudoterminals">Example 64-4</a>) encapsulates the BSD
+                    technique for obtaining the name of the slave.</p></div><div class="example"><a id="implementation_of_ptymasteropen_open_par"/><div class="example-title">Example 64-1. Implementation of <span class="emphasis"><em>ptyMasterOpen()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pty/pty_master_open.c</code></strong>
+#define _XOPEN_SOURCE 600
+#include &lt;stdlib.h&gt;
+#include &lt;fcntl.h&gt;
+#include "pty_master_open.h"            /* Declares ptyMasterOpen() */
+#include "tlpi_hdr.h"
+
+int
+ptyMasterOpen(char *slaveName, size_t snLen)
+{
+    int masterFd, savedErrno;
+    char *p;
+
+    masterFd = posix_openpt(O_RDWR | O_NOCTTY); /* Open pty master */
+    if (masterFd == -1)
+        return -1;
+
+    if (grantpt(masterFd) == -1) {              /* Grant access to slave pty */
+        savedErrno = errno;
+        close(masterFd);                        /* Might change 'errno' */
+        errno = savedErrno;
+        return -1;
+    }
+
+    if (unlockpt(masterFd) == -1) {             /* Unlock slave pty */
+        savedErrno = errno;
+        close(masterFd);                        /* Might change 'errno' */
+        errno = savedErrno;
+        return -1;
+    }
+
+    p = ptsname(masterFd);                      /* Get slave pty name */
+    if (p == NULL) {
+        savedErrno = errno;
+        close(masterFd);                        /* Might change 'errno' */
+        errno = savedErrno;
+        return -1;
+    }
+
+    if (strlen(p) &lt; snLen) {
+        strncpy(slaveName, p, snLen);
+    } else {                    /* Return an error if buffer too small */
+        close(masterFd);
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    return masterFd;
+}
+      <strong class="userinput"><code>pty/pty_master_open.c</code></strong></pre></div></div></div><div class="sect1" title="Connecting Processes with a Pseudoterminal: ptyFork()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="connecting_processes_with_a_pseudotermin">Connecting Processes with a Pseudoterminal:
+                <span class="emphasis"><em>ptyFork()</em></span></h2></div></div></div><p>We are now ready to implement a function that does all of the work of setting up a
+                connection between two processes using a pseudoterminal pair, as shown in <a class="xref" href="ch64.html#two_programs_communicating_via_a_pseudot" title="Figure 64-2. Two programs communicating via a pseudoterminal">Figure 64-2</a>. The
+                    <span class="emphasis"><em>ptyFork()</em></span> function creates a child process that is
+                connected to the parent by a pseudoterminal pair.<a id="IDX-CHP-64-8833" class="indexterm"/><a id="IDX-CHP-64-8834" class="indexterm"/><a id="IDX-CHP-64-8835" class="indexterm"/><a id="IDX-CHP-64-8836" class="indexterm"/><a id="IDX-CHP-64-8837" class="indexterm"/><a id="IDX-CHP-64-8838" class="indexterm"/><a id="IDX-CHP-64-8839" class="indexterm"/><a id="IDX-CHP-64-8840" class="indexterm"/><a id="IDX-CHP-64-8841" class="indexterm"/><a id="IDX-CHP-64-8842" class="indexterm"/><a id="IDX-CHP-64-8843" class="indexterm"/><a id="IDX-CHP-64-8844" class="indexterm"/><a id="IDX-CHP-64-8845" class="indexterm"/><a id="IDX-CHP-64-8846" class="indexterm"/><a id="IDX-CHP-64-8847" class="indexterm"/><a id="IDX-CHP-64-8832" class="indexterm"/></p><a id="I_programlisting64_d1e174847"/><pre class="programlisting">#include "pty_fork.h"
+
+pid_t <strong class="userinput"><code>ptyFork</code></strong>(int *<span class="emphasis"><em>masterFd</em></span>, char *<span class="emphasis"><em>slaveName</em></span>, size_t <span class="emphasis"><em>snLen</em></span>,
+            const struct termios *<span class="emphasis"><em>slaveTermios</em></span>, const struct winsize *<span class="emphasis"><em>slaveWS</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>In parent: returns process ID of child on success, or -1 on error; in
+                    successfully created child: always returns 0</p></div><p>The implementation of <span class="emphasis"><em>ptyFork()</em></span> is shown in <a class="xref" href="ch64.html#implementation_of_ptyfork_open_parenthes" title="Example 64-2. Implementation of ptyFork()">Example 64-2</a>. This function performs the
+                following steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Open a pseudoterminal master using <span class="emphasis"><em>ptyMasterOpen()</em></span>
+                            (<a class="xref" href="ch64.html#implementation_of_ptymasteropen_open_par" title="Example 64-1. Implementation of ptyMasterOpen()">Example 64-1</a>)
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e174887"/><img src="figs/web/U001.png" alt=""/></span>.</p></li><li class="listitem"><p>If the <span class="emphasis"><em>slaveName</em></span> argument is not <code class="literal">NULL</code>, copy the name of the pseudoterminal
+                        slave into this buffer <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e174902"/><img src="figs/web/U002.png" alt=""/></span>. (If <span class="emphasis"><em>slaveName</em></span> is not <code class="literal">NULL</code>, then it must point to a buffer of at
+                        least <span class="emphasis"><em>snLen</em></span> bytes.) The caller can use this name to
+                        update the login accounting files (<a class="xref" href="ch40.html" title="Chapter 40. Login Accounting">Chapter 40</a>), if
+                        appropriate. Updating the login accounting files would be appropriate for
+                        applications that provide login services—for example,
+                            <span class="emphasis"><em>ssh</em></span>, <span class="emphasis"><em>rlogin</em></span>, and
+                            <span class="emphasis"><em>telnet</em></span>. On the other hand, programs such as
+                            <span class="emphasis"><em>script(1)</em></span> (Section 64.6) do not update the login
+                        accounting files, because they don’t provide login services.</p></li><li class="listitem"><p>Call <span class="emphasis"><em>fork()</em></span> to create a child process
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e174938"/><img src="figs/web/U003.png" alt=""/></span>.</p></li><li class="listitem"><p>All that the parent does after the <span class="emphasis"><em>fork()</em></span> is to
+                        ensure that the file descriptor for the pseudoterminal master is returned to
+                        the caller in the integer pointed to by <span class="emphasis"><em>masterFd</em></span>
+                        <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e174953"/><img src="figs/web/U004.png" alt=""/></span>.</p></li><li class="listitem"><p>After the <span class="emphasis"><em>fork()</em></span>, the child performs the following
+                        steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Call <span class="emphasis"><em>setsid()</em></span>, to create a new session
+                                (Section 34.3) <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e174972"/><img src="figs/web/U005.png" alt=""/></span>. The child is the leader of the new session and
+                                loses its controlling terminal (if it had one).<a id="IDX-CHP-64-8848" class="indexterm"/></p></li><li class="listitem"><p>Close the file descriptor for the pseudoterminal master, since it
+                                is not required in the child <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e174984"/><img src="figs/web/U006.png" alt=""/></span>.</p></li><li class="listitem"><p>Open the pseudoterminal slave <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e174993"/><img src="figs/web/U007.png" alt=""/></span>. Since the child lost its controlling terminal
+                                in the previous step, this step causes the pseudoterminal slave to
+                                become the controlling terminal for the child.</p></li><li class="listitem"><p>If the <code class="literal">TIOCSCTTY</code> macro is
+                                defined, perform a <code class="literal">TIOCSCTTY</code>
+                                <span class="emphasis"><em>ioctl()</em></span> operation on the file descriptor for
+                                the pseudoterminal slave <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175011"/><img src="figs/web/U008.png" alt=""/></span>. This code allows our
+                                    <span class="emphasis"><em>ptyFork()</em></span> function to work on BSD
+                                platforms, where a controlling terminal can be acquired only as a
+                                consequence of an explicit <code class="literal">TIOCSCTTY</code> operation (refer to Section 34.4).</p></li><li class="listitem"><p>If the <span class="emphasis"><em>slaveTermios</em></span> argument is non-<code class="literal">NULL</code>, call
+                                    <span class="emphasis"><em>tcsetattr()</em></span> to set the terminal attributes
+                                of the slave to the values in the <span class="emphasis"><em>termios</em></span>
+                                structure pointed to by this argument <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175039"/><img src="figs/web/U009.png" alt=""/></span>. Use of this argument is a convenience for
+                                certain interactive programs (e.g., <span class="emphasis"><em>script(1)</em></span>)
+                                that use a pseudoterminal and need to set the attributes of the
+                                slave device to be the same as those of the terminal under which the
+                                program is run.</p></li><li class="listitem"><p>If the <span class="emphasis"><em>slaveWS</em></span> argument is non-<code class="literal">NULL</code>, perform an
+                                    <span class="emphasis"><em>ioctl()</em></span>
+                                <code class="literal">TIOCSWINSZ</code> operation to set the
+                                window size of the pseudoterminal slave to the values in the
+                                    <span class="emphasis"><em>winsize</em></span> structure pointed to by this
+                                argument <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175068"/><img src="figs/web/U010.png" alt=""/></span>. This step is performed for the same reason as
+                                the previous step.</p></li><li class="listitem"><p>Use <span class="emphasis"><em>dup2()</em></span> to duplicate the slave file
+                                descriptor to be the standard input, output, and error for the child
+                                    <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175080"/><img src="figs/web/U011.png" alt=""/></span>. At this point, the child can now exec an
+                                arbitrary program, and that program can use the standard file
+                                descriptors to communicate with the pseudoterminal. The execed
+                                program can perform all of the usual terminal-oriented operations
+                                that can be performed by a program running on a conventional
+                                terminal.</p></li></ul></div></li></ul></div><p>As with <span class="emphasis"><em>fork()</em></span>, <span class="emphasis"><em>ptyFork()</em></span> returns the
+                process ID of the child in the parent process, 0 in the child process, or -1 on
+                error.</p><p>Eventually, the child process created by <span class="emphasis"><em>ptyFork()</em></span> will
+                terminate. If the parent doesn’t terminate at the same time, then it must wait on
+                the child to eliminate the resulting zombie. However, this step can often be
+                eliminated, since applications that employ pseudoterminals are commonly designed so
+                that the parent does terminate at the same time as the child.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>BSD derivatives provide two related, nonstandard functions for working with
+                    pseudoterminals. The first of these is <span class="emphasis"><em>openpty()</em></span>, which
+                    opens a pseudoterminal pair, returns the file descriptors for the master and
+                    slave, optionally returns the name of the slave device, and optionally sets the
+                    terminal attributes and window size from arguments analogous to
+                        <span class="emphasis"><em>slaveTermios</em></span> and <span class="emphasis"><em>slaveWS</em></span>. The
+                    other function, <span class="emphasis"><em>forkpty()</em></span>, is the same as our
+                        <span class="emphasis"><em>ptyFork()</em></span>, except that it doesn’t provide an analog of
+                    the <span class="emphasis"><em>snLen</em></span> argument. On Linux, both of these functions are
+                    provided by <span class="emphasis"><em>glibc</em></span> and are documented in the
+                        <span class="emphasis"><em>openpty(3)</em></span> manual page.<a id="IDX-CHP-64-8849" class="indexterm"/></p></div><div class="example"><a id="implementation_of_ptyfork_open_parenthes"/><div class="example-title">Example 64-2. Implementation of <span class="emphasis"><em>ptyFork()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pty/pty_fork.c</code></strong>
+    #include &lt;fcntl.h&gt;
+    #include &lt;termios.h&gt;
+    #include &lt;sys/ioctl.h&gt;
+    #include "pty_master_open.h"
+    #include "pty_fork.h"                   /* Declares ptyFork() */
+    #include "tlpi_hdr.h"
+
+    #define MAX_SNAME 1000
+
+    pid_t
+    ptyFork(int *masterFd, char *slaveName, size_t snLen,
+            const struct termios *slaveTermios, const struct winsize *slaveWS)
+    {
+        int mfd, slaveFd, savedErrno;
+        pid_t childPid;
+        char slname[MAX_SNAME];
+
+    <img src="figs/web/U001.png" alt=""/>    mfd = ptyMasterOpen(slname, MAX_SNAME);
+        if (mfd == -1)
+            return -1;
+
+<img src="figs/web/U002.png" alt=""/>    if (slaveName != NULL) {            /* Return slave name to caller */
+            if (strlen(slname) &lt; snLen) {
+                strncpy(slaveName, slname, snLen);
+
+            } else {                        /* 'slaveName' was too small */
+                close(mfd);
+                errno = EOVERFLOW;
+                return -1;
+            }
+        }
+
+<img src="figs/web/U003.png" alt=""/>    childPid = fork();
+
+        if (childPid == -1) {               /* fork() failed */
+            savedErrno = errno;             /* close() might change 'errno' */
+            close(mfd);                     /* Don't leak file descriptors */
+            errno = savedErrno;
+            return -1;
+        }
+
+<img src="figs/web/U004.png" alt=""/>    if (childPid != 0) {                /* Parent */
+            *masterFd = mfd;                /* Only parent gets master fd */
+            return childPid;                /* Like parent of fork() */
+        }
+
+        /* Child falls through to here */
+
+<img src="figs/web/U005.png" alt=""/>    if (setsid() == -1)                 /* Start a new session */
+            err_exit("ptyFork:setsid");
+
+<img src="figs/web/U006.png" alt=""/>    close(mfd);                         /* Not needed in child */
+
+<img src="figs/web/U007.png" alt=""/>    slaveFd = open(slname, O_RDWR);     /* Becomes controlling tty */
+        if (slaveFd == -1)
+            err_exit("ptyFork:open-slave");
+
+<img src="figs/web/U008.png" alt=""/>#ifdef TIOCSCTTY                        /* Acquire controlling tty on BSD */
+        if (ioctl(slaveFd, TIOCSCTTY, 0) == -1)
+            err_exit("ptyFork:ioctl-TIOCSCTTY");
+    #endif
+
+<img src="figs/web/U009.png" alt=""/>    if (slaveTermios != NULL)           /* Set slave tty attributes */
+            if (tcsetattr(slaveFd, TCSANOW, slaveTermios) == -1)
+                err_exit("ptyFork:tcsetattr");
+
+<img src="figs/web/U010.png" alt=""/>    if (slaveWS != NULL)                /* Set slave tty window size */
+            if (ioctl(slaveFd, TIOCSWINSZ, slaveWS) == -1)
+                err_exit("ptyFork:ioctl-TIOCSWINSZ");
+
+            /* Duplicate pty slave to be child's stdin, stdout, and stderr */
+
+<img src="figs/web/U011.png" alt=""/>    if (dup2(slaveFd, STDIN_FILENO) != STDIN_FILENO)
+            err_exit("ptyFork:dup2-STDIN_FILENO");
+        if (dup2(slaveFd, STDOUT_FILENO) != STDOUT_FILENO)
+            err_exit("ptyFork:dup2-STDOUT_FILENO");
+        if (dup2(slaveFd, STDERR_FILENO) != STDERR_FILENO)
+            err_exit("ptyFork:dup2-STDERR_FILENO");
+
+        if (slaveFd &gt; STDERR_FILENO)        /* Safety check */
+            close(slaveFd);                 /* No longer need this fd */
+
+        return 0;                           /* Like child of fork() */
+    }
+          <strong class="userinput"><code>pty/pty_fork.c</code></strong></pre></div></div></div><div class="sect1" title="Pseudoterminal I/O"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="pseudoterminal_i_solidus_o">Pseudoterminal I/O</h2></div></div></div><p>A pseudoterminal pair is similar to a bidirectional pipe. Anything that is written
+                on the master appears as input on the slave, and anything that is written on the
+                slave appears as input on the master.<a id="IDX-CHP-64-8851" class="indexterm"/><a id="IDX-CHP-64-8852" class="indexterm"/><a id="IDX-CHP-64-8853" class="indexterm"/><a id="IDX-CHP-64-8850" class="indexterm"/></p><p>The point that distinguishes a pseudoterminal pair from a bidirectional pipe is
+                that the slave side operates like a terminal device. The slave interprets input in
+                the same way as a normal controlling terminal would interpret keyboard input. For
+                example, if we write a <span class="emphasis"><em>Control-C</em></span> character (the usual terminal
+                    <span class="emphasis"><em>interrupt</em></span> character) to the pseudoterminal master, the
+                slave will generate a <code class="literal">SIGINT</code> signal for its
+                foreground process group. Just as with a conventional terminal, when a
+                pseudoterminal slave operates in canonical mode (the default), input is buffered
+                line by line. In other words, the program reading from the pseudoterminal slave will
+                see (a line of) input only when we write a newline character to the pseudoterminal
+                master.</p><p>Like pipes, pseudoterminals have a limited capacity. If we exhaust this capacity,
+                then further writes are blocked until the process on the other side of the
+                pseudoterminal has consumed some bytes.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On Linux, the pseudoterminal capacity is about 4 kB in each direction.</p></div><p>If we close all file descriptors referring to the pseudoterminal master,
+                then:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If the slave device has a controlling process, a <code class="literal">SIGHUP</code> signal is sent to that process (see Section
+                        34.6).</p></li><li class="listitem"><p>A <span class="emphasis"><em>read()</em></span> from the slave device returns end-of-file
+                        (0).</p></li><li class="listitem"><p>A <span class="emphasis"><em>write()</em></span> to the slave device fails with the error
+                            <code class="literal">EIO</code>. (On some other UNIX
+                        implementations, <span class="emphasis"><em>write()</em></span> fails with the error <code class="literal">ENXIO</code> in this case.)</p></li></ul></div><p>If we close all file descriptors referring to the pseudoterminal slave,
+                then:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>A <span class="emphasis"><em>read()</em></span> from the master device fails with the error
+                            <code class="literal">EIO</code>. (On some other UNIX
+                        implementations, a <span class="emphasis"><em>read()</em></span> returns end-of-file in this
+                        case.)</p></li><li class="listitem"><p>A <span class="emphasis"><em>write()</em></span> to the master device succeeds, unless the
+                        input queue of the slave device is full, in which case the
+                            <span class="emphasis"><em>write()</em></span> blocks. If the slave device is subsequently
+                        reopened, these bytes can be read.</p></li></ul></div><p>UNIX implementations vary widely in their behavior for the last case. On some UNIX
+                implementations, <span class="emphasis"><em>write()</em></span> fails with the error <code class="literal">EIO</code>. On other implementations,
+                    <span class="emphasis"><em>write()</em></span> succeeds, but the output bytes are discarded (i.e.,
+                they can’t be read if the slave is reopened). In general, these variations don’t
+                present a problem. Normally, the process on the master side detects that the slave
+                has been closed because a <span class="emphasis"><em>read()</em></span> from the master returns
+                end-of-file or fails. At this point, the process performs no further writes to the
+                master.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="packet_mode"/></div></div></div><div class="sect3" title="Packet mode"><div class="titlepage"><div><div><h4 class="title" id="packet_mode-id1">Packet mode</h4></div></div></div><p><span class="emphasis"><em>Packet mode</em></span> is a mechanism that allows the process
+                        running above a pseudoterminal master to be informed when the following
+                        events related to software flow control occur on the pseudoterminal
+                            slave:<a id="IDX-CHP-64-8854" class="indexterm"/><a id="IDX-CHP-64-8855" class="indexterm"/><a id="IDX-CHP-64-8856" class="indexterm"/><a id="IDX-CHP-64-8857" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>the input or output queue is flushed;</p></li><li class="listitem"><p>terminal output is stopped or started
+                                    (<span class="emphasis"><em>Control-S/Control-Q</em></span>); or</p></li><li class="listitem"><p>flow control was enabled or disabled.</p></li></ul></div><p>Packet mode helps with handling software flow control in certain
+                        pseudoterminal applications that provide network login services (e.g.,
+                            <span class="emphasis"><em>telnet</em></span> and <span class="emphasis"><em>rlogin</em></span>).</p><p>Packet mode is enabled by applying the <span class="emphasis"><em>ioctl()</em></span>
+                        <code class="literal">TIOCPKT</code> operation to the file descriptor
+                        referring to the pseudoterminal master:</p><a id="I_programlisting64_d1e175377"/><pre class="programlisting">int arg;
+
+arg = 1;                /* 1 == enable; 0 == disable */
+if (ioctl(mfd, TIOCPKT, &amp;arg) == -1)
+    errExit("ioctl");</pre><p>When packet mode is in operation, reads from the pseudoterminal master
+                        return either a single nonzero control byte, which is a bit mask indicating
+                        the state change(s) that occurred on the slave device, or a 0 byte followed
+                        by one or more bytes of data that were written on the pseudoterminal
+                            slave.<a id="IDX-CHP-64-8858" class="indexterm"/></p><p>When a state change occurs on a pseudoterminal that is operating in packet
+                        mode, <span class="emphasis"><em>select()</em></span> indicates that an exceptional condition
+                        (the <span class="emphasis"><em>exceptfds</em></span> argument) has occurred on the master,
+                        and <span class="emphasis"><em>poll()</em></span> returns <code class="literal">POLLPRI</code> in the <span class="emphasis"><em>revents</em></span> field. (Refer to
+                            <a class="xref" href="ch63.html" title="Chapter 63. Alternative I/O Models">Chapter 63</a> for descriptions of
+                            <span class="emphasis"><em>select()</em></span> and
+                            <span class="emphasis"><em>poll()</em></span>.)<a id="IDX-CHP-64-8859" class="indexterm"/><a id="IDX-CHP-64-8860" class="indexterm"/></p><p>Packet mode is not standardized in SUSv3, and some details vary on other
+                        UNIX implementations. Further details of packet mode on Linux, including the
+                        bit-mask values used to indicate state changes, can be found in the
+                            <span class="emphasis"><em>tty_ioctl(4)</em></span> manual page.</p></div></div></div><div class="sect1" title="Implementing script(1)"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="implementing_script_open_parenthesis_1_c">Implementing <span class="emphasis"><em>script(1)</em></span></h2></div></div></div><p>We are now ready to implement a simple version of the standard
+                    <span class="emphasis"><em>script(1)</em></span> program. This program starts a new shell session,
+                and records all input and output from the session to a file. Most of the shell
+                sessions shown in this book were recorded using
+                    <span class="emphasis"><em>script</em></span>.<a id="IDX-CHP-64-8861" class="indexterm"/><a id="IDX-CHP-64-8862" class="indexterm"/><a id="IDX-CHP-64-8863" class="indexterm"/><a id="IDX-CHP-64-8864" class="indexterm"/><a id="IDX-CHP-64-8865" class="indexterm"/><a id="IDX-CHP-64-8866" class="indexterm"/><a id="IDX-CHP-64-8867" class="indexterm"/><a id="IDX-CHP-64-8868" class="indexterm"/><a id="IDX-CHP-64-8869" class="indexterm"/><a id="IDX-CHP-64-8870" class="indexterm"/><a id="IDX-CHP-64-8871" class="indexterm"/><a id="IDX-CHP-64-8872" class="indexterm"/><a id="IDX-CHP-64-8873" class="indexterm"/><a id="IDX-CHP-64-8874" class="indexterm"/></p><p>In a normal login session, the shell is connected directly to the user’s terminal.
+                When we run <span class="emphasis"><em>script</em></span>, it places itself between the user’s
+                terminal and the shell, and uses a pseudoterminal pair to create a communication
+                channel between itself and the shell (see <a class="xref" href="ch64.html#the_script_program" title="Figure 64-4. The script program">Figure 64-4</a>). The
+                shell is connected to the pseudoterminal slave. The <span class="emphasis"><em>script</em></span>
+                process is connected to the pseudoterminal master. The <span class="emphasis"><em>script</em></span>
+                process acts as a proxy for the user, taking input entered at the terminal and
+                writing it to the pseudoterminal master, and reading output from the pseudoterminal
+                master and writing it to the user’s terminal.</p><p>In addition, <span class="emphasis"><em>script</em></span> produces an output file (named <code class="literal">typescript</code> by default) that contains a copy of all
+                bytes that are output on the pseudoterminal master. This has the effect of recording
+                not only the output produced by the shell session, but also the input that is
+                supplied to it. The input is recorded because, just as with a conventional terminal
+                device, the kernel echoes input characters by copying them to the terminal output
+                queue (see <a class="xref" href="ch62.html#input_and_output_queues_for_a_terminal_d" title="Figure 62-1. Input and output queues for a terminal device">Figure 62-1</a>, in <a class="xref" href="ch62.html#retrieving_and_modifying_terminal_attrib" title="Retrieving and Modifying Terminal Attributes">Retrieving and Modifying Terminal Attributes</a>). However, when terminal
+                echoing is disabled, as is done by programs that read passwords, the pseudoterminal
+                slave input is not copied to the slave output queue, and thus is not copied to the
+                script output file.</p><div class="figure"><a id="the_script_program"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject64_d1e175566"/><img src="figs/web/64-4_PTY-script-scale90.png.jpg" alt="The script program"/></div></div><div class="figure-title">Figure 64-4. The <span class="emphasis"><em>script</em></span> program</div></div><p>Our implementation of <span class="emphasis"><em>script</em></span> is shown in <a class="xref" href="ch64.html#a_simple_implementation_of_script_open_p" title="Example 64-3. A simple implementation of script(1)">Example 64-3</a>. This program performs the
+                following steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Retrieve the attributes and window size of the terminal under which the
+                        program is run <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175582"/><img src="figs/web/U001.png" alt=""/></span>. These are passed to the subsequent call to
+                            <span class="emphasis"><em>ptyFork()</em></span>, which uses them to set the corresponding
+                        values for the pseudoterminal slave device.</p></li><li class="listitem"><p>Call our <span class="emphasis"><em>ptyFork()</em></span> function (<a class="xref" href="ch64.html#implementation_of_ptyfork_open_parenthes" title="Example 64-2. Implementation of ptyFork()">Example 64-2</a>) to create a child
+                        process that is connected to the parent via a pseudoterminal pair
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175599"/><img src="figs/web/U002.png" alt=""/></span>.</p></li><li class="listitem"><p>After the <span class="emphasis"><em>ptyFork()</em></span> call, the child execs a shell
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175611"/><img src="figs/web/U004.png" alt=""/></span>. The choice of shell is determined by the setting of
+                        the <code class="literal">SHELL</code> environment variable
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175620"/><img src="figs/web/U003.png" alt=""/></span>. If the <code class="literal">SHELL</code>
+                        variable is not set or its value is an empty string, then the child execs
+                            <code class="literal">/bin/sh</code>.</p></li><li class="listitem"><p>After the <span class="emphasis"><em>ptyFork()</em></span> call, the parent performs the
+                        following steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Open the output script file <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175643"/><img src="figs/web/U005.png" alt=""/></span>. If a command-line argument is supplied, this
+                                is used as the name of the script file. If no command-line argument
+                                is supplied, the default name <code class="literal">typescript</code> is used.</p></li><li class="listitem"><p>Place the terminal in raw mode (using the
+                                    <span class="emphasis"><em>ttySetRaw()</em></span> function shown in <a class="xref" href="ch62.html#switching_a_terminal_to_cbreak_and_raw_m" title="Example 62-3. Switching a terminal to cbreak and raw modes">Example 62-3</a>, in <a class="xref" href="ch62.html#example_colon_setting_raw_and_cbreak_mod" title="Example: setting raw and cbreak mode">Example: setting raw and cbreak mode</a>), so that
+                                all input characters are passed directly to the
+                                    <span class="emphasis"><em>script</em></span> program without being modified by
+                                the terminal driver <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175665"/><img src="figs/web/U006.png" alt=""/></span>. Characters output by the
+                                    <span class="emphasis"><em>script</em></span> program are likewise not modified by
+                                the terminal driver.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The fact that the terminal is in raw mode doesn’t mean that
+                                    raw, uninterpreted control characters will be transmitted to the
+                                    shell, or whatever other process group is in the foreground for
+                                    the pseudoterminal slave device, nor that output from that
+                                    process group is passed raw to the user’s terminal. Instead,
+                                    interpretation of terminal special characters is taking place
+                                    within the slave device (unless the slave was also explicitly
+                                    placed in raw mode by an application). By placing the user’s
+                                    terminal in raw mode, we prevent a <span class="emphasis"><em>second</em></span>
+                                    round of interpretation of input and output characters from
+                                    occurring.</p></div></li></ul></div></li><li class="listitem"><p>Call <span class="emphasis"><em>atexit()</em></span> to install an exit handler that resets
+                        the terminal to its original mode when the program terminates
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175687"/><img src="figs/web/U007.png" alt=""/></span>.</p></li><li class="listitem"><p>Execute a loop that transfers data in both directions between the terminal
+                        and the pseudoterminal master <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175696"/><img src="figs/web/U008.png" alt=""/></span>. In each loop iteration, the program first uses
+                            <span class="emphasis"><em>select()</em></span> (<a class="xref" href="ch63.html#the_select_open_parenthesis_close_parent" title="The select() System Call">The <span class="emphasis"><em>select()</em></span> System Call</a>) to monitor both
+                        the terminal and the pseudoterminal master for input <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175707"/><img src="figs/web/U009.png" alt=""/></span>. If the terminal has input available, then the program
+                        reads some of that input and writes it to the pseudoterminal master
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175713"/><img src="figs/web/U010.png" alt=""/></span>. Similarly, if the pseudoterminal master has input
+                        available, the program reads some of that input and writes it to the
+                        terminal and to the script file <span class="inlinemediaobject"><a id="I_inlinemediaobject64_d1e175720"/><img src="figs/web/U010.png" alt=""/></span>. The loop executes until end-of-file or an error is
+                        detected on one of the monitored file descriptors.</p></li></ul></div><div class="example"><a id="a_simple_implementation_of_script_open_p"/><div class="example-title">Example 64-3. A simple implementation of <span class="emphasis"><em>script(1)</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pty/script.c</code></strong>
+    #include &lt;sys/stat.h&gt;
+    #include &lt;fcntl.h&gt;
+    #include &lt;libgen.h&gt;
+    #include &lt;termios.h&gt;
+    #include &lt;sys/select.h&gt;
+    #include "pty_fork.h"           /* Declaration of ptyFork() */
+    #include "tty_functions.h"      /* Declaration of ttySetRaw() */
+    #include "tlpi_hdr.h"
+
+    #define BUF_SIZE 256
+    #define MAX_SNAME 1000
+
+    struct termios ttyOrig;
+
+    static void             /* Reset terminal mode on program exit */
+    ttyReset(void)
+    {
+        if (tcsetattr(STDIN_FILENO, TCSANOW, &amp;ttyOrig) == -1)
+            errExit("tcsetattr");
+    }
+
+    int
+    main(int argc, char *argv[])
+    {
+        char slaveName[MAX_SNAME];
+        char *shell;
+        int masterFd, scriptFd;
+        struct winsize ws;
+        fd_set inFds;
+        char buf[BUF_SIZE];
+        ssize_t numRead;
+        pid_t childPid;
+
+<img src="figs/web/U001.png" alt=""/>    if (tcgetattr(STDIN_FILENO, &amp;ttyOrig) == -1)
+            errExit("tcgetattr");
+        if (ioctl(STDIN_FILENO, TIOCGWINSZ, &amp;ws) &lt; 0)
+            errExit("ioctl-TIOCGWINSZ");
+
+<img src="figs/web/U002.png" alt=""/>    childPid = ptyFork(&amp;masterFd, slaveName, MAX_SNAME, &amp;ttyOrig, &amp;ws);
+        if (childPid == -1)
+            errExit("ptyFork");
+
+        if (childPid == 0) {        /* Child: execute a shell on pty slave */
+<img src="figs/web/U003.png" alt=""/>        shell = getenv("SHELL");
+            if (shell == NULL || *shell == '\0')
+                shell = "/bin/sh";
+
+<img src="figs/web/U004.png" alt=""/>        execlp(shell, shell, (char *) NULL);
+            errExit("execlp");      /* If we get here, something went wrong */
+        }
+
+            /* Parent: relay data between terminal and pty master */
+
+<img src="figs/web/U005.png" alt=""/>    scriptFd = open((argc &gt; 1) ? argv[1] : "typescript",
+                            O_WRONLY | O_CREAT | O_TRUNC,
+                            S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP |
+                                    S_IROTH | S_IWOTH);
+        if (scriptFd == -1)
+            errExit("open typescript");
+
+<img src="figs/web/U006.png" alt=""/>    ttySetRaw(STDIN_FILENO, &amp;ttyOrig);
+
+<img src="figs/web/U007.png" alt=""/>    if (atexit(ttyReset) != 0)
+            errExit("atexit");
+
+<img src="figs/web/U008.png" alt=""/>    for (;;) {
+            FD_ZERO(&amp;inFds);
+            FD_SET(STDIN_FILENO, &amp;inFds);
+            FD_SET(masterFd, &amp;inFds);
+
+<img src="figs/web/U009.png" alt=""/>        if (select(masterFd + 1, &amp;inFds, NULL, NULL, NULL) == -1)
+                errExit("select");
+
+<img src="figs/web/U010.png" alt=""/>        if (FD_ISSET(STDIN_FILENO, &amp;inFds)) {   /* stdin —&gt; pty */
+                numRead = read(STDIN_FILENO, buf, BUF_SIZE);
+                if (numRead &lt;= 0)
+                    exit(EXIT_SUCCESS);
+
+                if (write(masterFd, buf, numRead) != numRead)
+                    fatal("partial/failed write (masterFd)");
+            }
+
+<img src="figs/web/U011.png" alt=""/>        if (FD_ISSET(masterFd, &amp;inFds)) {       /* pty —&gt; stdout+file */
+                numRead = read(masterFd, buf, BUF_SIZE);
+                if (numRead &lt;= 0)
+                    exit(EXIT_SUCCESS);
+
+                if (write(STDOUT_FILENO, buf, numRead) != numRead)
+                    fatal("partial/failed write (STDOUT_FILENO)");
+                if (write(scriptFd, buf, numRead) != numRead)
+                    fatal("partial/failed write (scriptFd)");
+            }
+        }
+    }
+         <strong class="userinput"><code>pty/script.c</code></strong></pre></div></div><p>In the following shell session, we demonstrate the use of the program in <a class="xref" href="ch64.html#a_simple_implementation_of_script_open_p" title="Example 64-3. A simple implementation of script(1)">Example 64-3</a>. We begin by displaying the
+                name of the pseudoterminal used by the <span class="emphasis"><em>xterm</em></span> on which the login
+                shell is running and the process ID of the login shell. This information is useful
+                later in the shell session.</p><a id="I_programlisting64_d1e175812"/><pre class="programlisting">$ <strong class="userinput"><code>tty</code></strong>
+/dev/pts/1
+$ <strong class="userinput"><code>echo $$</code></strong>
+7979</pre><p>We then start an instance of our <span class="emphasis"><em>script</em></span> program, which
+                invokes a subshell. Once more, we display the name of the terminal on which the
+                shell is running and the process ID of the shell:</p><a id="I_programlisting64_d1e175826"/><pre class="programlisting">$ <strong class="userinput"><code>./script</code></strong>
+$ <strong class="userinput"><code>tty</code></strong>
+/dev/pts/24                         <em class="lineannotation"><span class="lineannotation">Pseudoterminal slave opened by</span></em> <span class="emphasis"><em>script</em></span>
+$ <strong class="userinput"><code>echo $$</code></strong>
+29825                               <em class="lineannotation"><span class="lineannotation">PID of subshell process started by</span></em> <span class="emphasis"><em>script</em></span></pre><p>Now we use <span class="emphasis"><em>ps(1)</em></span> to display information about the two shells
+                and the process running <span class="emphasis"><em>script</em></span>, and then terminate the shell
+                started by <span class="emphasis"><em>script</em></span>:</p><a id="I_programlisting64_d1e175860"/><pre class="programlisting">$ <strong class="userinput"><code>ps -p 7979 -p 29825 -C script -o "pid ppid sid tty cmd"</code></strong>
+  PID  PPID   SID TT       CMD
+ 7979  7972  7979 pts/1    /bin/bash
+29824  7979  7979 pts/1    ./script
+29825 29824 29825 pts/24   /bin/bash
+$ <strong class="userinput"><code>exit</code></strong></pre><p>The output of <span class="emphasis"><em>ps(1)</em></span> shows the parent-child relationships
+                between the login shell, the process running <span class="emphasis"><em>script</em></span>, and the
+                subshell started by <span class="emphasis"><em>script</em></span>.</p><p>At this point, we have returned to the login shell. Displaying the contents of the
+                file <code class="literal">typescript</code> shows a record of all input and
+                output that was produced while <span class="emphasis"><em>script</em></span> was running:</p><a id="I_programlisting64_d1e175886"/><pre class="programlisting">$ <strong class="userinput"><code>cat typescript</code></strong>
+$ tty
+/dev/pts/24
+$ echo $$
+29825
+$ ps -p 7979 -p 29825 -C script -o "pid ppid sid tty cmd"
+  PID  PPID   SID TT       CMD
+ 7979  7972  7979 pts/1    /bin/bash
+29824  7979  7979 pts/1    ./script
+29825 29824 29825 pts/24   /bin/bash
+$ exit</pre></div><div class="sect1" title="Terminal Attributes and Window Size"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="terminal_attributes_and_window_size">Terminal Attributes and Window Size</h2></div></div></div><p>The master and slave device share terminal attributes
+                    (<span class="emphasis"><em>termios</em></span>) and window size (<span class="emphasis"><em>winsize</em></span>)
+                structures. (Both of these structures are described in <a class="xref" href="ch62.html" title="Chapter 62. Terminals">Chapter 62</a>.)
+                This means that the program running above the pseudoterminal master can change these
+                attributes for the pseudoterminal slave by applying <span class="emphasis"><em>tcsetattr()</em></span>
+                and <span class="emphasis"><em>ioctl()</em></span> to the file descriptor of the master
+                    device.<a id="IDX-CHP-64-8875" class="indexterm"/><a id="IDX-CHP-64-8876" class="indexterm"/><a id="IDX-CHP-64-8877" class="indexterm"/></p><p>One example of where changing terminal attributes can be useful is in the script
+                program. Suppose we are running <span class="emphasis"><em>script</em></span> in a terminal emulator
+                window, and we change the size of the window. In this case, the terminal emulator
+                program will inform the kernel of the change in the size of the corresponding
+                terminal device, but this change is not reflected in the separate kernel record for
+                the pseudoterminal slave (see <a class="xref" href="ch64.html#the_script_program" title="Figure 64-4. The script program">Figure 64-4</a>). As a
+                consequence, screen-oriented programs (e.g., <span class="emphasis"><em>vi</em></span>) running above
+                the pseudoterminal slave will produce confusing output, since their understanding of
+                the terminal window size differs from the actual size of the terminal. We can solve
+                this problem as follows:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Install a handler for <code class="literal">SIGWINCH</code> in the
+                            <span class="emphasis"><em>script</em></span> parent process, so that it is signaled when
+                        the size of the terminal window changes.</p></li><li class="listitem"><p>When the <span class="emphasis"><em>script</em></span> parent receives a <code class="literal">SIGWINCH</code> signal, it uses an
+                            <span class="emphasis"><em>ioctl()</em></span>
+                        <code class="literal">TIOCGWINSZ</code> operation to retrieve a
+                            <span class="emphasis"><em>winsize</em></span> structure for the terminal window
+                        associated with its standard input. It then uses this structure in an
+                            <span class="emphasis"><em>ioctl()</em></span>
+                        <code class="literal">TIOCSWINSZ</code> operation that sets the window
+                        size of the pseudoterminal master.<a id="IDX-CHP-64-8878" class="indexterm"/></p></li><li class="listitem"><p>If the new pseudoterminal window size is different from the old size, then
+                        the kernel generates a <code class="literal">SIGWINCH</code> signal
+                        for the foreground process group of the pseudoterminal slave.
+                        Screen-handling programs such as <span class="emphasis"><em>vi</em></span> are designed to
+                        catch this signal and perform an <span class="emphasis"><em>ioctl()</em></span>
+                        <code class="literal">TIOCGWINSZ</code> operation to update their
+                        understanding of the terminal window size.</p></li></ol></div><p>We described the details of terminal window sizes and the
+                    <span class="emphasis"><em>ioctl()</em></span>
+                <code class="literal">TIOCGWINSZ</code> and <code class="literal">TIOCSWINSZ</code> operations in Section 62.9.</p></div><div class="sect1" title="BSD Pseudoterminals"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="bsd_pseudoterminals">BSD Pseudoterminals</h2></div></div></div><p>For most of this chapter, we have focused on UNIX 98 pseudoterminals, since this
+                is the style of pseudoterminal that is standardized in SUSv3 and thus should be used
+                in all new programs. However, we may sometimes encounter BSD pseudoterminals in
+                older applications or when porting programs to Linux from other UNIX
+                implementations. Therefore, we now consider the details of BSD
+                    pseudoterminals.<a id="IDX-CHP-64-8880" class="indexterm"/><a id="IDX-CHP-64-8881" class="indexterm"/><a id="IDX-CHP-64-8882" class="indexterm"/><a id="IDX-CHP-64-8883" class="indexterm"/><a id="IDX-CHP-64-8884" class="indexterm"/><a id="IDX-CHP-64-8885" class="indexterm"/><a id="IDX-CHP-64-8886" class="indexterm"/><a id="IDX-CHP-64-8887" class="indexterm"/><a id="IDX-CHP-64-8888" class="indexterm"/><a id="IDX-CHP-64-8889" class="indexterm"/><a id="IDX-CHP-64-8890" class="indexterm"/><a id="IDX-CHP-64-8891" class="indexterm"/><a id="IDX-CHP-64-8879" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The use of BSD pseudoterminals is deprecated on Linux. From Linux 2.6.4
+                    onward, BSD pseudoterminal support is an optional kernel component that can be
+                    configured via the <code class="literal">CONFIG_LEGACY_PTYS</code>
+                    option.</p></div><p>BSD pseudoterminals differ from their UNIX 98 counterparts only in the details of
+                how pseudoterminal master and slave devices are found and opened. Once the master
+                and slave have been opened, BSD pseudoterminals operate in the same way as UNIX 98
+                pseudoterminals.</p><p>With UNIX 98 pseudoterminals, we obtain an unused pseudoterminal master by calling
+                    <span class="emphasis"><em>posix_openpt()</em></span>, which opens <code class="literal">/dev/ptmx</code>, the pseudoterminal master clone device. We then obtain the
+                name of the corresponding pseudoterminal slave using <span class="emphasis"><em>ptsname()</em></span>.
+                By contrast, with BSD pseudoterminals, the master and slave device pairs are
+                precreated entries in the <code class="literal">/dev</code> directory. Each
+                master device has a name of the form <code class="literal">/dev/pty</code><span class="emphasis"><em>xy</em></span>, where <span class="emphasis"><em>x</em></span> is
+                replaced by a letter in the 16-letter range <code class="literal">[p-za-e]</code> and <span class="emphasis"><em>y</em></span> is replaced by a letter in the
+                16-letter range <code class="literal">[0-9a-f]</code>. The slave corresponding
+                to a particular pseudoterminal master has a name of the form <code class="literal">/dev/tty</code><span class="emphasis"><em>xy</em></span>. Thus, for example,
+                the devices <code class="literal">/dev/ptyp0</code> and <code class="literal">/dev/ttyp0</code> constitute a BSD pseudoterminal
+                pair.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>UNIX implementations vary in the number and names of BSD pseudoterminal pairs
+                    that they supply, with some supplying as few as 32 pairs by default. Most
+                    implementations provide at least the 32 master devices with names in the range
+                        <code class="literal">/dev/pty[pq][0-9a-f]</code>, along with the
+                    corresponding slave devices.</p></div><p>To find an unused pseudoterminal pair, we execute a loop that attempts to open
+                each master device in turn, until one of them is opened successfully. While
+                executing this loop, there are two errors that we may encounter when calling
+                    <span class="emphasis"><em>open()</em></span>:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If a given master device name doesn’t exist, <span class="emphasis"><em>open()</em></span>
+                        fails with the error <code class="literal">ENOENT</code>. Typically,
+                        this means we’ve run through the complete set of pseudoterminal master names
+                        on the system without finding a free device (i.e., there was not the full
+                        range of devices listed above).</p></li><li class="listitem"><p>If the master device is in use, <span class="emphasis"><em>open()</em></span> fails with the
+                        error <code class="literal">EIO</code>. We can just ignore this error
+                        and try the next device.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>On HP-UX 11, <span class="emphasis"><em>open()</em></span> fails with the error <code class="literal">EBUSY</code> on an attempt to open a BSD pseudoterminal
+                    master that is in use.</p></div><p>Once we have found an available master device, we can obtain the name of the
+                corresponding slave by substituting <code class="literal">tty</code> for
+                    <code class="literal">pty</code> in the name of the master. We can then
+                open the slave using <span class="emphasis"><em>open()</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>With BSD pseudoterminals, there is no equivalent of
+                        <span class="emphasis"><em>grantpt()</em></span> to change the ownership and permissions of
+                    the pseudoterminal slave. If we need to do this, then we must make explicit
+                    calls to <span class="emphasis"><em>chown()</em></span> (only possible in a privileged program)
+                    and <span class="emphasis"><em>chmod()</em></span>, or write a set-user-ID program (like
+                        <span class="emphasis"><em>pt_chown</em></span>) that performs this task for an unprivileged
+                    program.</p></div><p><a class="xref" href="ch64.html#implementation_of_ptymasteropen_open" title="Example 64-4. Implementation of ptyMasterOpen() using BSD pseudoterminals">Example 64-4</a> shows a reimplementation of
+                the <span class="emphasis"><em>ptyMasterOpen()</em></span> function of Section 64.3 using BSD
+                pseudoterminals. Substituting this implementation is all that is required to make
+                our <span class="emphasis"><em>script</em></span> program (Section 64.6) work with BSD
+                    pseudoterminals.<a id="IDX-CHP-64-8892" class="indexterm"/></p><div class="example"><a id="implementation_of_ptymasteropen_open"/><div class="example-title">Example 64-4. Implementation of <span class="emphasis"><em>ptyMasterOpen()</em></span> using BSD
+                    pseudoterminals</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pty/pty_master_open_bsd.c</code></strong>
+#include &lt;fcntl.h&gt;
+#include "pty_master_open.h"            /* Declares ptyMasterOpen() */
+#include "tlpi_hdr.h"
+
+#define PTYM_PREFIX     "/dev/pty"
+#define PTYS_PREFIX     "/dev/tty"
+#define PTY_PREFIX_LEN  (sizeof(PTYM_PREFIX) - 1)
+#define PTY_NAME_LEN    (PTY_PREFIX_LEN + sizeof("XY"))
+#define X_RANGE         "pqrstuvwxyzabcde"
+#define Y_RANGE         "0123456789abcdef"
+
+int
+ptyMasterOpen(char *slaveName, size_t snLen)
+{
+    int masterFd, n;
+    char *x, *y;
+    char masterName[PTY_NAME_LEN];
+
+    if (PTY_NAME_LEN &gt; snLen) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    memset(masterName, 0, PTY_NAME_LEN);
+    strncpy(masterName, PTYM_PREFIX, PTY_PREFIX_LEN);
+
+    for (x = X_RANGE; *x != '\0'; x++) {
+        masterName[PTY_PREFIX_LEN] = *x;
+
+        for (y = Y_RANGE; *y != '\0'; y++) {
+            masterName[PTY_PREFIX_LEN + 1] = *y;
+
+            masterFd = open(masterName, O_RDWR);
+
+            if (masterFd == -1) {
+                if (errno == ENOENT)    /* No such file */
+                    return -1;          /* Probably no more pty devices */
+                else                    /* Other error (e.g., pty busy) */
+                    continue;
+
+            } else {            /* Return slave name corresponding to master */
+                n = snprintf(slaveName, snLen, "%s%c%c", PTYS_PREFIX, *x, *y);
+                if (n &gt;= snLen) {
+                    errno = EOVERFLOW;
+                    return -1;
+                } else if (n == -1) {
+                    return -1;
+                }
+
+                return masterFd;
+            }
+        }
+    }
+
+    return -1;                  /* Tried all ptys without success */
+}
+     <strong class="userinput"><code>pty/pty_master_open_bsd.c</code></strong></pre></div></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id63">Summary</h2></div></div></div><p>A pseudoterminal pair consists of a connected master device and slave device.
+                Together, these two devices provide a bidirectional IPC channel. The benefit of a
+                pseudoterminal is that, on the slave side of the pair, we can connect a
+                terminal-oriented program that is driven by the program that has opened the master
+                device. The pseudoterminal slave behaves just like a conventional terminal. All of
+                the operations that can be applied to a conventional terminal can be applied to the
+                slave, and input transmitted from the master to the slave is interpreted in the same
+                manner as keyboard input is interpreted on a conventional terminal.</p><p>One common use of pseudoterminals is in applications that provide network login
+                services. However, pseudoterminals are also used in many other programs, such as
+                terminal emulators and the <span class="emphasis"><em>script(1)</em></span> program.</p><p>Different pseudoterminals APIs arose on System V and BSD. Linux supports both
+                APIs, but the System V API forms the basis for the pseudoterminal API that is
+                standardized in SUSv3.</p></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id45">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>In what order do the <span class="emphasis"><em>script</em></span> parent process and the
+                        child shell process terminate when the user types the end-of-file character
+                        (usually <span class="emphasis"><em>Control-D</em></span>) while running the program in <a class="xref" href="ch64.html#a_simple_implementation_of_script_open_p" title="Example 64-3. A simple implementation of script(1)">Example 64-3</a>? Why?<a id="IDX-CHP-64-8893" class="indexterm"/><a id="IDX-CHP-64-8894" class="indexterm"/><a id="IDX-CHP-64-8895" class="indexterm"/><a id="IDX-CHP-64-8896" class="indexterm"/></p></li><li class="listitem"><p>Make the following modifications to the program in <a class="xref" href="ch64.html#a_simple_implementation_of_script_open_p" title="Example 64-3. A simple implementation of script(1)">Example 64-3</a> (<code class="literal">script.c</code>):</p><div class="orderedlist"><ol class="orderedlist" type="a"><li class="listitem"><p>The standard <span class="emphasis"><em>script(1)</em></span> program adds lines to
+                                the beginning and the end of the output file showing the time the
+                                script started and finished. Add this feature.</p></li><li class="listitem"><p>Add code to handle changes to the terminal window size as
+                                described in Section 64.7. You may find the program in <a class="xref" href="ch62.html#monitoring_changes_in_the_terminal_windo" title="Example 62-5. Monitoring changes in the terminal window size">Example 62-5</a> (<code class="literal">demo_SIGWINCH.c</code>) useful for testing
+                                this feature.</p></li></ol></div></li><li class="listitem"><p>Modify the program in <a class="xref" href="ch64.html#a_simple_implementation_of_script_open_p" title="Example 64-3. A simple implementation of script(1)">Example 64-3</a> (<code class="literal">script.c</code>) to replace the use of
+                            <span class="emphasis"><em>select()</em></span> by a pair of processes: one to handle data
+                        transfer from the terminal to the pseudoterminal master, and the other to
+                        handle data transfer in the opposite direction.</p></li><li class="listitem"><p>Modify the program in <a class="xref" href="ch64.html#a_simple_implementation_of_script_open_p" title="Example 64-3. A simple implementation of script(1)">Example 64-3</a> (<code class="literal">script.c</code>) to add a time-stamped recording
+                        feature. Each time the program writes a string to the <code class="literal">typescript</code> file, it should also write a
+                        time-stamped string to a second file (say, <code class="literal">typescript.timed</code>). Records written to this second file might
+                        have the following general form:</p><a id="I_programlisting64_d1e176321"/><pre class="programlisting">&lt;timestamp&gt; &lt;space&gt; &lt;string&gt; &lt;newline&gt;</pre><p>The <span class="emphasis"><em>timestamp</em></span> should be recorded in text form as the
+                        number of milliseconds since the start of the script session. Recording the
+                        timestamp in text form has the advantage that the resulting file is
+                        human-readable. Within <span class="emphasis"><em>string</em></span>, real newline characters
+                        will need to be escaped. One possibility is to record a newline as the
+                        2-character sequence <code class="literal">\n</code> and a backslash
+                        as <code class="literal">\\</code>.</p><p>Write a second program, <code class="literal">script_replay.c</code>, that reads the time-stamped script file and
+                        displays its contents on standard output at the same rate at which they were
+                        originally written. Together, these two programs provide a simple recording
+                        and playback feature for shell session logs.</p></li><li class="listitem"><p>Implement client and server programs to provide a simple
+                            <span class="emphasis"><em>telnet</em></span>-style remote login facility. Design the
+                        server to handle clients concurrently (Section 60.1). <a class="xref" href="ch64.html#how_ssh_uses_a_pseudoterminal" title="Figure 64-3. How ssh uses a pseudoterminal">Figure 64-3</a> shows the setup that needs to
+                        be established for each client login. What isn’t shown in that diagram is
+                        the parent server process, which handles incoming socket connections from
+                        clients and creates a server child to handle each connection. Note that all
+                        of the work of authenticating the user and starting a login shell can be
+                        dealt with in each server child by having the (grand)child created by
+                            <span class="emphasis"><em>ptyFork()</em></span> go on to exec
+                            <span class="emphasis"><em>login(1)</em></span>.</p></li><li class="listitem"><p>Add code to the program developed in the previous exercise to update the
+                        login accounting files at the start and end of the login session (<a class="xref" href="ch40.html" title="Chapter 40. Login Accounting">Chapter 40</a>).</p></li><li class="listitem"><p>Suppose we execute a long-running program that slowly generates output
+                        that is redirected to a file or pipe, as in this example:</p><a id="I_programlisting64_d1e176364"/><pre class="programlisting">$ <strong class="userinput"><code>longrunner | grep str</code></strong></pre><p>One problem with the above scenario is that, by default, the
+                            <span class="emphasis"><em>stdio</em></span> package flushes standard output only when the
+                            <span class="emphasis"><em>stdio</em></span> buffer is filled. This means that the output
+                        from the <span class="emphasis"><em>longrunner</em></span> program will appear in bursts
+                        separated by long intervals of time. One way to circumvent this problem is
+                        to write a program that does the following:</p><div class="orderedlist"><ol class="orderedlist" type="a"><li class="listitem"><p>Create a pseudoterminal.</p></li><li class="listitem"><p>Exec the program named in its command-line arguments with the
+                                standard file descriptors connected to the pseudoterminal
+                                slave.</p></li><li class="listitem"><p>Read output from the pseudoterminal master and write it
+                                immediately to standard output (<code class="literal">STDOUT_FILENO</code>, file descriptor 1), and, at the same
+                                time, read input from the terminal and write it to the
+                                pseudoterminal master, so that it can be read by the execed
+                                program.</p><p>Such a program, which we’ll call <span class="emphasis"><em>unbuffer</em></span>,
+                                would be used as follows:</p><a id="I_programlisting64_d1e176397"/><pre class="programlisting">$ <strong class="userinput"><code>./unbuffer longrunner | grep str</code></strong></pre><p>Write the <span class="emphasis"><em>unbuffer</em></span> program. (Much of the code
+                                for this program will be similar to that of <a class="xref" href="ch64.html#a_simple_implementation_of_script_open_p" title="Example 64-3. A simple implementation of script(1)">Example 64-3</a>.)</p></li></ol></div></li><li class="listitem"><p>Write a program that implements a scripting language that can be used to
+                        drive <span class="emphasis"><em>vi</em></span> in a noninteractive mode. Since
+                            <span class="emphasis"><em>vi</em></span> expects to be run from a terminal, the program
+                        will need to employ a pseudoterminal.</p></li></ol></div></div></section></body></html>

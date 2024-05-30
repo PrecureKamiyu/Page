@@ -1,0 +1,568 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 60. Sockets: Server Design</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch59.html" title="Chapter 59. Sockets: Internet Domains"/><link rel="next" href="ch61.html" title="Chapter 61. Sockets: Advanced Topics"/></head><body><section class="chapter" title="Chapter 60. Sockets: Server Design" epub:type="chapter" id="sockets_colon_server_design"><div class="titlepage"><div><div><h2 class="title">Chapter 60. Sockets: Server Design</h2></div></div></div><p>This chapter discusses the fundamentals of designing iterative and concurrent servers
+            and describes <span class="emphasis"><em>inetd</em></span>, a special daemon designed to facilitate the
+            creation of Internet servers.</p><div class="sect1" title="Iterative and Concurrent Servers"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="iterative_and_concurrent_servers">Iterative and Concurrent Servers</h2></div></div></div><p>Two common designs for network servers using sockets are the following:<a id="IDX-CHP-60-7893" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>Iterative</em></span>: The server handles one client at a time,
+                        processing that client’s request(s) completely, before proceeding to the
+                        next client.</p></li><li class="listitem"><p><span class="emphasis"><em>Concurrent</em></span>: The server is designed to handle multiple
+                        clients simultaneously.</p></li></ul></div><p>We have already seen an example of an iterative server using FIFOs in <a class="xref" href="ch44.html#a_client-server_application_using_fifos" title="A Client-Server Application Using FIFOs">A Client-Server Application Using FIFOs</a> and an example of a
+                concurrent server using System V message queues in Section 46.8.<a id="IDX-CHP-60-7894" class="indexterm"/><a id="IDX-CHP-60-7895" class="indexterm"/></p><p>Iterative servers are usually suitable only when client requests can be handled
+                quickly, since each client must wait until all of the preceding clients have been
+                serviced. A typical scenario for employing an iterative server is where the client
+                and server exchange a single request and response.</p><p>Concurrent servers are suitable when a significant amount of processing time is
+                required to handle each request, or where the client and server engage in an
+                extended conversation, passing messages back and forth. In this chapter, we mainly
+                focus on the traditional (and simplest) method of designing a concurrent server:
+                creating a new child process for each new client. Each server child performs all
+                tasks necessary to service a single client and then terminates. Since each of these
+                processes can operate independently, multiple clients can be handled simultaneously.
+                The principal task of the main server process (the parent) is to create a new child
+                process for each new client. (A variation on this approach is to create a new thread
+                for each client.)</p><p>In the following sections, we look at examples of an iterative and a concurrent
+                server using Internet domain sockets. These two servers implement the
+                    <span class="emphasis"><em>echo</em></span> service (RFC 862), a rudimentary service that returns
+                a copy of whatever the client sends it.<a id="IDX-CHP-60-7896" class="indexterm"/></p></div><div class="sect1" title="An Iterative UDP echo Server"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="an_iterative_udp_echo_server">An Iterative UDP <span class="emphasis"><em>echo</em></span> Server</h2></div></div></div><p>In this and the next section, we present servers for the <span class="emphasis"><em>echo</em></span>
+                service. The <span class="emphasis"><em>echo</em></span> service operates on both UDP and TCP port 7.
+                (Since this is a reserved port, the <span class="emphasis"><em>echo</em></span> server must be run
+                with superuser privileges.)<a id="IDX-CHP-60-7897" class="indexterm"/><a id="IDX-CHP-60-7898" class="indexterm"/><a id="IDX-CHP-60-7899" class="indexterm"/><a id="IDX-CHP-60-7900" class="indexterm"/><a id="IDX-CHP-60-7901" class="indexterm"/><a id="IDX-CHP-60-7902" class="indexterm"/><a id="IDX-CHP-60-7903" class="indexterm"/><a id="IDX-CHP-60-7904" class="indexterm"/></p><p>The UDP <span class="emphasis"><em>echo</em></span> server continuously reads datagrams, returning a
+                copy of each datagram to the sender. Since the server needs to handle only a single
+                message at a time, an iterative server design suffices. The header file for the
+                server is shown in <a class="xref" href="ch60.html#header_file_for_id_underscore_echo_under" title="Example 60-1. Header file for id_echo_sv.c and id_echo_cl.c">Example 60-1</a>.</p><div class="example"><a id="header_file_for_id_underscore_echo_under"/><div class="example-title">Example 60-1. Header file for <code class="literal">id_echo_sv.c</code> and <code class="literal">id_echo_cl.c</code></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/id_echo.h</code></strong>
+#include "inet_sockets.h"       /* Declares our socket functions */
+#include "tlpi_hdr.h"
+
+#define SERVICE "echo"          /* Name of UDP service */
+
+#define BUF_SIZE 500            /* Maximum size of datagrams that can
+                                   be read by client and server */
+      <strong class="userinput"><code>sockets/id_echo.h</code></strong></pre></div></div><p><a class="xref" href="ch60.html#an_iterative_server_that_implements_the" title="Example 60-2. An iterative server that implements the UDP echo service">Example 60-2</a> shows the implementation
+                of the server. Note the following points regarding the server implementation:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>We use the <span class="emphasis"><em>becomeDaemon()</em></span> function of <a class="xref" href="ch37.html#creating_a_daemon" title="Creating a Daemon">Creating a Daemon</a> to turn the server into a daemon.</p></li><li class="listitem"><p>To shorten this program, we employ the Internet domain sockets library
+                        developed in <a class="xref" href="ch59.html#an_internet_domain_sockets_library" title="An Internet Domain Sockets Library">An Internet Domain Sockets Library</a>.</p></li><li class="listitem"><p>If the server can’t send a reply to the client, it logs a message using
+                            <span class="emphasis"><em>syslog()</em></span>.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>In a real-world application, we would probably apply some rate limit to the
+                    messages written with <span class="emphasis"><em>syslog()</em></span>, both to prevent the
+                    possibility of an attacker filling the system log and because each call to
+                        <span class="emphasis"><em>syslog()</em></span> is expensive, since (by default)
+                        <span class="emphasis"><em>syslog()</em></span> in turn calls
+                        <span class="emphasis"><em>fsync()</em></span>.<a id="IDX-CHP-60-7905" class="indexterm"/></p></div><div class="example"><a id="an_iterative_server_that_implements_the"/><div class="example-title">Example 60-2. An iterative server that implements the UDP <span class="emphasis"><em>echo</em></span>
+                    service</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/id_echo_sv.c</code></strong>
+#include &lt;syslog.h&gt;
+#include "id_echo.h"
+#include "become_daemon.h"
+
+int
+main(int argc, char *argv[])
+{
+    int sfd;
+    ssize_t numRead;
+    socklen_t addrlen, len;
+    struct sockaddr_storage claddr;
+    char buf[BUF_SIZE];
+    char addrStr[IS_ADDR_STR_LEN];
+
+    if (becomeDaemon(0) == -1)
+        errExit("becomeDaemon");
+
+    sfd = inetBind(SERVICE, SOCK_DGRAM, &amp;addrlen);
+    if (sfd == -1) {
+        syslog(LOG_ERR, "Could not create server socket (%s)", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+
+    /* Receive datagrams and return copies to senders */
+
+    for (;;) {
+        len = sizeof(struct sockaddr_storage);
+        numRead = recvfrom(sfd, buf, BUF_SIZE, 0,
+                           (struct sockaddr *) &amp;claddr, &amp;len);
+        if (numRead == -1)
+            errExit("recvfrom");
+
+        if (sendto(sfd, buf, numRead, 0, (struct sockaddr *) &amp;claddr, len)
+                    != numRead)
+            syslog(LOG_WARNING, "Error echoing response to %s (%s)",
+                    inetAddressStr((struct sockaddr *) &amp;claddr, len,
+                                   addrStr, IS_ADDR_STR_LEN),
+                    strerror(errno));
+    }
+}
+     <strong class="userinput"><code>sockets/id_echo_sv.c</code></strong></pre></div></div><p>To test the server, we use the client program shown in <a class="xref" href="ch60.html#a_client_for_the_udp_echo_service" title="Example 60-3. A client for the UDP echo service">Example 60-3</a>. This program also employs the
+                Internet domain sockets library developed in <a class="xref" href="ch59.html#an_internet_domain_sockets_library" title="An Internet Domain Sockets Library">An Internet Domain Sockets Library</a>. As its first command-line
+                argument, the client program expects the name of the host on which the server
+                resides. The client executes a loop in which it sends each of its remaining
+                command-line arguments to the server as separate datagrams, and reads and prints
+                each response datagram sent back by the server.</p><div class="example"><a id="a_client_for_the_udp_echo_service"/><div class="example-title">Example 60-3. A client for the UDP <span class="emphasis"><em>echo</em></span> service</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/id_echo_cl.c</code></strong>
+#include "id_echo.h"
+
+int
+main(int argc, char *argv[])
+{
+    int sfd, j;
+    size_t len;
+    ssize_t numRead;
+    char buf[BUF_SIZE];
+
+    if (argc &lt; 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s: host msg...\n", argv[0]);
+
+    /* Construct server address from first command-line argument */
+
+    sfd = inetConnect(argv[1], SERVICE, SOCK_DGRAM);
+    if (sfd == -1)
+        fatal("Could not connect to server socket");
+
+    /* Send remaining command-line arguments to server as separate datagrams */
+
+    for (j = 2; j &lt; argc; j++) {
+        len = strlen(argv[j]);
+        if (write(sfd, argv[j], len) != len)
+            fatal("partial/failed write");
+
+        numRead = read(sfd, buf, BUF_SIZE);
+        if (numRead == -1)
+            errExit("read");
+
+        printf("[%ld bytes] %.*s\n", (long) numRead, (int) numRead, buf);
+    }
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>sockets/id_echo_cl.c</code></strong></pre></div></div><p>Here is an example of what we see when we run the server and two instances of the
+                client:</p><a id="I_programlisting60_d1e155030"/><pre class="programlisting">$ <strong class="userinput"><code>su</code></strong>                                      <em class="lineannotation"><span class="lineannotation">Need privilege to bind reserved port</span></em>
+Password:
+# <strong class="userinput"><code>./id_echo_sv</code></strong>                            <em class="lineannotation"><span class="lineannotation">Server places itself in background</span></em>
+# <strong class="userinput"><code>exit</code></strong>                                    <em class="lineannotation"><span class="lineannotation">Cease to be superuser</span></em>
+$ <strong class="userinput"><code>./id_echo_cl localhost hello world</code></strong>      <em class="lineannotation"><span class="lineannotation">This client sends two datagrams</span></em>
+[5 bytes] hello                           <em class="lineannotation"><span class="lineannotation">Client prints responses from server</span></em>
+[5 bytes] world
+$ <strong class="userinput"><code>./id_echo_cl localhost goodbye</code></strong>          <em class="lineannotation"><span class="lineannotation">This client sends one datagram</span></em>
+[7 bytes] goodbye</pre></div><div class="sect1" title="A Concurrent TCP echo Server"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="a_concurrent_tcp_echo_server">A Concurrent TCP <span class="emphasis"><em>echo</em></span> Server</h2></div></div></div><p>The TCP <span class="emphasis"><em>echo</em></span> service also operates on port 7. The TCP
+                    <span class="emphasis"><em>echo</em></span> server accepts a connection and then loops
+                continuously, reading all transmitted data and sending it back to the client on the
+                same socket. The server continues reading until it detects end-of-file, at which
+                point it closes its socket (so that the client sees end-of-file if it is still
+                reading from its socket).<a id="IDX-CHP-60-7906" class="indexterm"/><a id="IDX-CHP-60-7907" class="indexterm"/><a id="IDX-CHP-60-7908" class="indexterm"/></p><p>Since the client may send an indefinite amount of data to the server (and thus
+                servicing the client may take an indefinite amount of time), a concurrent server
+                design is appropriate, so that multiple clients can be simultaneously served. The
+                server implementation is shown in <a class="xref" href="ch60.html#a_concurrent_server_that_implements_the" title="Example 60-4. A concurrent server that implements the TCP echo service">Example 60-4</a>. (We show an implementation
+                of a client for this service in Section 61.2.) Note the following points about the
+                    implementation:<a id="IDX-CHP-60-7909" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The server becomes a daemon by calling the
+                            <span class="emphasis"><em>becomeDaemon()</em></span> function shown in Section
+                        37.2.</p></li><li class="listitem"><p>To shorten this program, we employ the Internet domain sockets library
+                        shown in <a class="xref" href="ch59.html#an_internet_domain_sockets_librar" title="Example 59-9. An Internet domain sockets library">Example 59-9</a> (page
+                        1228).</p></li><li class="listitem"><p>Since the server creates a child process for each client connection, we
+                        must ensure that zombies are reaped. We do this within a <code class="literal">SIGCHLD</code> handler.</p></li><li class="listitem"><p>The main body of the server consists of a <code class="literal">for</code> loop that accepts a client connection and then uses
+                            <span class="emphasis"><em>fork()</em></span> to create a child process that invokes the
+                            <span class="emphasis"><em>handleRequest()</em></span> function to handle that client. In
+                        the meantime, the parent continues around the <code class="literal">for</code> loop to accept the next client connection.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>In a real-world application, we would probably include some code in
+                            our server to place an upper limit on the number of child processes that
+                            the server could create, in order to prevent an attacker from attempting
+                            a remote fork bomb by using the service to create so many processes on
+                            the system that it becomes unusable. We could impose this limit by
+                            adding extra code in the server to count the number of children
+                            currently executing (this count would be incremented after a successful
+                                <span class="emphasis"><em>fork()</em></span> and decremented as each child was reaped
+                            in the <code class="literal">SIGCHLD</code> handler). If the limit
+                            on the number of children were reached, we could then temporarily stop
+                            accepting connections (or alternatively, accept connections and then
+                            immediately close them).</p></div></li><li class="listitem"><p>After each <span class="emphasis"><em>fork()</em></span>, the file descriptors for the
+                        listening and connected sockets are duplicated in the child (<a class="xref" href="ch24.html#file_sharing_between_parent_and_child" title="File Sharing Between Parent and Child">File Sharing Between Parent and Child</a>). This means that both
+                        the parent and the child could communicate with the client using the
+                        connected socket. However, only the child needs to perform such
+                        communication, and so the parent closes the file descriptor for the
+                        connected socket immediately after the <span class="emphasis"><em>fork()</em></span>. (If the
+                        parent did not do this, then the socket would never actually be closed;
+                        furthermore, the parent would eventually run out of file descriptors.) Since
+                        the child doesn’t accept new connections, it closes its duplicate of the
+                        file descriptor for the listening socket.</p></li><li class="listitem"><p>Each child process terminates after handling a single client.</p></li></ul></div><div class="example"><a id="a_concurrent_server_that_implements_the"/><div class="example-title">Example 60-4. A concurrent server that implements the TCP <span class="emphasis"><em>echo</em></span>
+                    service</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/is_echo_sv.c</code></strong>
+#include &lt;signal.h&gt;
+#include &lt;syslog.h&gt;
+#include &lt;sys/wait.h&gt;
+#include "become_daemon.h"
+#include "inet_sockets.h"       /* Declarations of inet*() socket functions */
+#include "tlpi_hdr.h"
+
+#define SERVICE "echo"          /* Name of TCP service */
+#define BUF_SIZE 4096
+
+static void             /* SIGCHLD handler to reap dead child processes */
+grimReaper(int sig)
+{
+    int savedErrno;             /* Save 'errno' in case changed here */
+
+    savedErrno = errno;
+    while (waitpid(-1, NULL, WNOHANG) &gt; 0)
+        continue;
+    errno = savedErrno;
+}
+
+/* Handle a client request: copy socket input back to socket */
+
+static void
+handleRequest(int cfd)
+{
+    char buf[BUF_SIZE];
+    ssize_t numRead;
+
+    while ((numRead = read(cfd, buf, BUF_SIZE)) &gt; 0) {
+        if (write(cfd, buf, numRead) != numRead) {
+            syslog(LOG_ERR, "write() failed: %s", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    if (numRead == -1) {
+        syslog(LOG_ERR, "Error from read(): %s", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+}
+
+int
+main(int argc, char *argv[])
+{
+    int lfd, cfd;               /* Listening and connected sockets */
+    struct sigaction sa;
+
+    if (becomeDaemon(0) == -1)
+        errExit("becomeDaemon");
+
+    sigemptyset(&amp;sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sa.sa_handler = grimReaper;
+    if (sigaction(SIGCHLD, &amp;sa, NULL) == -1) {
+        syslog(LOG_ERR, "Error from sigaction(): %s", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+
+    lfd = inetListen(SERVICE, 10, NULL);
+    if (lfd == -1) {
+        syslog(LOG_ERR, "Could not create server socket (%s)", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+
+    for (;;) {
+        cfd = accept(lfd, NULL, NULL);  /* Wait for connection */
+        if (cfd == -1) {
+            syslog(LOG_ERR, "Failure in accept(): %s", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+
+        /* Handle each client request in a new child process */
+
+        switch (fork()) {
+        case -1:
+            syslog(LOG_ERR, "Can't create child (%s)", strerror(errno));
+            close(cfd);                 /* Give up on this client */
+            break;                      /* May be temporary; try next client */
+
+        case 0:                         /* Child */
+            close(lfd);                 /* Unneeded copy of listening socket */
+            handleRequest(cfd);
+            _exit(EXIT_SUCCESS);
+
+        default:                        /* Parent */
+            close(cfd);                 /* Unneeded copy of connected socket */
+            break;                      /* Loop to accept next connection */
+        }
+    }
+}
+     <strong class="userinput"><code>sockets/is_echo_sv.c</code></strong></pre></div></div></div><div class="sect1" title="Other Concurrent Server Designs"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="other_concurrent_server_designs">Other Concurrent Server Designs</h2></div></div></div><p>The traditional concurrent server model described in the previous section is
+                adequate for many applications that need to simultaneously handle multiple clients
+                via TCP connections. However, for very high-load servers (for example, web servers
+                handling thousands of requests per minute), the cost of creating a new child (or
+                even thread) for each client imposes a significant burden on the server (refer to
+                    <a class="xref" href="ch28.html#speed_of_process_creation" title="Speed of Process Creation">Speed of Process Creation</a>), and alternative designs need to be
+                employed. We briefly consider some of these alternatives.<a id="IDX-CHP-60-7910" class="indexterm"/><a id="IDX-CHP-60-7911" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="preforked_and_prethreaded_servers"/></div></div></div><div class="sect3" title="Preforked and prethreaded servers"><div class="titlepage"><div><div><h4 class="title" id="preforked_and_prethreaded_servers-id1">Preforked and prethreaded servers</h4></div></div></div><p>Preforked and prethreaded servers are described in some detail in <a class="xref" href="ch30.html" title="Chapter 30. Threads: Thread Synchronization">Chapter 30</a> of [Stevens et al.,
+                        2004]. The key ideas are the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Instead of creating a new child process (or thread) for each
+                                client, the server precreates a fixed number of child processes (or
+                                threads) immediately on startup (i.e., before any client requests
+                                are even received). These children constitute a so-called
+                                    <span class="emphasis"><em>server pool</em></span>.<a id="IDX-CHP-60-7912" class="indexterm"/></p></li><li class="listitem"><p>Each child in the server pool handles one client at a time, but
+                                instead of terminating after handling the client, the child fetches
+                                the next client to be serviced and services it, and so on.</p></li></ul></div><p>Employing the above technique requires some careful management within the
+                        server application. The server pool should be large enough to ensure
+                        adequate response to client requests. This means that the server parent must
+                        monitor the number of unoccupied children, and, in times of peak load,
+                        increase the size of the pool so that there are always enough child
+                        processes available to immediately serve new clients. If the load decreases,
+                        then the size of the server pool should be reduced, since having excess
+                        processes on the system can degrade overall system performance.</p><p>In addition, the children in the server pool must follow some protocol to
+                        allow them to exclusively select individual client connections. On most UNIX
+                        implementations (including Linux), it is sufficient to have each child in
+                        the pool block in an <span class="emphasis"><em>accept()</em></span> call on the listening
+                        descriptor. In other words, the server parent creates the listening socket
+                        before creating any children, and each of the children inherits a file
+                        descriptor for the socket during the <span class="emphasis"><em>fork()</em></span>. When a new
+                        client connection arrives, only one of the children will complete the
+                            <span class="emphasis"><em>accept()</em></span> call. However, because
+                            <span class="emphasis"><em>accept()</em></span> is not an atomic system call on some older
+                        implementations, the call may need to be bracketed by some mutual-exclusion
+                        technique (e.g., a file lock) to ensure that only one child at a time
+                        performs the call ([Stevens et al., 2004]).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>There are alternatives to having all of the children in the server
+                            pool perform <span class="emphasis"><em>accept()</em></span> calls. If the server pool
+                            consists of separate processes, the server parent can perform the
+                                <span class="emphasis"><em>accept()</em></span> call, and then pass the file
+                            descriptor containing the new connection to one of the free processes in
+                            the pool, using a technique that we briefly describe in <a class="xref" href="ch61.html#passing_file_descriptors" title="Passing File Descriptors">Passing File Descriptors</a>. If the server pool consists of
+                            threads, the main thread can perform the <span class="emphasis"><em>accept()</em></span>
+                            call, and then inform one of the free server threads that a new client
+                            is available on the connected descriptor.</p></div></div><div class="sect3" title="Handling multiple clients from a single process"><div class="titlepage"><div><div><h4 class="title" id="handling_multiple_clients_from_a_single">Handling multiple clients from a single process</h4></div></div></div><p>In some cases, we can design a single server process to handle multiple
+                        clients. To do this, we must employ one of the I/O models (I/O multiplexing,
+                        signal-driven I/O, or <span class="emphasis"><em>epoll</em></span>) that allow a single
+                        process to simultaneously monitor multiple file descriptors for I/O events.
+                        These models are described in <a class="xref" href="ch63.html" title="Chapter 63. Alternative I/O Models">Chapter 63</a>.<a id="IDX-CHP-60-7913" class="indexterm"/><a id="IDX-CHP-60-7914" class="indexterm"/><a id="IDX-CHP-60-7915" class="indexterm"/></p><p>In a single-server design, the server process must take on some of the
+                        scheduling tasks that are normally handled by the kernel. In a solution that
+                        involves one server process per client, we can rely on the kernel to ensure
+                        that each server process (and thus client) gets a fair share of access to
+                        the resources of the server host. But when we use a single server process to
+                        handle multiple clients, the server must do some work to ensure that one or
+                        a few clients don’t monopolize access to the server while other clients are
+                        starved. We say a little more about this point in <a class="xref" href="ch63.html#edge-triggered_notification" title="Edge-Triggered Notification">Edge-Triggered Notification</a>.</p></div><div class="sect3" title="Using server farms"><div class="titlepage"><div><div><h4 class="title" id="using_server_farms">Using server farms</h4></div></div></div><p>Other approaches to handling high client loads involve the use of multiple
+                        server systems—a <span class="emphasis"><em>server farm</em></span>.<a id="IDX-CHP-60-7916" class="indexterm"/><a id="IDX-CHP-60-7917" class="indexterm"/><a id="IDX-CHP-60-7918" class="indexterm"/><a id="IDX-CHP-60-7919" class="indexterm"/><a id="IDX-CHP-60-7920" class="indexterm"/></p><p>One of the simplest approaches to building a server farm (employed by some
+                        web servers) is <span class="emphasis"><em>DNS round-robin load sharing</em></span> (or
+                            <span class="emphasis"><em>load distribution</em></span>), where the authoritative name
+                        server for a zone maps the same domain name to several IP addresses (i.e.,
+                        several servers share the same domain name). Successive requests to the DNS
+                        server to resolve the domain name return these IP addresses in round-robin
+                        order. Further information about DNS round-robin load sharing can be found
+                        in [Albitz &amp; Liu, 2006].<a id="IDX-CHP-60-7921" class="indexterm"/></p><p>Round-robin DNS has the advantage of being inexpensive and easy to set up.
+                        However, it does have some shortcomings. A DNS server performing iterative
+                        resolution may cache its results (see <a class="xref" href="ch59.html#domain_name_system_open_parenthesis_dns" title="Domain Name System (DNS)">Domain Name System (DNS)</a>), with the result
+                        that future queries on the domain name return the same IP address, instead
+                        of the round-robin sequence generated by the authoritative DNS server. Also,
+                        round-robin DNS doesn’t have any built-in mechanisms for ensuring good load
+                        balancing (different clients may place different loads on a server) or
+                        ensuring high availability (what if one of the servers dies or the server
+                        application that it is running crashes?). Another issue that we may need to
+                        consider—one that is faced by many designs that employ multiple server
+                        machines—is ensuring <span class="emphasis"><em>server affinity</em></span>; that is, ensuring
+                        that a sequence of requests from the same client are all directed to the
+                        same server, so that any state information maintained by the server about
+                        the client remains accurate.<a id="IDX-CHP-60-7922" class="indexterm"/><a id="IDX-CHP-60-7923" class="indexterm"/></p><p>A more flexible, but also more complex, solution is <span class="emphasis"><em>server load
+                            balancing</em></span>. In this scenario, a single load-balancing server
+                        routes incoming client requests to one of the members of the server farm.
+                        (To ensure high availability, there may be a backup server that takes over
+                        if the primary load-balancing server crashes.) This eliminates the problems
+                        associated with remote DNS caching, since the server farm presents a single
+                        IP address (that of the load-balancing server) to the outside world. The
+                        load-balancing server incorporates algorithms to measure or estimate server
+                        load (perhaps based on metrics supplied by the members of the server farm)
+                        and intelligently distribute the load across the members of the server farm.
+                        The load-balancing server also automatically detects failures in members of
+                        the server farm (and the addition of new servers, if demand requires it).
+                        Finally, a load-balancing server may also provide support for server
+                        affinity. Further information about server load balancing can be found in
+                        [Kopparapu, 2002].</p></div></div></div><div class="sect1" title="The inetd (Internet Superserver) Daemon"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_inetd_open_parenthesis_internet_supe">The <span class="emphasis"><em>inetd</em></span> (Internet Superserver) Daemon</h2></div></div></div><p>If we look through the contents of <code class="literal">/etc/services</code>, we see literally hundreds of different services
+                listed. This implies that a system could theoretically be running a large number of
+                server processes. However, most of these servers would usually be doing nothing but
+                waiting for infrequent connection requests or datagrams. All of these server
+                processes would nevertheless occupy slots in the kernel process table, and consume
+                some memory and swap space, thus placing a load on the system.</p><p>The <span class="emphasis"><em>inetd</em></span> daemon is designed to eliminate the need to run
+                large numbers of infrequently used servers. Using <span class="emphasis"><em>inetd</em></span>
+                provides two main benefits:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Instead of running a separate daemon for each service, a single
+                        process—the <span class="emphasis"><em>inetd</em></span> daemon—monitors a specified set of
+                        socket ports and starts other servers as required. Thus, the number of
+                        processes running on the system is reduced.</p></li><li class="listitem"><p>The programming of the servers started by <span class="emphasis"><em>inetd</em></span> is
+                        simplified, because <span class="emphasis"><em>inetd</em></span> performs several of the steps
+                        that are commonly required by all network servers on startup.</p></li></ul></div><p>Since it oversees a range of services, invoking other servers as required,
+                    <span class="emphasis"><em>inetd</em></span> is sometimes known as the <span class="emphasis"><em>Internet
+                    superserver</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>An extended version of <span class="emphasis"><em>inetd</em></span>,
+                    <span class="emphasis"><em>xinetd</em></span>, is provided in some Linux distributions. Among
+                    other things, <span class="emphasis"><em>xinetd</em></span> adds a number of security
+                    enhancements. Information about <span class="emphasis"><em>xinetd</em></span> can be found at
+                        <a class="ulink" href="http://www.xinetd.org/" target="_top">http://www.xinetd.org/</a>.</p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="operation_of_the_inetd_daemon"/></div></div></div><div class="sect3" title="Operation of the inetd daemon"><div class="titlepage"><div><div><h4 class="title" id="operation_of_the_inetd_daemon-id1">Operation of the <span class="emphasis"><em>inetd</em></span> daemon</h4></div></div></div><p>The <span class="emphasis"><em>inetd</em></span> daemon is normally started during system
+                        boot. After becoming a daemon process (<a class="xref" href="ch37.html#creating_a_daemon" title="Creating a Daemon">Creating a Daemon</a>),
+                            <span class="emphasis"><em>inetd</em></span> performs the following steps:<a id="IDX-CHP-60-7924" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>For each of the services specified in its configuration file,
+                                    <code class="literal">/etc/inetd.conf</code>,
+                                    <span class="emphasis"><em>inetd</em></span> creates a socket of the appropriate
+                                type (i.e., stream or datagram) and binds it to the specified port.
+                                Each TCP socket is additionally marked to permit incoming
+                                connections via a call to <span class="emphasis"><em>listen()</em></span>.</p></li><li class="listitem"><p>Using the <span class="emphasis"><em>select()</em></span> system call (<a class="xref" href="ch63.html#the_select_open_parenthesis_close_parent" title="The select() System Call">The <span class="emphasis"><em>select()</em></span> System Call</a>),
+                                    <span class="emphasis"><em>inetd</em></span> monitors all of the sockets created
+                                in the preceding step for datagrams or incoming connection
+                                requests.</p></li><li class="listitem"><p>The <span class="emphasis"><em>select()</em></span> call blocks until either a UDP
+                                socket has a datagram available to read or a connection request is
+                                received on a TCP socket. In the case of a TCP connection,
+                                    <span class="emphasis"><em>inetd</em></span> performs an
+                                    <span class="emphasis"><em>accept()</em></span> for the connection before
+                                proceeding to the next step.</p></li><li class="listitem"><p>To start the server specified for this socket,
+                                    <span class="emphasis"><em>inetd()</em></span> calls <span class="emphasis"><em>fork()</em></span>
+                                to create a new process that then does an
+                                    <span class="emphasis"><em>exec()</em></span> to start the server program. Before
+                                performing the <span class="emphasis"><em>exec()</em></span>, the child process
+                                performs the following steps:</p><div class="orderedlist"><ol class="orderedlist" type="a"><li class="listitem"><p>Close all of the file descriptors inherited from its
+                                        parent, except the one for the socket on which the UDP
+                                        datagram is available or the TCP connection has been
+                                        accepted.</p></li><li class="listitem"><p>Use the techniques described in <a class="xref" href="ch05.html#duplicating_file_descriptors" title="Duplicating File Descriptors">Duplicating File Descriptors</a> to duplicate
+                                        the socket file descriptor on file descriptors 0, 1, and 2,
+                                        and close the socket file descriptor itself (since it is no
+                                        longer required). After this step, the execed server is able
+                                        to communicate on the socket by using the three standard
+                                        file descriptors.</p></li><li class="listitem"><p>Optionally, set the user and group IDs for the execed
+                                        server to values specified in <code class="literal">/etc/inetd.conf</code>.</p></li></ol></div></li><li class="listitem"><p>If a connection was accepted on a TCP socket in step 3,
+                                    <span class="emphasis"><em>inetd</em></span> closes the connected socket (since it
+                                is needed only in the execed server).</p></li><li class="listitem"><p>The <span class="emphasis"><em>inetd</em></span> server returns to step 2.</p></li></ol></div></div><div class="sect3" title="The /etc/inetd.conf file"><div class="titlepage"><div><div><h4 class="title" id="the_solidus_etc_solidus_inetd.conf_file">The <code class="literal">/etc/inetd.conf</code> file</h4></div></div></div><p>The operation of the <span class="emphasis"><em>inetd</em></span> daemon is controlled by a
+                        configuration file, normally /<code class="literal">etc/inetd.conf</code>. Each line in this file describes one of the
+                        services to be handled by <span class="emphasis"><em>inetd</em></span>. <a class="xref" href="ch60.html#example_lines_from_solidus_etc_solidus_i" title="Example 60-5. Example lines from /etc/inetd.conf">Example 60-5</a> shows some examples
+                        of entries in the <code class="literal">/etc/inetd.conf</code> file
+                        that comes with one Linux distribution.<a id="IDX-CHP-60-7925" class="indexterm"/></p><div class="example"><a id="example_lines_from_solidus_etc_solidus_i"/><div class="example-title">Example 60-5. Example lines from <code class="literal">/etc/inetd.conf</code></div><div class="example-contents"><pre class="programlisting"># echo  stream  tcp  nowait  root    internal
+# echo  dgram   udp  wait    root    internal
+ftp     stream  tcp  nowait  root    /usr/sbin/tcpd   in.ftpd
+telnet  stream  tcp  nowait  root    /usr/sbin/tcpd   in.telnetd
+login   stream  tcp  nowait  root    /usr/sbin/tcpd   in.rlogind</pre></div></div><p>The first two lines of <a class="xref" href="ch60.html#example_lines_from_solidus_etc_solidus_i" title="Example 60-5. Example lines from /etc/inetd.conf">Example 60-5</a> are commented out
+                        by the initial <code class="literal">#</code> character; we show them
+                        now since we’ll refer to the <span class="emphasis"><em>echo</em></span> service
+                        shortly.</p><p>Each line of <code class="literal">/etc/inetd.conf</code> consists
+                        of the following fields, delimited by white space:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>Service name</em></span>: This specifies the name of a
+                                service from the <code class="literal">/etc/services</code>
+                                file. In conjunction with the <span class="emphasis"><em>protocol</em></span> field,
+                                this is used to look up <code class="literal">/etc/services</code> to determine which port number
+                                    <span class="emphasis"><em>inetd</em></span> should monitor for this
+                                service.</p></li><li class="listitem"><p><span class="emphasis"><em>Socket type</em></span>: This specifies the type of
+                                socket used by this service—for example, <code class="literal">stream</code> or <code class="literal">dgram</code>.</p></li><li class="listitem"><p><span class="emphasis"><em>Protocol</em></span>: This specifies the protocol to be
+                                used by this socket. This field can contain any of the Internet
+                                protocols listed in the file <code class="literal">/etc/protocols</code> (documented in the
+                                    <span class="emphasis"><em>protocols(5)</em></span> manual page), but almost every
+                                service specifies either <code class="literal">tcp</code> (for
+                                TCP) or <code class="literal">udp</code> (for UDP).</p></li><li class="listitem"><p><span class="emphasis"><em>Flags</em></span>: This field contains either <code class="literal">wait</code> or <code class="literal">nowait</code>. This field specifies whether or not the
+                                server execed by <span class="emphasis"><em>inetd</em></span> (temporarily) takes over
+                                management of the socket for this service. If the execed server
+                                manages the socket, then this field is specified as <code class="literal">wait</code>. This causes
+                                    <span class="emphasis"><em>inetd</em></span> to remove this socket from the file
+                                descriptor set that it monitors using <span class="emphasis"><em>select()</em></span>
+                                until the execed server exits (<span class="emphasis"><em>inetd</em></span> detects
+                                this via a handler for <code class="literal">SIGCHLD</code>).
+                                We say some more about this field below.</p></li><li class="listitem"><p><span class="emphasis"><em>Login name</em></span>: This field consists of a username
+                                from <code class="literal">/etc/passwd</code>, optionally
+                                followed by a period (<code class="literal">.</code>) and a
+                                group name from <code class="literal">/etc/group</code>. These
+                                determine the user and group IDs under which the execed server is
+                                run. (Since <span class="emphasis"><em>inetd</em></span> runs with an effective user
+                                ID of <span class="emphasis"><em>root</em></span>, its children are also privileged
+                                and can thus use calls to <span class="emphasis"><em>setuid()</em></span> and
+                                    <span class="emphasis"><em>setgid()</em></span> to change process credentials if
+                                desired.)</p></li><li class="listitem"><p><span class="emphasis"><em>Server program</em></span>: This specifies the pathname
+                                of the server program to be execed.</p></li><li class="listitem"><p><span class="emphasis"><em>Server program arguments</em></span>: This field
+                                specifies one or more arguments, separated by white space, to be
+                                used as the argument list when execing the server program. The first
+                                of these corresponds to <span class="emphasis"><em>argv[0]</em></span> in the execed
+                                program and is thus usually the same as the basename part of the
+                                    <span class="emphasis"><em>server program</em></span> name. The next argument
+                                corresponds to <span class="emphasis"><em>argv[1]</em></span>, and so on.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>In the example lines shown in <a class="xref" href="ch60.html#example_lines_from_solidus_etc_solidus_i" title="Example 60-5. Example lines from /etc/inetd.conf">Example 60-5</a> for the
+                                <span class="emphasis"><em>ftp</em></span>, <span class="emphasis"><em>telnet</em></span>, and
+                                <span class="emphasis"><em>login</em></span> services, we see the server program and
+                            arguments are set up differently than just described. All three of these
+                            services cause <span class="emphasis"><em>inetd</em></span> to invoke the same program,
+                                <span class="emphasis"><em>tcpd(8)</em></span> (the TCP daemon wrapper), which
+                            performs some logging and access-control checks before in turn execing
+                            the appropriate program, based on the value specified as the first
+                            server program argument (which is available to <span class="emphasis"><em>tcpd</em></span>
+                            via <span class="emphasis"><em>argv[0]</em></span>). Further information about
+                                <span class="emphasis"><em>tcpd</em></span> can be found in the
+                                <span class="emphasis"><em>tcpd(8)</em></span> manual page and in [Mann &amp;
+                            Mitchell, 2003].</p></div><p>Stream socket (TCP) servers invoked by <span class="emphasis"><em>inetd</em></span> are
+                        normally designed to handle just a single client connection and then
+                        terminate, leaving <span class="emphasis"><em>inetd</em></span> with the job of listening for
+                        further connections. For such servers, <span class="emphasis"><em>flags</em></span> should be
+                        specified as <code class="literal">nowait</code>. (If, instead, the
+                        execed server is to accept connections, then <code class="literal">wait</code> should be specified, in which case
+                            <span class="emphasis"><em>inetd</em></span> does not accept the connection, but instead
+                        passes the file descriptor for the <span class="emphasis"><em>listening</em></span> socket to
+                        the execed server as descriptor 0.)</p><p>For most UDP servers, the <span class="emphasis"><em>flags</em></span> field should be
+                        specified as <code class="literal">wait</code>. A UDP server invoked
+                        by <span class="emphasis"><em>inetd</em></span> is normally designed to read and process all
+                        outstanding datagrams on the socket and then terminate. (This usually
+                        requires some sort of timeout when reading the socket, so that the server
+                        terminates when no new datagrams arrive within a specified interval.) By
+                        specifying <code class="literal">wait</code>, we prevent the
+                            <span class="emphasis"><em>inetd</em></span> daemon from simultaneously trying to
+                            <span class="emphasis"><em>select()</em></span> on the socket, which would have the
+                        unintended consequence that <span class="emphasis"><em>inetd</em></span> would race the UDP
+                        server to check for datagrams and, if it won the race, start another
+                        instance of the UDP server.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Because the operation of <span class="emphasis"><em>inetd</em></span> and the format of
+                            its configuration file are not specified by SUSv3, there are some
+                            (generally small) variations in the values that can be specified in the
+                            fields of <code class="literal">/etc/inetd.conf</code>. Most
+                            versions of <span class="emphasis"><em>inetd</em></span> provide at least the syntax that
+                            we describe in the main text. For further details, see the
+                                <span class="emphasis"><em>inetd.conf(8)</em></span> manual page.</p></div><p>As an efficiency measure, <span class="emphasis"><em>inetd</em></span> implements a few
+                        simple services itself, instead of execing separate servers to perform the
+                        task. The UDP and TCP <span class="emphasis"><em>echo</em></span> services are examples of
+                        services that <span class="emphasis"><em>inetd</em></span> implements. For such services, the
+                            <span class="emphasis"><em>server program</em></span> field of the corresponding <code class="literal">/etc/inetd.conf</code> record is specified as
+                            <code class="literal">internal</code>, and the <span class="emphasis"><em>server
+                            program arguments</em></span> are omitted. (In the example lines in <a class="xref" href="ch60.html#example_lines_from_solidus_etc_solidus_i" title="Example 60-5. Example lines from /etc/inetd.conf">Example 60-5</a>, we saw that the
+                            <span class="emphasis"><em>echo</em></span> service entries were commented out. To enable
+                        the <span class="emphasis"><em>echo</em></span> service, we need to remove the <code class="literal">#</code> character at the start of these
+                        lines.)</p><p>Whenever we change the <code class="literal">/etc/inetd.conf</code>
+                        file, we need to send a <code class="literal">SIGHUP</code> signal to
+                            <span class="emphasis"><em>inetd</em></span> to request it to reread the file:</p><a id="I_programlisting60_d1e155812"/><pre class="programlisting"># <strong class="userinput"><code>killall -HUP inetd</code></strong></pre></div><div class="sect3" title="Example: invoking a TCP echo service via inetd"><div class="titlepage"><div><div><h4 class="title" id="example_colon_invoking_a_tcp_echo_servic">Example: invoking a TCP <span class="emphasis"><em>echo</em></span> service via
+                            <span class="emphasis"><em>inetd</em></span></h4></div></div></div><p>We noted earlier that <span class="emphasis"><em>inetd</em></span> simplifies the
+                        programming of servers, especially concurrent (usually TCP) servers. It does
+                        this by carrying out the following steps on behalf of the servers it
+                            invokes:<a id="IDX-CHP-60-7926" class="indexterm"/><a id="IDX-CHP-60-7927" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Perform all socket-related initialization, calling
+                                    <span class="emphasis"><em>socket()</em></span>, <span class="emphasis"><em>bind()</em></span>, and
+                                (for TCP servers) <span class="emphasis"><em>listen()</em></span>.</p></li><li class="listitem"><p>For a TCP service, perform an <span class="emphasis"><em>accept()</em></span> for
+                                the new connection.</p></li><li class="listitem"><p>Create a new process to handle the incoming UDP datagram or TCP
+                                connection. The process is automatically set up as a daemon. The
+                                    <span class="emphasis"><em>inetd</em></span> program handles all details of
+                                process creation via <span class="emphasis"><em>fork()</em></span> and the reaping of
+                                dead children via a handler for <code class="literal">SIGCHLD</code>.</p></li><li class="listitem"><p>Duplicate the file descriptor of the UDP socket or the connected
+                                TCP socket on file descriptors 0, 1, and 2, and close all other file
+                                descriptors (since they are unused in the execed server).</p></li><li class="listitem"><p>Exec the server program.</p></li></ol></div><p>(In the description of the above steps, we assume the usual cases that the
+                            <span class="emphasis"><em>flags</em></span> field of the service entry in <code class="literal">/etc/inetd.conf</code> is specified as <code class="literal">nowait</code> for TCP services and <code class="literal">wait</code> for UDP services.)</p><p>As an example of how <span class="emphasis"><em>inetd</em></span> simplifies the programming
+                        of a TCP service, in <a class="xref" href="ch60.html#tcp_echo_server_designed_to_be_invoked_v" title="Example 60-6. TCP echo server designed to be invoked via inetd">Example 60-6</a>, we show the
+                            <span class="emphasis"><em>inetd</em></span>-invoked equivalent of the TCP
+                            <span class="emphasis"><em>echo</em></span> server from <a class="xref" href="ch60.html#a_concurrent_server_that_implements_the" title="Example 60-4. A concurrent server that implements the TCP echo service">Example 60-4</a>. Since
+                            <span class="emphasis"><em>inetd</em></span> performs all of the above steps, all that
+                        remains of the server is the code executed by the child process to handle
+                        the client request, which can be read from file descriptor 0 (<code class="literal">STDIN_FILENO</code>).</p><p>If the server resides in the directory <code class="literal">/bin</code> (for example), then we would need to create the
+                        following entry in <code class="literal">/etc/inetd.conf</code> in
+                        order to have <span class="emphasis"><em>inetd</em></span> invoke the server:</p><a id="I_programlisting60_d1e155921"/><pre class="programlisting">echo stream tcp nowait root /bin/is_echo_inetd_sv is_echo_inetd_sv</pre><div class="example"><a id="tcp_echo_server_designed_to_be_invoked_v"/><div class="example-title">Example 60-6. TCP <span class="emphasis"><em>echo</em></span> server designed to be invoked via
+                                <span class="emphasis"><em>inetd</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/is_echo_inetd_sv.c</code></strong>
+#include &lt;syslog.h&gt;
+#include "tlpi_hdr.h"
+
+#define BUF_SIZE 4096
+
+int
+main(int argc, char *argv[])
+{
+    char buf[BUF_SIZE];
+    ssize_t numRead;
+
+    while ((numRead = read(STDIN_FILENO, buf, BUF_SIZE)) &gt; 0) {
+        if (write(STDOUT_FILENO, buf, numRead) != numRead) {
+            syslog(LOG_ERR, "write() failed: %s", strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    if (numRead == -1) {
+        syslog(LOG_ERR, "Error from read(): %s", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>sockets/is_echo_inetd_sv.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id59">Summary</h2></div></div></div><p>An iterative server handles one client at a time, processing that client’s
+                request(s) completely, before proceeding to the next client. A concurrent server
+                handles multiple clients simultaneously. In high-load scenarios, a traditional
+                concurrent server design that creates a new child process (or thread) for each
+                client may not perform well enough, and we outlined a range of other approaches for
+                concurrently handling large numbers of clients.</p><p>The Internet superserver daemon, <span class="emphasis"><em>inetd</em></span>, monitors multiple
+                sockets and starts the appropriate servers in response to incoming UDP datagrams or
+                TCP connections. Using <span class="emphasis"><em>inetd</em></span> allows us to decrease system load
+                by minimizing the number of network server processes on the system, and also
+                simplifies the programming of server processes, since it performs most of the
+                initialization steps required by a server.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id82"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id83">Further information</h4></div></div></div><p>Refer to the sources of further information listed in <a class="xref" href="ch59.html#further_information-id81" title="Further Information">Further Information</a>.</p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id41">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Add code to the program in <a class="xref" href="ch60.html#a_concurrent_server_that_implements_the" title="Example 60-4. A concurrent server that implements the TCP echo service">Example 60-4</a> (<code class="literal">is_echo_sv.c</code>) to place a limit on the number
+                        of simultaneously executing children.<a id="IDX-CHP-60-7928" class="indexterm"/></p></li><li class="listitem"><p>Sometimes, it may be necessary to write a socket server so that it can be
+                        invoked either directly from the command line or indirectly via
+                            <span class="emphasis"><em>inetd</em></span>. In this case, a command-line option is used
+                        to distinguish the two cases. Modify the program in <a class="xref" href="ch60.html#a_concurrent_server_that_implements_the" title="Example 60-4. A concurrent server that implements the TCP echo service">Example 60-4</a> so that, if it is
+                        given a <span class="emphasis"><em>-i</em></span> command-line option, it assumes that it is
+                        being invoked by <span class="emphasis"><em>inetd</em></span> and handles a single client on
+                        the connected socket, which <span class="emphasis"><em>inetd</em></span> supplies via <code class="literal">STDIN_FILENO</code>. If the <span class="emphasis"><em>-i</em></span>
+                        option is not supplied, then the program can assume it is being invoked from
+                        the command line, and operate in the usual fashion. (This change requires
+                        only the addition of a few lines of code.) Modify <code class="literal">/etc/inetd.conf</code> to invoke this program for the
+                            <span class="emphasis"><em>echo</em></span> service.</p></li></ol></div></div></section></body></html>

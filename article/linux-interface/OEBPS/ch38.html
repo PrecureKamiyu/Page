@@ -1,0 +1,508 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 38. Writing Secure Privileged Programs</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch37.html" title="Chapter 37. Daemons"/><link rel="next" href="ch39.html" title="Chapter 39. Capabilities"/></head><body><section class="chapter" title="Chapter 38. Writing Secure Privileged Programs" epub:type="chapter" id="writing_secure_privileged_programs"><div class="titlepage"><div><div><h2 class="title">Chapter 38. Writing Secure Privileged Programs</h2></div></div></div><p>Privileged programs have access to features and resources (files, devices, and so on)
+            that are not available to ordinary users. A program can run with privileges by two
+            general means:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The program was started under a privileged user ID. Many daemons and network
+                    servers, which are typically run as <span class="emphasis"><em>root</em></span>, fall into this
+                    category.</p></li><li class="listitem"><p>The program has its set-user-ID or set-group-ID permission bit set. When a
+                    set-user-ID (set-group-ID) program is execed, it changes the effective user
+                    (group) ID of the process to be the same as the owner (group) of the program
+                    file. (We first described set-user-ID and set-group-ID programs in Section 9.3.)
+                    In this chapter, we’ll sometimes use the term
+                        set-user-ID-<span class="emphasis"><em>root</em></span> to distinguish a set-user-ID program
+                    that gives superuser privileges to a process from one that gives a process
+                    another effective identity.</p></li></ul></div><p>If a privileged program contains bugs, or can be subverted by a malicious user, then
+            the security of the system or an application can be compromised. From a security
+            viewpoint, we should write programs so as to minimize both the chance of a compromise
+            and the damage that can be done if a compromise does occur. These topics form the
+            subject of this chapter, which provides a set of recommended practices for secure
+            programming, and describes various pitfalls that should be avoided when writing
+            privileged programs.<a id="IDX-CHP-38-5497" class="indexterm"/><a id="IDX-CHP-38-5498" class="indexterm"/></p><div class="sect1" title="Is a Set-User-ID or Set-Group-ID Program Required?"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="is_a_set-user-id_or_set-group-id_program">Is a Set-User-ID or Set-Group-ID Program Required?</h2></div></div></div><p>One of the best pieces of advice concerning set-user-ID and set-group-ID programs
+                is to avoid writing them whenever possible. If there is an alternative way of
+                performing a task that doesn’t involve giving a program privilege, we should
+                generally employ that alternative, since it eliminates the possibility of a security
+                compromise.</p><p>Sometimes, we can isolate the functionality that needs privilege into a separate
+                program that performs a single task, and exec that program in a child process as
+                required. This technique can be especially useful for libraries. One example of such
+                a use is provided by the <span class="emphasis"><em>pt_chown</em></span> program described in <a class="xref" href="ch64.html#changing_slave_ownership_and_permissions" title="Changing Slave Ownership and Permissions: grantpt()">Changing Slave Ownership and Permissions:
+                    <span class="emphasis"><em>grantpt()</em></span></a>.<a id="IDX-CHP-38-5499" class="indexterm"/></p><p>Even in cases where a set-user-ID or set-group-ID is needed, it isn’t always
+                necessary for a set-user-ID program to give a process <span class="emphasis"><em>root</em></span>
+                credentials. If giving a process some other credentials suffices, then this option
+                should be preferred, since running with <span class="emphasis"><em>root</em></span> privileges opens
+                the gates to possible security compromises.<a id="IDX-CHP-38-5500" class="indexterm"/></p><p>Consider a set-user-ID program that needs to allow users to update a file on which
+                they do not have write permission. A safer way to do this is to create a dedicated
+                group account (group ID) for this program, change the group ownership of the file to
+                that group (and make the file writable by that group), and write a set-group-ID
+                program that sets the process’s effective group ID to the dedicated group ID. Since
+                the dedicated group ID is not otherwise privileged, this greatly limits the damage
+                that can be done if the program contains bugs or can otherwise be
+                    subverted.<a id="IDX-CHP-38-5501" class="indexterm"/></p></div><div class="sect1" title="Operate with Least Privilege"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="operate_with_least_privilege">Operate with Least Privilege</h2></div></div></div><p>A set-user-ID (or set-group-ID) program typically requires privileges only to
+                perform certain operations. While the program (especially one assuming superuser
+                privileges) is performing other work, it should disable these privileges. When
+                privileges will never again be required, they should be dropped permanently. In
+                other words, the program should always operate with the <span class="emphasis"><em>least
+                    privilege</em></span> required to accomplish the tasks that it is currently
+                performing. The saved set-user-ID facility was designed for this purpose (<a class="xref" href="ch09.html#saved_set-user-id_and_saved_set-group-id" title="Saved Set-User-ID and Saved Set-Group-ID">Saved Set-User-ID and Saved Set-Group-ID</a>).<a id="IDX-CHP-38-5502" class="indexterm"/><a id="IDX-CHP-38-5503" class="indexterm"/><a id="IDX-CHP-38-5504" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="hold_privileges_only_while_they_are"/></div></div></div><div class="sect3" title="Hold privileges only while they are required"><div class="titlepage"><div><div><h4 class="title" id="hold_privileges_only_while_they_are-id1">Hold privileges only while they are required</h4></div></div></div><p>In a set-user-ID program, we can use the following sequence of
+                            <span class="emphasis"><em>seteuid()</em></span> calls to temporarily drop and then
+                        reacquire privileges:<a id="IDX-CHP-38-5505" class="indexterm"/></p><a id="I_programlisting38_d1e103997"/><pre class="programlisting">uid_t orig_euid;
+
+orig_euid = geteuid();
+if (seteuid(getuid()) == -1)            /* Drop privileges */
+    errExit("seteuid");
+
+/* Do unprivileged work */
+
+if (seteuid(orig_euid) == -1)           /* Reacquire privileges */
+    errExit("seteuid");
+
+/* Do privileged work */</pre><p>The first call makes the effective user ID of the calling process the same
+                        as its real ID. The second call restores the effective user ID to the value
+                        held in the saved set-user-ID.</p><p>For set-group-ID programs, the saved set-group-ID saves the program’s
+                        initial effective group ID, and <span class="emphasis"><em>setegid()</em></span> is used to
+                        drop and reacquire privilege. We describe <span class="emphasis"><em>seteuid()</em></span>,
+                            <span class="emphasis"><em>setegid()</em></span>, and other similar system calls mentioned
+                        in the following recommendations in <a class="xref" href="ch09.html" title="Chapter 9. Process Credentials">Chapter 9</a>
+                        and summarize them in <a class="xref" href="ch09.html#summary_of_interfaces_used_to_change_pro" title="Table 9-1. Summary of interfaces used to change process credentials">Table 9-1</a> (in <a class="xref" href="ch09.html#example_colon_displaying_process_credent" title="Example: Displaying Process Credentials">Example: Displaying Process Credentials</a>).<a id="IDX-CHP-38-5506" class="indexterm"/></p><p>The safest practice is to drop privileges immediately on program startup,
+                        and then temporarily reacquire them as needed at later points in the
+                        program. If, at a certain point, privileges will never be required again,
+                        then the program should drop them irreversibly, by ensuring that the saved
+                        set-user-ID is also changed. This eliminates the possibility of the program
+                        being tricked into reacquiring privilege, perhaps via the stack-crashing
+                        technique described in Section 38.9.</p></div><div class="sect3" title="Drop privileges permanently when they will never again be required"><div class="titlepage"><div><div><h4 class="title" id="drop_privileges_permanently_when_they_wi">Drop privileges permanently when they will never again be
+                        required</h4></div></div></div><p>If a set-user-ID or set-group-ID program finishes all tasks that require
+                        privileges, then it should drop its privileges permanently in order to
+                        eliminate any security risk that could occur because the program is
+                        compromised by a bug or other unexpected behavior. Dropping privileges
+                        permanently is accomplished by resetting all process user (group) IDs to the
+                        same value as the real (group) ID.<a id="IDX-CHP-38-5507" class="indexterm"/><a id="IDX-CHP-38-5508" class="indexterm"/></p><p>From a set-user-ID-<span class="emphasis"><em>root</em></span> program whose effective user
+                        ID is currently 0, we can reset all user IDs using the following
+                        code:</p><a id="I_programlisting38_d1e104045"/><pre class="programlisting">if (setuid(getuid()) == -1)
+    errExit("setuid");</pre><p>However, the above code does <span class="emphasis"><em>not</em></span> reset the saved
+                        set-user-ID if the effective user ID of the calling process is currently
+                        nonzero: when called from a program whose effective user ID is nonzero,
+                            <span class="emphasis"><em>setuid()</em></span> changes only the effective user ID (<a class="xref" href="ch09.html#retrieving_and_modifying_real_comma_effe" title="Retrieving and Modifying Real, Effective, and Saved Set IDs">Retrieving and Modifying Real, Effective, and Saved Set IDs</a>). In other words,
+                        in a set-user-ID-<span class="emphasis"><em>root</em></span> program, the following sequence
+                        doesn’t permanently drop the user ID 0:</p><a id="I_programlisting38_d1e104060"/><pre class="programlisting">/* Initial UIDs:    real=1000 effective=0 saved=0 */
+
+/* 1. Usual call to temporarily drop privilege */
+
+orig_euid = geteuid();
+if (seteuid(getuid() == -1)
+    errExit("seteuid");
+
+/* UIDs changed to: real=1000 effective=1000 saved=0 */
+
+/* 2. Looks like the right way to permanently drop privilege (WRONG!) */
+
+if (setuid(getuid() == -1)
+    errExit("setuid");
+
+/* UIDs unchanged:  real=1000 effective=1000 saved=0 */</pre><p>Instead, we must regain privilege prior to dropping it permanently, by
+                        inserting the following call between steps 1 and 2 above:</p><a id="I_programlisting38_d1e104064"/><pre class="programlisting">if (seteuid(orig_euid) == -1)
+    errExit("seteuid");</pre><p>On the other hand, if we have a set-user-ID program owned by a user other
+                        than <span class="emphasis"><em>root</em></span>, then, because <span class="emphasis"><em>setuid()</em></span>
+                        is insufficient to change the saved set-user-ID, we must use either
+                            <span class="emphasis"><em>setreuid()</em></span> or <span class="emphasis"><em>setresuid()</em></span> to
+                        permanently drop the privileged identifier. For example, we could achieve
+                        the desired result using <span class="emphasis"><em>setreuid()</em></span>, as
+                            follows:<a id="IDX-CHP-38-5509" class="indexterm"/></p><a id="I_programlisting38_d1e104088"/><pre class="programlisting">if (setreuid(getuid(), getuid()) == -1)
+    errExit("setreuid");</pre><p>This code relies on a feature of the Linux implementation of
+                            <span class="emphasis"><em>setreuid()</em></span>: if the first
+                        (<span class="emphasis"><em>ruid</em></span>) argument is not -1, then the saved set-user-ID
+                        is also set to the same value as the (new) effective user ID. SUSv3 doesn’t
+                        specify this feature, but many other implementations behave the same way as
+                        Linux. SUSv4 does specify this feature.</p><p>The <span class="emphasis"><em>setregid()</em></span> or <span class="emphasis"><em>setresgid()</em></span>
+                        system call must likewise be used to permanently drop a privileged group ID
+                        in a set-group-ID program, since, when the effective user ID of a program is
+                        nonzero, <span class="emphasis"><em>setgid()</em></span> changes only the effective group ID
+                        of the calling process.<a id="IDX-CHP-38-5510" class="indexterm"/></p></div><div class="sect3" title="General points on changing process credentials"><div class="titlepage"><div><div><h4 class="title" id="general_points_on_changing_process_crede">General points on changing process credentials</h4></div></div></div><p>In the preceding pages, we described techniques for temporarily and
+                        permanently dropping privileges. We now add a few general points regarding
+                        the use of these techniques:<a id="IDX-CHP-38-5511" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The semantics of some of the system calls that change process
+                                credentials vary across systems. Furthermore, the semantics of some
+                                of these system calls vary depending on whether or not the caller is
+                                privileged (effective user ID of 0). For details, see <a class="xref" href="ch09.html" title="Chapter 9. Process Credentials">Chapter 9</a>, and especially <a class="xref" href="ch09.html#summary_of_calls_for_modifying_process_c" title="Summary of Calls for Modifying Process Credentials">Summary of Calls for Modifying Process Credentials</a>. Because of
+                                these variations, [Tsafrir et al., 2008] recommends that
+                                applications should use system-specific
+                                    <span class="emphasis"><em>nonstandard</em></span> system calls for changing
+                                process credentials, since, in many cases, these nonstandard system
+                                calls provide simpler and more consistent semantics than their
+                                standard counterparts. On Linux, this would translate to using
+                                    <span class="emphasis"><em>setresuid()</em></span> and
+                                    <span class="emphasis"><em>setresgid()</em></span> to change user and group
+                                credentials. Although these system calls are not present on all
+                                systems, their use is likely to be less prone to error. ([Tsafrir et
+                                al., 2008] proposes a library of functions that make credential
+                                changes using what they consider to be the best interfaces available
+                                on each platform.)</p></li><li class="listitem"><p>On Linux, even if the caller has an effective user ID of 0, system
+                                calls for changing credentials may not behave as expected if the
+                                program has explicitly manipulated its capabilities. For example, if
+                                the <code class="literal">CAP_SETUID</code> capability has
+                                been disabled, then attempts to change process user IDs will fail
+                                or, even worse, silently change only some of the requested user
+                                IDs.</p></li><li class="listitem"><p>Because of the possibilities listed in the two preceding points,
+                                it is highly recommended practice (see, for example, [Tsafrir et
+                                al., 2008]) to not only check that a credential-changing system call
+                                has succeeded, but also to verify that the change occurred as
+                                expected. For example, if we are temporarily dropping or reacquiring
+                                a privileged user ID using <span class="emphasis"><em>seteuid()</em></span>, then we
+                                should follow that call with a <span class="emphasis"><em>geteuid()</em></span> call
+                                that verifies that the effective user ID is what we expect.
+                                Similarly, if we are dropping a privileged user ID permanently, then
+                                we should verify that the real user ID, effective user ID, and saved
+                                set-user-ID have all been successfully changed to the unprivileged
+                                user ID. Unfortunately, while there are standard system calls for
+                                retrieving the real and effective IDs, there are no standard system
+                                calls for retrieving the saved set IDs. Linux and a few other
+                                systems provide <span class="emphasis"><em>getresuid()</em></span> and
+                                    <span class="emphasis"><em>getresgid()</em></span> for this purpose; on some other
+                                systems, we may need to employ techniques such as parsing
+                                information in <code class="literal">/proc</code>
+                                files.</p></li><li class="listitem"><p>Some credential changes can be made only by processes with an
+                                effective user ID of 0. Therefore, when changing multiple
+                                IDs—supplementary group IDs, group IDs, and user IDs—we should drop
+                                the privileged effective user ID last when dropping privileged IDs.
+                                Conversely, we should raise the privileged effective user ID first
+                                when raising privileged IDs.</p></li></ul></div></div></div></div><div class="sect1" title="Be Careful When Executing a Program"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="be_careful_when_executing_a_program">Be Careful When Executing a Program</h2></div></div></div><p>Caution is required when a privileged program executes another program, either
+                directly, via an <span class="emphasis"><em>exec()</em></span>, or indirectly, via
+                    <span class="emphasis"><em>system()</em></span>, <span class="emphasis"><em>popen()</em></span>, or a similar
+                library function.<a id="IDX-CHP-38-5512" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="drop_privileges_permanently_before"/></div></div></div><div class="sect3" title="Drop privileges permanently before execing another program"><div class="titlepage"><div><div><h4 class="title" id="drop_privileges_permanently_before-id1">Drop privileges permanently before execing another program</h4></div></div></div><p>If a set-user-ID (or set-group-ID) program executes another program, then
+                        it should ensure that all process user (group) IDs are reset to the same
+                        value as the real user (group) ID, so that the new program doesn’t start
+                        with privileges and also can’t reacquire them. One way to do this is to
+                        reset all of the IDs before performing the <span class="emphasis"><em>exec()</em></span>,
+                        using the techniques described in Section 38.2.</p><p>The same result can be achieved by preceding the
+                            <span class="emphasis"><em>exec()</em></span> with the call
+                            <span class="emphasis"><em>setuid(getuid())</em></span>. Even though this
+                            <span class="emphasis"><em>setuid()</em></span> call changes only the effective user ID in
+                        a process whose effective user ID is nonzero, privileges are nevertheless
+                        dropped because (as described in <a class="xref" href="ch09.html#saved_set-user-id_and_saved_set-group-id" title="Saved Set-User-ID and Saved Set-Group-ID">Saved Set-User-ID and Saved Set-Group-ID</a>) a successful
+                            <span class="emphasis"><em>exec()</em></span> goes on to copy the effective user ID to the
+                        saved set-user-ID. (If the <span class="emphasis"><em>exec()</em></span> fails, then the saved
+                        set-user-ID is left unchanged. This may be useful if the program then needs
+                        to perform other privileged work because the <span class="emphasis"><em>exec()</em></span>
+                        failed.)</p><p>A similar approach (i.e., <span class="emphasis"><em>setgid(getgid())</em></span>) can be
+                        used with set-group-ID programs, since a successful
+                            <span class="emphasis"><em>exec()</em></span> also copies the effective group ID to the
+                        saved set-group-ID.</p><p>As an example, suppose that we have a set-user-ID program owned by user ID
+                        200. When this program is executed by a user whose ID is 1000, the user IDs
+                        of the resulting process will be as follows:</p><a id="I_programlisting38_d1e104226"/><pre class="programlisting">real=1000 effective=200 saved=200</pre><p>If this program subsequently executes the call
+                            <span class="emphasis"><em>setuid(getuid())</em></span>, then the process user IDs are
+                        changed to the following:</p><a id="I_programlisting38_d1e104233"/><pre class="programlisting">real=1000 effective=1000 saved=200</pre><p>When the process executes an unprivileged program, the effective user ID
+                        of the process is copied to the saved set-user-ID, resulting in the
+                        following set of process user IDs:</p><a id="I_programlisting38_d1e104237"/><pre class="programlisting">real=1000 effective=1000 saved=1000</pre></div><div class="sect3" title="Avoid executing a shell (or other interpreter) with privileges"><div class="titlepage"><div><div><h4 class="title" id="avoid_executing_a_shell_open_parenthesis">Avoid executing a shell (or other interpreter) with privileges</h4></div></div></div><p>Privileged programs running under user control should never exec a shell,
+                        either directly or indirectly (via <span class="emphasis"><em>system()</em></span>,
+                            <span class="emphasis"><em>popen()</em></span>, <span class="emphasis"><em>execlp()</em></span>,
+                            <span class="emphasis"><em>execvp()</em></span>, or other similar library functions). The
+                        complexity and power of shells (and other unconstrained interpreters such as
+                            <span class="emphasis"><em>awk</em></span>) mean that it is virtually impossible to
+                        eliminate all security loopholes, even if the execed shell doesn’t allow
+                        interactive access. The consequent risk is that the user may be able to
+                        execute arbitrary shell commands under the effective user ID of the process.
+                        If a shell must be execed, ensure that privileges are permanently dropped
+                            beforehand.<a id="IDX-CHP-38-5513" class="indexterm"/><a id="IDX-CHP-38-5514" class="indexterm"/><a id="IDX-CHP-38-5515" class="indexterm"/><a id="IDX-CHP-38-5516" class="indexterm"/><a id="IDX-CHP-38-5517" class="indexterm"/><a id="IDX-CHP-38-5518" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>An example of the kind of security loophole that can occur when
+                            execing a shell is noted in the discussion of
+                                <span class="emphasis"><em>system()</em></span> in Section 27.6.</p></div><p>A few UNIX implementations honor the set-user-ID and set-group-ID
+                        permission bits when they are applied to interpreter scripts (<a class="xref" href="ch27.html#interpreter_scripts" title="Interpreter Scripts">Interpreter Scripts</a>), so that, when the script is run, the
+                        process executing the script assumes the identity of some other (privileged)
+                        user. Because of the security risks just described, Linux, like some other
+                        UNIX implementations, silently ignores the set-user-ID and set-group-ID
+                        permission bits when execing a script. Even on implementations where
+                        set-user-ID and set-group-ID scripts are permitted, their use should be
+                        avoided.</p></div><div class="sect3" title="Close all unnecessary file descriptors before an exec()"><div class="titlepage"><div><div><h4 class="title" id="close_all_unnecessary_file_descriptors_b">Close all unnecessary file descriptors before an
+                            <span class="emphasis"><em>exec()</em></span></h4></div></div></div><p>In <a class="xref" href="ch27.html#file_descriptors_and_exec_open_parenthes" title="File Descriptors and exec()">File Descriptors and <span class="emphasis"><em>exec()</em></span></a>, we noted
+                        that, by default, file descriptors remain open across an
+                            <span class="emphasis"><em>exec()</em></span>. A privileged program may open a file that
+                        normal processes can’t access. The resulting open file descriptor represents
+                        a privileged resource. The file descriptor should be closed before an
+                            <span class="emphasis"><em>exec()</em></span>, so that the execed program can’t access the
+                        associated file. We can do this either by explicitly closing the file
+                        descriptor or by setting its close-on-exec flag (<a class="xref" href="ch27.html#file_descriptors_and_exec_open_parenthes" title="File Descriptors and exec()">File Descriptors and <span class="emphasis"><em>exec()</em></span></a>).<a id="IDX-CHP-38-5519" class="indexterm"/></p></div></div></div><div class="sect1" title="Avoid Exposing Sensitive Information"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="avoid_exposing_sensitive_information">Avoid Exposing Sensitive Information</h2></div></div></div><p>When a program reads passwords or other sensitive information, it should perform
+                whatever processing is required, and then immediately erase the information from
+                memory. (We show an example of this in Section 8.5.) Leaving such information in
+                memory is a security risk, for the following reasons:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The virtual memory page containing the data may be swapped out (unless it
+                        is locked in memory using <span class="emphasis"><em>mlock()</em></span> or similar), and
+                        could then be read from the swap area by a privileged program.</p></li><li class="listitem"><p>If the process receives a signal that causes it to produce a core dump
+                        file, then that file may be read to obtain the information.<a id="IDX-CHP-38-5520" class="indexterm"/></p></li></ul></div><p>Following on from the last point, as a general principle, a secure program should
+                prevent core dumps, so that a core dump file can’t be inspected for sensitive
+                information. A program can ensure that a core dump file is not created by using
+                    <span class="emphasis"><em>setrlimit()</em></span> to set the <code class="literal">RLIMIT_CORE</code> resource limit to <code class="literal">0</code>
+                (see <a class="xref" href="ch36.html#details_of_specific_resource_limits" title="Details of Specific Resource Limits">Details of Specific Resource Limits</a>).<a id="IDX-CHP-38-5521" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>By default, Linux doesn’t permit a set-user-ID program to perform a core dump
+                    in response to a signal (<a class="xref" href="ch22.html#core_dump_files" title="Core Dump Files">Core Dump Files</a>), even if the program
+                    has dropped all privileges. However, other UNIX implementations may not provide
+                    this security feature.</p></div></div><div class="sect1" title="Confine the Process"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="confine_the_process">Confine the Process</h2></div></div></div><p>In this section, we consider ways in which we can confine a program to limit the
+                damage that is done if the program is compromised.<a id="IDX-CHP-38-5522" class="indexterm"/><a id="IDX-CHP-38-5523" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="consider_using_capabilities"/></div></div></div><div class="sect3" title="Consider using capabilities"><div class="titlepage"><div><div><h4 class="title" id="consider_using_capabilities-id1">Consider using capabilities</h4></div></div></div><p>The Linux capabilities scheme divides the traditional all-or-nothing UNIX
+                        privilege scheme into distinct units called
+                            <span class="emphasis"><em>capabilities</em></span>. A process can independently enable or
+                        disable individual capabilities. By enabling just those capabilities that it
+                        requires, a program operates with less privilege than it would have if run
+                        with full <span class="emphasis"><em>root</em></span> privileges. This reduces the potential
+                        for damage if the program is compromised.</p><p>Furthermore, using capabilities and the <span class="emphasis"><em>securebits</em></span>
+                        flags, we can create a process that has a limited set of capabilities but is
+                        not owned by <span class="emphasis"><em>root</em></span> (i.e., all of its user IDs are
+                        nonzero). Such a process can no longer use <span class="emphasis"><em>exec()</em></span> to
+                        regain a full set of capabilities. We describe capabilities and the
+                            <span class="emphasis"><em>securebits</em></span> flags in <a class="xref" href="ch39.html" title="Chapter 39. Capabilities">Chapter 39</a>.</p></div><div class="sect3" title="Consider using a chroot jail"><div class="titlepage"><div><div><h4 class="title" id="consider_using_a_chroot_jail">Consider using a <span class="emphasis"><em>chroot</em></span> jail</h4></div></div></div><p>A useful security technique in certain cases is to establish a
+                            <span class="emphasis"><em>chroot</em></span> jail to limit the set of directories and
+                        files that a program may access. (Make sure to also call
+                            <span class="emphasis"><em>chdir()</em></span> to change the process’s current working
+                        directory to a location within the jail.) Note, however, that a
+                            <span class="emphasis"><em>chroot</em></span> jail is insufficient to confine a
+                            set-user-ID-<span class="emphasis"><em>root</em></span> program (see <a class="xref" href="ch18.html#changing_the_root_directory_of_a_process" title="Changing the Root Directory of a Process: chroot()">Changing the Root Directory of a Process: <span class="emphasis"><em>chroot()</em></span></a>).<a id="IDX-CHP-38-5524" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>An alternative to using a <span class="emphasis"><em>chroot</em></span> jail is a
+                                <span class="emphasis"><em>virtual server</em></span>, which is a server implemented
+                            on top of a virtual kernel. Because each virtual kernel is isolated from
+                            other virtual kernels that may be running on the same hardware, a
+                            virtual server is more secure and flexible than a
+                                <span class="emphasis"><em>chroot</em></span> jail. (Several other modern operating
+                            systems also provide their own implementations of virtual servers.) The
+                            oldest virtualization implementation on Linux is User-Mode Linux (UML),
+                            which is a standard part of the Linux 2.6 kernel. Further information
+                            about UML can be found at <a class="ulink" href="http://user-mode-linux.sourceforge.net/" target="_top">http://user-mode-linux.sourceforge.net/</a>. More recent virtual
+                            kernel projects include Xen (<a class="ulink" href="http://www.cl.cam.ac.uk/Research/SRG/netos/xen/" target="_top">http://www.cl.cam.ac.uk/Research/SRG/netos/xen/</a>) and KVM
+                                (<a class="ulink" href="http://kvm.qumranet.com/" target="_top">http://kvm.qumranet.com/</a>).<a id="IDX-CHP-38-5525" class="indexterm"/><a id="IDX-CHP-38-5526" class="indexterm"/><a id="IDX-CHP-38-5527" class="indexterm"/><a id="IDX-CHP-38-5528" class="indexterm"/></p></div></div></div></div><div class="sect1" title="Beware of Signals and Race Conditions"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="beware_of_signals_and_race_conditions">Beware of Signals and Race Conditions</h2></div></div></div><p>A user may send arbitrary signals to a set-user-ID program that they have started.
+                Such signals may arrive at any time and with any frequency. We need to consider the
+                race conditions that can occur if a signal is delivered at <span class="emphasis"><em>any</em></span>
+                point in the execution of the program. Where appropriate, signals should be caught,
+                blocked, or ignored to prevent possible security problems. Furthermore, the design
+                of signal handlers should be as simple as possible, in order to reduce the risk of
+                inadvertently creating a race condition.</p><p>This issue is particularly relevant with the signals that stop a process (e.g.,
+                    <code class="literal">SIGTSTP</code> and <code class="literal">SIGSTOP</code>). The problematic scenario is the following:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>A set-user-ID program determines some information about its run-time
+                        environment.</p></li><li class="listitem"><p>The user manages to stop the process running the program and change
+                        details of the run-time environment. Such changes may include modifying the
+                        permissions on a file, changing the target of a symbolic link, or removing a
+                        file that the program depends on.</p></li><li class="listitem"><p>The user resumes the process with a <code class="literal">SIGCONT</code> signal. At this point, the program will continue
+                        execution based on now false assumptions about its run-time environment, and
+                        these assumptions may lead to a security breach.</p></li></ol></div><p>The situation described here is really just a special case of a
+                    <span class="emphasis"><em>time-of-check</em></span>, <span class="emphasis"><em>time-of-use</em></span> race
+                condition. A privileged process should avoid performing operations based on previous
+                verifications that may no longer hold (refer to the discussion of the
+                    <span class="emphasis"><em>access()</em></span> system call in <a class="xref" href="ch15.html#checking_file_accessibility_colon_access" title="Checking File Accessibility: access()">Checking File Accessibility: <span class="emphasis"><em>access()</em></span></a> for a specific example).
+                This guideline applies even when the user can’t send signals to the process. The
+                ability to stop a process simply allows a user to widen the interval between the
+                time of the check and the time of use.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Although it may be difficult on a single attempt to stop a process between the
+                    time of check and time of use, a malicious user could execute a set-user-ID
+                    program repeatedly, and use another program or a shell script to repeatedly send
+                    stop signals to the set-user-ID program and change the run-time environment.
+                    This greatly improves the chances of subverting the set-user-ID program.</p></div></div><div class="sect1" title="Pitfalls When Performing File Operations and File I/O"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="pitfalls_when_performing_file_operations">Pitfalls When Performing File Operations and File I/O</h2></div></div></div><p>If a privileged process needs to create a file, then we must take care of that
+                file’s ownership and permissions to ensure that there is never a point, no matter
+                how brief, when the file is vulnerable to malicious manipulation. The following
+                guidelines apply:<a id="IDX-CHP-38-5529" class="indexterm"/><a id="IDX-CHP-38-5530" class="indexterm"/><a id="IDX-CHP-38-5531" class="indexterm"/><a id="IDX-CHP-38-5532" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The process umask (<a class="xref" href="ch15.html#the_process_file_mode_creation_mask_colo" title="The Process File Mode Creation Mask: umask()">The Process File Mode Creation Mask: <span class="emphasis"><em>umask()</em></span></a>) should be set to a
+                        value that ensures that the process never creates publicly writable files,
+                        since these could be modified by a malicious user.<a id="IDX-CHP-38-5533" class="indexterm"/></p></li><li class="listitem"><p>Since the ownership of a file is taken from the effective user ID of the
+                        creating process, judicious use of <span class="emphasis"><em>seteuid()</em></span> or
+                            <span class="emphasis"><em>setreuid()</em></span> to temporarily change process
+                        credentials may be required in order ensure that a newly created file
+                        doesn’t belong to the wrong user. Since the group ownership of the file
+                            <span class="emphasis"><em>may</em></span> be taken from process’s effective group ID (see
+                            <a class="xref" href="ch15.html#ownership_of_new_files" title="Ownership of New Files">Ownership of New Files</a>), a similar statement applies
+                        with respect to set-group-ID programs, and the corresponding group ID calls
+                        can be used to avoid such problems. (To be strictly accurate, on Linux, the
+                        owner of a new file is determined by the process’s file-system user ID,
+                        which normally has the same value as the process’s effective user ID; refer
+                        to Section 9.5.)</p></li><li class="listitem"><p>If a set-user-ID-<span class="emphasis"><em>root</em></span> program must create a file that
+                        initially it must own, but which will eventually be owned by another user,
+                        the file should be created so that it is initially not writable by other
+                        users, either by using a suitable <span class="emphasis"><em>mode</em></span> argument to
+                            <span class="emphasis"><em>open()</em></span> or by setting the process umask before
+                        calling <span class="emphasis"><em>open()</em></span>. Afterward, the program can change its
+                        ownership with <span class="emphasis"><em>fchown()</em></span>, and then change its
+                        permissions, if necessary, with <span class="emphasis"><em>fchmod()</em></span>. The key point
+                        is that a set-user-ID program should ensure that it never creates a file
+                        that is owned by the program owner and that is even momentarily writable by
+                        other users.</p></li><li class="listitem"><p>Checks on file attributes should be performed on open file descriptors
+                        (e.g., <span class="emphasis"><em>open()</em></span> followed by
+                        <span class="emphasis"><em>fstat()</em></span>), rather than by checking the attributes
+                        associated with a pathname and then opening the file (e.g.,
+                            <span class="emphasis"><em>stat()</em></span> followed by <span class="emphasis"><em>open()</em></span>).
+                        The latter method creates a time-of-use, time-of-check problem.</p></li><li class="listitem"><p>If a program must ensure that it is the creator of a file, then the
+                            <code class="literal">O_EXCL</code> flag should be used when
+                        calling <span class="emphasis"><em>open()</em></span>.</p></li><li class="listitem"><p>A privileged program should avoid creating or relying on files in publicly
+                        writable directories such as <code class="literal">/tmp</code>, since
+                        this leaves the program vulnerable to malicious attempts to create
+                        unauthorized files with names expected by the privileged program. A program
+                        that absolutely must create a file in a publicly writable directory should
+                        at least ensure that the file has an unpredictable name, by using a function
+                        such as <span class="emphasis"><em>mkstemp()</em></span> (<a class="xref" href="ch05.html#creating_temporary_files" title="Creating Temporary Files">Creating Temporary Files</a>).<a id="IDX-CHP-38-5534" class="indexterm"/></p></li></ul></div></div><div class="sect1" title="Don’t Trust Inputs or the Environment"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="don_apostrophy_t_trust_inputs_or_the_env">Don’t Trust Inputs or the Environment</h2></div></div></div><p>Privileged programs should avoid making assumptions about the input they are
+                given, or the environment in which they are running.<a id="IDX-CHP-38-5535" class="indexterm"/><a id="IDX-CHP-38-5536" class="indexterm"/><a id="IDX-CHP-38-5537" class="indexterm"/><a id="IDX-CHP-38-5538" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="don_apostrophy_t_trust_the_environ"/></div></div></div><div class="sect3" title="Don’t trust the environment list"><div class="titlepage"><div><div><h4 class="title" id="don_apostrophy_t_trust_the_environ-id1">Don’t trust the environment list</h4></div></div></div><p>Set-user-ID and set-group-ID programs should not assume that the values of
+                        environment variables are reliable. Two variables that are particularly
+                        relevant are <code class="literal">PATH</code> and <code class="literal">IFS</code>.<a id="IDX-CHP-38-5539" class="indexterm"/></p><p><code class="literal">PATH</code> determines where the shell (and
+                        thus <span class="emphasis"><em>system()</em></span> and <span class="emphasis"><em>popen()</em></span>), as
+                        well as <span class="emphasis"><em>execlp()</em></span> and <span class="emphasis"><em>execvp()</em></span>,
+                        search for programs. A malicious user can set <code class="literal">PATH</code> to a value that may trick a set-user-ID program
+                        employing one of these functions into executing an arbitrary program with
+                        privilege. If these functions are to be used, PATH should be set to a
+                        trustworthy list of directories (but better still, absolute pathnames should
+                        be specified when execing programs). However, as already noted, it is best
+                        to drop privileges before execing a shell or employing one of the
+                        aforementioned functions.</p><p><code class="literal">IFS</code> specifies the delimiting characters
+                        that the shell interprets as separating the words of a command line. This
+                        variable should be set to an empty string, which means that only white-space
+                        characters are interpreted by the shell as word separators. Some shells
+                        always set <code class="literal">IFS</code> in this way on startup.
+                            (<a class="xref" href="ch27.html#executing_a_shell_command_colon_system_o" title="Executing a Shell Command: system()">Executing a Shell Command: <span class="emphasis"><em>system()</em></span></a> describes
+                        one vulnerability relating to <code class="literal">IFS</code> that
+                        appeared in older Bourne shells.)</p><p>In some cases, it may be safest to erase the entire environment list
+                            (<a class="xref" href="ch06.html#environment_list-id1" title="Environment List">Environment List</a>), and then restore selected
+                        environment variables with known-safe values, especially when executing
+                        other programs or calling libraries that may be affected by environment
+                        variable settings.</p></div><div class="sect3" title="Handle untrusted user inputs defensively"><div class="titlepage"><div><div><h4 class="title" id="handle_untrusted_user_inputs_defensively">Handle untrusted user inputs defensively</h4></div></div></div><p>A privileged program should carefully validate all inputs from untrusted
+                        sources before taking action based on those inputs. Such validation may
+                        include verifying that numbers fall within acceptable limits, and that
+                        strings are of an acceptable length and consist of acceptable characters.
+                        Among inputs that may need to be validated in this way are those coming from
+                        user-created files, command-line arguments, interactive inputs, CGI inputs,
+                        email messages, environment variables, interprocess communication channels
+                        (FIFOs, shared memory, and so on) accessible by untrusted users, and network
+                            packets.<a id="IDX-CHP-38-5540" class="indexterm"/><a id="IDX-CHP-38-5541" class="indexterm"/></p></div><div class="sect3" title="Avoid unreliable assumptions about the process’s run-time environment"><div class="titlepage"><div><div><h4 class="title" id="avoid_unreliable_assumptions_about_the_p">Avoid unreliable assumptions about the process’s run-time
+                        environment</h4></div></div></div><p>A set-user-ID program should avoid making unreliable assumptions about its
+                        initial run-time environment. For example, standard input, output, or error
+                        may have been closed. (These descriptors might have been closed in the
+                        program that execs the set-user-ID program.) In this case, opening a file
+                        could inadvertently reuse descriptor 1 (for example), so that, while the
+                        program thinks it is writing to standard output, it is actually writing to
+                        the file it opened.</p><p>There are many other possibilities to consider. For example, a process may
+                        exhaust various resource limits, such as the limit on the number of
+                        processes that may be created, the CPU time resource limit, or the file size
+                        resource limit, with the result that various system calls may fail or
+                        various signals may be generated. Malicious users may attempt to
+                        deliberately engineer resource exhaustion in an attempt to subvert a
+                        program.</p></div></div></div><div class="sect1" title="Beware of Buffer Overruns"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="beware_of_buffer_overruns">Beware of Buffer Overruns</h2></div></div></div><p>Beware of buffer overruns (overflows), where an input value or copied string
+                exceeds the allocated buffer space. Never use <span class="emphasis"><em>gets()</em></span>, and
+                employ functions such as <span class="emphasis"><em>scanf()</em></span>,
+                    <span class="emphasis"><em>sprintf()</em></span>, <span class="emphasis"><em>strcpy()</em></span>, and
+                    <span class="emphasis"><em>strcat()</em></span> with caution (e.g., guarding their use with
+                    <code class="literal">if</code> statements that prevent buffer
+                overruns).</p><p>Buffer overruns allow techniques such as <span class="emphasis"><em>stack crashing</em></span> (also
+                known as <span class="emphasis"><em>stack smashing</em></span>), whereby a malicious user employs a
+                buffer overrun to place carefully coded bytes into a stack frame in order to force
+                the privileged program to execute arbitrary code. (Several online sources explain
+                the details of stack crashing; see also [Erickson, 2008] and [Anley, 2007].) Buffer
+                overruns are probably the single most common source of security breaches on computer
+                systems, as evidenced by the frequency of advisories posted by CERT (<a class="ulink" href="http://www.cert.org/" target="_top">http://www.cert.org/</a>) and to Bugtraq (<a class="ulink" href="http://www.securityfocus.com/" target="_top">http://www.securityfocus.com/</a>). Buffer overruns are particularly
+                dangerous in network servers, since they leave a system open to remote attack from
+                anywhere on a network.<a id="IDX-CHP-38-5542" class="indexterm"/><a id="IDX-CHP-38-5543" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>In order to make stack crashing more difficult—in particular, to make such
+                    attacks much more time-consuming when conducted remotely against network
+                    servers—from kernel 2.6.12 onward, Linux implements <span class="emphasis"><em>address-space
+                        randomization</em></span>. This technique randomly varies the location of the
+                    stack over an 8 MB range at the top of virtual memory. In addition, the
+                    locations of memory mappings may also be randomized, if the soft <code class="literal">RLIMIT_STACK</code> limit is not infinite and the
+                    Linux-specific <code class="literal">/proc/sys/vm/legacy_va_layout</code>
+                    file contains the value 0.<a id="IDX-CHP-38-5544" class="indexterm"/><a id="IDX-CHP-38-5545" class="indexterm"/></p><p>More recent x86-32 architectures provide hardware support for marking page
+                    tables as <span class="emphasis"><em>NX</em></span> (“no execute”). This feature is used to
+                    prevent execution of program code on the stack, thus making stack crashing more
+                    difficult.</p></div><p>There are safe alternatives to many of the functions mentioned above—for example,
+                    <span class="emphasis"><em>snprintf()</em></span>, <span class="emphasis"><em>strncpy()</em></span>, and
+                    <span class="emphasis"><em>strncat()</em></span>—that allow the caller to specify the maximum
+                number of characters that should be copied. These functions take the specified
+                maximum into account in order to avoid overrunning the target buffer. In general,
+                these alternatives are preferable, but must still be handled with care. In
+                particular, note the following points:<a id="IDX-CHP-38-5546" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>With most of these functions, if the specified maximum is reached, then a
+                        truncated version of the source string is placed in the target buffer. Since
+                        such a truncated string may be meaningless in terms of the semantics of the
+                        program, the caller must check if truncation occurred (e.g., using the
+                        return value from <span class="emphasis"><em>snprintf()</em></span>), and take appropriate
+                        action if it has.</p></li><li class="listitem"><p>Using <span class="emphasis"><em>strncpy()</em></span> can carry a performance impact. If,
+                        in the call <span class="emphasis"><em>strncpy(s1</em></span>, <span class="emphasis"><em>s2</em></span>,
+                            <span class="emphasis"><em>n</em></span>), the string pointed to by
+                            <span class="emphasis"><em>s2</em></span> is less than <span class="emphasis"><em>n</em></span> bytes in
+                        length, then padding null bytes are written to <span class="emphasis"><em>s1</em></span> to
+                        ensure that <span class="emphasis"><em>n</em></span> bytes in total are written.</p></li><li class="listitem"><p>If the maximum size value given to <span class="emphasis"><em>strncpy()</em></span> is not
+                        long enough to permit the inclusion of the terminating null character, then
+                        the target string is <span class="emphasis"><em>not</em></span> null-terminated.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>Some UNIX implementations provide the <span class="emphasis"><em>strlcpy()</em></span> function,
+                    which, given a length argument <span class="emphasis"><em>n</em></span>, copies at most
+                        <span class="emphasis"><em>n - 1</em></span> bytes to the destination buffer and always
+                    appends a null character at the end of the buffer. However, this function is not
+                    specified in SUSv3 and is not implemented in <span class="emphasis"><em>glibc</em></span>.
+                    Furthermore, in cases where the caller is not carefully checking string lengths,
+                    this function only substitutes one problem (buffer overflows) for another
+                    (silently discarding data).<a id="IDX-CHP-38-5547" class="indexterm"/></p></div></div><div class="sect1" title="Beware of Denial-of-Service Attacks"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="beware_of_denial-of-service_attacks">Beware of Denial-of-Service Attacks</h2></div></div></div><p>With the increase in Internet-based services has come a corresponding increase in
+                the opportunities for remote denial-of-service attacks. These attacks attempt to
+                make a service unavailable to legitimate clients, either by sending the server
+                malformed data that causes it to crash or by overloading it with bogus
+                    requests.<a id="IDX-CHP-38-5548" class="indexterm"/><a id="IDX-CHP-38-5549" class="indexterm"/><a id="IDX-CHP-38-5550" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Local denial-of-service attacks are also possible. The most well-known example
+                    is when a user runs a simple fork bomb (a program that repeatedly forks, thus
+                    consuming all of the process slots on the system). However, the origin of local
+                    denial-of-service attacks is much easier to determine, and they can generally be
+                    prevented by suitable physical and password security measures.<a id="IDX-CHP-38-5551" class="indexterm"/></p></div><p>Dealing with malformed requests is straightforward—a server should be programmed
+                to rigorously check its inputs and avoid buffer overruns, as described above.</p><p>Overload attacks are more difficult to deal with. Since the server can’t control
+                the behavior of remote clients or the rate at which they submit requests, such
+                attacks are impossible to prevent. (The server may not even be able to determine the
+                true origin of the attack, since the source IP address of a network packet can be
+                spoofed. Alternatively, distributed attacks may enlist unwitting intermediary hosts
+                to direct an attack at a target system.) Nevertheless, various measures can be taken
+                to minimize the risk and consequences of an overload attack:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The server should perform load throttling, dropping requests when the load
+                        exceeds some predetermined limit. This will have the consequence of dropping
+                        legitimate requests, but prevents the server and host machine from becoming
+                        overloaded. The use of resource limits and disk quotas may also be helpful
+                        in limiting excessive loads. (Refer to <a class="ulink" href="http://sourceforge.net/projects/linuxquota/" target="_top">http://sourceforge.net/projects/linuxquota/</a> for more information
+                        on disk quotas.)<a id="IDX-CHP-38-5552" class="indexterm"/></p></li><li class="listitem"><p>A server should employ timeouts for communication with a client, so that
+                        if the client (perhaps deliberately) doesn’t respond, the server is not tied
+                        up indefinitely waiting on the client.</p></li><li class="listitem"><p>In the event of an overload, the server should log suitable messages so
+                        that the system administrator is notified of the problem. (However, logging
+                        should be throttled, so that logging itself does not overload the
+                        system.)</p></li><li class="listitem"><p>The server should be programmed so that it doesn’t crash in the face of an
+                        unexpected load. For example, bounds checking should be rigorously performed
+                        to ensure that excessive requests don’t overflow a data structure.</p></li><li class="listitem"><p>Data structures should be designed to avoid
+                            <span class="emphasis"><em>algorithmic-complexity attacks</em></span>. For example, a
+                        binary tree may be balanced and deliver acceptable performance under typical
+                        loads. However, an attacker could construct a sequence of inputs that result
+                        in an unbalanced tree (the equivalent of a linked list in the worst case),
+                        which could cripple performance. [Crosby &amp; Wallach, 2003] details
+                        the nature of such attacks and discusses data-structuring techniques that
+                        can be used to avoid them.</p></li></ul></div></div><div class="sect1" title="Check Return Statuses and Fail Safely"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="check_return_statuses_and_fail_safely">Check Return Statuses and Fail Safely</h2></div></div></div><p>A privileged program should always check to see whether system calls and library
+                functions succeed, and whether they return expected values. (This is true for all
+                programs, of course, but is especially important for privileged programs.) Various
+                system calls can fail, even for a program running as <span class="emphasis"><em>root</em></span>. For
+                example, <span class="emphasis"><em>fork()</em></span> may fail if the system-wide limit on the number
+                of processes is encountered, an <span class="emphasis"><em>open()</em></span> for writing may fail on
+                a read-only file system, or <span class="emphasis"><em>chdir()</em></span> may fail if the target
+                directory doesn’t exist.<a id="IDX-CHP-38-5553" class="indexterm"/><a id="IDX-CHP-38-5554" class="indexterm"/></p><p>Even where a system call succeeds, it may be necessary to check its result. For
+                example, where it matters, a privileged program should check that a successful
+                    <span class="emphasis"><em>open()</em></span> has not returned one of the three standard file
+                descriptors: 0, 1, or 2.</p><p>Finally, if a privileged program encounters an unexpected situation, then the
+                appropriate behavior is usually either to terminate or, in the case of a server, to
+                drop the client request. Attempting to fix unexpected problems typically requires
+                making assumptions that may not be justified in all circumstances and may lead to
+                the creation of security loopholes. In such situations, it is safer to have the
+                program terminate, or to have the server log a message and discard the client’s
+                request.</p></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id37">Summary</h2></div></div></div><p>Privileged programs have access to system resources that are not available to
+                ordinary users. If such programs can be subverted, then the security of the system
+                can be compromised. In this chapter, we presented a set of guidelines for writing
+                privileged programs. The aim of these guidelines is twofold: to minimize the chances
+                of a privileged program being subverted, and to minimize the damage that can be done
+                in the event that a privileged program is subverted.<a id="IDX-CHP-38-5555" class="indexterm"/><a id="IDX-CHP-38-5556" class="indexterm"/><a id="IDX-CHP-38-5557" class="indexterm"/><a id="IDX-CHP-38-5558" class="indexterm"/><a id="IDX-CHP-38-5559" class="indexterm"/><a id="IDX-CHP-38-5560" class="indexterm"/><a id="IDX-CHP-38-5561" class="indexterm"/><a id="IDX-CHP-38-5562" class="indexterm"/><a id="IDX-CHP-38-5563" class="indexterm"/><a id="IDX-CHP-38-5564" class="indexterm"/><a id="IDX-CHP-38-5565" class="indexterm"/><a id="IDX-CHP-38-5566" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id51"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id52">Further information</h4></div></div></div><p>[Viega &amp; McGraw, 2002] covers a broad range of topics relating to
+                        the design and implementation of secure software. General information about
+                        security on UNIX systems, as well as a chapter on secure-programming
+                        techniques can be found in [Garfinkel et al., 2003]. Computer security is
+                        covered at some length in [Bishop, 2005], and at even greater length by the
+                        same author in [Bishop, 2003]. [Peikari &amp; Chuvakin, 2004] describes
+                        computer security with a focus on the various means by which system may be
+                        attacked. [Erickson, 2008] and [Anley, 2007] both provide a thorough
+                        discussion of various security exploits, providing enough detail for wise
+                        programmers to avoid these exploits. [Chen et al., 2002] is a paper
+                        describing and analyzing the UNIX set-user-ID model. [Tsafrir et al., 2008]
+                        revises and enhances the discussion of various points in [Chen et al.,
+                        2002]. [Drepper, 2009] provides a wealth of tips on secure and defensive
+                        programming on Linux.</p><p>Several sources of information about writing secure programs are available
+                        online, including the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Matt Bishop has written a range of security-related papers, which
+                                are available online at <a class="ulink" href="http://nob.cs.ucdavis.edu/~bishop/secprog" target="_top">http://nob.cs.ucdavis.edu/~bishop/secprog</a>. The most
+                                interesting of these is “How to Write a Setuid Program,” (originally
+                                published in <span class="emphasis"><em>;login: 12(1) Jan/Feb 1986</em></span>).
+                                Although somewhat dated, this paper contains a wealth of useful
+                                tips.</p></li><li class="listitem"><p>The <span class="emphasis"><em>Secure Programming for Linux and Unix
+                                    HOWTO</em></span>, written by David Wheeler, is available at
+                                    <a class="ulink" href="http://www.dwheeler.com/secure-programs/" target="_top">http://www.dwheeler.com/secure-programs/</a>.</p></li><li class="listitem"><p>A useful checklist for writing set-user-ID programs is available
+                                online at <a class="ulink" href="http://www.homeport.org/~adam/setuid.7.html" target="_top">http://www.homeport.org/~adam/setuid.7.html</a>.</p></li></ul></div></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id25">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Log in as a normal, unprivileged user, create an executable file (or copy
+                        an existing file such as <code class="literal">/bin/sleep</code>), and
+                        enable the set-user-ID permission bit on that file (<span class="emphasis"><em>chmod
+                            u+s</em></span>). Try modifying the file (e.g., <span class="emphasis"><em>cat
+                            &gt;&gt; file</em></span>). What happens to the file permissions
+                        as a result (<span class="emphasis"><em>ls -l</em></span>)? Why does this happen?</p></li><li class="listitem"><p>Write a set-user-ID-<span class="emphasis"><em>root</em></span> program similar to the
+                            <span class="emphasis"><em>sudo(8)</em></span> program. This program should take
+                        command-line options and arguments as follows:</p><a id="I_programlisting38_d1e105037"/><pre class="programlisting">$ <strong class="userinput"><code>./douser [-u</code></strong> <strong class="userinput"><code><em class="replaceable"><code>user</code></em></code></strong> <strong class="userinput"><code>]</code></strong> <strong class="userinput"><code><em class="replaceable"><code>program-file arg1</code></em></code></strong> <strong class="userinput"><code><em class="replaceable"><code>arg2</code></em></code></strong><strong class="userinput"><code> ...</code></strong></pre><p>The <span class="emphasis"><em>douser</em></span> program executes
+                            <span class="emphasis"><em>program-file</em></span>, with the given arguments, as though
+                        it was run by <span class="emphasis"><em>user</em></span>. (If the <span class="emphasis"><em>-u</em></span>
+                        option is omitted, then <span class="emphasis"><em>user</em></span> should default to
+                            <span class="emphasis"><em>root</em></span>.) Before executing
+                            <span class="emphasis"><em>program-file</em></span>, <span class="emphasis"><em>douser</em></span> should
+                        request the password for <span class="emphasis"><em>user</em></span>, authenticate it against
+                        the standard password file (see <a class="xref" href="ch08.html#authenticating_a_user_against_the_shadow" title="Example 8-2. Authenticating a user against the shadow password file">Example 8-2</a>, in <a class="xref" href="ch08.html#summary-id7" title="Summary">Summary</a>), and then set all of the process user and group
+                        IDs to the correct values for that user.</p></li></ol></div></div></section></body></html>

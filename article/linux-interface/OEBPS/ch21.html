@@ -1,0 +1,1786 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 21. Signals: Signal Handlers</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch20.html" title="Chapter 20. Signals: Fundamental Concepts"/><link rel="next" href="ch22.html" title="Chapter 22. Signals: Advanced Features"/></head><body><section class="chapter" title="Chapter 21. Signals: Signal Handlers" epub:type="chapter" id="signals_colon_signal_handlers"><div class="titlepage"><div><div><h2 class="title">Chapter 21. Signals: Signal Handlers</h2></div></div></div><p>This chapter continues the description of signals begun in the previous chapter. It
+            focuses on signal handlers, and extends the discussion started in Section 20.4. Among
+            the topics we consider are the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>how to design a signal handler, which necessitates a discussion of reentrancy
+                    and async-signal-safe functions;<a id="IDX-CHP-21-2971" class="indexterm"/></p></li><li class="listitem"><p>alternatives to performing a normal return from a signal handler, in
+                    particular, the use of a nonlocal goto for this purpose;</p></li><li class="listitem"><p>handling of signals on an alternate stack;</p></li><li class="listitem"><p>the use of the <span class="emphasis"><em>sigaction()</em></span>
+                    <code class="literal">SA_SIGINFO</code> flag to allow a signal handler to
+                    obtain more detailed information about the signal that caused its invocation;
+                    and</p></li><li class="listitem"><p>how a blocking system call may be interrupted by a signal handler, and how the
+                    call can be restarted if desired.</p></li></ul></div><div class="sect1" title="Designing Signal Handlers"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="designing_signal_handlers">Designing Signal Handlers</h2></div></div></div><p>In general, it is preferable to write simple signal handlers. One important reason
+                for this is to reduce the risk of creating race conditions. Two common designs for
+                signal handlers are the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The signal handler sets a global flag and exits. The main program
+                        periodically checks this flag and, if it is set, takes appropriate action.
+                        (If the main program cannot perform such periodic checks because it needs to
+                        monitor one or more file descriptors to see if I/O is possible, then the
+                        signal handler can also write a single byte to a dedicated pipe whose read
+                        end is included among the file descriptors monitored by the main program. We
+                        show an example of this technique in <a class="xref" href="ch63.html#the_self-pipe_trick" title="The Self-Pipe Trick">The Self-Pipe Trick</a>.)</p></li><li class="listitem"><p>The signal handler performs some type of cleanup and then either
+                        terminates the process or uses a nonlocal goto (<a class="xref" href="ch21.html#performing_a_nonlocal_goto_from_a_signal" title="Performing a Nonlocal Goto from a Signal Handler">Performing a Nonlocal Goto from a Signal Handler</a>) to unwind the
+                        stack and return control to a predetermined location in the main
+                        program.</p></li></ul></div><p>In the following sections, we explore these ideas, as well as other concepts that
+                are important in the design of signal handlers.<a id="IDX-CHP-21-2972" class="indexterm"/></p><div class="sect2" title="Signals Are Not Queued (Revisited)"><div class="titlepage"><div><div><h3 class="title" id="signals_are_not_queued_open_parenthesis">Signals Are Not Queued (Revisited)</h3></div></div></div><p>In <a class="xref" href="ch20.html#the_signal_mask_open_parenthesis_blockin" title="The Signal Mask (Blocking Signal Delivery)">The Signal Mask (Blocking Signal Delivery)</a>, we noted that
+                    delivery of a signal is blocked during the execution of its handler (unless we
+                    specify the <code class="literal">SA_NODEFER</code> flag to
+                        <span class="emphasis"><em>sigaction()</em></span>). If the signal is (again) generated while
+                    the handler is executing, then it is marked as pending and later delivered when
+                    the handler returns. We also already noted that signals are not queued. If the
+                    signal is generated more than once while the handler is executing, then it is
+                    still marked as pending, and it will later be delivered only once.<a id="IDX-CHP-21-2973" class="indexterm"/></p><p>That signals can “disappear” in this way has implications for how we design
+                    signal handlers. To begin with, we can’t reliably count the number of times a
+                    signal is generated. Furthermore, we may need to code our signal handlers to
+                    deal with the possibility that multiple events of the type corresponding to the
+                    signal have occurred. We’ll see an example of this when we consider the use of
+                    the <code class="literal">SIGCHLD</code> signal in <a class="xref" href="ch26.html#establishing_a_handler_for_sigchld" title="Establishing a Handler for SIGCHLD">Establishing a Handler for <code class="literal">SIGCHLD</code></a>.</p></div><div class="sect2" title="Reentrant and Async-Signal-Safe Functions"><div class="titlepage"><div><div><h3 class="title" id="reentrant_and_async-signal-safe_function">Reentrant and Async-Signal-Safe Functions</h3></div></div></div><p>Not all system calls and library functions can be safely called from a signal
+                    handler. To understand why requires an explanation of two concepts: reentrant
+                    functions and async-signal-safe functions.</p><div class="sect3" title="Reentrant and nonreentrant functions"><div class="titlepage"><div><div><h4 class="title" id="reentrant_and_nonreentrant_functions">Reentrant and nonreentrant functions</h4></div></div></div><p>To explain what a reentrant function is, we need to first distinguish
+                        between single-threaded and multithreaded programs. Classical UNIX programs
+                        have a single <span class="emphasis"><em>thread of execution</em></span>: the CPU processes
+                        instructions for a single logical flow of execution through the program. In
+                        a multithreaded program, there are multiple, independent, concurrent logical
+                        flows of execution within the same process.<a id="IDX-CHP-21-2974" class="indexterm"/><a id="IDX-CHP-21-2975" class="indexterm"/></p><p>In <a class="xref" href="ch29.html" title="Chapter 29. Threads: Introduction">Chapter 29</a>, we’ll see how to
+                        explicitly create programs that contain multiple threads of execution.
+                        However, the concept of multiple threads of execution is also relevant for
+                        programs that employ signal handlers. Because a signal handler may
+                        asynchronously interrupt the execution of a program at any point in time,
+                        the main program and the signal handler in effect form two independent
+                        (although not concurrent) threads of execution within the same
+                        process.</p><p>A function is said to be <span class="emphasis"><em>reentrant</em></span> if it can safely
+                        be simultaneously executed by multiple threads of execution in the same
+                        process. In this context, “safe” means that the function achieves its
+                        expected result, regardless of the state of execution of any other thread of
+                        execution.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The SUSv3 definition of a reentrant function is one “whose effect,
+                            when called by two or more threads, is guaranteed to be as if the
+                            threads each executed the function one after the other in an undefined
+                            order, even if the actual execution is interleaved.”</p></div><p>A function may be <span class="emphasis"><em>nonreentrant</em></span> if it updates global
+                        or static data structures. (A function that employs only local variables is
+                        guaranteed to be reentrant.) If two invocations of (i.e., two threads
+                        executing) the function simultaneously attempt to update the same global
+                        variable or data structure, then these updates are likely to interfere with
+                        each other and produce incorrect results. For example, suppose that one
+                        thread of execution is in the middle of updating a linked list data
+                        structure to add a new list item when another thread also attempts to update
+                        the same linked list. Since adding a new item to the list requires updating
+                        multiple pointers, if another thread interrupts these steps and updates the
+                        same pointers, chaos will result.</p><p>Such possibilities are in fact rife within the standard C library. For
+                        example, we already noted in <a class="xref" href="ch07.html#implementation_of_malloc_open_parenthesi" title="Implementation of malloc() and free()">Implementation of <span class="emphasis"><em>malloc()</em></span> and
+                        <span class="emphasis"><em>free()</em></span></a> that
+                            <span class="emphasis"><em>malloc()</em></span> and <span class="emphasis"><em>free()</em></span> maintain a
+                        linked list of freed memory blocks available for reallocation from the heap.
+                        If a call to <span class="emphasis"><em>malloc()</em></span> in the main program is
+                        interrupted by a signal handler that also calls
+                            <span class="emphasis"><em>malloc()</em></span>, then this linked list can be corrupted.
+                        For this reason, the <span class="emphasis"><em>malloc()</em></span> family of functions, and
+                        other library functions that use them, are nonreentrant.<a id="IDX-CHP-21-2976" class="indexterm"/><a id="IDX-CHP-21-2977" class="indexterm"/></p><p>Other library functions are nonreentrant because they return information
+                        using statically allocated memory. Examples of such functions (described
+                        elsewhere in this book) include <span class="emphasis"><em>crypt()</em></span>,
+                            <span class="emphasis"><em>getpwnam()</em></span>, <span class="emphasis"><em>gethostbyname()</em></span>,
+                        and <span class="emphasis"><em>getservbyname()</em></span>. If a signal handler also uses one
+                        of these functions, then it will overwrite information returned by any
+                        earlier call to the same function from within the main program (or vice
+                        versa).</p><p>Functions can also be nonreentrant if they use static data structures for
+                        their internal bookkeeping. The most obvious examples of such functions are
+                        the members of the <span class="emphasis"><em>stdio</em></span> library
+                            (<span class="emphasis"><em>printf()</em></span>, <span class="emphasis"><em>scanf()</em></span>, and so
+                        on), which update internal data structures for buffered I/O. Thus, when
+                        using <span class="emphasis"><em>printf()</em></span> from within a signal handler, we may
+                        sometimes see strange output—or even a program crash or data corruption—if
+                        the handler interrupts the main program in the middle of executing a call to
+                            <span class="emphasis"><em>printf()</em></span> or another <span class="emphasis"><em>stdio</em></span>
+                        function.</p><p>Even if we are not using nonreentrant library functions, reentrancy issues
+                        can still be relevant. If a signal handler updates programmer-defined global
+                        data structures that are also updated within the main program, then we can
+                        say that the signal handler is nonreentrant with respect to the main
+                        program.</p><p>If a function is nonreentrant, then its manual page will normally provide
+                        an explicit or implicit indication of this fact. In particular, watch out
+                        for statements that the function uses or returns information in statically
+                        allocated variables.</p></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id23">Example program</h4></div></div></div><p><a class="xref" href="ch21.html#calling_a_nonreentrant_function_from_bot" title="Example 21-1. Calling a nonreentrant function from both main() and a signal handler">Example 21-1</a> demonstrates
+                        the nonreentrant nature of the <span class="emphasis"><em>crypt()</em></span> function (<a class="xref" href="ch08.html#password_encryption_and_user_authenticat" title="Password Encryption and User Authentication">Password Encryption and User Authentication</a>). As command-line
+                        arguments, this program accepts two strings. The program performs the
+                        following steps:<a id="IDX-CHP-21-2978" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Call <span class="emphasis"><em>crypt()</em></span> to encrypt the string in the
+                                first command-line argument, and copy this string to a separate
+                                buffer using <span class="emphasis"><em>strdup()</em></span>.</p></li><li class="listitem"><p>Establish a handler for <code class="literal">SIGINT</code>
+                                (generated by typing <span class="emphasis"><em>Control-C</em></span>). The handler
+                                calls <span class="emphasis"><em>crypt()</em></span> to encrypt the string supplied in
+                                the second command-line argument.</p></li><li class="listitem"><p>Enter an infinite <code class="literal">for</code> loop that
+                                uses <span class="emphasis"><em>crypt()</em></span> to encrypt the string in the first
+                                command-line argument and check that the returned string is the same
+                                as that saved in step 1.</p></li></ol></div><p>In the absence of a signal, the strings will always match in step 3.
+                        However, if a <code class="literal">SIGINT</code> signal arrives and
+                        the execution of the signal handler interrupts the main program just after
+                        the execution of the <span class="emphasis"><em>crypt()</em></span> call in the <code class="literal">for</code> loop, but before the check to see if the
+                        strings match, then the main program will report a mismatch. When we run the
+                        program, this is what we see:</p><a id="I_programlisting21_d1e56800"/><pre class="programlisting">$ <strong class="userinput"><code>./non_reentrant abc def</code></strong>
+<em class="lineannotation"><span class="lineannotation">Repeatedly type Control-C to generate</span></em> SIGINT
+Mismatch on call 109871 (mismatch=1 handled=1)
+Mismatch on call 128061 (mismatch=2 handled=2)
+<em class="lineannotation"><span class="lineannotation">Many lines of output removed</span></em>
+Mismatch on call 727935 (mismatch=149 handled=156)
+Mismatch on call 729547 (mismatch=150 handled=157)
+<em class="lineannotation"><span class="lineannotation">Type Control-\ to generate</span></em> SIGQUIT
+Quit (core dumped)</pre><p>Comparing the <span class="emphasis"><em>mismatch</em></span> and
+                            <span class="emphasis"><em>handled</em></span> values in the above output, we see that in
+                        the majority of cases where the signal handler is invoked, it overwrites the
+                        statically allocated buffer between the call to <span class="emphasis"><em>crypt()</em></span>
+                        and the string comparison in <span class="emphasis"><em>main()</em></span>.</p><div class="example"><a id="calling_a_nonreentrant_function_from_bot"/><div class="example-title">Example 21-1. Calling a nonreentrant function from both <span class="emphasis"><em>main()</em></span>
+                            and a signal handler</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/nonreentrant.c</code></strong>
+#define _XOPEN_SOURCE 600
+#include &lt;unistd.h&gt;
+#include &lt;signal.h&gt;
+#include &lt;string.h&gt;
+#include "tlpi_hdr.h"
+
+static char *str2;              /* Set from argv[2] */
+static int handled = 0;         /* Counts number of calls to handler */
+
+static void
+handler(int sig)
+{
+
+    crypt(str2, "xx");
+    handled++;
+}
+int
+main(int argc, char *argv[])
+{
+    char *cr1;
+    int callNum, mismatch;
+    struct sigaction sa;
+
+    if (argc != 3)
+        usageErr("%s str1 str2\n", argv[0]);
+
+    str2 = argv[2];                      /* Make argv[2] available to handler */
+    cr1 = strdup(crypt(argv[1], "xx"));  /* Copy statically allocated string
+                                            to another buffer */
+    if (cr1 == NULL)
+        errExit("strdup");
+
+    sigemptyset(&amp;sa.sa_mask);
+    sa.sa_flags = 0;
+    sa.sa_handler = handler;
+    if (sigaction(SIGINT, &amp;sa, NULL) == -1)
+        errExit("sigaction");
+
+    /* Repeatedly call crypt() using argv[1]. If interrupted by a
+       signal handler, then the static storage returned by crypt()
+       will be overwritten by the results of encrypting argv[2], and
+       strcmp() will detect a mismatch with the value in 'cr1'. */
+
+    for (callNum = 1, mismatch = 0; ; callNum++) {
+        if (strcmp(crypt(argv[1], "xx"), cr1) != 0) {
+            mismatch++;
+            printf("Mismatch on call %d (mismatch=%d handled=%d)\n",
+                    callNum, mismatch, handled);
+        }
+    }
+}
+     <strong class="userinput"><code>signals/nonreentrant.c</code></strong></pre></div></div></div><div class="sect3" title="Standard async-signal-safe functions"><div class="titlepage"><div><div><h4 class="title" id="standard_async-signal-safe_functions">Standard async-signal-safe functions</h4></div></div></div><p>An <span class="emphasis"><em>async-signal-safe</em></span> function is one that the
+                        implementation guarantees to be safe when called from a signal handler. A
+                        function is async-signal-safe either because it is reentrant or because it
+                        is not interruptible by a signal handler.<a id="IDX-CHP-21-2979" class="indexterm"/><a id="IDX-CHP-21-2980" class="indexterm"/><a id="IDX-CHP-21-2981" class="indexterm"/><a id="IDX-CHP-21-2982" class="indexterm"/><a id="IDX-CHP-21-2983" class="indexterm"/><a id="IDX-CHP-21-2984" class="indexterm"/><a id="IDX-CHP-21-2985" class="indexterm"/><a id="IDX-CHP-21-2986" class="indexterm"/><a id="IDX-CHP-21-2987" class="indexterm"/><a id="IDX-CHP-21-2988" class="indexterm"/><a id="IDX-CHP-21-2989" class="indexterm"/><a id="IDX-CHP-21-2990" class="indexterm"/><a id="IDX-CHP-21-2991" class="indexterm"/><a id="IDX-CHP-21-2992" class="indexterm"/><a id="IDX-CHP-21-2993" class="indexterm"/><a id="IDX-CHP-21-2994" class="indexterm"/><a id="IDX-CHP-21-2995" class="indexterm"/><a id="IDX-CHP-21-2996" class="indexterm"/><a id="IDX-CHP-21-2997" class="indexterm"/><a id="IDX-CHP-21-2998" class="indexterm"/><a id="IDX-CHP-21-2999" class="indexterm"/><a id="IDX-CHP-21-3000" class="indexterm"/><a id="IDX-CHP-21-3001" class="indexterm"/><a id="IDX-CHP-21-3002" class="indexterm"/><a id="IDX-CHP-21-3003" class="indexterm"/><a id="IDX-CHP-21-3004" class="indexterm"/><a id="IDX-CHP-21-3005" class="indexterm"/><a id="IDX-CHP-21-3006" class="indexterm"/><a id="IDX-CHP-21-3007" class="indexterm"/><a id="IDX-CHP-21-3008" class="indexterm"/><a id="IDX-CHP-21-3009" class="indexterm"/><a id="IDX-CHP-21-3010" class="indexterm"/><a id="IDX-CHP-21-3011" class="indexterm"/><a id="IDX-CHP-21-3012" class="indexterm"/><a id="IDX-CHP-21-3013" class="indexterm"/><a id="IDX-CHP-21-3014" class="indexterm"/><a id="IDX-CHP-21-3015" class="indexterm"/><a id="IDX-CHP-21-3016" class="indexterm"/><a id="IDX-CHP-21-3017" class="indexterm"/><a id="IDX-CHP-21-3018" class="indexterm"/><a id="IDX-CHP-21-3019" class="indexterm"/><a id="IDX-CHP-21-3020" class="indexterm"/><a id="IDX-CHP-21-3021" class="indexterm"/><a id="IDX-CHP-21-3022" class="indexterm"/><a id="IDX-CHP-21-3023" class="indexterm"/><a id="IDX-CHP-21-3024" class="indexterm"/><a id="IDX-CHP-21-3025" class="indexterm"/><a id="IDX-CHP-21-3026" class="indexterm"/><a id="IDX-CHP-21-3027" class="indexterm"/><a id="IDX-CHP-21-3028" class="indexterm"/><a id="IDX-CHP-21-3029" class="indexterm"/><a id="IDX-CHP-21-3030" class="indexterm"/><a id="IDX-CHP-21-3031" class="indexterm"/><a id="IDX-CHP-21-3032" class="indexterm"/><a id="IDX-CHP-21-3033" class="indexterm"/></p><p><a class="xref" href="ch21.html#functions_required_to_be_async-signal-sa" title="Table 21-1. Functions required to be async-signal-safe by POSIX.1-1990, SUSv2, and SUSv3">Table 21-1</a> lists the
+                        functions that various standards require to be async-signal-safe. In this
+                        table, the functions whose names are not followed by a
+                            <span class="emphasis"><em>v2</em></span> or <span class="emphasis"><em>v3</em></span> were specified as
+                        async-signal-safe in POSIX.1-1990. SUSv2 added the functions marked
+                            <span class="emphasis"><em>v2</em></span> to the list, and those marked
+                            <span class="emphasis"><em>v3</em></span> were added by SUSv3. Individual UNIX
+                        implementations may make other functions async-signal-safe, but all
+                        standards-conformant UNIX implementations must ensure that at least these
+                        functions are async-signal-safe (if they are provided by the implementation;
+                        not all of these functions are provided on Linux).</p><p>SUSv4 makes the following changes to <a class="xref" href="ch21.html#functions_required_to_be_async-signal-sa" title="Table 21-1. Functions required to be async-signal-safe by POSIX.1-1990, SUSv2, and SUSv3">Table 21-1</a>:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The following functions are removed:
+                                    <span class="emphasis"><em>fpathconf()</em></span>,
+                                    <span class="emphasis"><em>pathconf()</em></span>, and
+                                    <span class="emphasis"><em>sysconf()</em></span>.<a id="IDX-CHP-21-3034" class="indexterm"/><a id="IDX-CHP-21-3035" class="indexterm"/><a id="IDX-CHP-21-3036" class="indexterm"/></p></li><li class="listitem"><p>The following functions are added: <span class="emphasis"><em>execl()</em></span>,
+                                    <span class="emphasis"><em>execv()</em></span>, <span class="emphasis"><em>faccessat()</em></span>,
+                                    <span class="emphasis"><em>fchmodat()</em></span>,
+                                <span class="emphasis"><em>fchownat()</em></span>, <span class="emphasis"><em>fexecve()</em></span>,
+                                    <span class="emphasis"><em>fstatat()</em></span>, <span class="emphasis"><em>futimens()</em></span>,
+                                    <span class="emphasis"><em>linkat()</em></span>, <span class="emphasis"><em>mkdirat()</em></span>,
+                                    <span class="emphasis"><em>mkfifoat()</em></span>, <span class="emphasis"><em>mknod()</em></span>,
+                                    <span class="emphasis"><em>mknodat()</em></span>, <span class="emphasis"><em>openat()</em></span>,
+                                    <span class="emphasis"><em>readlinkat()</em></span>,
+                                    <span class="emphasis"><em>renameat()</em></span>,
+                                    <span class="emphasis"><em>symlinkat()</em></span>,
+                                    <span class="emphasis"><em>unlinkat()</em></span>,
+                                    <span class="emphasis"><em>utimensat()</em></span>, and
+                                    <span class="emphasis"><em>utimes()</em></span>.<a id="IDX-CHP-21-3037" class="indexterm"/><a id="IDX-CHP-21-3038" class="indexterm"/><a id="IDX-CHP-21-3039" class="indexterm"/><a id="IDX-CHP-21-3040" class="indexterm"/><a id="IDX-CHP-21-3041" class="indexterm"/><a id="IDX-CHP-21-3042" class="indexterm"/><a id="IDX-CHP-21-3043" class="indexterm"/><a id="IDX-CHP-21-3044" class="indexterm"/><a id="IDX-CHP-21-3045" class="indexterm"/><a id="IDX-CHP-21-3046" class="indexterm"/><a id="IDX-CHP-21-3047" class="indexterm"/><a id="IDX-CHP-21-3048" class="indexterm"/><a id="IDX-CHP-21-3049" class="indexterm"/><a id="IDX-CHP-21-3050" class="indexterm"/><a id="IDX-CHP-21-3051" class="indexterm"/><a id="IDX-CHP-21-3052" class="indexterm"/><a id="IDX-CHP-21-3053" class="indexterm"/><a id="IDX-CHP-21-3054" class="indexterm"/><a id="IDX-CHP-21-3055" class="indexterm"/><a id="IDX-CHP-21-3056" class="indexterm"/></p></li></ul></div><div class="table"><a id="functions_required_to_be_async-signal-sa"/><div class="table-title">Table 21-1. Functions required to be async-signal-safe by POSIX.1-1990, SUSv2,
+                            and SUSv3</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/></colgroup><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <span class="emphasis"><em>_Exit()(v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>_exit()</em></span>
+                                            <a id="IDX-CHP-21-3057" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>abort() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>accept() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>access()</em></span>
+                                            <a id="IDX-CHP-21-3058" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>aio_error() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>aio_return()(v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>aio_suspend() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>alarm()</em></span>
+                                            <a id="IDX-CHP-21-3059" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>bind()(v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>cfgetispeed()</em></span>
+                                            <a id="IDX-CHP-21-3060" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>cfgetospeed()</em></span>
+                                            <a id="IDX-CHP-21-3061" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>cfsetispeed()</em></span>
+                                            <a id="IDX-CHP-21-3062" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>cfsetospeed()</em></span>
+                                            <a id="IDX-CHP-21-3063" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>chdir()</em></span>
+                                            <a id="IDX-CHP-21-3064" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>chmod()</em></span>
+                                            <a id="IDX-CHP-21-3065" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>chown()</em></span>
+                                            <a id="IDX-CHP-21-3066" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>clock_gettime() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>close()</em></span>
+                                            <a id="IDX-CHP-21-3067" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>connect() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>creat()</em></span>
+                                            <a id="IDX-CHP-21-3068" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>dup()</em></span>
+                                            <a id="IDX-CHP-21-3069" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>dup2()</em></span>
+                                            <a id="IDX-CHP-21-3070" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>execle()</em></span>
+                                            <a id="IDX-CHP-21-3071" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>execve()</em></span>
+                                            <a id="IDX-CHP-21-3072" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>fchmod() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>fchown() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>fcntl()</em></span>
+                                            <a id="IDX-CHP-21-3073" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>fdatasync() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>fork()</em></span>
+                                            <a id="IDX-CHP-21-3074" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>fpathconf() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>fstat()</em></span>
+                                            <a id="IDX-CHP-21-3075" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>fsync() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>ftruncate() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>getegid()</em></span>
+                                            <a id="IDX-CHP-21-3076" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>geteuid()</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>getgid()</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>getgroups()</em></span>
+                                            <a id="IDX-CHP-21-3077" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>getpeername() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>getpgrp()</em></span>
+                                            <a id="IDX-CHP-21-3078" class="indexterm"/>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <span class="emphasis"><em>getpid()</em></span>
+                                            <a id="IDX-CHP-21-3079" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>getppid()</em></span>
+                                            <a id="IDX-CHP-21-3080" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>getsockname() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>getsockopt() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>getuid()</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>kill()</em></span>
+                                            <a id="IDX-CHP-21-3081" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>link()</em></span>
+                                            <a id="IDX-CHP-21-3082" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>listen() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>lseek()</em></span>
+                                            <a id="IDX-CHP-21-3083" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>lstat() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>mkdir()</em></span>
+                                            <a id="IDX-CHP-21-3084" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>mkfifo()</em></span>
+                                            <a id="IDX-CHP-21-3085" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>open()</em></span>
+                                            <a id="IDX-CHP-21-3086" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>pathconf()</em></span>
+                                            <a id="IDX-CHP-21-3087" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>pause()</em></span>
+                                            <a id="IDX-CHP-21-3088" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>pipe()</em></span>
+                                            <a id="IDX-CHP-21-3089" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>poll() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>posix_trace_event() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>pselect() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>raise() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>read()</em></span>
+                                            <a id="IDX-CHP-21-3090" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>readlink() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>recv() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>recvfrom() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>recvmsg() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>rename()</em></span>
+                                            <a id="IDX-CHP-21-3091" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>rmdir()</em></span>
+                                            <a id="IDX-CHP-21-3092" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>select() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sem_post() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>send() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sendmsg() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sendto() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>setgid()</em></span>
+                                            <a id="IDX-CHP-21-3093" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>setpgid()</em></span>
+                                            <a id="IDX-CHP-21-3094" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>setsid()</em></span>
+                                            <a id="IDX-CHP-21-3095" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>setsockopt() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>setuid()</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>shutdown() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sigaction()</em></span>
+                                            <a id="IDX-CHP-21-3096" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sigaddset()</em></span>
+                                            <a id="IDX-CHP-21-3097" class="indexterm"/>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; ">
+                                        <p>
+                                            <span class="emphasis"><em>sigdelset()</em></span>
+                                            <a id="IDX-CHP-21-3098" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sigemptyset()</em></span>
+                                            <a id="IDX-CHP-21-3099" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sigfillset()</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sigismember()</em></span>
+                                            <a id="IDX-CHP-21-3100" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>signal() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sigpause() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sigpending()</em></span>
+                                            <a id="IDX-CHP-21-3101" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sigprocmask()</em></span>
+                                            <a id="IDX-CHP-21-3102" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sigqueue() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sigset() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sigsuspend()</em></span>
+                                            <a id="IDX-CHP-21-3103" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sleep()</em></span>
+                                            <a id="IDX-CHP-21-3104" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>socket() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sockatmark() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>socketpair() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>stat()</em></span>
+                                            <a id="IDX-CHP-21-3105" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>symlink() (v3)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>sysconf()</em></span>
+                                            <a id="IDX-CHP-21-3106" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>tcdrain()</em></span>
+                                            <a id="IDX-CHP-21-3107" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>tcflow()</em></span>
+                                            <a id="IDX-CHP-21-3108" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>tcflush()</em></span>
+                                            <a id="IDX-CHP-21-3109" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>tcgetattr()</em></span>
+                                            <a id="IDX-CHP-21-3110" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>tcgetpgrp()</em></span>
+                                            <a id="IDX-CHP-21-3111" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>tcsendbreak()</em></span>
+                                            <a id="IDX-CHP-21-3112" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>tcsetattr()</em></span>
+                                            <a id="IDX-CHP-21-3113" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>tcsetpgrp()</em></span>
+                                            <a id="IDX-CHP-21-3114" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>time()</em></span>
+                                            <a id="IDX-CHP-21-3115" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>timer_getoverrun() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>timer_gettime() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>timer_settime() (v2)</em></span>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>times()</em></span>
+                                            <a id="IDX-CHP-21-3116" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>umask()</em></span>
+                                            <a id="IDX-CHP-21-3117" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>uname()</em></span>
+                                            <a id="IDX-CHP-21-3118" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>unlink()</em></span>
+                                            <a id="IDX-CHP-21-3119" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>utime()</em></span>
+                                            <a id="IDX-CHP-21-3120" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>wait()</em></span>
+                                            <a id="IDX-CHP-21-3121" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>waitpid()</em></span>
+                                            <a id="IDX-CHP-21-3122" class="indexterm"/>
+                                        </p>
+                                        <p>
+                                            <span class="emphasis"><em>write()</em></span>
+                                            <a id="IDX-CHP-21-3123" class="indexterm"/>
+                                        </p>
+                                    </td></tr></tbody></table></div></div><p>SUSv3 notes that all functions not listed in <a class="xref" href="ch21.html#functions_required_to_be_async-signal-sa" title="Table 21-1. Functions required to be async-signal-safe by POSIX.1-1990, SUSv2, and SUSv3">Table 21-1</a> are considered to
+                        be unsafe with respect to signals, but points out that a function is unsafe
+                        only when invocation of a signal handler interrupts the execution of an
+                        unsafe function, and the handler itself also calls an unsafe function. In
+                        other words, when writing signal handlers, we have two choices:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Ensure that the code of the signal handler itself is reentrant and
+                                that it calls only async-signal-safe functions.</p></li><li class="listitem"><p>Block delivery of signals while executing code in the main program
+                                that calls unsafe functions or works with global data structures
+                                also updated by the signal handler.</p></li></ul></div><p>The problem with the second approach is that, in a complex program, it can
+                        be difficult to ensure that a signal handler will never interrupt the main
+                        program while it is calling an unsafe function. For this reason, the above
+                        rules are often simplified to the statement that we must not call unsafe
+                        functions from within a signal handler.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>If we set up the same handler function to deal with several different
+                            signals or use the <code class="literal">SA_NODEFER</code> flag to
+                                <span class="emphasis"><em>sigaction()</em></span>, then a handler may interrupt
+                            itself. As a consequence, the handler may be nonreentrant if it updates
+                            global (or static) variables, even if they are not used by the main
+                            program.</p></div></div><div class="sect3" title="Use of errno inside signal handlers"><div class="titlepage"><div><div><h4 class="title" id="use_of_errno_inside_signal_handlers">Use of <span class="emphasis"><em>errno</em></span> inside signal handlers</h4></div></div></div><p>Because they may update <span class="emphasis"><em>errno</em></span>, use of the functions
+                        listed in <a class="xref" href="ch21.html#functions_required_to_be_async-signal-sa" title="Table 21-1. Functions required to be async-signal-safe by POSIX.1-1990, SUSv2, and SUSv3">Table 21-1</a> can
+                        nevertheless render a signal handler nonreentrant, since they may overwrite
+                        the <span class="emphasis"><em>errno</em></span> value that was set by a function called from
+                        the main program. The workaround is to save the value of
+                            <span class="emphasis"><em>errno</em></span> on entry to a signal handler that uses any of
+                        the functions in <a class="xref" href="ch21.html#functions_required_to_be_async-signal-sa" title="Table 21-1. Functions required to be async-signal-safe by POSIX.1-1990, SUSv2, and SUSv3">Table 21-1</a>
+                        and restore the <span class="emphasis"><em>errno</em></span> value on exit from the handler,
+                        as in the following example:<a id="IDX-CHP-21-3124" class="indexterm"/><a id="IDX-CHP-21-3125" class="indexterm"/><a id="IDX-CHP-21-3126" class="indexterm"/><a id="IDX-CHP-21-3127" class="indexterm"/><a id="IDX-CHP-21-3128" class="indexterm"/></p><a id="I_programlisting21_d1e58123"/><pre class="programlisting">void
+handler(int sig)
+{
+    int savedErrno;
+
+    savedErrno = errno;
+
+    /* Now we can execute a function that might modify errno */
+
+    errno = savedErrno;
+}</pre></div><div class="sect3" title="Use of unsafe functions in example programs in this book"><div class="titlepage"><div><div><h4 class="title" id="use_of_unsafe_functions_in_example_progr">Use of unsafe functions in example programs in this book</h4></div></div></div><p>Although <span class="emphasis"><em>printf()</em></span> is not async-signal-safe, we use it
+                        in signal handlers in various example programs in this book. We do so
+                        because <span class="emphasis"><em>printf()</em></span> provides an easy and concise way to
+                        demonstrate that a signal handler has been called, and to display the
+                        contents of relevant variables within the handler. For similar reasons, we
+                        occasionally use a few other unsafe functions in signal handlers, including
+                        other <span class="emphasis"><em>stdio</em></span> functions and
+                            <span class="emphasis"><em>strsignal()</em></span>.</p><p>Real-world applications should avoid calling non-async-signal-safe
+                        functions from signal handlers. To make this clear, each signal handler in
+                        the example programs that uses one of these functions is marked with a
+                        comment indicating that the usage is unsafe:</p><a id="I_programlisting21_d1e58144"/><pre class="programlisting">printf("Some message\n");           /* UNSAFE */</pre></div></div><div class="sect2" title="Global Variables and the sig_atomic_t Data Type"><div class="titlepage"><div><div><h3 class="title" id="global_variables_and_the_sig_underscore">Global Variables and the <span class="emphasis"><em>sig_atomic_t</em></span> Data Type</h3></div></div></div><p>Notwithstanding reentrancy issues, it can be useful to share global variables
+                    between the main program and a signal handler. This can be safe as long as the
+                    main program correctly handles the possibility that the signal handler may
+                    change the global variable at any time. For example, one common design is to
+                    make a signal handler’s sole action the setting of a global flag. This flag is
+                    periodically checked by the main program, which then takes appropriate action in
+                    response to the delivery of the signal (and clears the flag). When global
+                    variables are accessed in this way from a signal handler, we should always
+                    declare them using the <code class="literal">volatile</code> attribute
+                    (see <a class="xref" href="ch06.html#performing_a_nonlocal_goto_colon_setjmp" title="Performing a Nonlocal Goto: setjmp() and long jmp()">Performing a Nonlocal Goto: <span class="emphasis"><em>setjmp()</em></span> and <span class="emphasis"><em>long
+                    jmp()</em></span></a>) in order to
+                    prevent the compiler from performing optimizations that result in the variable
+                    being stored in a register.<a id="IDX-CHP-21-3129" class="indexterm"/><a id="IDX-CHP-21-3130" class="indexterm"/><a id="IDX-CHP-21-3131" class="indexterm"/><a id="IDX-CHP-21-3132" class="indexterm"/><a id="IDX-CHP-21-3133" class="indexterm"/></p><p>Reading and writing global variables may involve more than one
+                    machine-language instruction, and a signal handler may interrupt the main
+                    program in the middle of such an instruction sequence. (We say that access to
+                    the variable is <span class="emphasis"><em>nonatomic</em></span>.) For this reason, the C language
+                    standards and SUSv3 specify an integer data type,
+                        <span class="emphasis"><em>sig_atomic_t</em></span>, for which reads and writes are guaranteed
+                    to be atomic. Thus, a global flag variable that is shared between the main
+                    program and a signal handler should be declared as follows:</p><a id="I_programlisting21_d1e58192"/><pre class="programlisting">volatile sig_atomic_t flag;</pre><p>We show an example of the use of the <span class="emphasis"><em>sig_atomic_t</em></span> data
+                    type in <a class="xref" href="ch22.html#using_sigsuspend_open_parenthesis_close" title="Example 22-5. Using sigsuspend()">Example 22-5</a>, in <a class="xref" href="ch22.html#example_program-id26" title="Example program">Example program</a>.<a id="IDX-CHP-21-3134" class="indexterm"/></p><p>Note that the C increment (<code class="literal">++</code>) and
+                    decrement (<code class="literal">--</code>) operators don’t fall within
+                    the guarantee provided for <span class="emphasis"><em>sig_atomic_t</em></span>. On some hardware
+                    architectures, these operations may not be atomic (refer to <a class="xref" href="ch30.html#protecting_accesses_to_shared_variables" title="Protecting Accesses to Shared Variables: Mutexes">Protecting Accesses to Shared Variables: Mutexes</a> for more details). All
+                    that we are guaranteed to be safely allowed to do with a
+                        <span class="emphasis"><em>sig_atomic_t</em></span> variable is set it within the signal
+                    handler, and check it in the main program (or vice versa).</p><p>C99 and SUSv3 specify that an implementation should define two constants (in
+                        <code class="literal">&lt;stdint.h&gt;</code>), <code class="literal">SIG_ATOMIC_MIN</code> and <code class="literal">SIG_ATOMIC_MAX</code>, that define the range of values that may be
+                    assigned to variables of type <span class="emphasis"><em>sig_atomic_t</em></span>. The standards
+                    require that this range be at least -127 to 127 if
+                        <span class="emphasis"><em>sig_atomic_t</em></span> is represented as a signed value, or 0 to
+                    255 if it is represented as an unsigned value. On Linux, these two constants
+                    equate to the negative and positive limits for signed 32-bit integers.</p></div></div><div class="sect1" title="Other Methods of Terminating a Signal Handler"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="other_methods_of_terminating_a_signal_ha">Other Methods of Terminating a Signal Handler</h2></div></div></div><p>All of the signal handlers that we have looked at so far complete by returning to
+                the main program. However, simply returning from a signal handler sometimes isn’t
+                desirable, or in some cases, isn’t even useful. (We’ll see an example of where
+                returning from a signal handler isn’t useful when we discuss hardware-generated
+                signals in Section 22.4.)</p><p>There are various other ways of terminating a signal handler:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Use <span class="emphasis"><em>_exit()</em></span> to terminate the process. Beforehand, the
+                        handler may carry out some cleanup actions. Note that we can’t use
+                            <span class="emphasis"><em>exit()</em></span> to terminate a signal handler, because it is
+                        not one of safe functions listed in <a class="xref" href="ch21.html#functions_required_to_be_async-signal-sa" title="Table 21-1. Functions required to be async-signal-safe by POSIX.1-1990, SUSv2, and SUSv3">Table 21-1</a>. It is unsafe
+                        because it flushes <span class="emphasis"><em>stdio</em></span> buffers prior to calling
+                            <span class="emphasis"><em>_exit()</em></span>, as described in Section 25.1.</p></li><li class="listitem"><p>Use <span class="emphasis"><em>kill()</em></span> or <span class="emphasis"><em>raise()</em></span> to send a
+                        signal that kills the process (i.e., a signal whose default action is
+                        process termination).</p></li><li class="listitem"><p>Perform a nonlocal goto from the signal handler.</p></li><li class="listitem"><p>Use the <span class="emphasis"><em>abort()</em></span> function to terminate the process
+                        with a core dump.</p></li></ul></div><p>The last two of these options are described in further detail in the following
+                sections.</p><div class="sect2" title="Performing a Nonlocal Goto from a Signal Handler"><div class="titlepage"><div><div><h3 class="title" id="performing_a_nonlocal_goto_from_a_signal">Performing a Nonlocal Goto from a Signal Handler</h3></div></div></div><p><a class="xref" href="ch06.html#performing_a_nonlocal_goto_colon_setjmp" title="Performing a Nonlocal Goto: setjmp() and long jmp()">Performing a Nonlocal Goto: <span class="emphasis"><em>setjmp()</em></span> and <span class="emphasis"><em>long
+                    jmp()</em></span></a> described the use of
+                        <span class="emphasis"><em>setjmp()</em></span> and <span class="emphasis"><em>longjmp()</em></span> to perform
+                    a nonlocal goto from a function to one of its callers. We can also use this
+                    technique from a signal handler. This provides a way to recover after delivery
+                    of a signal caused by a hardware exception (e.g., a memory access error), and
+                    also allows us to catch a signal and return control to a particular point in a
+                    program. For example, upon receipt of a <code class="literal">SIGINT</code> signal (normally generated by typing
+                        <span class="emphasis"><em>Control-C</em></span>), the shell performs a nonlocal goto to
+                    return control to its main input loop (and thus read a new command).<a id="IDX-CHP-21-3135" class="indexterm"/><a id="IDX-CHP-21-3136" class="indexterm"/><a id="IDX-CHP-21-3137" class="indexterm"/><a id="IDX-CHP-21-3138" class="indexterm"/><a id="IDX-CHP-21-3139" class="indexterm"/></p><p>However, there is a problem with using the standard
+                        <span class="emphasis"><em>longjmp()</em></span> function to exit from a signal handler. We
+                    noted earlier that, upon entry to the signal handler, the kernel automatically
+                    adds the invoking signal, as well as any signals specified in the
+                        <span class="emphasis"><em>act.sa_mask</em></span> field, to the process signal mask, and then
+                    removes these signals from the mask when the handler does a normal
+                    return.</p><p>What happens to the signal mask if we exit the signal handler using
+                        <span class="emphasis"><em>longjmp()</em></span>? The answer depends on the genealogy of the
+                    particular UNIX implementation. Under System V, <span class="emphasis"><em>longjmp()</em></span>
+                    doesn’t restore the signal mask, so that blocked signals are not unblocked upon
+                    leaving the handler. Linux follows the System V behavior. (This is usually not
+                    what we want, since it leaves the signal that caused invocation of the handler
+                    blocked.) Under BSD-derived implementations, <span class="emphasis"><em>setjmp()</em></span> saves
+                    the signal mask in its <span class="emphasis"><em>env</em></span> argument, and the saved signal
+                    mask is restored by <span class="emphasis"><em>longjmp()</em></span>. (BSD-derived implementations
+                    also provide two other functions, <span class="emphasis"><em>_setjmp()</em></span> and
+                        <span class="emphasis"><em>_longjmp()</em></span>, which have the System V semantics.) In
+                    other words, we can’t portably use <span class="emphasis"><em>longjmp()</em></span> to exit a
+                    signal handler.<a id="IDX-CHP-21-3140" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>If we define the <code class="literal">_BSD_SOURCE</code> feature
+                        test macro when compiling a program, then (the <span class="emphasis"><em>glibc</em></span>)
+                            <span class="emphasis"><em>setjmp()</em></span> follows the BSD semantics.</p></div><p>Because of this difference in the two main UNIX variants, POSIX.1-1990 chose
+                    not to specify the handling of the signal mask by <span class="emphasis"><em>setjmp()</em></span>
+                    and <span class="emphasis"><em>longjmp()</em></span>. Instead, it defined a pair of new functions,
+                        <span class="emphasis"><em>sigsetjmp()</em></span> and <span class="emphasis"><em>siglongjmp()</em></span>, that
+                    provide explicit control of the signal mask when performing a nonlocal
+                        goto.<a id="IDX-CHP-21-3141" class="indexterm"/></p><a id="I_programlisting21_d1e58400"/><pre class="programlisting">#include &lt;setjmp.h&gt;
+
+int <strong class="userinput"><code>sigsetjmp</code></strong>(sigjmp_buf <span class="emphasis"><em>env</em></span>, int <span class="emphasis"><em>savesigs</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on initial call, nonzero on return via
+                            <span class="emphasis"><em>siglongjmp()</em></span></p></div><a id="I_programlisting21_d1e58416"/><pre class="programlisting">void <strong class="userinput"><code>siglongjmp</code></strong>(sigjmp_buf <span class="emphasis"><em>env</em></span>, int <span class="emphasis"><em>val</em></span>);</pre><p>The <span class="emphasis"><em>sigsetjmp()</em></span> and <span class="emphasis"><em>siglongjmp()</em></span>
+                    functions operate similarly to <span class="emphasis"><em>setjmp()</em></span> and
+                        <span class="emphasis"><em>longjmp()</em></span>. The only differences are in the type of the
+                        <span class="emphasis"><em>env</em></span> argument (<span class="emphasis"><em>sigjmp_buf</em></span> instead
+                    of <span class="emphasis"><em>jmp_buf</em></span>) and the extra <span class="emphasis"><em>savesigs</em></span>
+                    argument to <span class="emphasis"><em>sigsetjmp()</em></span>. If <span class="emphasis"><em>savesigs</em></span>
+                    is nonzero, then the process signal mask that is current at the time of the
+                        <span class="emphasis"><em>sigsetjmp()</em></span> call is saved in <span class="emphasis"><em>env</em></span>
+                    and restored by a later <span class="emphasis"><em>siglongjmp()</em></span> call specifying the
+                    same <span class="emphasis"><em>env</em></span> argument. If <span class="emphasis"><em>savesigs</em></span> is 0,
+                    then the process signal mask is not saved and restored.</p><p>The <span class="emphasis"><em>longjmp()</em></span> and <span class="emphasis"><em>siglongjmp()</em></span>
+                    functions are not listed among the async-signal-safe functions in <a class="xref" href="ch21.html#functions_required_to_be_async-signal-sa" title="Table 21-1. Functions required to be async-signal-safe by POSIX.1-1990, SUSv2, and SUSv3">Table 21-1</a>. This is because
+                    calling any non-async-signal-safe function after performing a nonlocal goto
+                    carries the same risks as calling that function from within the signal handler.
+                    Furthermore, if a signal handler interrupts the main program while it is
+                    part-way through updating a data structure, and the handler exits by performing
+                    a nonlocal goto, then the incomplete update may leave that data structure in an
+                    inconsistent state. One technique that can help to avoid problems is to use
+                        <span class="emphasis"><em>sigprocmask()</em></span> to temporarily block the signal while
+                    sensitive updates are being performed.</p><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id24">Example program</h4></div></div></div><p><a class="xref" href="ch21.html#performing_a_nonlocal_goto_from_a_si" title="Example 21-2. Performing a nonlocal goto from a signal handler">Example 21-2</a> demonstrates the
+                        difference in signal mask handling for the two types of nonlocal gotos. This
+                        program establishes a handler for <code class="literal">SIGINT</code>.
+                        The program is designed to allow either <span class="emphasis"><em>setjmp()</em></span> plus
+                            <span class="emphasis"><em>longjmp()</em></span> or <span class="emphasis"><em>sigsetjmp()</em></span> plus
+                            <span class="emphasis"><em>siglongjmp()</em></span> to be used to exit the signal handler,
+                        depending on whether the program is compiled with the <code class="literal">USE_SIGSETJMP</code> macro defined. The program
+                        displays the current settings of the signal mask both on entry to the signal
+                        handler and after the nonlocal goto has transferred control from the handler
+                        back to the main program.<a id="IDX-CHP-21-3142" class="indexterm"/><a id="IDX-CHP-21-3143" class="indexterm"/><a id="IDX-CHP-21-3144" class="indexterm"/><a id="IDX-CHP-21-3145" class="indexterm"/><a id="IDX-CHP-21-3146" class="indexterm"/><a id="IDX-CHP-21-3147" class="indexterm"/><a id="IDX-CHP-21-3148" class="indexterm"/></p><p>When we build the program so that <span class="emphasis"><em>longjmp()</em></span> is used
+                        to exit the signal handler, this is what we see when we run the
+                        program:</p><a id="I_programlisting21_d1e58563"/><pre class="programlisting">$ <strong class="userinput"><code>make -s sigmask_longjmp</code></strong>         <em class="lineannotation"><span class="lineannotation">Default compilation causes</span></em>
+ <span class="emphasis"><em>setjmp()</em></span> <em class="lineannotation"><span class="lineannotation">to be used</span></em>
+$ <strong class="userinput"><code>./sigmask_longjmp</code></strong>
+Signal mask at startup:
+                &lt;empty signal set&gt;
+Calling setjmp()
+<em class="lineannotation"><span class="lineannotation">Type Control-C to generate</span></em> SIGINT
+Received signal 2 (Interrupt), signal mask is:
+                2 (Interrupt)
+After jump from handler, signal mask is:
+                2 (Interrupt)
+<em class="lineannotation"><span class="lineannotation">(At this point, typing Control-C again has no effect, since</span></em> SIGINT <em class="lineannotation"><span class="lineannotation">is blocked)</span></em>
+<em class="lineannotation"><span class="lineannotation">Type Control-\ to kill the program</span></em>
+Quit</pre><p>From the program output, we can see that, after a
+                            <span class="emphasis"><em>longjmp()</em></span> from the signal handler, the signal mask
+                        remains set to the value to which it was set on entry to the signal
+                        handler.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>In the above shell session, we built the program using the makefile
+                            supplied with the source code distribution for this book. The
+                                <span class="emphasis"><em>-s</em></span> option tells <span class="emphasis"><em>make</em></span> not
+                            to echo the commands that it is executing. We use this option to avoid
+                            cluttering the session log. ([Mecklenburg, 2005] provides a description
+                            of the GNU <span class="emphasis"><em>make</em></span> program.)</p></div><p>When we compile the same source file to build an executable that uses
+                            <span class="emphasis"><em>siglongjmp()</em></span> to exit the handler, we see the
+                        following:</p><a id="I_programlisting21_d1e58615"/><pre class="programlisting">$ <strong class="userinput"><code>make -s sigmask_siglongjmp</code></strong>      <em class="lineannotation"><span class="lineannotation">Compiles using</span></em> <span class="emphasis"><em>cc -DUSE_SIGSETJMP</em></span>
+$ <strong class="userinput"><code>./sigmask_siglongjmp</code></strong>
+Signal mask at startup:
+                &lt;empty signal set&gt;
+Calling sigsetjmp()
+<em class="lineannotation"><span class="lineannotation">Type Control-C</span></em>
+Received signal 2 (Interrupt), signal mask is:
+                2 (Interrupt)
+After jump from handler, signal mask is:
+                &lt;empty signal set&gt;</pre><p>At this point, <code class="literal">SIGINT</code> is not blocked,
+                        because <span class="emphasis"><em>siglongjmp()</em></span> restored the signal mask to its
+                        original state. Next, we type <span class="emphasis"><em>Control-C</em></span> again, so that
+                        the handler is once more invoked:</p><a id="I_programlisting21_d1e58643"/><pre class="programlisting"><em class="lineannotation"><span class="lineannotation">Type Control-C</span></em>
+Received signal 2 (Interrupt), signal mask is:
+                2 (Interrupt)
+After jump from handler, signal mask is:
+                &lt;empty signal set&gt;
+<em class="lineannotation"><span class="lineannotation">Type Control-\ to kill the program</span></em>
+Quit</pre><p>From the above output, we can see that <span class="emphasis"><em>siglongjmp()</em></span>
+                        restores the signal mask to the value it had at the time of the
+                            <span class="emphasis"><em>sigsetjmp()</em></span> call (i.e., an empty signal
+                        set).</p><p><a class="xref" href="ch21.html#performing_a_nonlocal_goto_from_a_si" title="Example 21-2. Performing a nonlocal goto from a signal handler">Example 21-2</a> also demonstrates a
+                        useful technique for use with a signal handler that performs a nonlocal
+                        goto. Because a signal can be generated at any time, it may actually occur
+                        before the target of the goto has been set up by
+                            <span class="emphasis"><em>sigsetjmp()</em></span> (or <span class="emphasis"><em>setjmp()</em></span>). To
+                        prevent this possibility (which would cause the handler to perform a
+                        nonlocal goto using an uninitialized <span class="emphasis"><em>env</em></span> buffer), we
+                        employ a guard variable, <span class="emphasis"><em>canJump</em></span>, to indicate whether
+                        the <span class="emphasis"><em>env</em></span> buffer has been initialized. If
+                            <span class="emphasis"><em>canJump</em></span> is false, then instead of doing a nonlocal
+                        goto, the handler simply returns. An alternative approach is to arrange the
+                        program code so that the call to <span class="emphasis"><em>sigsetjmp()</em></span> (or
+                            <span class="emphasis"><em>setjmp()</em></span>) occurs before the signal handler is
+                        established. However, in complex programs, it may be difficult to ensure
+                        that these two steps are performed in that order, and the use of a guard
+                        variable may be simpler.</p><p>Note that using <code class="literal">#ifdef</code> was the simplest
+                        way of writing the program in <a class="xref" href="ch21.html#performing_a_nonlocal_goto_from_a_si" title="Example 21-2. Performing a nonlocal goto from a signal handler">Example 21-2</a> in a
+                        standards-conformant fashion. In particular, we could not have replaced the
+                            <code class="literal">#ifdef</code> with the following run-time
+                        check:</p><a id="I_programlisting21_d1e58697"/><pre class="programlisting">if (useSiglongjmp)
+    s = sigsetjmp(senv, 1);
+else
+    s = setjmp(env);
+if (s == 0)
+    ...</pre><p>This is not permitted because SUSv3 doesn’t allow
+                            <span class="emphasis"><em>setjmp()</em></span> and <span class="emphasis"><em>sigsetjmp()</em></span> to be
+                        used within an assignment statement (see <a class="xref" href="ch06.html#performing_a_nonlocal_goto_colon_setjmp" title="Performing a Nonlocal Goto: setjmp() and long jmp()">Performing a Nonlocal Goto: <span class="emphasis"><em>setjmp()</em></span> and <span class="emphasis"><em>long
+                    jmp()</em></span></a>).</p><div class="example"><a id="performing_a_nonlocal_goto_from_a_si"/><div class="example-title">Example 21-2. Performing a nonlocal goto from a signal handler</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/sigmask_longjmp.c</code></strong>
+#define _GNU_SOURCE     /* Get strsignal() declaration from &lt;string.h&gt; */
+#include &lt;string.h&gt;
+#include &lt;setjmp.h&gt;
+#include &lt;signal.h&gt;
+#include "signal_functions.h"           /* Declaration of printSigMask() */
+#include "tlpi_hdr.h"
+
+static volatile sig_atomic_t canJump = 0;
+                        /* Set to 1 once "env" buffer has been
+                           initialized by [sig]setjmp() */
+#ifdef USE_SIGSETJMP
+static sigjmp_buf senv;
+#else
+static jmp_buf env;
+#endif
+
+static void
+handler(int sig)
+{
+    /* UNSAFE: This handler uses non-async-signal-safe functions
+       (printf(), strsignal(), printSigMask(); see Section 21.1.2) */
+
+    printf("Received signal %d (%s), signal mask is:\n", sig,
+            strsignal(sig));
+    printSigMask(stdout, NULL);
+
+    if (!canJump) {
+        printf("'env' buffer not yet set, doing a simple return\n");
+        return;
+    }
+
+#ifdef USE_SIGSETJMP
+    siglongjmp(senv, 1);
+#else
+    longjmp(env, 1);
+#endif
+}
+
+int
+main(int argc, char *argv[])
+{
+    struct sigaction sa;
+
+    printSigMask(stdout, "Signal mask at startup:\n");
+
+    sigemptyset(&amp;sa.sa_mask);
+    sa.sa_flags = 0;
+    sa.sa_handler = handler;
+    if (sigaction(SIGINT, &amp;sa, NULL) == -1)
+        errExit("sigaction");
+
+#ifdef USE_SIGSETJMP
+    printf("Calling sigsetjmp()\n");
+    if (sigsetjmp(senv, 1) == 0)
+#else
+    printf("Calling setjmp()\n");
+    if (setjmp(env) == 0)
+#endif
+        canJump = 1;                    /* Executed after [sig]setjmp() */
+
+    else                                /* Executed after [sig]longjmp() */
+        printSigMask(stdout, "After jump from handler, signal mask is:\n" );
+
+    for (;;)                            /* Wait for signals until killed */
+        pause();
+}
+      <strong class="userinput"><code>signals/sigmask_longjmp.c</code></strong></pre></div></div></div></div><div class="sect2" title="Terminating a Process Abnormally: abort()"><div class="titlepage"><div><div><h3 class="title" id="terminating_a_process_abnormally_colon_a">Terminating a Process Abnormally: <span class="emphasis"><em>abort()</em></span></h3></div></div></div><p>The <span class="emphasis"><em>abort()</em></span> function terminates the calling process and
+                    causes it to produce a core dump.<a id="IDX-CHP-21-3150" class="indexterm"/><a id="IDX-CHP-21-3151" class="indexterm"/><a id="IDX-CHP-21-3152" class="indexterm"/><a id="IDX-CHP-21-3153" class="indexterm"/><a id="IDX-CHP-21-3154" class="indexterm"/><a id="IDX-CHP-21-3155" class="indexterm"/><a id="IDX-CHP-21-3149" class="indexterm"/></p><a id="I_programlisting21_d1e58776"/><pre class="programlisting">#include &lt;stdlib.h&gt;
+
+void <strong class="userinput"><code>abort</code></strong>(void);</pre><p>The <span class="emphasis"><em>abort()</em></span> function terminates the calling process by
+                    raising a <code class="literal">SIGABRT</code> signal. The default action
+                    for <code class="literal">SIGABRT</code> is to produce a core dump file
+                    and terminate the process. The core dump file can then be used within a debugger
+                    to examine the state of the program at the time of the
+                        <span class="emphasis"><em>abort()</em></span> call.<a id="IDX-CHP-21-3156" class="indexterm"/></p><p>SUSv3 requires that <span class="emphasis"><em>abort()</em></span> override the effect of
+                    blocking or ignoring <code class="literal">SIGABRT</code>. Furthermore,
+                    SUSv3 specifies that <span class="emphasis"><em>abort()</em></span> must terminate the process
+                    unless the process catches the signal with a handler that doesn’t return. This
+                    last statement requires a moment’s thought. Of the methods of terminating a
+                    signal handler described in <a class="xref" href="ch21.html#other_methods_of_terminating_a_signal_ha" title="Other Methods of Terminating a Signal Handler">Other Methods of Terminating a Signal Handler</a>, the one that is
+                    relevant here is the use of a nonlocal goto to exit the handler. If this is
+                    done, then the effect of <span class="emphasis"><em>abort()</em></span> will be nullified;
+                    otherwise, <span class="emphasis"><em>abort()</em></span> always terminates the process. In most
+                    implementations, termination is guaranteed as follows: if the process still
+                    hasn’t terminated after raising <code class="literal">SIGABRT</code> once
+                    (i.e., a handler catches the signal and returns, so that execution of
+                        <span class="emphasis"><em>abort()</em></span> is resumed), <span class="emphasis"><em>abort()</em></span>
+                    resets the handling of <code class="literal">SIGABRT</code> to <code class="literal">SIG_DFL</code> and raises a second <code class="literal">SIGABRT</code>, which is guaranteed to kill the
+                    process.</p><p>If <span class="emphasis"><em>abort()</em></span> does successfully terminate the process, then
+                    it also flushes and closes <span class="emphasis"><em>stdio</em></span> streams.</p><p>An example of the use of <span class="emphasis"><em>abort()</em></span> is provided in the
+                    error-handling functions of <a class="xref" href="ch03.html#error-handling_functions_used_by_all_pro" title="Example 3-3. Error-handling functions used by all programs">Example 3-3</a>, in <a class="xref" href="ch03.html#functions_for_parsing_numeric_command-li" title="Functions for parsing numeric command-line arguments">Functions for parsing numeric command-line arguments</a>.</p></div></div><div class="sect1" title="Handling a Signal on an Alternate Stack: sigaltstack()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="handling_a_signal_on_an_alternate_stack">Handling a Signal on an Alternate Stack:
+                <span class="emphasis"><em>sigaltstack()</em></span></h2></div></div></div><p>Normally, when a signal handler is invoked, the kernel creates a frame for it on
+                the process stack. However, this may not be possible if a process attempts to extend
+                the stack beyond the maximum possible size. For example, this may occur because the
+                stack grows so large that it encounters a region of mapped memory (<a class="xref" href="ch48.html#location_of_shared_memory_in_virtual_mem" title="Location of Shared Memory in Virtual Memory">Location of Shared Memory in Virtual Memory</a>) or the upwardly growing
+                heap, or it reaches the <code class="literal">RLIMIT_STACK</code> resource
+                limit (<a class="xref" href="ch36.html#details_of_specific_resource_limits" title="Details of Specific Resource Limits">Details of Specific Resource Limits</a>).<a id="IDX-CHP-21-3158" class="indexterm"/><a id="IDX-CHP-21-3159" class="indexterm"/><a id="IDX-CHP-21-3160" class="indexterm"/><a id="IDX-CHP-21-3161" class="indexterm"/><a id="IDX-CHP-21-3162" class="indexterm"/><a id="IDX-CHP-21-3163" class="indexterm"/><a id="IDX-CHP-21-3164" class="indexterm"/><a id="IDX-CHP-21-3165" class="indexterm"/><a id="IDX-CHP-21-3166" class="indexterm"/><a id="IDX-CHP-21-3167" class="indexterm"/><a id="IDX-CHP-21-3168" class="indexterm"/><a id="IDX-CHP-21-3169" class="indexterm"/><a id="IDX-CHP-21-3170" class="indexterm"/><a id="IDX-CHP-21-3157" class="indexterm"/><a id="IDX-CHP-21-3171" class="indexterm"/></p><p>When a process attempts to grow its stack beyond the maximum possible size, the
+                kernel generates a <code class="literal">SIGSEGV</code> signal for the
+                process. However, since the stack space is exhausted, the kernel can’t create a
+                frame for any <code class="literal">SIGSEGV</code> handler that the program
+                may have established. Consequently, the handler is not invoked, and the process is
+                terminated (the default action for <code class="literal">SIGSEGV</code>).</p><p>If we instead need to ensure that the <code class="literal">SIGSEGV</code>
+                signal is handled in these circumstances, we can do the following:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Allocate an area of memory, called an <span class="emphasis"><em>alternate signal
+                            stack</em></span>, to be used for the stack frame of a signal
+                            handler.<a id="IDX-CHP-21-3172" class="indexterm"/></p></li><li class="listitem"><p>Use the <span class="emphasis"><em>sigaltstack()</em></span> system call to inform the
+                        kernel of the existence of the alternate signal stack.</p></li><li class="listitem"><p>When establishing the signal handler, specify the <code class="literal">SA_ONSTACK</code> flag, to tell the kernel that the frame for this
+                        handler should be created on the alternate stack.</p></li></ol></div><p>The <span class="emphasis"><em>sigaltstack()</em></span> system call both establishes an alternate
+                signal stack and returns information about any alternate signal stack that is
+                already established.</p><a id="I_programlisting21_d1e58992"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigaltstack</code></strong>(const stack_t *<span class="emphasis"><em>sigstack</em></span>, stack_t *<span class="emphasis"><em>old_sigstack</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>sigstack</em></span> argument points to a structure specifying the
+                location and attributes of the new alternate signal stack. The
+                    <span class="emphasis"><em>old_sigstack</em></span> argument points to a structure used to return
+                information about the previously established alternate signal stack (if there was
+                one). Either one of these arguments can be specified as <code class="literal">NULL</code>. For example, we can find out about the existing alternate
+                signal stack, without changing it, by specifying <code class="literal">NULL</code> for the <span class="emphasis"><em>sigstack</em></span> argument. Otherwise, each
+                of these arguments points to a structure of the following type:</p><a id="I_programlisting21_d1e59023"/><pre class="programlisting">typedef struct {
+    void  *ss_sp;         /* Starting address of alternate stack */
+    int    ss_flags;      /* Flags: SS_ONSTACK, SS_DISABLE */
+    size_t ss_size;       /* Size of alternate stack */
+} stack_t;</pre><p>The <span class="emphasis"><em>ss_sp</em></span> and <span class="emphasis"><em>ss_size</em></span> fields specify the
+                size and location of the alternate signal stack. When actually using the alternate
+                signal stack, the kernel automatically takes care of aligning the value given in
+                    <span class="emphasis"><em>ss_sp</em></span> to an address boundary that is suitable for the
+                hardware architecture.</p><p>Typically, the alternate signal stack is either statically allocated or
+                dynamically allocated on the heap. SUSv3 specifies the constant <code class="literal">SIGSTKSZ</code> to be used as a typical value when sizing the
+                alternate stack, and <code class="literal">MINSIGSTKSZ</code> as the minimum
+                size required to invoke a signal handler. On Linux/x86-32, these constants are
+                defined with the values 8192 and 2048, respectively.</p><p>The kernel doesn’t resize an alternate signal stack. If the stack overflows the
+                space we have allocated for it, then chaos results (e.g., overwriting of variables
+                beyond the limits of the stack). This is not usually a problem—because we normally
+                use an alternate signal stack to handle the special case of the standard stack
+                overflowing, typically only one or a few frames are allocated on the stack. The job
+                of the <code class="literal">SIGSEGV</code> handler is either to perform some
+                cleanup and terminate the process or to unwind the standard stack using a nonlocal
+                goto.</p><p>The <span class="emphasis"><em>ss_flags</em></span> field contains one of the following
+                values:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">SS_ONSTACK</code>
+                    </span></dt><dd><p>If this flag is set when retrieving information about the currently
+                            established alternate signal stack (<span class="emphasis"><em>old_sigstack</em></span>),
+                            it indicates that the process is currently executing on the alternate
+                            signal stack. Attempts to establish a new alternate signal stack while
+                            the process is already running on an alternate signal stack result in an
+                            error (<code class="literal">EPERM</code>) from
+                                <span class="emphasis"><em>sigaltstack()</em></span>.</p></dd><dt><span class="term">
+                        <code class="literal">SS_DISABLE</code>
+                    </span></dt><dd><p>Returned in <span class="emphasis"><em>old_sigstack</em></span>, this flag indicates
+                            that there is no currently established alternate signal stack. When
+                            specified in <span class="emphasis"><em>sigstack</em></span>, this disables a currently
+                            established alternate signal stack.</p></dd></dl></div><p><a class="xref" href="ch21.html#using_sigaltstack_open_parenthesis_close" title="Example 21-3. Using sigaltstack()">Example 21-3</a> demonstrates the
+                establishment and use of an alternate signal stack. After establishing an alternate
+                signal stack and a handler for <code class="literal">SIGSEGV</code>, this
+                program calls a function that infinitely recurses, so that the stack overflows and
+                the process is sent a <code class="literal">SIGSEGV</code> signal. When we run
+                the program, this is what we see:</p><a id="I_programlisting21_d1e59094"/><pre class="programlisting">$ <strong class="userinput"><code>ulimit -s unlimited</code></strong>
+$ <strong class="userinput"><code>./t_sigaltstack</code></strong>
+Top of standard stack is near 0xbffff6b8
+Alternate stack is at          0x804a948-0x804cfff
+Call    1 - top of stack near 0xbff0b3ac
+Call    2 - top of stack near 0xbfe1714c
+<em class="lineannotation"><span class="lineannotation">Many intervening lines of output removed</span></em>
+Call 2144 - top of stack near 0x4034120c
+Call 2145 - top of stack near 0x4024cfac
+Caught signal 11 (Segmentation fault)
+Top of handler stack near      0x804c860</pre><p>In this shell session, the <span class="emphasis"><em>ulimit</em></span> command is used to remove
+                any <code class="literal">RLIMIT_STACK</code> resource limit that may have
+                been set in the shell. We explain this resource limit in Section 36.3.<a id="IDX-CHP-21-3173" class="indexterm"/></p><div class="example"><a id="using_sigaltstack_open_parenthesis_close"/><div class="example-title">Example 21-3. Using <span class="emphasis"><em>sigaltstack()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/t_sigaltstack.c</code></strong>
+#define _GNU_SOURCE          /* Get strsignal() declaration from &lt;string.h&gt; */
+#include &lt;string.h&gt;
+#include &lt;signal.h&gt;
+#include "tlpi_hdr.h"
+
+static void
+sigsegvHandler(int sig)
+{
+    int x;
+
+    /* UNSAFE: This handler uses non-async-signal-safe functions
+       (printf(), strsignal(), fflush(); see Section 21.1.2) */
+
+    printf("Caught signal %d (%s)\n", sig, strsignal(sig));
+    printf("Top of handler stack near     %10p\n", (void *) &amp;x);
+    fflush(NULL);
+
+    _exit(EXIT_FAILURE);                /* Can't return after SIGSEGV */
+}
+
+static void             /* A recursive function that overflows the stack */
+overflowStack(int callNum)
+{
+    char a[100000];                     /* Make this stack frame large */
+
+    printf("Call %4d - top of stack near %10p\n", callNum, &amp;a[0]);
+    overflowStack(callNum+1);
+}
+
+int
+main(int argc, char *argv[])
+{
+    stack_t sigstack;
+    struct sigaction sa;
+    int j;
+
+    printf("Top of standard stack is near %10p\n", (void *) &amp;j);
+
+    /* Allocate alternate stack and inform kernel of its existence */
+
+    sigstack.ss_sp = malloc(SIGSTKSZ);
+    if (sigstack.ss_sp == NULL)
+        errExit("malloc");
+
+    sigstack.ss_size = SIGSTKSZ;
+    sigstack.ss_flags = 0;
+    if (sigaltstack(&amp;sigstack, NULL) == -1)
+        errExit("sigaltstack");
+    printf("Alternate stack is at         %10p-%p\n",
+            sigstack.ss_sp, (char *) sbrk(0) - 1);
+
+    sa.sa_handler = sigsegvHandler;     /* Establish handler for SIGSEGV */
+    sigemptyset(&amp;sa.sa_mask);
+    sa.sa_flags = SA_ONSTACK;           /* Handler uses alternate stack */
+    if (sigaction(SIGSEGV, &amp;sa, NULL) == -1)
+        errExit("sigaction");
+
+    overflowStack(1);
+}
+      <strong class="userinput"><code>signals/t_sigaltstack.c</code></strong></pre></div></div></div><div class="sect1" title="The SA_SIGINFO Flag"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_sa_underscore_siginfo_flag">The <code class="literal">SA_SIGINFO</code> Flag</h2></div></div></div><p>Setting the <code class="literal">SA_SIGINFO</code> flag when establishing a
+                handler with <span class="emphasis"><em>sigaction()</em></span> allows the handler to obtain
+                additional information about a signal when it is delivered. In order to obtain this
+                information, we must declare the handler as follows:<a id="IDX-CHP-21-3174" class="indexterm"/><a id="IDX-CHP-21-3175" class="indexterm"/><a id="IDX-CHP-21-3176" class="indexterm"/><a id="IDX-CHP-21-3177" class="indexterm"/><a id="IDX-CHP-21-3178" class="indexterm"/><a id="IDX-CHP-21-3179" class="indexterm"/><a id="IDX-CHP-21-3180" class="indexterm"/><a id="IDX-CHP-21-3181" class="indexterm"/><a id="IDX-CHP-21-3182" class="indexterm"/></p><a id="I_programlisting21_d1e59205"/><pre class="programlisting">void handler(int sig, siginfo_t *siginfo, void *ucontext);</pre><p>The first argument, <span class="emphasis"><em>sig</em></span>, is the signal number, as for a
+                standard signal handler. The second argument, <span class="emphasis"><em>siginfo</em></span>, is a
+                structure used to provide the additional information about the signal. We describe
+                this structure below. The last argument, <span class="emphasis"><em>ucontext</em></span>, is also
+                described below.</p><p>Since the above signal handler has a different prototype from a standard signal
+                handler, C typing rules mean that we can’t use the <span class="emphasis"><em>sa_handler</em></span>
+                field of the <span class="emphasis"><em>sigaction</em></span> structure to specify the address of the
+                handler. Instead, we must use an alternative field:
+                    <span class="emphasis"><em>sa_sigaction</em></span>. In other words, the definition of the
+                    <span class="emphasis"><em>sigaction</em></span> structure is somewhat more complex than was shown
+                in <a class="xref" href="ch20.html#changing_signal_dispositions_colon_sigac" title="Changing Signal Dispositions: sigaction()">Changing Signal Dispositions: <span class="emphasis"><em>sigaction()</em></span></a>. In full, the
+                structure is defined as follows:<a id="IDX-CHP-21-3183" class="indexterm"/></p><a id="I_programlisting21_d1e59240"/><pre class="programlisting">struct sigaction {
+    union {
+        void (*sa_handler)(int);
+        void (*sa_sigaction)(int, siginfo_t *, void *);
+    } __sigaction_handler;
+    sigset_t   sa_mask;
+    int        sa_flags;
+    void     (*sa_restorer)(void);
+};
+/* Following defines make the union fields look like simple fields
+   in the parent structure */
+#define sa_handler __sigaction_handler.sa_handler
+#define sa_sigaction __sigaction_handler.sa_sigaction</pre><p>The <span class="emphasis"><em>sigaction</em></span> structure uses a union to combine the
+                    <span class="emphasis"><em>sa_sigaction</em></span> and <span class="emphasis"><em>sa_handler</em></span> fields.
+                (Most other UNIX implementations similarly use a union for this purpose.) Using a
+                union is possible because only one of these fields is required during a particular
+                call to <span class="emphasis"><em>sigaction()</em></span>. (However, this can lead to strange bugs if
+                we naively expect to be able to set the <span class="emphasis"><em>sa_handler</em></span> and
+                    <span class="emphasis"><em>sa_sigaction</em></span> fields independently of one another, perhaps
+                because we reuse a single <span class="emphasis"><em>sigaction</em></span> structure in multiple
+                    <span class="emphasis"><em>sigaction()</em></span> calls to establish handlers for different
+                signals.)</p><p>Here is an example of the use of <code class="literal">SA_SIGINFO</code> to
+                establish a signal handler:</p><a id="I_programlisting21_d1e59274"/><pre class="programlisting">struct sigaction act;
+
+sigemptyset(&amp;act.sa_mask);
+act.sa_sigaction = handler;
+act.sa_flags = SA_SIGINFO;
+
+if (sigaction(SIGINT, &amp;act, NULL) == -1)
+    errExit("sigaction");</pre><p>For complete examples of the use of the <code class="literal">SA_SIGINFO</code> flag, see <a class="xref" href="ch22.html#handling_realtime_signals-id1" title="Example 22-3. Handling realtime signals">Example 22-3</a>
+                (page 462) and <a class="xref" href="ch23.html#posix_timer_notification_using_a_signal" title="Example 23-5. POSIX timer notification using a signal">Example 23-5</a> (page
+                500).</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="the_siginfo_underscore_t_structure"/></div></div></div><div class="sect3" title="The siginfo_t structure"><div class="titlepage"><div><div><h4 class="title" id="the_siginfo_underscore_t_structure-id1">The <span class="emphasis"><em>siginfo_t</em></span> structure</h4></div></div></div><p>The <span class="emphasis"><em>siginfo_t</em></span> structure passed as the second argument
+                        to a signal handler that is established with <code class="literal">SA_SIGINFO</code> has the following form:<a id="IDX-CHP-21-3185" class="indexterm"/><a id="IDX-CHP-21-3186" class="indexterm"/><a id="IDX-CHP-21-3187" class="indexterm"/><a id="IDX-CHP-21-3188" class="indexterm"/><a id="IDX-CHP-21-3189" class="indexterm"/><a id="IDX-CHP-21-3190" class="indexterm"/><a id="IDX-CHP-21-3191" class="indexterm"/><a id="IDX-CHP-21-3192" class="indexterm"/><a id="IDX-CHP-21-3193" class="indexterm"/><a id="IDX-CHP-21-3194" class="indexterm"/><a id="IDX-CHP-21-3195" class="indexterm"/><a id="IDX-CHP-21-3196" class="indexterm"/><a id="IDX-CHP-21-3197" class="indexterm"/><a id="IDX-CHP-21-3198" class="indexterm"/><a id="IDX-CHP-21-3199" class="indexterm"/><a id="IDX-CHP-21-3200" class="indexterm"/><a id="IDX-CHP-21-3201" class="indexterm"/><a id="IDX-CHP-21-3202" class="indexterm"/><a id="IDX-CHP-21-3203" class="indexterm"/><a id="IDX-CHP-21-3204" class="indexterm"/><a id="IDX-CHP-21-3205" class="indexterm"/><a id="IDX-CHP-21-3206" class="indexterm"/><a id="IDX-CHP-21-3207" class="indexterm"/><a id="IDX-CHP-21-3208" class="indexterm"/><a id="IDX-CHP-21-3209" class="indexterm"/><a id="IDX-CHP-21-3210" class="indexterm"/><a id="IDX-CHP-21-3211" class="indexterm"/><a id="IDX-CHP-21-3212" class="indexterm"/><a id="IDX-CHP-21-3213" class="indexterm"/><a id="IDX-CHP-21-3214" class="indexterm"/><a id="IDX-CHP-21-3215" class="indexterm"/><a id="IDX-CHP-21-3216" class="indexterm"/><a id="IDX-CHP-21-3217" class="indexterm"/><a id="IDX-CHP-21-3218" class="indexterm"/><a id="IDX-CHP-21-3219" class="indexterm"/><a id="IDX-CHP-21-3220" class="indexterm"/><a id="IDX-CHP-21-3221" class="indexterm"/><a id="IDX-CHP-21-3222" class="indexterm"/><a id="IDX-CHP-21-3223" class="indexterm"/><a id="IDX-CHP-21-3224" class="indexterm"/><a id="IDX-CHP-21-3225" class="indexterm"/><a id="IDX-CHP-21-3226" class="indexterm"/><a id="IDX-CHP-21-3227" class="indexterm"/><a id="IDX-CHP-21-3228" class="indexterm"/><a id="IDX-CHP-21-3229" class="indexterm"/><a id="IDX-CHP-21-3230" class="indexterm"/><a id="IDX-CHP-21-3231" class="indexterm"/><a id="IDX-CHP-21-3232" class="indexterm"/><a id="IDX-CHP-21-3233" class="indexterm"/><a id="IDX-CHP-21-3234" class="indexterm"/><a id="IDX-CHP-21-3235" class="indexterm"/><a id="IDX-CHP-21-3236" class="indexterm"/><a id="IDX-CHP-21-3237" class="indexterm"/><a id="IDX-CHP-21-3238" class="indexterm"/><a id="IDX-CHP-21-3239" class="indexterm"/><a id="IDX-CHP-21-3240" class="indexterm"/><a id="IDX-CHP-21-3241" class="indexterm"/><a id="IDX-CHP-21-3242" class="indexterm"/><a id="IDX-CHP-21-3243" class="indexterm"/><a id="IDX-CHP-21-3244" class="indexterm"/><a id="IDX-CHP-21-3245" class="indexterm"/><a id="IDX-CHP-21-3246" class="indexterm"/><a id="IDX-CHP-21-3247" class="indexterm"/><a id="IDX-CHP-21-3248" class="indexterm"/><a id="IDX-CHP-21-3249" class="indexterm"/><a id="IDX-CHP-21-3250" class="indexterm"/><a id="IDX-CHP-21-3251" class="indexterm"/><a id="IDX-CHP-21-3252" class="indexterm"/><a id="IDX-CHP-21-3253" class="indexterm"/><a id="IDX-CHP-21-3184" class="indexterm"/></p><a id="I_programlisting21_d1e59660"/><pre class="programlisting">typedef struct {
+    int     si_signo;         /* Signal number */
+    int     si_code;          /* Signal code */
+    int     si_trapno;        /* Trap number for hardware-generated signal
+                                 (unused on most architectures) */
+    union sigval si_value;    /* Accompanying data from sigqueue() */
+    pid_t   si_pid;           /* Process ID of sending process */
+    uid_t   si_uid;           /* Real user ID of sender */
+    int     si_errno;         /* Error number (generally unused) */
+    void   *si_addr;          /* Address that generated signal
+
+                                 (hardware-generated signals only) */
+
+    int     si_overrun;       /* Overrun count (Linux 2.6, POSIX timers) */
+    int     si_timerid;       /* (Kernel-internal) Timer ID
+                                 (Linux 2.6, POSIX timers) */
+    long    si_band;          /* Band event (SIGPOLL/SIGIO) */
+    int     si_fd;            /* File descriptor (SIGPOLL/SIGIO) */
+    int     si_status;        /* Exit status or signal (SIGCHLD) */
+    clock_t si_utime;         /* User CPU time (SIGCHLD) */
+    clock_t si_stime;         /* System CPU time (SIGCHLD) */
+} siginfo_t;</pre><p>The <code class="literal">_POSIX_C_SOURCE</code> feature test macro
+                        must be defined with a value greater than or equal to 199309 in order to
+                        make the declaration of the <span class="emphasis"><em>siginfo_t</em></span> structure visible
+                        from <code class="literal">&lt;signal.h&gt;</code>.</p><p>On Linux, as on most UNIX implementations, many of the fields in the
+                            <span class="emphasis"><em>siginfo_t</em></span> structure are combined into a union,
+                        since not all of the fields are needed for each signal. (See <code class="literal">&lt;bits/siginfo.h&gt;</code> for
+                        details.)</p><p>Upon entry to a signal handler, the fields of the
+                            <span class="emphasis"><em>siginfo_t</em></span> structure are set as follows:</p><div class="variablelist"><dl><dt><span class="term">
+                                <span class="emphasis"><em>si_signo</em></span>
+                            </span></dt><dd><p>This field is set for all signals. It contains the number of
+                                    the signal causing invocation of the handler—that is, the same
+                                    value as the <span class="emphasis"><em>sig</em></span> argument to the
+                                    handler.</p></dd><dt><span class="term">
+                                <span class="emphasis"><em>si_code</em></span>
+                            </span></dt><dd><p>This field is set for all signals. It contains a code
+                                    providing further information about the origin of the signal, as
+                                    shown in <a class="xref" href="ch21.html#values_returned_in_the_si_underscore_cod" title="Table 21-2. Values returned in the si_code field of the siginfo_t structure">Table 21-2</a>.</p></dd><dt><span class="term">
+                                <span class="emphasis"><em>si_value</em></span>
+                            </span></dt><dd><p>This field contains the accompanying data for a signal sent
+                                    via <span class="emphasis"><em>sigqueue()</em></span>. We describe
+                                        <span class="emphasis"><em>sigqueue()</em></span> in <a class="xref" href="ch22.html#limits_on_the_number_of_queued_real-id1" title="Limits on the number of queued realtime signals">Limits on the number of queued realtime signals</a>.<a id="IDX-CHP-21-3254" class="indexterm"/></p></dd><dt><span class="term">
+                                <span class="emphasis"><em>si_pid</em></span>
+                            </span></dt><dd><p>For signals sent via <span class="emphasis"><em>kill()</em></span> or
+                                        <span class="emphasis"><em>sigqueue()</em></span>, this field is set to the
+                                    process ID of the sending process.<a id="IDX-CHP-21-3255" class="indexterm"/></p></dd><dt><span class="term">
+                                <span class="emphasis"><em>si_uid</em></span>
+                            </span></dt><dd><p>For signals sent via <span class="emphasis"><em>kill()</em></span> or
+                                        <span class="emphasis"><em>sigqueue()</em></span>, this field is set to the
+                                    real user ID of the sending process. The system provides the
+                                    real user ID of the sending process because that is more
+                                    informative than providing the effective user ID. Consider the
+                                    permission rules for sending signals described in <a class="xref" href="ch20.html#sending_signals_colon_kill_open_parenthe" title="Sending Signals: kill()">Sending Signals: <span class="emphasis"><em>kill()</em></span></a>: if the
+                                    effective user ID grants the sender permission to send the
+                                    signal, then that user ID must either be 0 (i.e., a privileged
+                                    process), or be the same as the real user ID or saved
+                                    set-user-ID of the receiving process. In this case, it could be
+                                    useful for the receiver to know the sender’s real user ID, which
+                                    may be different from the effective user ID (e.g., if the sender
+                                    is a set-user-ID program).</p></dd><dt><span class="term">
+                                <span class="emphasis"><em>si_errno</em></span>
+                            </span></dt><dd><p>If this field is set to a nonzero value, then it contains an
+                                    error number (like <span class="emphasis"><em>errno</em></span>) that identifies
+                                    the cause of the signal. This field is generally unused on
+                                    Linux.</p></dd><dt><span class="term">
+                                <span class="emphasis"><em>si_addr</em></span>
+                            </span></dt><dd><p>This field is set only for hardware-generated <code class="literal">SIGBUS</code>, <code class="literal">SIGSEGV</code>, <code class="literal">SIGILL</code>, and <code class="literal">SIGFPE</code> signals. For the <code class="literal">SIGBUS</code> and <code class="literal">SIGSEGV</code> signals, this field contains the address
+                                    that caused the invalid memory reference. For the <code class="literal">SIGILL</code> and <code class="literal">SIGFPE</code> signals, this field
+                                    contains the address of the program instruction that caused the
+                                    signal.</p></dd></dl></div><p>The following fields, which are nonstandard Linux extensions, are set only
+                        on the delivery of a signal generated on expiration of a POSIX timer (see
+                            <a class="xref" href="ch23.html#posix_interval_timers" title="POSIX Interval Timers">POSIX Interval Timers</a>):</p><div class="variablelist"><dl><dt><span class="term">
+                                <span class="emphasis"><em>si_timerid</em></span>
+                            </span></dt><dd><p>This field contains an ID that the kernel uses internally to
+                                    identify the timer.</p></dd><dt><span class="term">
+                                <span class="emphasis"><em>si_overrun</em></span>
+                            </span></dt><dd><p>This field is set to the overrun count for the timer.</p></dd></dl></div><p>The following two fields are set only for the delivery of a <code class="literal">SIGIO</code> signal (<a class="xref" href="ch63.html#signal-driven_i_solidus_o" title="Signal-Driven I/O">Signal-Driven I/O</a>):<a id="IDX-CHP-21-3256" class="indexterm"/></p><div class="variablelist"><dl><dt><span class="term">
+                                <span class="emphasis"><em>si_band</em></span>
+                            </span></dt><dd><p>This field contains the “band event” value associated with the
+                                    I/O event. (In versions of <span class="emphasis"><em>glibc</em></span> up until
+                                    2.3.2, <span class="emphasis"><em>si_band</em></span> was typed as
+                                        <span class="emphasis"><em>int</em></span>.)</p></dd><dt><span class="term">
+                                <span class="emphasis"><em>si_fd</em></span>
+                            </span></dt><dd><p>This field contains the number of the file descriptor
+                                    associated with the I/O event. This field is not specified in
+                                    SUSv3, but it is present on many other implementations.</p></dd></dl></div><p>The following fields are set only for the delivery of a <code class="literal">SIGCHLD</code> signal (<a class="xref" href="ch26.html#the_sigchld_signal" title="The SIGCHLD Signal">The <code class="literal">SIGCHLD</code> Signal</a>):<a id="IDX-CHP-21-3257" class="indexterm"/></p><div class="variablelist"><dl><dt><span class="term">
+                                <span class="emphasis"><em>si_status</em></span>
+                            </span></dt><dd><p>This field contains either the exit status of the child (if
+                                        <span class="emphasis"><em>si_code</em></span> is <code class="literal">CLD_EXITED</code>) or the number of the signal sent to
+                                    the child (i.e., the number of the signal that terminated or
+                                    stopped the child, as described in <a class="xref" href="ch26.html#the_wait_status_value" title="The Wait Status Value">The Wait Status Value</a>).</p></dd><dt><span class="term">
+                                <span class="emphasis"><em>si_utime</em></span>
+                            </span></dt><dd><p>This field contains the user CPU time used by the child
+                                    process. In kernels before 2.6, and since 2.6.27, this is
+                                    measured in system clock ticks (divide by
+                                        <span class="emphasis"><em>sysconf(_SC_CLK_TCK)</em></span>). In 2.6 kernels
+                                    before 2.6.27, a bug meant that this field reported times
+                                    measured in (user-configurable) jiffies (see <a class="xref" href="ch10.html#the_software_clock_open_parenthesis_jiff" title="The Software Clock (Jiffies)">The Software Clock (Jiffies)</a>). This
+                                    field is not specified in SUSv3, but it is present on many other
+                                    implementations.</p></dd><dt><span class="term">
+                                <span class="emphasis"><em>si_stime</em></span>
+                            </span></dt><dd><p>This field contains the system CPU time used by the child
+                                    process. See the description of the
+                                        <span class="emphasis"><em>si_utime</em></span> field. This field is not
+                                    specified in SUSv3, but it is present on many other
+                                    implementations.</p></dd></dl></div><p>The <span class="emphasis"><em>si_code</em></span> field provides further information about
+                        the origin of the signal, using the values shown in <a class="xref" href="ch21.html#values_returned_in_the_si_underscore_cod" title="Table 21-2. Values returned in the si_code field of the siginfo_t structure">Table 21-2</a>. Not all of the
+                        signal-specific values shown in the second column of this table occur on all
+                        UNIX implementations and hardware architectures (especially in the case of
+                        the four hardware-generated signals <code class="literal">SIGBUS</code>, <code class="literal">SIGSEGV</code>, <code class="literal">SIGILL</code>, and <code class="literal">SIGFPE</code>), although all of these constants are defined on Linux
+                        and most appear in SUSv3.</p><p>Note the following additional points about the values shown in <a class="xref" href="ch21.html#values_returned_in_the_si_underscore_cod" title="Table 21-2. Values returned in the si_code field of the siginfo_t structure">Table 21-2</a>:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The values <code class="literal">SI_KERNEL</code> and
+                                    <code class="literal">SI_SIGIO</code> are Linux-specific.
+                                They are not specified in SUSv3 and do not appear on other UNIX
+                                implementations.</p></li><li class="listitem"><p><code class="literal">SI_SIGIO</code> is employed only in
+                                Linux 2.2. From kernel 2.4 onward, Linux instead employs the
+                                    <code class="literal">POLL_*</code> constants shown in the
+                                table.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv4 specifies the <span class="emphasis"><em>psiginfo()</em></span> function, whose
+                            purpose is similar to <span class="emphasis"><em>psignal()</em></span> (<a class="xref" href="ch20.html#displaying_signal_descriptions" title="Displaying Signal Descriptions">Displaying Signal Descriptions</a>). The
+                                <span class="emphasis"><em>psiginfo()</em></span> function takes two arguments: a
+                            pointer to a <span class="emphasis"><em>siginfo_t</em></span> structure and a message
+                            string. It prints the message string on standard error, followed by
+                            information about the signal described in the
+                                <span class="emphasis"><em>siginfo_t</em></span> structure. The
+                                <span class="emphasis"><em>psiginfo()</em></span> function is provided by
+                                <span class="emphasis"><em>glibc</em></span> since version 2.10. The
+                                <span class="emphasis"><em>glibc</em></span> implementation prints the signal
+                            description, the origin of the signal (as indicated by the
+                                <span class="emphasis"><em>si_code</em></span> field), and, for some signals, other
+                            fields from the <span class="emphasis"><em>siginfo_t</em></span> structure. The
+                                <span class="emphasis"><em>psiginfo()</em></span> function is new in SUSv4, and it is
+                            not available on all systems.<a id="IDX-CHP-21-3258" class="indexterm"/></p></div><div class="table"><a id="values_returned_in_the_si_underscore_cod"/><div class="table-title">Table 21-2. Values returned in the <span class="emphasis"><em>si_code</em></span> field of the
+                                <span class="emphasis"><em>siginfo_t</em></span> structure</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Signal</p>
+                                    </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p><span class="emphasis"><em>si_code</em></span> value</p>
+                                    </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                        <p>Origin of signal</p>
+                                    </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Any</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SI_ASYNCIO</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Completion of an asynchronous I/O (AIO)
+                                            operation</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SI_KERNEL</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Sent by the kernel (e.g., a signal from terminal
+                                            driver)</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SI_MESGQ</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Message arrival on POSIX message queue (since Linux
+                                            2.6.6)</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SI_QUEUE</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>A realtime signal from a user process via
+                                                <span class="emphasis"><em>sigqueue()</em></span><a id="IDX-CHP-21-3259" class="indexterm"/></p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SI_SIGIO</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p><code class="literal">SIGIO</code> signal (Linux
+                                            2.2 only)<a id="IDX-CHP-21-3260" class="indexterm"/></p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SI_TIMER</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Expiration of a POSIX (realtime) timer</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SI_TKILL</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>A user process via <span class="emphasis"><em>tkill()</em></span> or
+                                                <span class="emphasis"><em>tgkill()</em></span> (since Linux
+                                                2.4.19)<a id="IDX-CHP-21-3261" class="indexterm"/><a id="IDX-CHP-21-3262" class="indexterm"/></p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SI_USER</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>A user process via <span class="emphasis"><em>kill()</em></span> or
+                                                <span class="emphasis"><em>raise()</em></span><a id="IDX-CHP-21-3264" class="indexterm"/><a id="IDX-CHP-21-3263" class="indexterm"/></p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SIGBUS</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">BUS_ADRALN</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Invalid address alignment</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">BUS_ADRERR</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Nonexistent physical address</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">BUS_MCEERR_AO</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Hardware memory error; action optional (since Linux
+                                            2.6.32)</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">BUS_MCEERR_AR</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Hardware memory error; action required (since Linux
+                                            2.6.32)</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">BUS_OBJERR</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Object-specific hardware error</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SIGCHLD</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">CLD_CONTINUED</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Child continued by <code class="literal">SIGCONT</code> (since Linux 2.6.9)</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">CLD_DUMPED</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Child terminated abnormally, with core dump</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">CLD_EXITED</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Child exited</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">CLD_KILLED</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Child terminated abnormally, without core dump</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">CLD_STOPPED</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Child stopped</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">CLD_TRAPPED</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Traced child has stopped</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SIGFPE</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">FPE_FLTDIV</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Floating-point divide-by-zero</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">FPE_FLTINV</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Invalid floating-point operation</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">FPE_FLTOVF</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Floating-point overflow</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">FPE_FLTRES</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Floating-point inexact result</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">FPE_FLTUND</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Floating-point underflow</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">FPE_INTDIV</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Integer divide-by-zero</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">FPE_INTOVF</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Integer overflow</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">FPE_SUB</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Subscript out of range</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SIGILL</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">ILL_BADSTK</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Internal stack error</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">ILL_COPROC</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Coprocessor error</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">ILL_ILLADR</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Illegal addressing mode</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">ILL_ILLOPC</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Illegal opcode</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">ILL_ILLOPN</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Illegal operand</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">ILL_ILLTRP</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Illegal trap</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">ILL_PRVOPC</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Privileged opcode</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">ILL_PRVREG</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Privileged register</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SIGPOLL</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">POLL_ERR</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>I/O error</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SIGIO</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">POLL_HUP</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Device disconnected</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">POLL_IN</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Input data available</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">POLL_MSG</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Input message available</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">POLL_OUT</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Output buffers available</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">POLL_PRI</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>High-priority input available</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SIGSEGV</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SEGV_ACCERR</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Invalid permissions for mapped object</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SEGV_MAPERR</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Address not mapped to object</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SIGTRAP</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">TRAP_BRANCH</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Process branch trap</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">TRAP_BRKPT</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Process breakpoint</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">TRAP_HWBKPT</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Hardware breakpoint/watchpoint</p>
+                                    </td></tr><tr><td style="border-right: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">TRAP_TRACE</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; ">
+                                        <p>Process trace trap</p>
+                                    </td></tr></tbody></table></div></div></div><div class="sect3" title="The ucontext argument"><div class="titlepage"><div><div><h4 class="title" id="the_ucontext_argument">The <span class="emphasis"><em>ucontext</em></span> argument</h4></div></div></div><p>The final argument passed to a handler established with the <code class="literal">SA_SIGINFO</code> flag,
+                        <span class="emphasis"><em>ucontext</em></span>, is a pointer to a structure of type
+                            <span class="emphasis"><em>ucontext_t</em></span> (defined in <code class="literal">&lt;ucontext.h&gt;</code>). (SUSv3 uses a
+                            <span class="emphasis"><em>void</em></span> pointer for this argument because it doesn’t
+                        specify any of the details of the argument.) This structure provides
+                        so-called user-context information describing the process state prior to
+                        invocation of the signal handler, including the previous process signal mask
+                        and saved register values (e.g., program counter and stack pointer). This
+                        information is rarely used in signal handlers, so we don’t go into further
+                            details.<a id="IDX-CHP-21-3265" class="indexterm"/><a id="IDX-CHP-21-3266" class="indexterm"/><a id="IDX-CHP-21-3267" class="indexterm"/><a id="IDX-CHP-21-3268" class="indexterm"/><a id="IDX-CHP-21-3269" class="indexterm"/><a id="IDX-CHP-21-3270" class="indexterm"/><a id="IDX-CHP-21-3271" class="indexterm"/><a id="IDX-CHP-21-3272" class="indexterm"/><a id="IDX-CHP-21-3273" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Another use of <span class="emphasis"><em>ucontext_t</em></span> structures is with the
+                            functions <span class="emphasis"><em>getcontext()</em></span>,
+                                <span class="emphasis"><em>makecontext()</em></span>,
+                                <span class="emphasis"><em>setcontext()</em></span>, and
+                                <span class="emphasis"><em>swapcontext()</em></span>, which allow a process to
+                            retrieve, create, change, and swap execution contexts, respectively.
+                            (These operations are somewhat like <span class="emphasis"><em>setjmp()</em></span> and
+                                <span class="emphasis"><em>longjmp()</em></span>, but more general.) These functions
+                            can be used to implement coroutines, where the thread of execution of a
+                            process alternates between two (or more) functions. SUSv3 specifies
+                            these functions, but marks them obsolete. SUSv4 removes the
+                            specifications, and suggests that applications should be rewritten to
+                            use POSIX threads instead. The <span class="emphasis"><em>glibc</em></span> manual
+                            provides further information about these functions.<a id="IDX-CHP-21-3274" class="indexterm"/><a id="IDX-CHP-21-3275" class="indexterm"/><a id="IDX-CHP-21-3276" class="indexterm"/><a id="IDX-CHP-21-3277" class="indexterm"/></p></div></div></div></div><div class="sect1" title="Interruption and Restarting of System Calls"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="interruption_and_restarting_of_system_ca">Interruption and Restarting of System Calls</h2></div></div></div><p>Consider the following scenario:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>We establish a handler for some signal.</p></li><li class="listitem"><p>We make a blocking system call, for example, a <span class="emphasis"><em>read()</em></span>
+                        from a terminal device, which blocks until input is supplied.</p></li><li class="listitem"><p>While the system call is blocked, the signal for which we established a
+                        handler is delivered, and its signal handler is invoked.</p></li></ol></div><p>What happens after the signal handler returns? By default, the system call fails
+                with the error <code class="literal">EINTR</code> (“Interrupted function”).
+                This can be a useful feature. In <a class="xref" href="ch23.html#setting_timeouts_on_blocking_operations" title="Setting Timeouts on Blocking Operations">Setting Timeouts on Blocking Operations</a>, we’ll see how to use a
+                timer (which results in the delivery of a <code class="literal">SIGALRM</code>
+                signal) to set a timeout on a blocking system call such as
+                    <span class="emphasis"><em>read()</em></span>.</p><p>Often, however, we would prefer to continue the execution of an interrupted system
+                call. To do this, we could use code such as the following to manually restart a
+                system call in the event that it is interrupted by a signal handler:</p><a id="I_programlisting21_d1e60660"/><pre class="programlisting">while ((cnt = read(fd, buf, BUF_SIZE)) == -1 &amp;&amp; errno == EINTR)
+    continue;                 /* Do nothing loop body */
+
+if (cnt == -1)                /* read() failed with other than EINTR */
+    errExit("read");</pre><p>If we frequently write code such as the above, it can be useful to define a macro
+                such as the following:</p><a id="I_programlisting21_d1e60664"/><pre class="programlisting">#define NO_EINTR(stmt) while ((stmt) == -1 &amp;&amp; errno == EINTR);</pre><p>Using this macro, we can rewrite the earlier <span class="emphasis"><em>read()</em></span> call as
+                follows:</p><a id="I_programlisting21_d1e60671"/><pre class="programlisting">NO_EINTR(cnt = read(fd, buf, BUF_SIZE));
+
+if (cnt == -1)                /* read() failed with other than EINTR */
+    errExit("read");</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>The GNU C library provides a (nonstandard) macro with the same purpose as our
+                        <code class="literal">NO_EINTR()</code> macro in <code class="literal">&lt;unistd.h&gt;</code>. The macro is called
+                        <code class="literal">TEMP_FAILURE_RETRY()</code> and is made
+                    available if the <code class="literal">_GNU_SOURCE</code> feature test
+                    macro is defined.</p></div><p>Even if we employ a macro like <code class="literal">NO_EINTR()</code>,
+                having signal handlers interrupt system calls can be inconvenient, since we must add
+                code to each blocking system call (assuming that we want to restart the call in each
+                case). Instead, we can specify the <code class="literal">SA_RESTART</code>
+                flag when establishing the signal handler with <span class="emphasis"><em>sigaction()</em></span>, so
+                that system calls are automatically restarted by the kernel on the process’s behalf.
+                This means that we don’t need to handle a possible <code class="literal">EINTR</code> error return for these system calls.<a id="IDX-CHP-21-3278" class="indexterm"/></p><p>The <code class="literal">SA_RESTART</code> flag is a per-signal setting. In
+                other words, we can allow handlers for some signals to interrupt blocking system
+                calls, while others permit automatic restarting of system calls.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="system_calls_open_parenthesis_and"/></div></div></div><div class="sect3" title="System calls (and library functions) for which SA_RESTART is effective"><div class="titlepage"><div><div><h4 class="title" id="system_calls_open_parenthesis_and-id1">System calls (and library functions) for which <code class="literal">SA_RESTART</code> is effective</h4></div></div></div><p>Unfortunately, not all blocking system calls automatically restart as a
+                        result of specifying <code class="literal">SA_RESTART</code>. The
+                        reasons for this are partly historical:<a id="IDX-CHP-21-3279" class="indexterm"/><a id="IDX-CHP-21-3280" class="indexterm"/><a id="IDX-CHP-21-3281" class="indexterm"/><a id="IDX-CHP-21-3282" class="indexterm"/><a id="IDX-CHP-21-3283" class="indexterm"/><a id="IDX-CHP-21-3284" class="indexterm"/><a id="IDX-CHP-21-3285" class="indexterm"/><a id="IDX-CHP-21-3286" class="indexterm"/><a id="IDX-CHP-21-3287" class="indexterm"/><a id="IDX-CHP-21-3288" class="indexterm"/><a id="IDX-CHP-21-3289" class="indexterm"/><a id="IDX-CHP-21-3290" class="indexterm"/><a id="IDX-CHP-21-3291" class="indexterm"/><a id="IDX-CHP-21-3292" class="indexterm"/><a id="IDX-CHP-21-3293" class="indexterm"/><a id="IDX-CHP-21-3294" class="indexterm"/><a id="IDX-CHP-21-3295" class="indexterm"/><a id="IDX-CHP-21-3296" class="indexterm"/><a id="IDX-CHP-21-3297" class="indexterm"/><a id="IDX-CHP-21-3298" class="indexterm"/><a id="IDX-CHP-21-3299" class="indexterm"/><a id="IDX-CHP-21-3300" class="indexterm"/><a id="IDX-CHP-21-3301" class="indexterm"/><a id="IDX-CHP-21-3302" class="indexterm"/><a id="IDX-CHP-21-3303" class="indexterm"/><a id="IDX-CHP-21-3304" class="indexterm"/><a id="IDX-CHP-21-3305" class="indexterm"/><a id="IDX-CHP-21-3306" class="indexterm"/><a id="IDX-CHP-21-3307" class="indexterm"/><a id="IDX-CHP-21-3308" class="indexterm"/><a id="IDX-CHP-21-3309" class="indexterm"/><a id="IDX-CHP-21-3310" class="indexterm"/><a id="IDX-CHP-21-3311" class="indexterm"/><a id="IDX-CHP-21-3312" class="indexterm"/><a id="IDX-CHP-21-3313" class="indexterm"/><a id="IDX-CHP-21-3314" class="indexterm"/><a id="IDX-CHP-21-3315" class="indexterm"/><a id="IDX-CHP-21-3316" class="indexterm"/><a id="IDX-CHP-21-3317" class="indexterm"/><a id="IDX-CHP-21-3318" class="indexterm"/><a id="IDX-CHP-21-3319" class="indexterm"/><a id="IDX-CHP-21-3320" class="indexterm"/><a id="IDX-CHP-21-3321" class="indexterm"/><a id="IDX-CHP-21-3322" class="indexterm"/><a id="IDX-CHP-21-3323" class="indexterm"/><a id="IDX-CHP-21-3324" class="indexterm"/><a id="IDX-CHP-21-3325" class="indexterm"/><a id="IDX-CHP-21-3326" class="indexterm"/><a id="IDX-CHP-21-3327" class="indexterm"/><a id="IDX-CHP-21-3328" class="indexterm"/><a id="IDX-CHP-21-3329" class="indexterm"/><a id="IDX-CHP-21-3330" class="indexterm"/><a id="IDX-CHP-21-3331" class="indexterm"/><a id="IDX-CHP-21-3332" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Restarting of system calls was introduced in 4.2BSD, and covered
+                                interrupted calls to <span class="emphasis"><em>wait()</em></span> and
+                                    <span class="emphasis"><em>waitpid()</em></span>, as well as the following I/O
+                                system calls: <span class="emphasis"><em>read()</em></span>,
+                                    <span class="emphasis"><em>readv()</em></span>, <span class="emphasis"><em>write()</em></span>,
+                                    <span class="emphasis"><em>writev()</em></span>, and blocking
+                                    <span class="emphasis"><em>ioctl()</em></span> operations. The I/O system calls
+                                are interruptible, and hence automatically restarted by <code class="literal">SA_RESTART</code> only when operating on a
+                                “slow” device. Slow devices include terminals, pipes, FIFOs, and
+                                sockets. On these file types, various I/O operations may block. (By
+                                contrast, disk files don’t fall into the category of slow devices,
+                                because disk I/O operations generally can be immediately satisfied
+                                via the buffer cache. If a disk I/O is required, the kernel puts the
+                                process to sleep until the I/O completes.)<a id="IDX-CHP-21-3333" class="indexterm"/></p></li><li class="listitem"><p>A number of other blocking system calls are derived from System V,
+                                which did not initially provide for restarting of system
+                                calls.</p></li></ul></div><p>On Linux, the following blocking system calls (and library functions
+                        layered on top of system calls) are automatically restarted if interrupted
+                        by a signal handler established using the <code class="literal">SA_RESTART</code> flag:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The system calls used to wait for a child process (<a class="xref" href="ch26.html#waiting_on_a_child_process" title="Waiting on a Child Process">Waiting on a Child Process</a>):
+                                    <span class="emphasis"><em>wait()</em></span>, <span class="emphasis"><em>waitpid()</em></span>,
+                                    <span class="emphasis"><em>wait3()</em></span>, <span class="emphasis"><em>wait4()</em></span>, and
+                                    <span class="emphasis"><em>waitid()</em></span>.</p></li><li class="listitem"><p>The I/O system calls <span class="emphasis"><em>read()</em></span>,
+                                    <span class="emphasis"><em>readv()</em></span>, <span class="emphasis"><em>write()</em></span>,
+                                    <span class="emphasis"><em>writev()</em></span>, and <span class="emphasis"><em>ioctl()</em></span>
+                                when applied to “slow” devices. In cases where data has already been
+                                partially transferred at the time of signal delivery, the input and
+                                output system calls will be interrupted, but return a success
+                                status: an integer indicating how many bytes were successfully
+                                transferred.</p></li><li class="listitem"><p>The <span class="emphasis"><em>open()</em></span> system call, in cases where it can
+                                block (e.g., when opening FIFOs, as described in <a class="xref" href="ch44.html#fifos" title="FIFOs">FIFOs</a>).</p></li><li class="listitem"><p>Various system calls used with sockets:
+                                    <span class="emphasis"><em>accept()</em></span>, <span class="emphasis"><em>accept4()</em></span>,
+                                    <span class="emphasis"><em>connect()</em></span>, <span class="emphasis"><em>send()</em></span>,
+                                    <span class="emphasis"><em>sendmsg()</em></span>, <span class="emphasis"><em>sendto()</em></span>,
+                                    <span class="emphasis"><em>recv()</em></span>, <span class="emphasis"><em>recvfrom()</em></span>,
+                                and <span class="emphasis"><em>recvmsg()</em></span>. (On Linux, these system calls
+                                are not automatically restarted if a timeout has been set on the
+                                socket using <span class="emphasis"><em>setsockopt()</em></span>. See the
+                                    <span class="emphasis"><em>signal(7)</em></span> manual page for details.)</p></li><li class="listitem"><p>The system calls used for I/O on POSIX message queues:
+                                    <span class="emphasis"><em>mq_receive()</em></span>,
+                                    <span class="emphasis"><em>mq_timedreceive()</em></span>,
+                                    <span class="emphasis"><em>mq_send()</em></span>, and
+                                    <span class="emphasis"><em>mq_timedsend()</em></span>.</p></li><li class="listitem"><p>The system calls and library functions used to place file locks:
+                                    <span class="emphasis"><em>flock()</em></span>, <span class="emphasis"><em>fcntl()</em></span>, and
+                                    <span class="emphasis"><em>lockf()</em></span>.</p></li><li class="listitem"><p>The <code class="literal">FUTEX_WAIT</code> operation of the
+                                Linux-specific <span class="emphasis"><em>futex()</em></span> system call.</p></li><li class="listitem"><p>The <span class="emphasis"><em>sem_wait()</em></span> and
+                                    <span class="emphasis"><em>sem_timedwait()</em></span> functions used to decrement
+                                a POSIX semaphore. (On some UNIX implementations,
+                                    <span class="emphasis"><em>sem_wait() is</em></span> restarted if the <code class="literal">SA_RESTART</code> flag is specified.)</p></li><li class="listitem"><p>The functions used to synchronize POSIX threads:
+                                    <span class="emphasis"><em>pthread_mutex_lock()</em></span>,
+                                    <span class="emphasis"><em>pthread_mutex_trylock()</em></span>,
+                                    <span class="emphasis"><em>pthread_mutex_timedlock()</em></span>,
+                                    <span class="emphasis"><em>pthread_cond_wait()</em></span>, and
+                                    <span class="emphasis"><em>pthread_cond_timedwait()</em></span>.</p></li></ul></div><p>In kernels before 2.6.22, <span class="emphasis"><em>futex()</em></span>,
+                            <span class="emphasis"><em>sem_wait()</em></span>, and
+                            <span class="emphasis"><em>sem_timedwait()</em></span> always failed with the error
+                            <code class="literal">EINTR</code> when interrupted, regardless of
+                        the setting of the <code class="literal">SA_RESTART</code>
+                        flag.</p><p>The following blocking system calls (and library functions layered on top
+                        of system calls) are never automatically restarted (even if <code class="literal">SA_RESTART</code> is specified):</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>poll()</em></span>, <span class="emphasis"><em>ppoll()</em></span>,
+                                    <span class="emphasis"><em>select()</em></span>, and
+                                    <span class="emphasis"><em>pselect()</em></span> I/O multiplexing calls. (SUSv3
+                                explicitly states that the behavior of <span class="emphasis"><em>select()</em></span>
+                                and <span class="emphasis"><em>pselect()</em></span> when interrupted by a signal
+                                handler is unspecified, regardless of the setting of <code class="literal">SA_RESTART</code>.)</p></li><li class="listitem"><p>The Linux-specific <span class="emphasis"><em>epoll_wait()</em></span> and
+                                    <span class="emphasis"><em>epoll_pwait()</em></span> system calls.</p></li><li class="listitem"><p>The Linux-specific <span class="emphasis"><em>io_getevents()</em></span> system
+                                call.</p></li><li class="listitem"><p>The blocking system calls used with System V message queues and
+                                semaphores: <span class="emphasis"><em>semop()</em></span>,
+                                    <span class="emphasis"><em>semtimedop()</em></span>,
+                                <span class="emphasis"><em>msgrcv()</em></span>, and <span class="emphasis"><em>msgsnd()</em></span>.
+                                (Although System V did not originally provide automatic restarting
+                                of system calls, on some UNIX implementations, these system calls
+                                    <span class="emphasis"><em>are</em></span> restarted if the <code class="literal">SA_RESTART</code> flag is specified.)</p></li><li class="listitem"><p>A <span class="emphasis"><em>read()</em></span> from an <span class="emphasis"><em>inotify</em></span>
+                                file descriptor.</p></li><li class="listitem"><p>The system calls and library functions designed to suspend
+                                execution of a program for a specified period:
+                                    <span class="emphasis"><em>sleep()</em></span>, <span class="emphasis"><em>nanosleep()</em></span>,
+                                and <span class="emphasis"><em>clock_nanosleep()</em></span>.</p></li><li class="listitem"><p>The system calls designed specifically to wait until a signal is
+                                delivered: <span class="emphasis"><em>pause()</em></span>,
+                                    <span class="emphasis"><em>sigsuspend()</em></span>,
+                                    <span class="emphasis"><em>sigtimedwait()</em></span>, and
+                                    <span class="emphasis"><em>sigwaitinfo()</em></span>.</p></li></ul></div></div><div class="sect3" title="Modifying the SA_RESTART flag for a signal"><div class="titlepage"><div><div><h4 class="title" id="modifying_the_sa_underscore_restart_flag">Modifying the <code class="literal">SA_RESTART</code> flag for a
+                        signal</h4></div></div></div><p>The <span class="emphasis"><em>siginterrupt()</em></span> function changes the <code class="literal">SA_RESTART</code> setting associated with a
+                            signal.<a id="IDX-CHP-21-3334" class="indexterm"/><a id="IDX-CHP-21-3335" class="indexterm"/><a id="IDX-CHP-21-3336" class="indexterm"/><a id="IDX-CHP-21-3337" class="indexterm"/><a id="IDX-CHP-21-3338" class="indexterm"/><a id="IDX-CHP-21-3339" class="indexterm"/><a id="IDX-CHP-21-3340" class="indexterm"/><a id="IDX-CHP-21-3341" class="indexterm"/><a id="IDX-CHP-21-3342" class="indexterm"/><a id="IDX-CHP-21-3343" class="indexterm"/><a id="IDX-CHP-21-3344" class="indexterm"/><a id="IDX-CHP-21-3345" class="indexterm"/><a id="IDX-CHP-21-3346" class="indexterm"/><a id="IDX-CHP-21-3347" class="indexterm"/><a id="IDX-CHP-21-3348" class="indexterm"/><a id="IDX-CHP-21-3349" class="indexterm"/><a id="IDX-CHP-21-3350" class="indexterm"/><a id="IDX-CHP-21-3351" class="indexterm"/><a id="IDX-CHP-21-3352" class="indexterm"/><a id="IDX-CHP-21-3353" class="indexterm"/><a id="IDX-CHP-21-3354" class="indexterm"/></p><a id="I_programlisting21_d1e61509"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>siginterrupt</code></strong>(int <span class="emphasis"><em>sig</em></span>, int <span class="emphasis"><em>flag</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>If <span class="emphasis"><em>flag</em></span> is true (1), then a handler for the signal
+                            <span class="emphasis"><em>sig</em></span> will interrupt blocking system calls. If
+                            <span class="emphasis"><em>flag</em></span> is false (0), then blocking system calls will
+                        be restarted after execution of a handler for
+                        <span class="emphasis"><em>sig</em></span>.</p><p>The <span class="emphasis"><em>siginterrupt()</em></span> function works by using
+                            <span class="emphasis"><em>sigaction()</em></span> to fetch a copy of the signal’s current
+                        disposition, tweaking the <code class="literal">SA_RESTART</code> flag
+                        in the returned <span class="emphasis"><em>oldact</em></span> structure, and then calling
+                            <span class="emphasis"><em>sigaction()</em></span> once more to update the signal’s
+                        disposition.</p><p>SUSv4 marks <span class="emphasis"><em>siginterrupt()</em></span> obsolete, recommending the
+                        use of <span class="emphasis"><em>sigaction()</em></span> instead for this purpose.</p></div><div class="sect3" title="Unhandled stop signals can generate EINTR for some Linux system calls"><div class="titlepage"><div><div><h4 class="title" id="unhandled_stop_signals_can_generate_eint">Unhandled stop signals can generate <code class="literal">EINTR</code> for some Linux system calls</h4></div></div></div><p>On Linux, certain blocking system calls can return <code class="literal">EINTR</code> even in the absence of a signal handler.
+                        This can occur if the system call is blocked and the process is stopped by a
+                        signal (<code class="literal">SIGSTOP</code>, <code class="literal">SIGTSTP</code>, <code class="literal">SIGTTIN</code>, or
+                            <code class="literal">SIGTTOU</code>), and then resumed by
+                        delivery of a <code class="literal">SIGCONT</code> signal.</p><p>The following system calls and functions exhibit this behavior:
+                            <span class="emphasis"><em>epoll_pwait()</em></span>, <span class="emphasis"><em>epoll_wait()</em></span>,
+                            <span class="emphasis"><em>read()</em></span> from an <span class="emphasis"><em>inotify</em></span> file
+                        descriptor, <span class="emphasis"><em>semop()</em></span>, <span class="emphasis"><em>semtimedop()</em></span>,
+                            <span class="emphasis"><em>sigtimedwait()</em></span>, and
+                            <span class="emphasis"><em>sigwaitinfo()</em></span>.</p><p>In kernels before 2.6.24, <span class="emphasis"><em>poll()</em></span> also exhibited this
+                        behavior, as did <span class="emphasis"><em>sem_wait(), sem_timedwait(),
+                            futex(FUTEX_WAIT</em></span>), in kernels before 2.6.22,
+                            <span class="emphasis"><em>msgrcv()</em></span> and <span class="emphasis"><em>msgsnd()</em></span> in
+                        kernels before 2.6.9, and <span class="emphasis"><em>nanosleep()</em></span> in Linux 2.4 and
+                        earlier.</p><p>In Linux 2.4 and earlier, <span class="emphasis"><em>sleep()</em></span> can also be
+                        interrupted in this manner, but, instead of returning an error, it returns
+                        the number of remaining unslept seconds.</p><p>The upshot of this behavior is that if there is a chance that our program
+                        may be stopped and restarted by signals, then we may need to include code to
+                        restart these system calls, even in a program that doesn’t install handlers
+                        for the stop signals.</p></div></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id20">Summary</h2></div></div></div><p>In this chapter, we considered a range of factors that affect the operation and
+                design of signal handlers.</p><p>Because signals are not queued, a signal handler must sometimes be coded to deal
+                with the possibility that multiple events of a particular type have occurred, even
+                though only one signal was delivered. The issue of reentrancy affects how we can
+                update global variables and limits the set of functions that we can safely call from
+                a signal handler.</p><p>Instead of returning, a signal handler can terminate in a variety of other ways,
+                including calling <span class="emphasis"><em>_exit()</em></span>, terminating the process by sending a
+                signal (<span class="emphasis"><em>kill()</em></span>, <span class="emphasis"><em>raise()</em></span>, or
+                    <span class="emphasis"><em>abort()</em></span>), or performing a nonlocal goto. Using
+                    <span class="emphasis"><em>sigsetjmp()</em></span> and <span class="emphasis"><em>siglongjmp()</em></span> provides
+                a program with explicit control of the treatment of the process signal mask when a
+                nonlocal goto is performed.</p><p>We can use <span class="emphasis"><em>sigaltstack()</em></span> to define an alternate signal stack
+                for a process. This is an area of memory that is used instead of the standard
+                process stack when invoking a signal handler. An alternate signal stack is useful in
+                cases where the standard stack has been exhausted by growing too large (at which
+                point the kernel sends a <code class="literal">SIGSEGV</code> signal to the
+                process).</p><p>The <span class="emphasis"><em>sigaction()</em></span>
+                <code class="literal">SA_SIGINFO</code> flag allows us to establish a signal
+                handler that receives additional information about a signal. This information is
+                supplied via a <span class="emphasis"><em>siginfo_t</em></span> structure whose address is passed as
+                an argument to the signal handler.</p><p>When a signal handler interrupts a blocked system call, the system call fails with
+                the error <code class="literal">EINTR</code>. We can take advantage of this
+                behavior to, for example, set a timer on a blocking system call. Interrupted system
+                calls can be manually restarted if desired. Alternatively, establishing the signal
+                handler with the <span class="emphasis"><em>sigaction()</em></span>
+                <code class="literal">SA_RESTART</code> flag causes many (but not all) system
+                calls to be automatically restarted.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id19"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id20">Further information</h4></div></div></div><p>See the sources listed in <a class="xref" href="ch20.html#summary-id19" title="Summary">Summary</a>.</p></div></div></div><div class="sect1" title="Exercise"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercise-id7">Exercise</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Implement <span class="emphasis"><em>abort()</em></span>.<a id="IDX-CHP-21-3355" class="indexterm"/></p></li></ol></div></div></section></body></html>

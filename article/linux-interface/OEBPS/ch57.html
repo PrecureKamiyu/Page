@@ -1,0 +1,468 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 57. Sockets: UNIX Domain</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch56.html" title="Chapter 56. Sockets: Introduction"/><link rel="next" href="ch58.html" title="Chapter 58. Sockets: Fundamentals of TCP/IP Networks"/></head><body><section class="chapter" title="Chapter 57. Sockets: UNIX Domain" epub:type="chapter" id="sockets_colon_unix_domain"><div class="titlepage"><div><div><h2 class="title">Chapter 57. Sockets: UNIX Domain</h2></div></div></div><p>This chapter looks at the use of UNIX domain sockets, which allow communication
+            between processes on the same host system. We discuss the use of both stream and
+            datagram sockets in the UNIX domain. We also describe the use of file permissions to
+            control access to UNIX domain sockets, the use of <span class="emphasis"><em>socketpair()</em></span> to
+            create a pair of connected UNIX domain sockets, and the Linux abstract socket
+                namespace.<a id="IDX-CHP-57-7404" class="indexterm"/></p><div class="sect1" title="UNIX Domain Socket Addresses: struct sockaddr_un"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="unix_domain_socket_addresses_colon_struc">UNIX Domain Socket Addresses: <span class="emphasis"><em>struct sockaddr_un</em></span></h2></div></div></div><p>In the UNIX domain, a socket address takes the form of a pathname, and the
+                domain-specific socket address structure is defined as follows:<a id="IDX-CHP-57-7405" class="indexterm"/><a id="IDX-CHP-57-7406" class="indexterm"/><a id="IDX-CHP-57-7407" class="indexterm"/><a id="IDX-CHP-57-7408" class="indexterm"/><a id="IDX-CHP-57-7409" class="indexterm"/><a id="IDX-CHP-57-7410" class="indexterm"/><a id="IDX-CHP-57-7411" class="indexterm"/></p><a id="I_programlisting57_d1e146973"/><pre class="programlisting">struct sockaddr_un {
+    sa_family_t sun_family;         /* Always AF_UNIX */
+    char sun_path[108];             /* Null-terminated socket pathname */
+};</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>The prefix <span class="emphasis"><em>sun_</em></span> in the fields of the
+                        <span class="emphasis"><em>sockaddr_un</em></span> structure has nothing to do with Sun
+                    Microsystems; rather, it derives from <span class="emphasis"><em>socket
+                        unix</em></span>.<a id="IDX-CHP-57-7412" class="indexterm"/></p></div><p>SUSv3 doesn’t specify the size of the <span class="emphasis"><em>sun_path</em></span> field. Early
+                BSD implementations used 108 and 104 bytes, and one contemporary implementation
+                (HP-UX 11) uses 92 bytes. Portable applications should code to this lower value, and
+                use <span class="emphasis"><em>snprintf()</em></span> or <span class="emphasis"><em>strncpy()</em></span> to avoid
+                buffer overruns when writing into this field.</p><p>In order to bind a UNIX domain socket to an address, we initialize a
+                    <span class="emphasis"><em>sockaddr_un</em></span> structure, and then pass a (cast) pointer to
+                this structure as the <span class="emphasis"><em>addr</em></span> argument to
+                    <span class="emphasis"><em>bind()</em></span>, and specify <span class="emphasis"><em>addrlen</em></span> as the
+                size of the structure, as shown in <a class="xref" href="ch57.html#binding_a_unix_domain_socket" title="Example 57-1. Binding a UNIX domain socket">Example 57-1</a>.</p><div class="example"><a id="binding_a_unix_domain_socket"/><div class="example-title">Example 57-1. Binding a UNIX domain socket</div><div class="example-contents"><pre class="programlisting">const char *SOCKNAME = "/tmp/mysock";
+    int sfd;
+    struct sockaddr_un addr;
+
+    sfd = socket(AF_UNIX, SOCK_STREAM, 0);            /* Create socket */
+    if (sfd == -1)
+        errExit("socket");
+
+    memset(&amp;addr, 0, sizeof(struct sockaddr_un));     /* Clear structure */
+    addr.sun_family = AF_UNIX;                            /* UNIX domain address */
+    strncpy(addr.sun_path, SOCKNAME, sizeof(addr.sun_path) - 1);
+
+    if (bind(sfd, (struct sockaddr *) &amp;addr, sizeof(struct sockaddr_un)) == -1)
+        errExit("bind");</pre></div></div><p>The use of the <span class="emphasis"><em>memset()</em></span> call in <a class="xref" href="ch57.html#binding_a_unix_domain_socket" title="Example 57-1. Binding a UNIX domain socket">Example 57-1</a> ensures that all of the structure
+                fields have the value 0. (The subsequent <span class="emphasis"><em>strncpy()</em></span> call takes
+                advantage of this by specifying its final argument as one less than the size of the
+                    <span class="emphasis"><em>sun_path</em></span> field, to ensure that this field always has a
+                terminating null byte.) Using <span class="emphasis"><em>memset()</em></span> to zero out the entire
+                structure, rather than initializing individual fields, ensures that any nonstandard
+                fields that are provided by some implementations are also initialized to 0.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The BSD-derived function <span class="emphasis"><em>bzero()</em></span> is an alternative to
+                        <span class="emphasis"><em>memset()</em></span> for zeroing the contents of a structure. SUSv3
+                    specifies <span class="emphasis"><em>bzero()</em></span> and the related
+                        <span class="emphasis"><em>bcopy()</em></span> (which is similar to
+                        <span class="emphasis"><em>memmove()</em></span>), but marks both functions LEGACY, noting
+                    that <span class="emphasis"><em>memset()</em></span> and <span class="emphasis"><em>memmove()</em></span> are
+                    preferred. SUSv4 removes the specifications of <span class="emphasis"><em>bzero()</em></span> and
+                        <span class="emphasis"><em>bcopy()</em></span>.<a id="IDX-CHP-57-7413" class="indexterm"/><a id="IDX-CHP-57-7414" class="indexterm"/></p></div><p>When used to bind a UNIX domain socket, <span class="emphasis"><em>bind()</em></span> creates an
+                entry in the file system. (Thus, a directory specified as part of the socket
+                pathname needs to be accessible and writable.) The ownership of the file is
+                determined according to the usual rules for file creation (<a class="xref" href="ch15.html#ownership_of_new_files" title="Ownership of New Files">Ownership of New Files</a>). The file is marked as a socket. When
+                    <span class="emphasis"><em>stat()</em></span> is applied to this pathname, it returns the value
+                    <code class="literal">S_IFSOCK</code> in the file-type component of the
+                    <span class="emphasis"><em>st_mode</em></span> field of the <span class="emphasis"><em>stat</em></span> structure
+                    (<a class="xref" href="ch15.html#retrieving_file_information_colon_stat_o" title="Retrieving File Information: stat()">Retrieving File Information: <span class="emphasis"><em>stat()</em></span></a>). When listed with
+                    <span class="emphasis"><em>ls -l</em></span>, a UNIX domain socket is shown with the type
+                    <span class="emphasis"><em>s</em></span> in the first column, and <span class="emphasis"><em>ls -F</em></span>
+                appends an equal sign (=) to the socket pathname.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Although UNIX domain sockets are identified by pathnames, I/O on these sockets
+                    doesn’t involve operations on the underlying device.</p></div><p>The following points are worth noting about binding a UNIX domain socket:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>We can’t bind a socket to an existing pathname
+                            (<span class="emphasis"><em>bind()</em></span> fails with the error <code class="literal">EADDRINUSE</code>).</p></li><li class="listitem"><p>It is usual to bind a socket to an absolute pathname, so that the socket
+                        resides at a fixed address in the file system. Using a relative pathname is
+                        possible, but unusual, because it requires an application that wants to
+                            <span class="emphasis"><em>connect()</em></span> to this socket to know the current
+                        working directory of the application that performs the
+                            <span class="emphasis"><em>bind()</em></span>.</p></li><li class="listitem"><p>A socket may be bound to only one pathname; conversely, a pathname can be
+                        bound to only one socket.</p></li><li class="listitem"><p>We can’t use <span class="emphasis"><em>open()</em></span> to open a socket.</p></li><li class="listitem"><p>When the socket is no longer required, its pathname entry can (and
+                        generally should) be removed using <span class="emphasis"><em>unlink()</em></span> (or
+                            <span class="emphasis"><em>remove()</em></span>).</p></li></ul></div><p>In most of our example programs, we bind UNIX domain sockets to pathnames in the
+                    <code class="literal">/tmp</code> directory, because this directory is
+                normally present and writable on every system. This makes it easy for the reader to
+                run these programs without needing to first edit the socket pathnames. Be aware,
+                however, that this is generally not a good design technique. As pointed out in <a class="xref" href="ch38.html#pitfalls_when_performing_file_operations" title="Pitfalls When Performing File Operations and File I/O">Pitfalls When Performing File Operations and File I/O</a>, creating files in publicly
+                writable directories such as <code class="literal">/tmp</code> can lead to
+                various security vulnerabilities. For example, by creating a pathname in <code class="literal">/tmp</code> with the same name as that used by the
+                application socket, we can create a simple denial-of-service attack. Real-world
+                applications should <span class="emphasis"><em>bind()</em></span> UNIX domain sockets to absolute
+                pathnames in suitably secured directories.<a id="IDX-CHP-57-7415" class="indexterm"/></p></div><div class="sect1" title="Stream Sockets in the UNIX Domain"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="stream_sockets_in_the_unix_domain">Stream Sockets in the UNIX Domain</h2></div></div></div><p>We now present a simple client-server application that uses stream sockets in the
+                UNIX domain. The client program (<a class="xref" href="ch57.html#a_simple_unix_domain_stream_socket_clien" title="Example 57-4. A simple UNIX domain stream socket client">Example 57-4</a>) connects to the server,
+                and uses the connection to transfer data from its standard input to the server. The
+                server program (<a class="xref" href="ch57.html#a_simple_unix_domain_stream_socket_serve" title="Example 57-3. A simple UNIX domain stream socket server">Example 57-3</a>) accepts
+                client connections, and transfers all data sent on the connection by the client to
+                standard output. The server is a simple example of an <span class="emphasis"><em>iterative</em></span>
+                server—a server that handles one client at a time before proceeding to the next
+                client. (We consider server design in more detail in <a class="xref" href="ch60.html" title="Chapter 60. Sockets: Server Design">Chapter 60</a>.)<a id="IDX-CHP-57-7416" class="indexterm"/><a id="IDX-CHP-57-7417" class="indexterm"/><a id="IDX-CHP-57-7418" class="indexterm"/><a id="IDX-CHP-57-7419" class="indexterm"/><a id="IDX-CHP-57-7420" class="indexterm"/><a id="IDX-CHP-57-7421" class="indexterm"/><a id="IDX-CHP-57-7422" class="indexterm"/><a id="IDX-CHP-57-7423" class="indexterm"/><a id="IDX-CHP-57-7424" class="indexterm"/><a id="IDX-CHP-57-7425" class="indexterm"/><a id="IDX-CHP-57-7426" class="indexterm"/><a id="IDX-CHP-57-7427" class="indexterm"/><a id="IDX-CHP-57-7428" class="indexterm"/></p><p><a class="xref" href="ch57.html#header_file_for_us_underscore_xfr_unders" title="Example 57-2. Header file for us_xfr_sv.c and us_xfr_cl.c">Example 57-2</a> is the header file used
+                by both of these programs.</p><div class="example"><a id="header_file_for_us_underscore_xfr_unders"/><div class="example-title">Example 57-2. Header file for <code class="literal">us_xfr_sv.c</code> and <code class="literal">us_xfr_cl.c</code></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/us_xfr.h</code></strong>
+#include &lt;sys/un.h&gt;
+#include &lt;sys/socket.h&gt;
+#include "tlpi_hdr.h"
+
+#define SV_SOCK_PATH "/tmp/us_xfr"
+
+#define BUF_SIZE 100
+      <strong class="userinput"><code>sockets/us_xfr.h</code></strong></pre></div></div><p>In the following pages, we first present the source code of the server and client,
+                and then discuss the details of these programs and show an example of their
+                use.</p><div class="example"><a id="a_simple_unix_domain_stream_socket_serve"/><div class="example-title">Example 57-3. A simple UNIX domain stream socket server</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/us_xfr_sv.c</code></strong>
+#include "us_xfr.h"
+
+#define BACKLOG 5
+
+int
+main(int argc, char *argv[])
+{
+    struct sockaddr_un addr;
+    int sfd, cfd;
+    ssize_t numRead;
+    char buf[BUF_SIZE];
+
+    sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sfd == -1)
+        errExit("socket");
+
+    /* Construct server socket address, bind socket to it,
+       and make this a listening socket */
+
+    if (remove(SV_SOCK_PATH) == -1 &amp;&amp; errno != ENOENT)
+        errExit("remove-%s", SV_SOCK_PATH);
+
+    memset(&amp;addr, 0, sizeof(struct sockaddr_un));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, SV_SOCK_PATH, sizeof(addr.sun_path) - 1);
+
+    if (bind(sfd, (struct sockaddr *) &amp;addr, sizeof(struct sockaddr_un)) == -1)
+        errExit("bind");
+
+    if (listen(sfd, BACKLOG) == -1)
+        errExit("listen");
+
+    for (;;) {          /* Handle client connections iteratively */
+
+        /* Accept a connection. The connection is returned on a new
+           socket, 'cfd'; the listening socket ('sfd') remains open
+           and can be used to accept further connections. */
+
+        cfd = accept(sfd, NULL, NULL);
+        if (cfd == -1)
+            errExit("accept");
+
+        /* Transfer data from connected socket to stdout until EOF */
+
+        while ((numRead = read(cfd, buf, BUF_SIZE)) &gt; 0)
+            if (write(STDOUT_FILENO, buf, numRead) != numRead)
+                fatal("partial/failed write");
+
+        if (numRead == -1)
+            errExit("read");
+        if (close(cfd) == -1)
+            errMsg("close");
+    }
+}
+     <strong class="userinput"><code>sockets/us_xfr_sv.c</code></strong></pre></div></div><div class="example"><a id="a_simple_unix_domain_stream_socket_clien"/><div class="example-title">Example 57-4. A simple UNIX domain stream socket client</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/us_xfr_cl.c</code></strong>
+#include "us_xfr.h"
+
+int
+main(int argc, char *argv[])
+{
+    struct sockaddr_un addr;
+    int sfd;
+    ssize_t numRead;
+    char buf[BUF_SIZE];
+
+    sfd = socket(AF_UNIX, SOCK_STREAM, 0);       /* Create client socket */
+    if (sfd == -1)
+        errExit("socket");
+
+    /* Construct server address, and make the connection */
+
+    memset(&amp;addr, 0, sizeof(struct sockaddr_un));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, SV_SOCK_PATH, sizeof(addr.sun_path) - 1);
+
+    if (connect(sfd, (struct sockaddr *) &amp;addr,
+                sizeof(struct sockaddr_un)) == -1)
+        errExit("connect");
+
+    /* Copy stdin to socket */
+
+    while ((numRead = read(STDIN_FILENO, buf, BUF_SIZE)) &gt; 0)
+        if (write(sfd, buf, numRead) != numRead)
+            fatal("partial/failed write");
+
+    if (numRead == -1)
+        errExit("read");
+
+    exit(EXIT_SUCCESS);         /* Closes our socket; server sees EOF */
+}
+     <strong class="userinput"><code>sockets/us_xfr_cl.c</code></strong></pre></div></div><p>The server program is shown in <a class="xref" href="ch57.html#a_simple_unix_domain_stream_socket_serve" title="Example 57-3. A simple UNIX domain stream socket server">Example 57-3</a>. The server performs the
+                following steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Create a socket.</p></li><li class="listitem"><p>Remove any existing file with the same pathname as that to which we want
+                        to bind the socket.</p></li><li class="listitem"><p>Construct an address structure for the server’s socket, bind the socket to
+                        that address, and mark the socket as a listening socket.</p></li><li class="listitem"><p>Execute an infinite loop to handle incoming client requests. Each loop
+                        iteration performs the following steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Accept a connection, obtaining a new socket,
+                                    <span class="emphasis"><em>cfd</em></span>, for the connection.</p></li><li class="listitem"><p>Read all of the data from the connected socket and write it to
+                                standard output.</p></li><li class="listitem"><p>Close the connected socket <span class="emphasis"><em>cfd</em></span>.</p></li></ul></div></li></ul></div><p>The server must be terminated manually (e.g., by sending it a signal).</p><p>The client program (<a class="xref" href="ch57.html#a_simple_unix_domain_stream_socket_clien" title="Example 57-4. A simple UNIX domain stream socket client">Example 57-4</a>)
+                performs the following steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Create a socket.</p></li><li class="listitem"><p>Construct the address structure for the server’s socket and connect to the
+                        socket at that address.</p></li><li class="listitem"><p>Execute a loop that copies its standard input to the socket connection.
+                        Upon encountering end-of-file in its standard input, the client terminates,
+                        with the result that its socket is closed and the server sees end-of-file
+                        when reading from the socket on the other end of the connection.</p></li></ul></div><p>The following shell session log demonstrates the use of these programs. We begin
+                by running the server in the background:</p><a id="I_programlisting57_d1e147364"/><pre class="programlisting">$ <strong class="userinput"><code>./us_xfr_sv &gt; b &amp;</code></strong>
+[1] 9866
+$ <strong class="userinput"><code>ls -lF /tmp/us_xfr</code></strong>                        <em class="lineannotation"><span class="lineannotation">Examine socket file with ls</span></em>
+srwxr-xr-x    1 mtk      users         0 Jul 18 10:48 /tmp/us_xfr=</pre><p>We then create a test file to be used as input for the client, and run the
+                client:</p><a id="I_programlisting57_d1e147377"/><pre class="programlisting">$ <strong class="userinput"><code>cat *.c &gt; a</code></strong>
+$ <strong class="userinput"><code>./us_xfr_cl &lt; a</code></strong>                           <em class="lineannotation"><span class="lineannotation">Client takes input from test file</span></em></pre><p>At this point, the child has completed. Now we terminate the server as well, and
+                check that the server’s output matches the client’s input:</p><a id="I_programlisting57_d1e147389"/><pre class="programlisting">$ <strong class="userinput"><code>kill %1</code></strong>                                   <em class="lineannotation"><span class="lineannotation">Terminate server</span></em>
+ [1]+  Terminated   ./us_xfr_sv &gt;b          <em class="lineannotation"><span class="lineannotation">Shell sees server’s termination</span></em>
+$ <strong class="userinput"><code>diff a b</code></strong>
+$</pre><p>The <span class="emphasis"><em>diff</em></span> command produces no output, indicating that the
+                input and output files are identical.</p><p>Note that after the server terminates, the socket pathname continues to exist.
+                This is why the server uses <span class="emphasis"><em>remove()</em></span> to remove any existing
+                instance of the socket pathname before calling <span class="emphasis"><em>bind()</em></span>.
+                (Assuming we have appropriate permissions, this <span class="emphasis"><em>remove()</em></span> call
+                would remove any type of file with this pathname, even if it wasn’t a socket.) If we
+                did not do this, then the <span class="emphasis"><em>bind()</em></span> call would fail if a previous
+                invocation of the server had already created this socket pathname.</p></div><div class="sect1" title="Datagram Sockets in the UNIX Domain"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="datagram_sockets_in_the_unix_domain">Datagram Sockets in the UNIX Domain</h2></div></div></div><p>In the generic description of datagram sockets that we provided in <a class="xref" href="ch56.html#datagram_sockets" title="Datagram Sockets">Datagram Sockets</a>, we stated that communication using datagram
+                sockets is unreliable. This is the case for datagrams transferred over a network.
+                However, for UNIX domain sockets, datagram transmission is carried out within the
+                kernel, and is reliable. All messages are delivered in order and
+                unduplicated.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="maximum_datagram_size_for_unix_domai"/></div></div></div><div class="sect3" title="Maximum datagram size for UNIX domain datagram sockets"><div class="titlepage"><div><div><h4 class="title" id="maximum_datagram_size_for_unix_domai-id1">Maximum datagram size for UNIX domain datagram sockets</h4></div></div></div><p>SUSv3 doesn’t specify a maximum size for datagrams sent via a UNIX domain
+                        socket. On Linux, we can send quite large datagrams. The limits are
+                        controlled via the <code class="literal">SO_SNDBUF</code> socket
+                        option and various <code class="literal">/proc</code> files, as
+                        described in the <span class="emphasis"><em>socket(7)</em></span> manual page. However, some
+                        other UNIX implementations impose lower limits, such as 2048 bytes. Portable
+                        applications employing UNIX domain datagram sockets should consider imposing
+                        a low upper limit on the size of datagrams used.<a id="IDX-CHP-57-7429" class="indexterm"/><a id="IDX-CHP-57-7430" class="indexterm"/><a id="IDX-CHP-57-7431" class="indexterm"/></p></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id72">Example program</h4></div></div></div><p><a class="xref" href="ch57.html#a_simple_unix_domain_datagram_server" title="Example 57-6. A simple UNIX domain datagram server">Example 57-6</a> and <a class="xref" href="ch57.html#a_simple_unix_domain_datagram_client" title="Example 57-7. A simple UNIX domain datagram client">Example 57-7</a> show a simple
+                        client-server application using UNIX domain datagram sockets. Both of these
+                        programs make use of the header file shown in <a class="xref" href="ch57.html#header_file_used_by_ud_underscore_ucase" title="Example 57-5. Header file used by ud_ucase_sv.c and ud_ucase_cl.c">Example 57-5</a>.<a id="IDX-CHP-57-7432" class="indexterm"/><a id="IDX-CHP-57-7433" class="indexterm"/><a id="IDX-CHP-57-7434" class="indexterm"/><a id="IDX-CHP-57-7435" class="indexterm"/><a id="IDX-CHP-57-7436" class="indexterm"/><a id="IDX-CHP-57-7437" class="indexterm"/><a id="IDX-CHP-57-7438" class="indexterm"/><a id="IDX-CHP-57-7439" class="indexterm"/><a id="IDX-CHP-57-7440" class="indexterm"/><a id="IDX-CHP-57-7441" class="indexterm"/><a id="IDX-CHP-57-7442" class="indexterm"/><a id="IDX-CHP-57-7443" class="indexterm"/><a id="IDX-CHP-57-7444" class="indexterm"/><a id="IDX-CHP-57-7445" class="indexterm"/></p><div class="example"><a id="header_file_used_by_ud_underscore_ucase"/><div class="example-title">Example 57-5. Header file used by <code class="literal">ud_ucase_sv.c</code>
+                            and <code class="literal">ud_ucase_cl.c</code></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/ud_ucase.h</code></strong>
+#include &lt;sys/un.h&gt;
+#include &lt;sys/socket.h&gt;
+#include &lt;ctype.h&gt;
+#include "tlpi_hdr.h"
+
+#define BUF_SIZE 10             /* Maximum size of messages exchanged
+                                   between client to server */
+
+#define SV_SOCK_PATH "/tmp/ud_ucase"
+     <strong class="userinput"><code>sockets/ud_ucase.h</code></strong></pre></div></div><p>The server program (<a class="xref" href="ch57.html#a_simple_unix_domain_datagram_server" title="Example 57-6. A simple UNIX domain datagram server">Example 57-6</a>) first creates a socket and binds it to a well-known address.
+                        (Beforehand, the server unlinks the pathname matching that address, in case
+                        the pathname already exists.) The server then enters an infinite loop, using
+                            <span class="emphasis"><em>recvfrom()</em></span> to receive datagrams from clients,
+                        converting the received text to uppercase, and returning the converted text
+                        to the client using the address obtained via
+                        <span class="emphasis"><em>recvfrom()</em></span>.</p><p>The client program (<a class="xref" href="ch57.html#a_simple_unix_domain_datagram_client" title="Example 57-7. A simple UNIX domain datagram client">Example 57-7</a>) creates a socket and binds the socket to an address, so that the server
+                        can send its reply. The client address is made unique by including the
+                        client’s process ID in the pathname. The client then loops, sending each of
+                        its command-line arguments as a separate message to the server. After
+                        sending each message, the client reads the server response and displays it
+                        on standard output.</p><div class="example"><a id="a_simple_unix_domain_datagram_server"/><div class="example-title">Example 57-6. A simple UNIX domain datagram server</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/ud_ucase_sv.c</code></strong>
+#include "ud_ucase.h"
+
+int
+main(int argc, char *argv[])
+{
+    struct sockaddr_un svaddr, claddr;
+    int sfd, j;
+    ssize_t numBytes;
+    socklen_t len;
+    char buf[BUF_SIZE];
+
+    sfd = socket(AF_UNIX, SOCK_DGRAM, 0);       /* Create server socket */
+    if (sfd == -1)
+        errExit("socket");
+
+    /* Construct well-known address and bind server socket to it */
+
+    if (remove(SV_SOCK_PATH) == -1 &amp;&amp; errno != ENOENT)
+        errExit("remove-%s", SV_SOCK_PATH);
+
+    memset(&amp;svaddr, 0, sizeof(struct sockaddr_un));
+    svaddr.sun_family = AF_UNIX;
+    strncpy(svaddr.sun_path, SV_SOCK_PATH, sizeof(svaddr.sun_path) - 1);
+
+    if (bind(sfd, (struct sockaddr *) &amp;svaddr, sizeof(struct sockaddr_un)) == -1)
+        errExit("bind");
+
+    /* Receive messages, convert to uppercase, and return to client */
+
+    for (;;) {
+        len = sizeof(struct sockaddr_un);
+        numBytes = recvfrom(sfd, buf, BUF_SIZE, 0,
+                            (struct sockaddr *) &amp;claddr, &amp;len);
+        if (numBytes == -1)
+            errExit("recvfrom");
+
+        printf("Server received %ld bytes from %s\n", (long) numBytes,
+                claddr.sun_path);
+
+        for (j = 0; j &lt; numBytes; j++)
+            buf[j] = toupper((unsigned char) buf[j]);
+
+        if (sendto(sfd, buf, numBytes, 0, (struct sockaddr *) &amp;claddr, len) !=
+                numBytes)
+            fatal("sendto");
+    }
+}
+      <strong class="userinput"><code>sockets/ud_ucase_sv.c</code></strong></pre></div></div><div class="example"><a id="a_simple_unix_domain_datagram_client"/><div class="example-title">Example 57-7. A simple UNIX domain datagram client</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>sockets/ud_ucase_cl.c</code></strong>
+#include "ud_ucase.h"
+
+int
+main(int argc, char *argv[])
+{
+    struct sockaddr_un svaddr, claddr;
+    int sfd, j;
+    size_t msgLen;
+    ssize_t numBytes;
+    char resp[BUF_SIZE];
+
+    if (argc &lt; 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s msg...\n", argv[0]);
+
+    /* Create client socket; bind to unique pathname (based on PID) */
+
+    sfd = socket(AF_UNIX, SOCK_DGRAM, 0);
+    if (sfd == -1)
+        errExit("socket");
+
+    memset(&amp;claddr, 0, sizeof(struct sockaddr_un));
+    claddr.sun_family = AF_UNIX;
+    snprintf(claddr.sun_path, sizeof(claddr.sun_path),
+            "/tmp/ud_ucase_cl.%ld", (long) getpid());
+
+    if (bind(sfd, (struct sockaddr *) &amp;claddr, sizeof(struct sockaddr_un)) == -1)
+        errExit("bind");
+
+    /* Construct address of server */
+
+    memset(&amp;svaddr, 0, sizeof(struct sockaddr_un));
+    svaddr.sun_family = AF_UNIX;
+    strncpy(svaddr.sun_path, SV_SOCK_PATH, sizeof(svaddr.sun_path) - 1);
+
+    /* Send messages to server; echo responses on stdout */
+
+    for (j = 1; j &lt; argc; j++) {
+        msgLen = strlen(argv[j]);       /* May be longer than BUF_SIZE */
+        if (sendto(sfd, argv[j], msgLen, 0, (struct sockaddr *) &amp;svaddr,
+                sizeof(struct sockaddr_un)) != msgLen)
+            fatal("sendto");
+
+        numBytes = recvfrom(sfd, resp, BUF_SIZE, 0, NULL, NULL);
+        if (numBytes == -1)
+            errExit("recvfrom");
+        printf("Response %d: %.*s\n", j, (int) numBytes, resp);
+    }
+
+    remove(claddr.sun_path);            /* Remove client socket pathname */
+    exit(EXIT_SUCCESS);
+}
+      <strong class="userinput"><code>sockets/ud_ucase_cl.c</code></strong></pre></div></div><p>The following shell session log demonstrates the use of the server and
+                        client programs:</p><a id="I_programlisting57_d1e147616"/><pre class="programlisting">$ <strong class="userinput"><code>./ud_ucase_sv &amp;</code></strong>
+[1] 20113
+$ <strong class="userinput"><code>./ud_ucase_cl hello world</code></strong>                 <em class="lineannotation"><span class="lineannotation">Send 2 messages to server</span></em>
+Server received 5 bytes from /tmp/ud_ucase_cl.20150
+Response 1: HELLO
+Server received 5 bytes from /tmp/ud_ucase_cl.20150
+Response 2: WORLD
+$ <strong class="userinput"><code>./ud_ucase_cl 'long message'</code></strong>              <em class="lineannotation"><span class="lineannotation">Send 1 longer message to server</span></em>
+Server received 10 bytes from /tmp/ud_ucase_cl.20151
+Response 1: LONG MESSA
+$ <strong class="userinput"><code>kill %1</code></strong>                                   <em class="lineannotation"><span class="lineannotation">Terminate server</span></em></pre><p>The second invocation of the client program was designed to show that when
+                        a <span class="emphasis"><em>recvfrom()</em></span> call specifies a
+                            <span class="emphasis"><em>length</em></span> (<code class="literal">BUF_SIZE</code>, defined in <a class="xref" href="ch57.html#header_file_used_by_ud_underscore_ucase" title="Example 57-5. Header file used by ud_ucase_sv.c and ud_ucase_cl.c">Example 57-5</a> with the value 10)
+                        that is shorter than the message size, the message is silently truncated. We
+                        can see that this truncation occurred, because the server prints a message
+                        saying it received just 10 bytes, while the message sent by the client
+                        consisted of 12 bytes.</p></div></div></div><div class="sect1" title="UNIX Domain Socket Permissions"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="unix_domain_socket_permissions">UNIX Domain Socket Permissions</h2></div></div></div><p>The ownership and permissions of the socket file determine which processes are
+                able to communicate with that socket:<a id="IDX-CHP-57-7446" class="indexterm"/><a id="IDX-CHP-57-7447" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>To connect to a UNIX domain stream socket, write permission is required on
+                        the socket file.</p></li><li class="listitem"><p>To send a datagram to a UNIX domain datagram socket, write permission is
+                        required on the socket file.</p></li></ul></div><p>In addition, execute (search) permission is required on each of the directories in
+                the socket pathname.</p><p>By default, a socket is created (by <span class="emphasis"><em>bind()</em></span>) with all
+                permissions granted to owner (user), group, and other. To change this, we can
+                precede the call to <span class="emphasis"><em>bind()</em></span> with a call to
+                    <span class="emphasis"><em>umask()</em></span> to disable the permissions that we do not wish to
+                    grant.<a id="IDX-CHP-57-7448" class="indexterm"/></p><p>Some systems ignore the permissions on the socket file (SUSv3 allows this). Thus,
+                we can’t portably use socket file permissions to control access to the socket,
+                although we can portably use permissions on the hosting directory for this
+                purpose.</p></div><div class="sect1" title="Creating a Connected Socket Pair: socketpair()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="creating_a_connected_socket_pair_colon_s">Creating a Connected Socket Pair: <span class="emphasis"><em>socketpair()</em></span></h2></div></div></div><p>Sometimes, it is useful for a single process to create a pair of sockets and
+                connect them together. This could be done using two calls to
+                    <span class="emphasis"><em>socket()</em></span>, a call to <span class="emphasis"><em>bind()</em></span>, and then
+                either calls to <span class="emphasis"><em>listen()</em></span>, <span class="emphasis"><em>connect()</em></span>, and
+                    <span class="emphasis"><em>accept()</em></span> (for stream sockets), or a call to
+                    <span class="emphasis"><em>connect()</em></span> (for datagram sockets). The
+                    <span class="emphasis"><em>socketpair()</em></span> system call provides a shorthand for this
+                    operation.<a id="IDX-CHP-57-7449" class="indexterm"/><a id="IDX-CHP-57-7450" class="indexterm"/></p><a id="I_programlisting57_d1e147732"/><pre class="programlisting">#include &lt;sys/socket.h&gt;
+
+int <strong class="userinput"><code>socketpair</code></strong>(int <span class="emphasis"><em>domain</em></span>, int <span class="emphasis"><em>type</em></span>, int <span class="emphasis"><em>protocol</em></span>, int <span class="emphasis"><em>sockfd</em></span>[2]);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>This <span class="emphasis"><em>socketpair()</em></span> system call can be used only in the UNIX
+                domain; that is, <span class="emphasis"><em>domain</em></span> must be specified as <code class="literal">AF_UNIX</code>. (This restriction applies on most
+                implementations, and is logical, since the socket pair is created on a single host
+                system.) The socket <span class="emphasis"><em>type</em></span> may be specified as either <code class="literal">SOCK_DGRAM</code> or <code class="literal">SOCK_STREAM</code>. The <span class="emphasis"><em>protocol</em></span> argument must be
+                specified as 0. The <span class="emphasis"><em>sockfd</em></span> array returns the file descriptors
+                referring to the two connected sockets.</p><p>Specifying <span class="emphasis"><em>type</em></span> as <code class="literal">SOCK_STREAM</code> creates the equivalent of a bidirectional pipe (also
+                known as a <span class="emphasis"><em>stream pipe</em></span>). Each socket can be used for both
+                reading and writing, and separate data channels flow in each direction between the
+                two sockets. (On BSD-derived implementations, <span class="emphasis"><em>pipe()</em></span> is
+                implemented as a call to <span class="emphasis"><em>socketpair()</em></span>.)<a id="IDX-CHP-57-7451" class="indexterm"/><a id="IDX-CHP-57-7452" class="indexterm"/></p><p>Typically, a socket pair is used in a similar fashion to a pipe. After the
+                    <span class="emphasis"><em>socketpair()</em></span> call, the process then creates a child via
+                    <span class="emphasis"><em>fork()</em></span>. The child inherits copies of the parent’s file
+                descriptors, including the descriptors referring to the socket pair. Thus, the
+                parent and child can use the socket pair for IPC.</p><p>One way in which the use of <span class="emphasis"><em>socketpair()</em></span> differs from
+                creating a pair of connected sockets manually is that the sockets are not bound to
+                any address. This can help us avoid a whole class of security vulnerabilities, since
+                the sockets are not visible to any other process.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Starting with kernel 2.6.27, Linux provides a second use for the
+                        <span class="emphasis"><em>type</em></span> argument, by allowing two nonstandard flags to be
+                    ORed with the socket type. The <code class="literal">SOCK_CLOEXEC</code>
+                    flag causes the kernel to enable the close-on-exec flag (<code class="literal">FD_CLOEXEC</code>) for the two new file descriptors. This
+                    flag is useful for the same reasons as the <span class="emphasis"><em>open()</em></span>
+                    <code class="literal">O_CLOEXEC</code> flag described in <a class="xref" href="ch04.html#file_descriptor_number_returned_by-id1" title="File descriptor number returned by open()">File descriptor number returned by <span class="emphasis"><em>open()</em></span></a>. The <code class="literal">SOCK_NONBLOCK</code> flag causes the kernel to set the <code class="literal">O_NONBLOCK</code> flag on both underlying open file
+                    descriptions, so that future I/O operations on the socket will be nonblocking.
+                    This saves additional calls to <span class="emphasis"><em>fcntl()</em></span> to achieve the same
+                        result.<a id="IDX-CHP-57-7453" class="indexterm"/></p></div></div><div class="sect1" title="The Linux Abstract Socket Namespace"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_linux_abstract_socket_namespace">The Linux Abstract Socket Namespace</h2></div></div></div><p>The so-called <span class="emphasis"><em>abstract namespace</em></span> is a Linux-specific feature
+                that allows us to bind a UNIX domain socket to a name without that name being
+                created in the file system. This provides a few potential advantages:<a id="IDX-CHP-57-7454" class="indexterm"/><a id="IDX-CHP-57-7455" class="indexterm"/><a id="IDX-CHP-57-7456" class="indexterm"/><a id="IDX-CHP-57-7457" class="indexterm"/><a id="IDX-CHP-57-7458" class="indexterm"/><a id="IDX-CHP-57-7459" class="indexterm"/><a id="IDX-CHP-57-7460" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>We don’t need to worry about possible collisions with existing names in
+                        the file system.</p></li><li class="listitem"><p>It is not necessary to unlink the socket pathname when we have finished
+                        using the socket. The abstract name is automatically removed when the socket
+                        is closed.</p></li><li class="listitem"><p>We don’t need to create a file-system pathname for the socket. This may be
+                        useful in a <span class="emphasis"><em>chroot</em></span> environment, or if we don’t have
+                        write access to a file system.</p></li></ul></div><p>To create an abstract binding, we specify the first byte of the
+                    <span class="emphasis"><em>sun_path</em></span> field as a null byte (<code class="literal">\0</code>). This distinguishes abstract socket names from conventional UNIX
+                domain socket pathnames, which consist of a string of one or more nonnull bytes
+                terminated by a null byte. The name of the abstract socket is then defined by the
+                remaining bytes (including any null bytes) in <span class="emphasis"><em>sun_path</em></span> up to
+                the length defined for the size of the address structure (i.e., <span class="emphasis"><em>addrlen -
+                    sizeof(sa_family_t)</em></span>).</p><p><a class="xref" href="ch57.html#creating_an_abstract_socket_binding" title="Example 57-8. Creating an abstract socket binding">Example 57-8</a> demonstrates the creation of
+                an abstract socket binding.</p><div class="example"><a id="creating_an_abstract_socket_binding"/><div class="example-title">Example 57-8. Creating an abstract socket binding</div><div class="example-contents"><pre class="programlisting"><span class="emphasis"><em>from</em></span> <strong class="userinput"><code>sockets/us_abstract_bind.c</code></strong>
+    struct sockaddr_un addr;
+
+    memset(&amp;addr, 0, sizeof(struct sockaddr_un));  /* Clear address structure */
+    addr.sun_family = AF_UNIX;                     /* UNIX domain address */
+
+    /* addr.sun_path[0] has already been set to 0 by memset() */
+
+    str = "xyz";         /* Abstract name is "\0xyz" */
+    strncpy(&amp;addr.sun_path[1], str, strlen (str));
+
+    sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sockfd == -1)
+        errExit("socket");
+
+    if (bind(sockfd, (struct sockaddr *) &amp;addr,
+            sizeof(sa_family_t) + strlen(str) + 1) == -1)
+        errExit("bind");
+                                                  <span class="emphasis"><em>from</em></span> <strong class="userinput"><code>sockets/us_abstract_bind.c</code></strong></pre></div></div><p>The fact that an initial null byte is used to distinguish an abstract socket name
+                from a conventional socket name can have an unusual consequence. Suppose that the
+                variable <span class="emphasis"><em>name</em></span> happens to point to a zero-length string and that
+                we attempt to bind a UNIX domain socket to a <span class="emphasis"><em>sun_path</em></span>
+                initialized as follows:</p><a id="I_programlisting57_d1e147946"/><pre class="programlisting">strncpy(addr.sun_path, name, sizeof(addr.sun_path) - 1);</pre><p>On Linux, we’ll inadvertently create an abstract socket binding. However, such a
+                code sequence is probably unintentional (i.e., a bug). On other UNIX
+                implementations, the subsequent <span class="emphasis"><em>bind()</em></span> would fail.</p></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id56">Summary</h2></div></div></div><p>UNIX domain sockets allow communication between applications on the same host. The
+                UNIX domain supports both stream and datagram sockets.<a id="IDX-CHP-57-7461" class="indexterm"/><a id="IDX-CHP-57-7462" class="indexterm"/><a id="IDX-CHP-57-7463" class="indexterm"/></p><p>A UNIX domain socket is identified by a pathname in the file system. File
+                permissions can be used to control access to a UNIX domain socket.</p><p>The <span class="emphasis"><em>socketpair()</em></span> system call creates a pair of connected UNIX
+                domain sockets. This avoids the need for multiple system calls to create, bind, and
+                connect the sockets. A socket pair is normally used in a similar fashion to a pipe:
+                one process creates the socket pair and then forks to create a child that inherits
+                descriptors referring to the sockets. The two processes can then communicate via the
+                socket pair.</p><p>The Linux-specific abstract socket namespace allows us to bind a UNIX domain
+                socket to a name that doesn’t appear in the file system.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id77"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id78">Further information</h4></div></div></div><p>Refer to the sources of further information listed in <a class="xref" href="ch59.html#further_information-id81" title="Further Information">Further Information</a>.</p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id39">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>In <a class="xref" href="ch57.html#datagram_sockets_in_the_unix_domain" title="Datagram Sockets in the UNIX Domain">Datagram Sockets in the UNIX Domain</a>, we noted that
+                        UNIX domain datagram sockets are reliable. Write programs to show that if a
+                        sender transmits datagrams to a UNIX domain datagram socket faster than the
+                        receiver reads them, then the sender is eventually blocked, and remains
+                        blocked until the receiver reads some of the pending datagrams.</p></li><li class="listitem"><p>Rewrite the programs in <a class="xref" href="ch57.html#a_simple_unix_domain_stream_socket_serve" title="Example 57-3. A simple UNIX domain stream socket server">Example 57-3</a> (<code class="literal">us_xfr_sv.c</code>) and <a class="xref" href="ch57.html#a_simple_unix_domain_stream_socket_clien" title="Example 57-4. A simple UNIX domain stream socket client">Example 57-4</a> (<code class="literal">us_xfr_cl.c</code>) to use the Linux-specific
+                        abstract socket namespace (<a class="xref" href="ch57.html#the_linux_abstract_socket_namespace" title="The Linux Abstract Socket Namespace">The Linux Abstract Socket Namespace</a>).</p></li><li class="listitem"><p>Reimplement the sequence-number server and client of <a class="xref" href="ch44.html#a_client-server_application_using_fifos" title="A Client-Server Application Using FIFOs">A Client-Server Application Using FIFOs</a> using UNIX domain
+                        stream sockets.</p></li><li class="listitem"><p>Suppose that we create two UNIX domain datagram sockets bound to the paths
+                            <code class="literal">/somepath/a</code> and <code class="literal">/somepath/b</code>, and that we connect the socket
+                            <code class="literal">/somepath/a</code> to <code class="literal">/somepath/b</code>. What happens if we create a third
+                        datagram socket and try to send (<span class="emphasis"><em>sendto()</em></span>) a datagram
+                        via that socket to <code class="literal">/somepath/a</code>? Write a
+                        program to determine the answer. If you have access to other UNIX systems,
+                        test the program on those systems to see if the answer differs.</p></li></ol></div></div></section></body></html>

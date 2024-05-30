@@ -1,0 +1,516 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 7. Memory Allocation</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch06.html" title="Chapter 6. Processes"/><link rel="next" href="ch08.html" title="Chapter 8. Users and Groups"/></head><body><section class="chapter" title="Chapter 7. Memory Allocation" epub:type="chapter" id="memory_allocation"><div class="titlepage"><div><div><h2 class="title">Chapter 7. Memory Allocation</h2></div></div></div><p>Many system programs need to be able to allocate extra memory for dynamic data
+            structures (e.g., linked lists and binary trees), whose size depends on information that
+            is available only at run time. This chapter describes the functions that are used to
+            allocate memory on the heap or the stack.</p><div class="sect1" title="Allocating Memory on the Heap"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="allocating_memory_on_the_heap">Allocating Memory on the Heap</h2></div></div></div><p>A process can allocate memory by increasing the size of the heap, a variable-size
+                segment of contiguous virtual memory that begins just after the uninitialized data
+                segment of a process and grows and shrinks as memory is allocated and freed (see
+                    <a class="xref" href="ch06.html#typical_memory_layout_of_a_process_on_li" title="Figure 6-1. Typical memory layout of a process on Linux/x86-32">Figure 6-1</a> in <a class="xref" href="ch06.html#virtual_memory_management" title="Virtual Memory Management">Virtual Memory Management</a>). The current limit of the heap is
+                referred to as the <span class="emphasis"><em>program break</em></span>.<a id="IDX-CHP-7-1000" class="indexterm"/><a id="IDX-CHP-7-1001" class="indexterm"/></p><p>To allocate memory, C programs normally use the <span class="emphasis"><em>malloc</em></span> family
+                of functions, which we describe shortly. However, we begin with a description of
+                    <span class="emphasis"><em>brk()</em></span> and <span class="emphasis"><em>sbrk()</em></span>, upon which the
+                    <span class="emphasis"><em>malloc</em></span> functions are based.</p><div class="sect2" title="Adjusting the Program Break: brk() and sbrk()"><div class="titlepage"><div><div><h3 class="title" id="adjusting_the_program_break_colon_brk_op">Adjusting the Program Break: <span class="emphasis"><em>brk()</em></span> and
+                        <span class="emphasis"><em>sbrk()</em></span></h3></div></div></div><p>Resizing the heap (i.e., allocating or deallocating memory) is actually as
+                    simple as telling the kernel to adjust its idea of where the process’s program
+                    break is. Initially, the program break lies just past the end of the
+                    uninitialized data segment (i.e., the same location as
+                        <span class="emphasis"><em>&amp;end</em></span>, shown in <a class="xref" href="ch06.html#typical_memory_layout_of_a_process_on_li" title="Figure 6-1. Typical memory layout of a process on Linux/x86-32">Figure 6-1</a>).</p><p>After the program break is increased, the program may access any address in
+                    the newly allocated area, but no physical memory pages are allocated yet. The
+                    kernel automatically allocates new physical pages on the first attempt by the
+                    process to access addresses in those pages.</p><p>Traditionally, the UNIX system has provided two system calls for manipulating
+                    the program break, and these are both available on Linux:
+                        <span class="emphasis"><em>brk()</em></span> and <span class="emphasis"><em>sbrk()</em></span>. Although these
+                    system calls are seldom used directly in programs, understanding them helps
+                    clarify how memory allocation works.<a id="IDX-CHP-7-1002" class="indexterm"/><a id="IDX-CHP-7-1003" class="indexterm"/></p><a id="I_programlisting7_d1e16475"/><pre class="programlisting">#define _BSD_SOURCE             /* Or: #define _SVID_SOURCE */
+#include &lt;unistd.h&gt;
+
+int <strong class="userinput"><code>brk</code></strong>(void *<span class="emphasis"><em>end_data_segment</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><a id="I_programlisting7_d1e16486"/><pre class="programlisting">void *<strong class="userinput"><code>sbrk</code></strong>(intptr_t <em class="replaceable"><code>increment</code></em>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns previous program break on success, or <span class="emphasis"><em>(void
+                            *)</em></span> -1 on error</p></div><p>The <span class="emphasis"><em>brk()</em></span> system call sets the program break to the
+                    location specified by <span class="emphasis"><em>end_data_segment</em></span>. Since virtual
+                    memory is allocated in units of pages, <span class="emphasis"><em>end_data_segment</em></span> is
+                    effectively rounded up to the next page boundary.</p><p>Attempts to set the program break below its initial value (i.e., below
+                        <span class="emphasis"><em>&amp;end</em></span>) are likely to result in unexpected
+                    behavior, such as a segmentation fault (the <code class="literal">SIGSEGV</code> signal, described in <a class="xref" href="ch20.html#signal_types_and_default_actions" title="Signal Types and Default Actions">Signal Types and Default Actions</a>) when trying to access data in
+                    now nonexistent parts of the initialized or uninitialized data segments. The
+                    precise upper limit on where the program break can be set depends on a range of
+                    factors, including: the process resource limit for the size of the data segment
+                        (<code class="literal">RLIMIT_DATA</code>, described in <a class="xref" href="ch36.html#details_of_specific_resource_limits" title="Details of Specific Resource Limits">Details of Specific Resource Limits</a>); and the location of memory
+                    mappings, shared memory segments, and shared libraries.<a id="IDX-CHP-7-1004" class="indexterm"/></p><p>A call to <span class="emphasis"><em>sbrk()</em></span> adjusts the program break by adding
+                        <span class="emphasis"><em>increment</em></span> to it. (On Linux, <span class="emphasis"><em>sbrk()</em></span>
+                    is a library function implemented on top of <span class="emphasis"><em>brk()</em></span>.) The
+                        <span class="emphasis"><em>intptr_t</em></span> type used to declare
+                        <span class="emphasis"><em>increment</em></span> is an integer data type. On success,
+                        <span class="emphasis"><em>sbrk()</em></span> returns the previous address of the program
+                    break. In other words, if we have increased the program break, the return value
+                    points to the start of the newly allocated block of memory.</p><p>The call <span class="emphasis"><em>sbrk(0)</em></span> returns the current setting of the
+                    program break without changing it. This can be useful if we want to track the
+                    size of the heap, perhaps in order to monitor the behavior of a memory
+                    allocation package.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv2 specified <span class="emphasis"><em>brk()</em></span> and <span class="emphasis"><em>sbrk()</em></span>
+                        (marking them LEGACY). SUSv3 removed their specifications.</p></div></div><div class="sect2" title="Allocating Memory on the Heap: malloc() and free()"><div class="titlepage"><div><div><h3 class="title" id="allocating_memory_on_the_heap_colon_mall">Allocating Memory on the Heap: <span class="emphasis"><em>malloc()</em></span> and
+                        <span class="emphasis"><em>free()</em></span></h3></div></div></div><p>In general, C programs use the <span class="emphasis"><em>malloc</em></span> family of functions
+                    to allocate and deallocate memory on the heap. These functions offer several
+                    advantages over <span class="emphasis"><em>brk()</em></span> and <span class="emphasis"><em>sbrk()</em></span>. In
+                    particular, they:<a id="IDX-CHP-7-1007" class="indexterm"/><a id="IDX-CHP-7-1008" class="indexterm"/><a id="IDX-CHP-7-1009" class="indexterm"/><a id="IDX-CHP-7-1010" class="indexterm"/><a id="IDX-CHP-7-1011" class="indexterm"/><a id="IDX-CHP-7-1012" class="indexterm"/><a id="IDX-CHP-7-1005" class="indexterm"/><a id="IDX-CHP-7-1006" class="indexterm"/><a id="IDX-CHP-7-1013" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>are standardized as part of the C language;</p></li><li class="listitem"><p>are easier to use in threaded programs;</p></li><li class="listitem"><p>provide a simple interface that allows memory to be allocated in small
+                            units; and</p></li><li class="listitem"><p>allow us to arbitrarily deallocate blocks of memory, which are
+                            maintained on a free list and recycled in future calls to allocate
+                            memory.</p></li></ul></div><p>The <span class="emphasis"><em>malloc()</em></span> function allocates <span class="emphasis"><em>size</em></span>
+                    bytes from the heap and returns a pointer to the start of the newly allocated
+                    block of memory. The allocated memory is not initialized.</p><a id="I_programlisting7_d1e16663"/><pre class="programlisting">#include &lt;stdlib.h&gt;
+
+void *<strong class="userinput"><code>malloc</code></strong>(size_t <span class="emphasis"><em>size</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns pointer to allocated memory on success, or <code class="literal">NULL</code> on error</p></div><p>Because <span class="emphasis"><em>malloc()</em></span> returns <span class="emphasis"><em>void *</em></span>, we
+                    can assign it to any type of C pointer. The block of memory returned by
+                        <span class="emphasis"><em>malloc()</em></span> is always aligned on a byte boundary suitable
+                    for any type of C data structure. In practice, this means that it is allocated
+                    on an 8-byte or 16-byte boundary on most architectures.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv3 specifies that the call <span class="emphasis"><em>malloc(0)</em></span> may return
+                        either <code class="literal">NULL</code> or a pointer to a small piece
+                        of memory that can (and should) be freed with <span class="emphasis"><em>free()</em></span>.
+                        On Linux, <span class="emphasis"><em>malloc(0)</em></span> follows the latter behavior.</p></div><p>If memory could not be allocated (perhaps because we reached the limit to
+                    which the program break could be raised), then <span class="emphasis"><em>malloc()</em></span>
+                    returns <code class="literal">NULL</code> and sets
+                        <span class="emphasis"><em>errno</em></span> to indicate the error. Although the possibility
+                    of failure in allocating memory is small, all calls to
+                        <span class="emphasis"><em>malloc()</em></span>, and the related functions that we describe
+                    later, should check for this error return.</p><p>The <span class="emphasis"><em>free()</em></span> function deallocates the block of memory
+                    pointed to by its <span class="emphasis"><em>ptr</em></span> argument, which should be an address
+                    previously returned by <span class="emphasis"><em>malloc()</em></span> or one of the other heap
+                    memory allocation functions that we describe later in this chapter.</p><a id="I_programlisting7_d1e16728"/><pre class="programlisting">#include &lt;stdlib.h&gt;
+
+void <strong class="userinput"><code>free</code></strong>(void *<span class="emphasis"><em>ptr</em></span>);</pre><p>In general, <span class="emphasis"><em>free()</em></span> doesn’t lower the program break, but
+                    instead adds the block of memory to a list of free blocks that are recycled by
+                    future calls to <span class="emphasis"><em>malloc()</em></span>. This is done for several
+                    reasons:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The block of memory being freed is typically somewhere in the middle
+                            of the heap, rather than at the end, so that lowering the program break
+                            is not possible.</p></li><li class="listitem"><p>It minimizes the number of <span class="emphasis"><em>sbrk()</em></span> calls that the
+                            program must perform. (As noted in <a class="xref" href="ch03.html#system_calls" title="System Calls">System Calls</a>,
+                            system calls have a small but significant overhead.)</p></li><li class="listitem"><p>In many cases, lowering the break would not help programs that
+                            allocate large amounts of memory, since they typically tend to hold on
+                            to allocated memory or repeatedly release and reallocate memory, rather
+                            than release it all and then continue to run for an extended period of
+                            time.</p></li></ul></div><p>If the argument given to <span class="emphasis"><em>free()</em></span> is a <code class="literal">NULL</code> pointer, then the call does nothing. (In
+                    other words, it is not an error to give a <code class="literal">NULL</code> pointer to <span class="emphasis"><em>free()</em></span>.)</p><p>Making any use of <span class="emphasis"><em>ptr</em></span> after the call to
+                        <span class="emphasis"><em>free()</em></span>—for example, passing it to
+                        <span class="emphasis"><em>free()</em></span> a second time—is an error that can lead to
+                    unpredictable results.</p><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id4">Example program</h4></div></div></div><p>The program in <a class="xref" href="ch07.html#demonstrate_what_happens_to_the_program" title="Example 7-1. Demonstrate what happens to the program break when memory is freed">Example 7-1</a>
+                        can be used to illustrate the effect of <span class="emphasis"><em>free()</em></span> on the
+                        program break. This program allocates multiple blocks of memory and then
+                        frees some or all of them, depending on its (optional) command-line
+                            arguments.<a id="IDX-CHP-7-1014" class="indexterm"/><a id="IDX-CHP-7-1015" class="indexterm"/><a id="IDX-CHP-7-1016" class="indexterm"/><a id="IDX-CHP-7-1017" class="indexterm"/></p><p>The first two command-line arguments specify the number and size of blocks
+                        to allocate. The third command-line argument specifies the loop step unit to
+                        be used when freeing memory blocks. If we specify 1 here (which is also the
+                        default if this argument is omitted), then the program frees every memory
+                        block; if 2, then every second allocated block; and so on. The fourth and
+                        fifth command-line arguments specify the range of blocks that we wish to
+                        free. If these arguments are omitted, then all allocated blocks (in steps
+                        given by the third command-line argument) are freed.</p><div class="example"><a id="demonstrate_what_happens_to_the_program"/><div class="example-title">Example 7-1. Demonstrate what happens to the program break when memory is
+                            freed</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>memalloc/free_and_sbrk.c</code></strong>
+
+#include "tlpi_hdr.h"
+#define MAX_ALLOCS 1000000
+
+int
+main(int argc, char *argv[])
+{
+    char *ptr[MAX_ALLOCS];
+    int freeStep, freeMin, freeMax, blockSize, numAllocs, j;
+
+    printf("\n");
+
+    if (argc &lt; 3 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s num-allocs block-size [step [min [max]]]\n", argv[0]);
+
+    numAllocs = getInt(argv[1], GN_GT_0, "num-allocs");
+    if (numAllocs &gt; MAX_ALLOCS)
+        cmdLineErr("num-allocs &gt; %d\n", MAX_ALLOCS);
+
+    blockSize = getInt(argv[2], GN_GT_0 | GN_ANY_BASE, "block-size");
+
+    freeStep = (argc &gt; 3) ? getInt(argv[3], GN_GT_0, "step") : 1;
+    freeMin =  (argc &gt; 4) ? getInt(argv[4], GN_GT_0, "min") : 1;
+    freeMax =  (argc &gt; 5) ? getInt(argv[5], GN_GT_0, "max") : numAllocs;
+
+    if (freeMax &gt; numAllocs)
+        cmdLineErr("free-max &gt; num-allocs\n");
+
+    printf("Initial program break:          %10p\n", sbrk(0));
+
+    printf("Allocating %d*%d bytes\n", numAllocs, blockSize);
+    for (j = 0; j &lt; numAllocs; j++) {
+        ptr[j] = malloc(blockSize);
+
+        if (ptr[j] == NULL)
+            errExit("malloc");
+    }
+
+    printf("Program break is now:           %10p\n", sbrk(0));
+
+    printf("Freeing blocks from %d to %d in steps of %d\n",
+                freeMin, freeMax, freeStep);
+    for (j = freeMin - 1; j &lt; freeMax; j += freeStep)
+        free(ptr[j]);
+
+    printf("After free(), program break is: %10p\n", sbrk(0));
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>memalloc/free_and_sbrk.c</code></strong></pre></div></div><p>Running the program in <a class="xref" href="ch07.html#demonstrate_what_happens_to_the_program" title="Example 7-1. Demonstrate what happens to the program break when memory is freed">Example 7-1</a> with the following
+                        command line causes the program to allocate 1000 blocks of memory and then
+                        free every second block:</p><a id="I_programlisting7_d1e16835"/><pre class="programlisting">$ <strong class="userinput"><code>./free_and_sbrk 1000 10240 2</code></strong></pre><p>The output shows that after these blocks have been freed, the program
+                        break is left unchanged from the level it reached when all memory blocks
+                        were allocated:</p><a id="I_programlisting7_d1e16841"/><pre class="programlisting">Initial program break:           0x804a6bc
+Allocating 1000*10240 bytes
+Program break is now:            0x8a13000
+Freeing blocks from 1 to 1000 in steps of 2
+After free(), program break is:  0x8a13000</pre><p>The following command line specifies that all but the last of the
+                        allocated blocks should be freed. Again, the program break remains at its
+                        “high-water mark.”</p><a id="I_programlisting7_d1e16845"/><pre class="programlisting">$ <strong class="userinput"><code>./free_and_sbrk 1000 10240 1 1 999</code></strong>
+
+Initial program break:           0x804a6bc
+Allocating 1000*10240 bytes
+Program break is now:            0x8a13000
+Freeing blocks from 1 to 999 in steps of 1
+After free(), program break is:  0x8a13000</pre><p>If, however, we free a complete set of blocks at the top end of the heap,
+                        we see that the program break decreases from its peak value, indicating that
+                            <span class="emphasis"><em>free()</em></span> has used <span class="emphasis"><em>sbrk()</em></span> to
+                        lower the program break. Here, we free the last 500 blocks of allocated
+                        memory:</p><a id="I_programlisting7_d1e16859"/><pre class="programlisting">$ <strong class="userinput"><code>./free_and_sbrk 1000 10240 1 500 1000</code></strong>
+
+Initial program break:           0x804a6bc
+Allocating 1000*10240 bytes
+Program break is now:            0x8a13000
+Freeing blocks from 500 to 1000 in steps of 1
+After free(), program break is:  0x852b000</pre><p>In this case, the (<span class="emphasis"><em>glibc</em></span>) <span class="emphasis"><em>free()</em></span>
+                        function is able to recognize that an entire region at the top end of the
+                        heap is free, since, when releasing blocks, it coalesces neighboring free
+                        blocks into a single larger block. (Such coalescing is done to avoid having
+                        a large number of small fragments on the free list, all of which may be too
+                        small to satisfy subsequent <span class="emphasis"><em>malloc()</em></span>
+                            requests.)<a id="IDX-CHP-7-1018" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>glibc free()</em></span> function calls
+                                <span class="emphasis"><em>sbrk()</em></span> to lower the program break only when the
+                            free block at the top end is “sufficiently” large, where “sufficient” is
+                            determined by parameters controlling the operation of the
+                                <span class="emphasis"><em>malloc</em></span> package (128 kB is a typical value).
+                            This reduces the number of <span class="emphasis"><em>sbrk()</em></span> calls (i.e., the
+                            number of <span class="emphasis"><em>brk()</em></span> system calls) that must be
+                            made.</p></div></div><div class="sect3" title="To free() or not to free()?"><div class="titlepage"><div><div><h4 class="title" id="to_free_open_parenthesis_close_parenthes">To <span class="emphasis"><em>free()</em></span> or not to
+                        <span class="emphasis"><em>free()</em></span>?</h4></div></div></div><p>When a process terminates, all of its memory is returned to the system,
+                        including heap memory allocated by functions in the
+                            <span class="emphasis"><em>malloc</em></span> package. In programs that allocate memory
+                        and continue using it until program termination, it is common to omit calls
+                        to <span class="emphasis"><em>free()</em></span>, relying on this behavior to automatically
+                        free the memory. This can be especially useful in programs that allocate
+                        many blocks of memory, since adding multiple calls to
+                            <span class="emphasis"><em>free()</em></span> could be expensive in terms of CPU time, as
+                        well as perhaps being complicated to code.</p><p>Although relying on process termination to automatically free memory is
+                        acceptable for many programs, there are a couple of reasons why it can be
+                        desirable to explicitly free all allocated memory:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Explicitly calling <span class="emphasis"><em>free()</em></span> may make the
+                                program more readable and maintainable in the face of future
+                                modifications.</p></li><li class="listitem"><p>If we are using a <span class="emphasis"><em>malloc</em></span> debugging library
+                                (described below) to find memory leaks in a program, then any memory
+                                that is not explicitly freed will be reported as a memory leak. This
+                                can complicate the task of finding real memory leaks.</p></li></ul></div></div></div><div class="sect2" title="Implementation of malloc() and free()"><div class="titlepage"><div><div><h3 class="title" id="implementation_of_malloc_open_parenthesi">Implementation of <span class="emphasis"><em>malloc()</em></span> and
+                        <span class="emphasis"><em>free()</em></span></h3></div></div></div><p>Although <span class="emphasis"><em>malloc()</em></span> and <span class="emphasis"><em>free()</em></span> provide
+                    an interface for allocating memory that is much easier to use than
+                        <span class="emphasis"><em>brk()</em></span> and <span class="emphasis"><em>sbrk()</em></span>, it is still
+                    possible to make various programming errors when using them. Understanding how
+                        <span class="emphasis"><em>malloc()</em></span> and <span class="emphasis"><em>free()</em></span> are
+                    implemented provides us with insights into the causes of these errors and how we
+                    can avoid them.<a id="IDX-CHP-7-1019" class="indexterm"/><a id="IDX-CHP-7-1020" class="indexterm"/></p><p>The implementation of <span class="emphasis"><em>malloc()</em></span> is straightforward. It
+                    first scans the list of memory blocks previously released by
+                        <span class="emphasis"><em>free()</em></span> in order to find one whose size is larger than
+                    or equal to its requirements. (Different strategies may be employed for this
+                    scan, depending on the implementation; for example,
+                        <span class="emphasis"><em>first-fit</em></span> or <span class="emphasis"><em>best-fit</em></span>.) If the
+                    block is exactly the right size, then it is returned to the caller. If it is
+                    larger, then it is split, so that a block of the correct size is returned to the
+                    caller and a smaller free block is left on the free list.<a id="IDX-CHP-7-1021" class="indexterm"/><a id="IDX-CHP-7-1022" class="indexterm"/></p><p>If no block on the free list is large enough, then
+                        <span class="emphasis"><em>malloc()</em></span> calls <span class="emphasis"><em>sbrk()</em></span> to allocate
+                    more memory. To reduce the number of calls to <span class="emphasis"><em>sbrk()</em></span>,
+                    rather than allocating exactly the number of bytes required,
+                        <span class="emphasis"><em>malloc()</em></span> increases the program break in larger units
+                    (some multiple of the virtual memory page size), putting the excess memory onto
+                    the free list.</p><p>Looking at the implementation of <span class="emphasis"><em>free()</em></span>, things start to
+                    become more interesting. When <span class="emphasis"><em>free()</em></span> places a block of
+                    memory onto the free list, how does it know what size that block is? This is
+                    done via a trick. When <span class="emphasis"><em>malloc()</em></span> allocates the block, it
+                    allocates extra bytes to hold an integer containing the size of the block. This
+                    integer is located at the beginning of the block; the address actually returned
+                    to the caller points to the location just past this length value, as shown in
+                        <a class="xref" href="ch07.html#memory_block_returned_by_malloc_open_par" title="Figure 7-1. Memory block returned by malloc()">Figure 7-1</a>.</p><div class="figure"><a id="memory_block_returned_by_malloc_open_par"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject7_d1e17037"/><img src="figs/web/07-1_MEMALLOC-malloc.png.jpg" alt="Memory block returned by malloc()"/></div></div><div class="figure-title">Figure 7-1. Memory block returned by <span class="emphasis"><em>malloc()</em></span></div></div><p>When a block is placed on the (doubly linked) free list,
+                        <span class="emphasis"><em>free()</em></span> uses the bytes of the block itself in order to
+                    add the block to the list, as shown in <a class="xref" href="ch07.html#a_block_on_the_free_list" title="Figure 7-2. A block on the free list">Figure 7-2</a>.</p><div class="figure"><a id="a_block_on_the_free_list"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject7_d1e17052"/><img src="figs/web/07-2_MEMALLOC-free-block.png.jpg" alt="A block on the free list"/></div></div><div class="figure-title">Figure 7-2. A block on the free list</div></div><p>As blocks are deallocated and reallocated over time, the blocks of the free
+                    list will become intermingled with blocks of allocated, in-use memory, as shown
+                    in <a class="xref" href="ch07.html#heap_containing_allocated_blocks_and_a_f" title="Figure 7-3. Heap containing allocated blocks and a free list">Figure 7-3</a>.</p><div class="figure"><a id="heap_containing_allocated_blocks_and_a_f"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject7_d1e17064"/><img src="figs/web/07-3_MEMALLOC-free-list.png.jpg" alt="Heap containing allocated blocks and a free list"/></div></div><div class="figure-title">Figure 7-3. Heap containing allocated blocks and a free list</div></div><p>Now consider the fact that C allows us to create pointers to any location in
+                    the heap, and modify the locations they point to, including the
+                        <span class="emphasis"><em>length</em></span>, <span class="emphasis"><em>previous free block</em></span>, and
+                        <span class="emphasis"><em>next free block</em></span> pointers maintained by
+                        <span class="emphasis"><em>free()</em></span> and <span class="emphasis"><em>malloc()</em></span>. Add this to
+                    the preceding description, and we have a fairly combustible mix when it comes to
+                    creating obscure programming bugs. For example, if, via a misdirected pointer,
+                    we accidentally increase one of the length values preceding an allocated block
+                    of memory, and subsequently deallocate that block, then
+                        <span class="emphasis"><em>free()</em></span> will record the wrong size block of memory on
+                    the free list. Subsequently, <span class="emphasis"><em>malloc()</em></span> may reallocate this
+                    block, leading to a scenario where the program has pointers to two blocks of
+                    allocated memory that it understands to be distinct, but which actually overlap.
+                    Numerous other pictures of what could go wrong can be drawn.</p><p>To avoid these types of errors, we should observe the following rules:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>After we allocate a block of memory, we should be careful not to touch
+                            any bytes outside the range of that block. This could occur, for
+                            example, as a result of faulty pointer arithmetic or off-by-one errors
+                            in loops updating the contents of a block.</p></li><li class="listitem"><p>It is an error to free the same piece of allocated memory more than
+                            once. With <span class="emphasis"><em>glibc</em></span> on Linux, we often get a
+                            segmentation violation (<code class="literal">SIGSEGV</code>
+                            signal). This is good, because it alerts us that we’ve made a
+                            programming error. However, more generally, freeing the same memory
+                            twice leads to unpredictable behavior.<a id="IDX-CHP-7-1023" class="indexterm"/></p></li><li class="listitem"><p>We should never call <span class="emphasis"><em>free()</em></span> with a pointer value
+                            that wasn’t obtained by a call to one of the functions in the
+                                <span class="emphasis"><em>malloc</em></span> package.</p></li><li class="listitem"><p>If we are writing a long-running program (e.g., a shell or a network
+                            daemon process) that repeatedly allocates memory for various purposes,
+                            then we should ensure that we deallocate any memory after we have
+                            finished using it. Failure to do so means that the heap will steadily
+                            grow until we reach the limits of available virtual memory, at which
+                            point further attempts to allocate memory fail. Such a condition is
+                            known as a <span class="emphasis"><em>memory leak</em></span>.<a id="IDX-CHP-7-1024" class="indexterm"/></p></li></ul></div><div class="sect3" title="Tools and libraries for malloc debugging"><div class="titlepage"><div><div><h4 class="title" id="tools_and_libraries_for_malloc_debugging">Tools and libraries for <span class="emphasis"><em>malloc</em></span> debugging</h4></div></div></div><p>Failure to observe the rules listed above can lead to the creation of bugs
+                        that are obscure and difficult to reproduce. The task of finding such bugs
+                        can be eased considerably by using the <span class="emphasis"><em>malloc</em></span> debugging
+                        tools provided by <span class="emphasis"><em>glibc</em></span> or one of a number of
+                            <span class="emphasis"><em>malloc</em></span> debugging libraries that are designed for
+                        this purpose.<a id="IDX-CHP-7-1026" class="indexterm"/><a id="IDX-CHP-7-1027" class="indexterm"/><a id="IDX-CHP-7-1025" class="indexterm"/></p><p>Among the <span class="emphasis"><em>malloc</em></span> debugging tools provided by
+                            <span class="emphasis"><em>glibc</em></span> are the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>mtrace()</em></span> and
+                                    <span class="emphasis"><em>muntrace()</em></span> functions allow a program to
+                                turn tracing of memory allocation calls on and off. These functions
+                                are used in conjunction with the <code class="literal">MALLOC_TRACE</code> environment variable, which should be
+                                defined to contain the name of a file to which tracing information
+                                should be written. When <span class="emphasis"><em>mtrace()</em></span> is called, it
+                                checks to see whether this file is defined and can be opened for
+                                writing; if so, then all calls to functions in the
+                                    <span class="emphasis"><em>malloc</em></span> package are traced and recorded in
+                                the file. Since the resulting file is not easily human-readable, a
+                                script—also called <span class="emphasis"><em>mtrace</em></span>—is provided to
+                                analyze the file and produce a readable summary. For security
+                                reasons, calls to <span class="emphasis"><em>mtrace()</em></span> are ignored by
+                                set-user-ID and set-group-ID programs.<a id="IDX-CHP-7-1028" class="indexterm"/><a id="IDX-CHP-7-1029" class="indexterm"/><a id="IDX-CHP-7-1030" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>mcheck()</em></span> and
+                                    <span class="emphasis"><em>mprobe()</em></span> functions allow a program to
+                                perform consistency checks on blocks of allocated memory; for
+                                example, catching errors such as attempting to write to a location
+                                past the end of a block of allocated memory. These functions provide
+                                functionality that somewhat overlaps with the
+                                    <span class="emphasis"><em>malloc</em></span> debugging libraries described below.
+                                Programs that employ these functions must be linked with the
+                                    <span class="emphasis"><em>mcheck</em></span> library using the <span class="emphasis"><em>cc
+                                    -lmcheck</em></span> option.<a id="IDX-CHP-7-1031" class="indexterm"/><a id="IDX-CHP-7-1032" class="indexterm"/></p></li><li class="listitem"><p>The <code class="literal">MALLOC_CHECK_</code> environment
+                                variable (note the trailing underscore) serves a similar purpose to
+                                    <span class="emphasis"><em>mcheck()</em></span> and <span class="emphasis"><em>mprobe()</em></span>.
+                                (One notable difference between the two techniques is that using
+                                    <code class="literal">MALLOC_CHECK_</code> doesn’t require
+                                modification and recompilation of the program.) By setting this
+                                variable to different integer values, we can control how a program
+                                responds to memory allocation errors. Possible settings are: 0,
+                                meaning ignore errors; 1, meaning print diagnostic errors on
+                                    <span class="emphasis"><em>stderr</em></span>; and 2, meaning call
+                                    <span class="emphasis"><em>abort()</em></span> to terminate the program. Not all
+                                memory allocation and deallocation errors are detected via the use
+                                of <code class="literal">MALLOC_CHECK_</code>; it finds just
+                                the common ones. However, this technique is fast, easy to use, and
+                                has low run-time overhead compared with the use of
+                                    <span class="emphasis"><em>malloc</em></span> debugging libraries. For security
+                                reasons, the setting of <code class="literal">MALLOC_CHECK_</code> is ignored by set-user-ID and
+                                set-group-ID programs.<a id="IDX-CHP-7-1033" class="indexterm"/></p></li></ul></div><p>Further information about all of the above features can be found in the
+                            <span class="emphasis"><em>glibc</em></span> manual.</p><p>A <span class="emphasis"><em>malloc</em></span> debugging library offers the same API as the
+                        standard <span class="emphasis"><em>malloc</em></span> package, but does extra work to catch
+                        memory allocation bugs. In order to use such a library, we link our
+                        application against that library instead of the <span class="emphasis"><em>malloc</em></span>
+                        package in the standard C library. Because these libraries typically operate
+                        at the cost of slower run-time operation, increased memory consumption, or
+                        both, we should use them only for debugging purposes, and then return to
+                        linking with the standard <span class="emphasis"><em>malloc</em></span> package for the
+                        production version of an application. Among such libraries are
+                            <span class="emphasis"><em>Electric Fence</em></span> (<a class="ulink" href="http://www.perens.com/FreeSoftware/" target="_top">http://www.perens.com/FreeSoftware/</a>),
+                            <span class="emphasis"><em>dmalloc</em></span> (<a class="ulink" href="http://dmalloc.com/" target="_top">http://dmalloc.com/</a>),
+                            <span class="emphasis"><em>Valgrind</em></span> (<a class="ulink" href="http://valgrind.org/" target="_top">http://valgrind.org/</a>), and
+                            <span class="emphasis"><em>Insure++</em></span> (<a class="ulink" href="http://www.parasoft.com/" target="_top">http://www.parasoft.com/</a>).<a id="IDX-CHP-7-1034" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Both <span class="emphasis"><em>Valgrind</em></span> and <span class="emphasis"><em>Insure++</em></span>
+                            are capable of detecting many other kinds of bugs aside from those
+                            associated with heap allocation. See their respective web sites for
+                            details.</p></div></div><div class="sect3" title="Controlling and monitoring the malloc package"><div class="titlepage"><div><div><h4 class="title" id="controlling_and_monitoring_the_malloc_pa">Controlling and monitoring the <span class="emphasis"><em>malloc</em></span>
+                        package</h4></div></div></div><p>The <span class="emphasis"><em>glibc</em></span> manual describes a range of nonstandard
+                        functions that can be used to monitor and control the allocation of memory
+                        by functions in the <span class="emphasis"><em>malloc</em></span> package, including the
+                            following:<a id="IDX-CHP-7-1035" class="indexterm"/><a id="IDX-CHP-7-1036" class="indexterm"/><a id="IDX-CHP-7-1037" class="indexterm"/><a id="IDX-CHP-7-1038" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>mallopt()</em></span> function modifies various
+                                parameters that control the algorithm used by
+                                    <span class="emphasis"><em>malloc()</em></span>. For example, one such parameter
+                                specifies the minimum amount of releasable space that must exist at
+                                the end of the free list before <span class="emphasis"><em>sbrk()</em></span> is used
+                                to shrink the heap. Another parameter specifies an upper limit for
+                                the size of blocks that will be allocated from the heap; blocks
+                                larger than this are allocated using the <span class="emphasis"><em>mmap()</em></span>
+                                system call (refer to <a class="xref" href="ch49.html#anonymous_mappings" title="Anonymous Mappings">Anonymous Mappings</a>).<a id="IDX-CHP-7-1039" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>mallinfo()</em></span> function returns a structure
+                                containing various statistics about the memory allocated by
+                                    <span class="emphasis"><em>malloc()</em></span>.<a id="IDX-CHP-7-1040" class="indexterm"/></p></li></ul></div><p>Many UNIX implementations provide versions of
+                            <span class="emphasis"><em>mallopt()</em></span> and <span class="emphasis"><em>mallinfo()</em></span>.
+                        However, the interfaces offered by these functions vary across
+                        implementations, so they are not portable.</p></div></div><div class="sect2" title="Other Methods of Allocating Memory on the Heap"><div class="titlepage"><div><div><h3 class="title" id="other_methods_of_allocating_memory_on_th">Other Methods of Allocating Memory on the Heap</h3></div></div></div><p>As well as <span class="emphasis"><em>malloc()</em></span>, the C library provides a range of
+                    other functions for allocating memory on the heap, and we describe those
+                    functions here.<a id="IDX-CHP-7-1041" class="indexterm"/></p><div class="sect3" title="Allocating memory with calloc() and realloc()"><div class="titlepage"><div><div><h4 class="title" id="allocating_memory_with_calloc_open_paren">Allocating memory with <span class="emphasis"><em>calloc()</em></span> and
+                            <span class="emphasis"><em>realloc()</em></span></h4></div></div></div><p>The <span class="emphasis"><em>calloc()</em></span> function allocates memory for an array
+                        of identical items.<a id="IDX-CHP-7-1043" class="indexterm"/><a id="IDX-CHP-7-1044" class="indexterm"/><a id="IDX-CHP-7-1045" class="indexterm"/><a id="IDX-CHP-7-1046" class="indexterm"/><a id="IDX-CHP-7-1042" class="indexterm"/></p><a id="I_programlisting7_d1e17460"/><pre class="programlisting">#include &lt;stdlib.h&gt;
+
+void *<strong class="userinput"><code>calloc</code></strong>(size_t <span class="emphasis"><em>numitems</em></span>, size_t <span class="emphasis"><em>size</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns pointer to allocated memory on success, or <code class="literal">NULL</code> on error</p></div><p>The <span class="emphasis"><em>numitems</em></span> argument specifies how many items to
+                        allocate, and <span class="emphasis"><em>size</em></span> specifies their size. After
+                        allocating a block of memory of the appropriate size,
+                            <span class="emphasis"><em>calloc()</em></span> returns a pointer to the start of the
+                        block (or <code class="literal">NULL</code> if the memory could not be
+                        allocated). Unlike <span class="emphasis"><em>malloc()</em></span>,
+                            <span class="emphasis"><em>calloc()</em></span> initializes the allocated memory to
+                        0.</p><p>Here is an example of the use of <span class="emphasis"><em>calloc()</em></span>:</p><a id="I_programlisting7_d1e17503"/><pre class="programlisting">struct { /* Some field definitions */ } myStruct;
+struct myStruct *p;
+
+p = calloc(1000, sizeof(struct myStruct));
+if (p == NULL)
+    errExit("calloc");</pre><p>The <span class="emphasis"><em>realloc()</em></span> function is used to resize (usually
+                        enlarge) a block of memory previously allocated by one of the functions in
+                        the <span class="emphasis"><em>malloc</em></span> package.<a id="IDX-CHP-7-1047" class="indexterm"/></p><a id="I_programlisting7_d1e17517"/><pre class="programlisting">#include &lt;stdlib.h&gt;
+
+void *<strong class="userinput"><code>realloc</code></strong>(void *<span class="emphasis"><em>ptr</em></span>, size_t <span class="emphasis"><em>size</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns pointer to allocated memory on success, or <code class="literal">NULL</code> on error</p></div><p>The <span class="emphasis"><em>ptr</em></span> argument is a pointer to the block of memory
+                        that is to be resized. The <span class="emphasis"><em>size</em></span> argument specifies the
+                        desired new size of the block.</p><p>On success, <span class="emphasis"><em>realloc()</em></span> returns a pointer to the
+                        location of the resized block. This may be different from its location
+                        before the call. On error, <span class="emphasis"><em>realloc()</em></span> returns <code class="literal">NULL</code> and leaves the block pointed to by
+                            <span class="emphasis"><em>ptr</em></span> untouched (SUSv3 requires this).</p><p>When <span class="emphasis"><em>realloc()</em></span> increases the size of a block of
+                        allocated memory, it doesn’t initialize the additionally allocated
+                        bytes.</p><p>Memory allocated using <span class="emphasis"><em>calloc()</em></span> or
+                            <span class="emphasis"><em>realloc()</em></span> should be deallocated with
+                            <span class="emphasis"><em>free()</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The call <span class="emphasis"><em>realloc(ptr, 0)</em></span> is equivalent to calling
+                                <span class="emphasis"><em>free(ptr)</em></span> followed by
+                                <span class="emphasis"><em>malloc(0)</em></span>. If <span class="emphasis"><em>ptr</em></span> is
+                            specified as <code class="literal">NULL</code>, then
+                                <span class="emphasis"><em>realloc()</em></span> is equivalent to calling
+                                <span class="emphasis"><em>malloc(size)</em></span>.</p></div><p>For the usual case, where we are increasing the size of the block of
+                        memory, <span class="emphasis"><em>realloc()</em></span> attempts to coalesce the block with
+                        an immediately following block of memory on the free list, if one exists and
+                        is large enough. If the block lies at the end of the heap, then
+                            <span class="emphasis"><em>realloc()</em></span> expands the heap. If the block of memory
+                        lies in the middle of the heap, and there is insufficient free space
+                        immediately following it, <span class="emphasis"><em>realloc()</em></span> allocates a new
+                        block of memory and copies all existing data from the old block to the new
+                        block. This last case is common and CPU-intensive. In general, it is
+                        advisable to minimize the use of <span class="emphasis"><em>realloc()</em></span>.</p><p>Since <span class="emphasis"><em>realloc()</em></span> may relocate the block of memory, we
+                        must use the returned pointer from <span class="emphasis"><em>realloc()</em></span> for future
+                        references to the memory block. We can employ <span class="emphasis"><em>realloc()</em></span>
+                        to reallocate a block pointed to by the variable <span class="emphasis"><em>ptr</em></span> as
+                        follows:</p><a id="I_programlisting7_d1e17626"/><pre class="programlisting">nptr = realloc(ptr, newsize);
+if (nptr == NULL) {
+    /* Handle error */
+} else {                /* realloc() succeeded */
+    ptr = nptr;
+}</pre><p>In this example, we didn’t assign the return value of
+                            <span class="emphasis"><em>realloc()</em></span> directly to <span class="emphasis"><em>ptr</em></span>
+                        because, if <span class="emphasis"><em>realloc()</em></span> had failed, then
+                            <span class="emphasis"><em>ptr</em></span> would have been set to <code class="literal">NULL</code>, making the existing block inaccessible.</p><p>Because <span class="emphasis"><em>realloc()</em></span> may move the block of memory, any
+                        pointers that referred to locations inside the block before the
+                            <span class="emphasis"><em>realloc()</em></span> call may no longer be valid after the
+                        call. The only type of reference to a location within the block that is
+                        guaranteed to remain valid is one formed by adding an offset to the pointer
+                        to the start of the block. We discuss this point in more detail in Section
+                        48.6.</p></div><div class="sect3" title="Allocating aligned memory: memalign() and posix_memalign()"><div class="titlepage"><div><div><h4 class="title" id="allocating_aligned_memory_colon_memalign">Allocating aligned memory: <span class="emphasis"><em>memalign()</em></span> and
+                            <span class="emphasis"><em>posix_memalign()</em></span></h4></div></div></div><p>The <span class="emphasis"><em>memalign()</em></span> and
+                            <span class="emphasis"><em>posix_memalign()</em></span> functions are designed to allocate
+                        memory starting at an address aligned at a specified power-of-two boundary,
+                        a feature that is useful for some applications (see, for example, <a class="xref" href="ch13.html#using_o_underscore_direct_to_bypass_the" title="Example 13-1. Using O_DIRECT to bypass the buffer cache">Example 13-1</a>, in <a class="xref" href="ch13.html#alignment_restrictions_for_direct_i-id1" title="Alignment restrictions for direct I/O">Alignment restrictions for direct I/O</a>).<a id="IDX-CHP-7-1050" class="indexterm"/><a id="IDX-CHP-7-1051" class="indexterm"/><a id="IDX-CHP-7-1052" class="indexterm"/><a id="IDX-CHP-7-1053" class="indexterm"/><a id="IDX-CHP-7-1048" class="indexterm"/><a id="IDX-CHP-7-1049" class="indexterm"/></p><a id="I_programlisting7_d1e17708"/><pre class="programlisting">#include &lt;malloc.h&gt;
+
+void *<strong class="userinput"><code>memalign</code></strong>(size_t <span class="emphasis"><em>boundary</em></span>, size_t <span class="emphasis"><em>size</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns pointer to allocated memory on success, or <code class="literal">NULL</code> on error</p></div><p>The <span class="emphasis"><em>memalign()</em></span> function allocates
+                            <span class="emphasis"><em>size</em></span> bytes starting at an address aligned to a
+                        multiple of <span class="emphasis"><em>boundary</em></span>, which must be a power of two. The
+                        address of the allocated memory is returned as the function result.</p><p>The <span class="emphasis"><em>memalign()</em></span> function is not present on all UNIX
+                        implementations. Most other UNIX implementations that provide
+                            <span class="emphasis"><em>memalign()</em></span> require the inclusion of <code class="literal">&lt;stdlib.h&gt;</code> instead of <code class="literal">&lt;malloc.h&gt;</code> in order to obtain
+                        the function declaration.</p><p>SUSv3 doesn’t specify <span class="emphasis"><em>memalign()</em></span>, but instead
+                        specifies a similar function, named <span class="emphasis"><em>posix_memalign()</em></span>.
+                        This function is a recent creation of the standards committees, and appears
+                        on only a few UNIX implementations.</p><a id="I_programlisting7_d1e17758"/><pre class="programlisting">#include &lt;stdlib.h&gt;
+
+int <strong class="userinput"><code>posix_memalign</code></strong>(void **<span class="emphasis"><em>memptr</em></span>, size_t <span class="emphasis"><em>alignment</em></span>, size_t <span class="emphasis"><em>size</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or a positive error number on error</p></div><p>The <span class="emphasis"><em>posix_memalign()</em></span> function differs from
+                            <span class="emphasis"><em>memalign()</em></span> in two respects:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The address of the allocated memory is returned in
+                                    <span class="emphasis"><em>memptr</em></span>.</p></li><li class="listitem"><p>The memory is aligned to a multiple of
+                                    <span class="emphasis"><em>alignment</em></span>, which must be a power-of-two
+                                multiple of <span class="emphasis"><em>sizeof(void *)</em></span> (4 or 8 bytes on
+                                most hardware architectures).</p></li></ul></div><p>Note also the unusual return value of this function—rather than returning
+                        -1 on error, it returns an error number (i.e., a positive integer of the
+                        type normally returned in <span class="emphasis"><em>errno</em></span>).</p><p>If <span class="emphasis"><em>sizeof(void *)</em></span> is 4, then we can use
+                            <span class="emphasis"><em>posix_memalign()</em></span> to allocate 65,536 bytes of memory
+                        aligned on a 4096-byte boundary as follows:</p><a id="I_programlisting7_d1e17813"/><pre class="programlisting">int s;
+void *memptr;
+
+s = posix_memalign(&amp;memptr, 1024 * sizeof(void *), 65536);
+if (s != 0)
+    /* Handle error */</pre><p>Blocks of memory allocated using <span class="emphasis"><em>memalign()</em></span> or
+                            <span class="emphasis"><em>posix_memalign()</em></span> should be deallocated with
+                            <span class="emphasis"><em>free()</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On some UNIX implementations, it is not possible to call
+                                <span class="emphasis"><em>free()</em></span> on a block of memory allocated via
+                                <span class="emphasis"><em>memalign()</em></span>, because the
+                                <span class="emphasis"><em>memalign()</em></span> implementation uses
+                                <span class="emphasis"><em>malloc()</em></span> to allocate a block of memory, and
+                            then returns a pointer to an address with a suitable alignment in that
+                            block. The <span class="emphasis"><em>glibc</em></span> implementation of
+                                <span class="emphasis"><em>memalign()</em></span> doesn’t suffer this
+                            limitation.</p></div></div></div></div><div class="sect1" title="Allocating Memory on the Stack: alloca()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="allocating_memory_on_the_stack_colon_all">Allocating Memory on the Stack: <span class="emphasis"><em>alloca()</em></span></h2></div></div></div><p>Like the functions in the <span class="emphasis"><em>malloc</em></span> package,
+                    <span class="emphasis"><em>alloca()</em></span> allocates memory dynamically. However, instead of
+                obtaining memory from the heap, <span class="emphasis"><em>alloca()</em></span> obtains memory from
+                the stack by increasing the size of the stack frame. This is possible because the
+                calling function is the one whose stack frame is, by definition, on the top of the
+                stack. Therefore, there is space above the frame for expansion, which can be
+                accomplished by simply modifying the value of the stack pointer.<a id="IDX-CHP-7-1055" class="indexterm"/><a id="IDX-CHP-7-1056" class="indexterm"/><a id="IDX-CHP-7-1057" class="indexterm"/><a id="IDX-CHP-7-1054" class="indexterm"/><a id="IDX-CHP-7-1058" class="indexterm"/></p><a id="I_programlisting7_d1e17891"/><pre class="programlisting">#include &lt;alloca.h&gt;
+
+void *<strong class="userinput"><code>alloca</code></strong>(size_t <span class="emphasis"><em>size</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns pointer to allocated block of memory</p></div><p>The <span class="emphasis"><em>size</em></span> argument specifies the number of bytes to allocate
+                on the stack. The <span class="emphasis"><em>alloca()</em></span> function returns a pointer to the
+                allocated memory as its function result.<a id="IDX-CHP-7-1059" class="indexterm"/></p><p>We need not—indeed, must not—call <span class="emphasis"><em>free()</em></span> to deallocate memory
+                allocated with <span class="emphasis"><em>alloca()</em></span>. Likewise, it is not possible to use
+                    <span class="emphasis"><em>realloc()</em></span> to resize a block of memory allocated by
+                    <span class="emphasis"><em>alloca()</em></span>.</p><p>Although <span class="emphasis"><em>alloca()</em></span> is not part of SUSv3, it is provided on
+                most UNIX implementations and is thus reasonably portable.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Older versions of <span class="emphasis"><em>glibc</em></span>, and some other UNIX
+                    implementations (mainly BSD derivatives), require the inclusion of <code class="literal">&lt;stdlib.h&gt;</code> instead of <code class="literal">&lt;alloca.h&gt;</code> to obtain the declaration
+                    of <span class="emphasis"><em>alloca()</em></span>.</p></div><p>If the stack overflows as a consequence of calling <span class="emphasis"><em>alloca()</em></span>,
+                then program behavior is unpredictable. In particular, we don’t get a <code class="literal">NULL</code> return to inform us of the error. (In fact, in
+                this circumstance, we may receive a <code class="literal">SIGSEGV</code>
+                signal. Refer to <a class="xref" href="ch21.html#handling_a_signal_on_an_alternate_stack" title="Handling a Signal on an Alternate Stack: sigaltstack()">Handling a Signal on an Alternate Stack:
+                <span class="emphasis"><em>sigaltstack()</em></span></a> for
+                further details.)<a id="IDX-CHP-7-1060" class="indexterm"/></p><p>Note that we can’t use <span class="emphasis"><em>alloca()</em></span> within a function argument
+                list, as in this example:</p><a id="I_programlisting7_d1e17972"/><pre class="programlisting">func(x, alloca(size), z);           /* WRONG! */</pre><p>This is because the stack space allocated by <span class="emphasis"><em>alloca()</em></span> would
+                appear in the middle of the space for the function arguments (which are placed at
+                fixed locations within the stack frame). Instead, we must use code such as
+                    this:<a id="IDX-CHP-7-1061" class="indexterm"/></p><a id="I_programlisting7_d1e17983"/><pre class="programlisting">void *y;
+
+y = alloca(size);
+func(x, y, z);</pre><p>Using <span class="emphasis"><em>alloca()</em></span> to allocate memory has a few advantages over
+                    <span class="emphasis"><em>malloc()</em></span>. One of these is that allocating blocks of memory
+                is faster with <span class="emphasis"><em>alloca()</em></span> than with
+                <span class="emphasis"><em>malloc()</em></span>, because <span class="emphasis"><em>alloca()</em></span> is implemented
+                by the compiler as inline code that directly adjusts the stack pointer. Furthermore,
+                    <span class="emphasis"><em>alloca()</em></span> doesn’t need to maintain a list of free
+                blocks.</p><p>Another advantage of <span class="emphasis"><em>alloca()</em></span> is that the memory that it
+                allocates is automatically freed when the stack frame is removed; that is, when the
+                function that called <span class="emphasis"><em>alloca()</em></span> returns. This is so because the
+                code executed during function return resets the value of the stack pointer register
+                to the end of the previous frame (i.e., assuming a downwardly growing stack, to the
+                address just above the start of the current frame). Since we don’t need to do the
+                work of ensuring that allocated memory is freed on all return paths from a function,
+                coding of some functions becomes much simpler.</p><p>Using <span class="emphasis"><em>alloca()</em></span> can be especially useful if we employ
+                    <span class="emphasis"><em>longjmp()</em></span> (<a class="xref" href="ch06.html#performing_a_nonlocal_goto_colon_setjmp" title="Performing a Nonlocal Goto: setjmp() and long jmp()">Performing a Nonlocal Goto: <span class="emphasis"><em>setjmp()</em></span> and <span class="emphasis"><em>long
+                    jmp()</em></span></a>) or
+                    <span class="emphasis"><em>siglongjmp()</em></span> (<a class="xref" href="ch21.html#performing_a_nonlocal_goto_from_a_signal" title="Performing a Nonlocal Goto from a Signal Handler">Performing a Nonlocal Goto from a Signal Handler</a>) to perform a nonlocal goto
+                from a signal handler. In this case, it is difficult or even impossible to avoid
+                memory leaks if we allocated memory in the jumped-over functions using
+                    <span class="emphasis"><em>malloc()</em></span>. By contrast, <span class="emphasis"><em>alloca()</em></span> avoids
+                this problem completely, since, as the stack is unwound by these calls, the
+                allocated memory is automatically freed.</p></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id6">Summary</h2></div></div></div><p>Using the <span class="emphasis"><em>malloc</em></span> family of functions, a process can
+                dynamically allocate and release memory on the heap. In considering the
+                implementation of these functions, we saw that various things can go wrong in a
+                program that mishandles the blocks of allocated memory, and we noted that a number
+                of debugging tools are available to help locate the source of such errors.<a id="IDX-CHP-7-1062" class="indexterm"/><a id="IDX-CHP-7-1063" class="indexterm"/></p><p>The <span class="emphasis"><em>alloca()</em></span> function allocates memory on the stack. This
+                memory is automatically deallocated when the function that calls
+                    <span class="emphasis"><em>alloca()</em></span> returns.</p></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id4">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Modify the program in <a class="xref" href="ch07.html#demonstrate_what_happens_to_the_program" title="Example 7-1. Demonstrate what happens to the program break when memory is freed">Example 7-1</a> (<code class="literal">free_and_sbrk.c</code>) to print out the current
+                        value of the program break after each execution of
+                            <span class="emphasis"><em>malloc()</em></span>. Run the program specifying a small
+                        allocation block size. This will demonstrate that
+                            <span class="emphasis"><em>malloc()</em></span> doesn’t employ <span class="emphasis"><em>sbrk()</em></span>
+                        to adjust the program break on each call, but instead periodically allocates
+                        larger chunks of memory from which it passes back small pieces to the
+                        caller.</p></li><li class="listitem"><p>(Advanced) Implement <span class="emphasis"><em>malloc()</em></span> and
+                            <span class="emphasis"><em>free()</em></span>.</p></li></ol></div></div></section></body></html>

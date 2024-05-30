@@ -1,0 +1,1360 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 3. System Programming Concepts</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch02.html" title="Chapter 2. Fundamental Concepts"/><link rel="next" href="ch04.html" title="Chapter 4. File I/O: The Universal I/O Model"/></head><body><section class="chapter" title="Chapter 3. System Programming Concepts" epub:type="chapter" id="system_programming_concepts"><div class="titlepage"><div><div><h2 class="title">Chapter 3. System Programming Concepts</h2></div></div></div><p>This chapter covers various topics that are prerequisites for system programming. We
+            begin by introducing system calls and detailing the steps that occur during their
+            execution. We then consider library functions and how they differ from system calls, and
+            couple this with a description of the (GNU) C library.</p><p>Whenever we make a system call or call a library function, we should always check the
+            return status of the call in order to determine if it was successful. We describe how to
+            perform such checks, and present a set of functions that are used in most of the example
+            programs in this book to diagnose errors from system calls and library
+                functions.<a id="IDX-CHP-3-0423" class="indexterm"/></p><p>We conclude by looking at various issues related to portable programming, specifically
+            the use of feature test macros and the standard system data types defined by
+            SUSv3.</p><div class="sect1" title="System Calls"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="system_calls">System Calls</h2></div></div></div><p>A <span class="emphasis"><em>system call</em></span> is a controlled entry point into the kernel,
+                allowing a process to request that the kernel perform some action on the process’s
+                behalf. The kernel makes a range of services accessible to programs via the system
+                call application programming interface (API). These services include, for example,
+                creating a new process, performing I/O, and creating a pipe for interprocess
+                communication. (The <span class="emphasis"><em>syscalls(2)</em></span> manual page lists the Linux
+                system calls.)<a id="IDX-CHP-3-0424" class="indexterm"/></p><p>Before going into the details of how a system call works, we note some general
+                points:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>A system call changes the processor state from user mode to kernel mode,
+                        so that the CPU can access protected kernel memory.<a id="IDX-CHP-3-0425" class="indexterm"/><a id="IDX-CHP-3-0426" class="indexterm"/></p></li><li class="listitem"><p>The set of system calls is fixed. Each system call is identified by a
+                        unique number. (This numbering scheme is not normally visible to programs,
+                        which identify system calls by name.)</p></li><li class="listitem"><p>Each system call may have a set of arguments that specify information to
+                        be transferred from user space (i.e., the process’s virtual address space)
+                        to kernel space and vice versa.</p></li></ul></div><p>From a programming point of view, invoking a system call looks much like calling a
+                C function. However, behind the scenes, many steps occur during the execution of a
+                system call. To illustrate this, we consider the steps in the order that they occur
+                on a specific hardware implementation, the x86-32. The steps are as follows:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>The application program makes a system call by invoking a wrapper function
+                        in the C library.</p></li><li class="listitem"><p>The wrapper function must make all of the system call arguments available
+                        to the system call trap-handling routine (described shortly). These
+                        arguments are passed to the wrapper via the stack, but the kernel expects
+                        them in specific registers. The wrapper function copies the arguments to
+                        these registers.</p></li><li class="listitem"><p>Since all system calls enter the kernel in the same way, the kernel needs
+                        some method of identifying the system call. To permit this, the wrapper
+                        function copies the system call number into a specific CPU register
+                            (<code class="literal">%eax</code>).</p></li><li class="listitem"><p>The wrapper function executes a <span class="emphasis"><em>trap</em></span> machine
+                        instruction (<code class="literal">int 0x80</code>), which causes the
+                        processor to switch from user mode to kernel mode and execute code pointed
+                        to by location <code class="literal">0x80</code> (128 decimal) of the
+                        system’s trap vector.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>More recent x86-32 architectures implement the <code class="literal">sysenter</code> instruction, which provides a
+                            faster method of entering kernel mode than the conventional <code class="literal">int 0x80</code> trap instruction. The use of
+                                <code class="literal">sysenter</code> is supported in the 2.6
+                            kernel and from <span class="emphasis"><em>glibc</em></span> 2.3.2 onward.</p></div></li><li class="listitem"><p>In response to the trap to location <code class="literal">0x80</code>, the kernel invokes its
+                            <span class="emphasis"><em>system_call()</em></span> routine (located in the assembler
+                        file <code class="literal">arch/i386/entry.S</code>) to handle the
+                        trap. This handler:</p><div class="orderedlist"><ol class="orderedlist" type="a"><li class="listitem"><p>Saves register values onto the kernel stack (<a class="xref" href="ch06.html#the_stack_and_stack_frames" title="The Stack and Stack Frames">The Stack and Stack Frames</a>).<a id="IDX-CHP-3-0427" class="indexterm"/></p></li><li class="listitem"><p>Checks the validity of the system call number.</p></li><li class="listitem"><p>Invokes the appropriate system call service routine, which is
+                                found by using the system call number to index a table of all system
+                                call service routines (the kernel variable
+                                    <span class="emphasis"><em>sys_call_table</em></span>). If the system call service
+                                routine has any arguments, it first checks their validity; for
+                                example, it checks that addresses point to valid locations in user
+                                memory. Then the service routine performs the required task, which
+                                may involve modifying values at addresses specified in the given
+                                arguments and transferring data between user memory and kernel
+                                memory (e.g., in I/O operations). Finally, the service routine
+                                returns a result status to the <span class="emphasis"><em>system_call()</em></span>
+                                routine.</p></li><li class="listitem"><p>Restores register values from the kernel stack and places the
+                                system call return value on the stack.</p></li><li class="listitem"><p>Returns to the wrapper function, simultaneously returning the
+                                processor to user mode.</p></li></ol></div></li><li class="listitem"><p>If the return value of the system call service routine indicated an error,
+                        the wrapper function sets the global variable <span class="emphasis"><em>errno</em></span>
+                        (see <a class="xref" href="ch03.html#handling_errors_from_system_calls_and_li" title="Handling Errors from System Calls and Library Functions">Handling Errors from System Calls and Library Functions</a>) using this
+                        value. The wrapper function then returns to the caller, providing an integer
+                        return value indicating the success or failure of the system call.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On Linux, system call service routines follow a convention of
+                            returning a nonnegative value to indicate success. In case of an error,
+                            the routine returns a negative number, which is the negated value of one
+                            of the <span class="emphasis"><em>errno</em></span> constants. When a negative value is
+                            returned, the C library wrapper function negates it (to make it
+                            positive), copies the result into <span class="emphasis"><em>errno</em></span>, and
+                            returns -1 as the function result of the wrapper to indicate an error to
+                            the calling program.</p><p>This convention relies on the assumption that system call service
+                            routines don’t return negative values on success. However, for a few of
+                            these routines, this assumption doesn’t hold. Normally, this is not a
+                            problem, since the range of negated <span class="emphasis"><em>errno</em></span> values
+                            doesn’t overlap with valid negative return values. However, this
+                            convention does cause a problem in one case: the <code class="literal">F_GETOWN</code> operation of the
+                                <span class="emphasis"><em>fcntl()</em></span> system call, which we describe in
+                            Section 63.3.</p></div></li></ol></div><p><a class="xref" href="ch03.html#steps_in_the_execution_of_a_system_call" title="Figure 3-1. Steps in the execution of a system call">Figure 3-1</a> illustrates the above
+                sequence using the example of the <span class="emphasis"><em>execve()</em></span> system call. On
+                Linux/x86-32, <span class="emphasis"><em>execve()</em></span> is system call number 11 (<code class="literal">__NR_execve</code>). Thus, in the
+                    <span class="emphasis"><em>sys_call_table</em></span> vector, entry 11 contains the address of
+                    <span class="emphasis"><em>sys_execve()</em></span>, the service routine for this system call. (On
+                Linux, system call service routines typically have names of the form
+                    <span class="emphasis"><em>sys_xyz()</em></span>, where <span class="emphasis"><em>xyz()</em></span> is the system
+                call in question.)</p><p>The information given in the preceding paragraphs is more than we’ll usually need
+                to know for the remainder of this book. However, it illustrates the important point
+                that, even for a simple system call, quite a bit of work must be done, and thus
+                system calls have a small but appreciable overhead.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>As an example of the overhead of making a system call, consider the
+                        <span class="emphasis"><em>getppid()</em></span> system call, which simply returns the process
+                    ID of the parent of the calling process. On one of the author’s x86-32 systems
+                    running Linux 2.6.25, 10 million calls to <span class="emphasis"><em>getppid()</em></span>
+                    required approximately 2.2 seconds to complete. This amounts to around 0.3
+                    microseconds per call. By comparison, on the same system, 10 million calls to a
+                    C function that simply returns an integer required 0.11 seconds, or around
+                    one-twentieth of the time required for calls to <span class="emphasis"><em>getppid()</em></span>.
+                    Of course, most system calls have significantly more overhead than
+                        <span class="emphasis"><em>getppid()</em></span>.</p></div><p>Since, from the point of view of a C program, calling the C library wrapper
+                function is synonymous with invoking the corresponding system call service routine,
+                in the remainder of this book, we use wording such as “invoking the system call
+                    <span class="emphasis"><em>xyz()</em></span>” to mean “calling the wrapper function that invokes
+                the system call <span class="emphasis"><em>xyz()</em></span>.”</p><div class="figure"><a id="steps_in_the_execution_of_a_system_call"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject3_d1e4960"/><img src="figs/web/03-1_PROGCONC-syscall-scale90.png.jpg" alt="Steps in the execution of a system call"/></div></div><div class="figure-title">Figure 3-1. Steps in the execution of a system call</div></div><p><a class="xref" href="apa.html" title="Appendix A. Tracing System Calls">Appendix A</a> describes the <span class="emphasis"><em>strace</em></span>
+                command, which can be used to trace the system calls made by a program, either for
+                debugging purposes or simply to investigate what a program is doing.</p><p>More information about the Linux system call mechanism can be found in [Love,
+                2010], [Bovet &amp; Cesati, 2005], and [Maxwell, 1999].</p></div><div class="sect1" title="Library Functions"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="library_functions">Library Functions</h2></div></div></div><p>A <span class="emphasis"><em>library function</em></span> is simply one of the multitude of
+                functions that constitutes the standard C library. (For brevity, when talking about
+                a specific function in the rest of the book we’ll often just write
+                    <span class="emphasis"><em>function</em></span> rather than <span class="emphasis"><em>library
+                function</em></span>.) The purposes of these functions are very diverse, including
+                such tasks as opening a file, converting a time to a human-readable format, and
+                comparing two character strings.<a id="IDX-CHP-3-0428" class="indexterm"/><a id="IDX-CHP-3-0429" class="indexterm"/><a id="IDX-CHP-3-0430" class="indexterm"/><a id="IDX-CHP-3-0431" class="indexterm"/><a id="IDX-CHP-3-0432" class="indexterm"/></p><p>Many library functions don’t make any use of system calls (e.g., the
+                string-manipulation functions). On the other hand, some library functions are
+                layered on top of system calls. For example, the <span class="emphasis"><em>fopen()</em></span>
+                library function uses the <span class="emphasis"><em>open()</em></span> system call to actually open a
+                file. Often, library functions are designed to provide a more caller-friendly
+                interface than the underlying system call. For example, the
+                    <span class="emphasis"><em>printf()</em></span> function provides output formatting and data
+                buffering, whereas the <span class="emphasis"><em>write()</em></span> system call just outputs a block
+                of bytes. Similarly, the <span class="emphasis"><em>malloc()</em></span> and
+                    <span class="emphasis"><em>free()</em></span> functions perform various bookkeeping tasks that
+                make them a much easier way to allocate and free memory than the underlying
+                    <span class="emphasis"><em>brk()</em></span> system call.</p></div><div class="sect1" title="The Standard C Library; The GNU C Library (glibc)"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_standard_c_library_semicolon_the_gnu">The Standard C Library; The GNU C Library (<span class="emphasis"><em>glibc</em></span>)</h2></div></div></div><p>There are different implementations of the standard C library on the various UNIX
+                implementations. The most commonly used implementation on Linux is the GNU C library
+                    (<span class="emphasis"><em>glibc</em></span>, <a class="ulink" href="http://www.gnu.org/software/libc/" target="_top">http://www.gnu.org/software/libc/</a>).<a id="IDX-CHP-3-0433" class="indexterm"/><a id="IDX-CHP-3-0434" class="indexterm"/><a id="IDX-CHP-3-0435" class="indexterm"/><a id="IDX-CHP-3-0436" class="indexterm"/><a id="IDX-CHP-3-0437" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The principal developer and maintainer of the GNU C library was initially
+                    Roland McGrath. Nowadays, this task is carried out by Ulrich Drepper.</p><p>Various other C libraries are available for Linux, including libraries with
+                    smaller memory requirements for use in embedded device applications. Examples
+                    include <span class="emphasis"><em>uClibc</em></span> (<a class="ulink" href="http://www.uclibc.org/" target="_top">http://www.uclibc.org/</a>) and
+                        <span class="emphasis"><em>diet libc</em></span> (<a class="ulink" href="http://www.fefe.de/dietlibc/" target="_top">http://www.fefe.de/dietlibc/</a>). In this book, we confine the discussion to <span class="emphasis"><em>glibc</em></span>,
+                    since that is the C library used by most applications developed on
+                        Linux.<a id="IDX-CHP-3-0438" class="indexterm"/><a id="IDX-CHP-3-0439" class="indexterm"/></p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="determining_the_version_of_glibc_on"/></div></div></div><div class="sect3" title="Determining the version of glibc on the system"><div class="titlepage"><div><div><h4 class="title" id="determining_the_version_of_glibc_on-id1">Determining the version of <span class="emphasis"><em>glibc</em></span> on the
+                        system</h4></div></div></div><p>Sometimes, we need to determine the version of <span class="emphasis"><em>glibc</em></span>
+                        on a system. From the shell, we can do this by running the
+                            <span class="emphasis"><em>glibc</em></span> shared library file as though it were an
+                        executable program. When we run the library as an executable, it displays
+                        various text, including its version number:</p><a id="I_programlisting3_d1e5104"/><pre class="programlisting"><strong class="userinput"><code>$ /lib/libc.so.6</code></strong>
+GNU C Library stable release version 2.10.1, by Roland McGrath et al.
+Copyright (C) 2009 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.
+There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.
+Compiled by GNU CC version 4.4.0 20090506 (Red Hat 4.4.0-4).
+Compiled on a Linux &gt;&gt;2.6.18-128.4.1.el5&lt;&lt; system on 2009-08-19.
+Available extensions:
+        The C stubs add-on version 2.1.2.
+        crypt add-on version 2.1 by Michael Glad and others
+        GNU Libidn by Simon Josefsson
+        Native POSIX Threads Library by Ulrich Drepper et al
+        BIND-8.2.3-T5B
+        RT using linux kernel aio
+For bug reporting instructions, please see:
+&lt;http://www.gnu.org/software/libc/bugs.html&gt;.</pre><p>In some Linux distributions, the GNU C library resides at a pathname other
+                        than <code class="literal">/lib/libc.so.6</code>. One way of
+                        determining the location of the library is to run the
+                            <span class="emphasis"><em>ldd</em></span> (list dynamic dependencies) program against an
+                        executable linked dynamically against <span class="emphasis"><em>glibc</em></span> (most
+                        executables are linked in this manner). We can then inspect the resulting
+                        library dependency list to find the location of the
+                            <span class="emphasis"><em>glibc</em></span> shared library:</p><a id="I_programlisting3_d1e5122"/><pre class="programlisting">$ ldd myprog | grep libc
+        libc.so.6 =&gt; /lib/tls/libc.so.6 (0x4004b000)</pre><p>There are two means by which an application program can determine the
+                        version of the GNU C library present on the system: by testing constants or
+                        by calling a library function. From version 2.0 onward,
+                            <span class="emphasis"><em>glibc</em></span> defines two constants, <code class="literal">__GLIBC__</code> and <code class="literal">__GLIBC_MINOR__</code>, that can be tested at compile time (in
+                            <code class="literal">#ifdef</code> statements). On a system with
+                            <span class="emphasis"><em>glibc</em></span> 2.12 installed, these constants would have
+                        the values 2 and 12. However, these constants are of limited use in a
+                        program that is compiled on one system but run on another system with a
+                        different <span class="emphasis"><em>glibc</em></span>. To handle this possibility, a program
+                        can call the <span class="emphasis"><em>gnu_get_libc_version()</em></span> function to
+                        determine the version of <span class="emphasis"><em>glibc</em></span> available at run
+                            time.<a id="IDX-CHP-3-0440" class="indexterm"/></p><a id="I_programlisting3_d1e5155"/><pre class="programlisting">#include &lt;gnu/libc-version.h&gt;
+
+const char *<strong class="userinput"><code>gnu_get_libc_version</code></strong>(void);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns pointer to null-terminated, statically allocated string
+                            containing GNU C library version number</p></div><p>The <span class="emphasis"><em>gnu_get_libc_version()</em></span> function returns a pointer
+                        to a string, such as <span class="emphasis"><em>2.12</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>We can also obtain version information by using the
+                                <span class="emphasis"><em>confstr()</em></span> function to retrieve the value of the
+                                (<span class="emphasis"><em>glibc</em></span>-specific) <code class="literal">_CS_GNU_LIBC_VERSION</code> configuration variable. This call
+                            returns a string such as <span class="emphasis"><em>glibc 2.12</em></span>.<a id="IDX-CHP-3-0441" class="indexterm"/></p></div></div></div></div><div class="sect1" title="Handling Errors from System Calls and Library Functions"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="handling_errors_from_system_calls_and_li">Handling Errors from System Calls and Library Functions</h2></div></div></div><p>Almost every system call and library function returns some type of status value
+                indicating whether the call succeeded or failed. This status value should
+                    <span class="emphasis"><em>always</em></span> be checked to see whether the call succeeded. If it
+                did not, then appropriate action should be taken—at the very least, the program
+                should display an error message warning that something unexpected
+                    occurred.<a id="IDX-CHP-3-0442" class="indexterm"/><a id="IDX-CHP-3-0443" class="indexterm"/><a id="IDX-CHP-3-0444" class="indexterm"/><a id="IDX-CHP-3-0445" class="indexterm"/><a id="IDX-CHP-3-0446" class="indexterm"/><a id="IDX-CHP-3-0447" class="indexterm"/></p><p>Although it is tempting to save typing time by excluding these checks (especially
+                after seeing examples of UNIX and Linux programs where status values are not
+                checked), it is a false economy. Many hours of debugging time can be wasted because
+                a check was not made on the status return of a system call or library function that
+                “couldn’t possibly fail.”</p><div class="note" title="Note"><h3 class="title">Note</h3><p>A few system calls never fail. For example, <span class="emphasis"><em>getpid()</em></span>
+                    always successfully returns the ID of a process, and
+                        <span class="emphasis"><em>_exit()</em></span> always terminates a process. It is not
+                    necessary to check the return values from such system calls.</p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="handling_system_call_errors"/></div></div></div><div class="sect3" title="Handling system call errors"><div class="titlepage"><div><div><h4 class="title" id="handling_system_call_errors-id1">Handling system call errors</h4></div></div></div><p>The manual page for each system call documents the possible return values
+                        of the call, showing which value(s) indicate an error. Usually, an error is
+                        indicated by a return of -1. Thus, a system call can be checked with code
+                        such as the following:<a id="IDX-CHP-3-0448" class="indexterm"/><a id="IDX-CHP-3-0449" class="indexterm"/></p><a id="I_programlisting3_d1e5258"/><pre class="programlisting">fd = open(pathname, flags, mode);       /* system call to open a file */
+if (fd == -1) {
+    /* Code to handle the error */
+}
+...
+if (close(fd) == -1) {
+    /* Code to handle the error */
+}</pre><p>When a system call fails, it sets the global integer variable
+                            <span class="emphasis"><em>errno</em></span> to a positive value that identifies the
+                        specific error. Including the <code class="literal">&lt;errno.h&gt;</code> header file provides a declaration of
+                            <span class="emphasis"><em>errno</em></span>, as well as a set of constants for the
+                        various error numbers. All of these symbolic names commence with <code class="literal">E</code>. The section headed <code class="literal">ERRORS</code> in each manual page provides a list of possible
+                            <span class="emphasis"><em>errno</em></span> values that can be returned by each system
+                        call. Here is a simple example of the use of <span class="emphasis"><em>errno</em></span> to
+                        diagnose a system call error:<a id="IDX-CHP-3-0450" class="indexterm"/></p><a id="I_programlisting3_d1e5289"/><pre class="programlisting">cnt = read(fd, buf, numbytes);
+if (cnt == -1) {
+    if (errno == EINTR)
+        fprintf(stderr, "read was interrupted by a signal\n");
+    else {
+        /* Some other error occurred */
+    }
+}</pre><p>Successful system calls and library functions never reset
+                            <span class="emphasis"><em>errno</em></span> to 0, so this variable may have a nonzero
+                        value as a consequence of an error from a previous call. Furthermore, SUSv3
+                        permits a successful function call to set <span class="emphasis"><em>errno</em></span> to a
+                        nonzero value (although few functions do this). Therefore, when checking for
+                        an error, we should always first check if the function return value
+                        indicates an error, and only then examine <span class="emphasis"><em>errno</em></span> to
+                        determine the cause of the error.</p><p>A few system calls (e.g., <span class="emphasis"><em>getpriority()</em></span>) can
+                        legitimately return -1 on success. To determine whether an error occurs in
+                        such calls, we set <span class="emphasis"><em>errno</em></span> to 0 before the call, and then
+                        check it afterward. If the call returns -1 and <span class="emphasis"><em>errno</em></span> is
+                        nonzero, an error occurred. (A similar statement also applies to a few
+                        library functions.)</p><p>A common course of action after a failed system call is to print an error
+                        message based on the <span class="emphasis"><em>errno</em></span> value. The
+                            <span class="emphasis"><em>perror()</em></span> and <span class="emphasis"><em>strerror()</em></span>
+                        library functions are provided for this purpose.<a id="IDX-CHP-3-0451" class="indexterm"/></p><p>The <span class="emphasis"><em>perror()</em></span> function prints the string pointed to by
+                        its <span class="emphasis"><em>msg</em></span> argument, followed by a message corresponding
+                        to the current value of <span class="emphasis"><em>errno</em></span>.</p><a id="I_programlisting3_d1e5339"/><pre class="programlisting">#include &lt;stdio.h&gt;
+
+void <strong class="userinput"><code>perror</code></strong>(const char *<span class="emphasis"><em>msg</em></span>);</pre><p>A simple way of handling errors from system calls would be as
+                        follows:</p><a id="I_programlisting3_d1e5350"/><pre class="programlisting">fd = open(pathname, flags, mode);
+if (fd == -1) {
+    perror("open");
+    exit(EXIT_FAILURE);
+}</pre><p>The <span class="emphasis"><em>strerror()</em></span> function returns the error string
+                        corresponding to the error number given in its <span class="emphasis"><em>errnum</em></span>
+                            argument.<a id="IDX-CHP-3-0452" class="indexterm"/></p><a id="I_programlisting3_d1e5363"/><pre class="programlisting">#include &lt;string.h&gt;
+
+char *<strong class="userinput"><code>strerror</code></strong>(int <span class="emphasis"><em>errnum</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns pointer to error string corresponding to
+                                <span class="emphasis"><em>errnum</em></span></p></div><p>The string returned by <span class="emphasis"><em>strerror()</em></span> may be statically
+                        allocated, which means that it could be overwritten by subsequent calls to
+                            <span class="emphasis"><em>strerror()</em></span>.<a id="IDX-CHP-3-0453" class="indexterm"/></p><p>If <span class="emphasis"><em>errnum</em></span> specifies an unrecognized error number,
+                            <span class="emphasis"><em>strerror()</em></span> returns a string of the form
+                            <span class="emphasis"><em>Unknown error nnn</em></span>. On some other implementations,
+                            <span class="emphasis"><em>strerror()</em></span> instead returns <code class="literal">NULL</code> in this case.</p><p>Because <span class="emphasis"><em>perror()</em></span> and <span class="emphasis"><em>strerror()</em></span>
+                        functions are locale-sensitive (<a class="xref" href="ch10.html#locales" title="Locales">Locales</a>), error
+                        descriptions are displayed in the local language.</p></div><div class="sect3" title="Handling errors from library functions"><div class="titlepage"><div><div><h4 class="title" id="handling_errors_from_library_functions">Handling errors from library functions</h4></div></div></div><p>The various library functions return different data types and different
+                        values to indicate failure. (Check the manual page for each function.) For
+                        our purposes, library functions can be divided into the following
+                            categories:<a id="IDX-CHP-3-0454" class="indexterm"/><a id="IDX-CHP-3-0455" class="indexterm"/><a id="IDX-CHP-3-0456" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Some library functions return error information in exactly the
+                                same way as system calls: a -1 return value, with
+                                    <span class="emphasis"><em>errno</em></span> indicating the specific error. An
+                                example of such a function is <span class="emphasis"><em>remove()</em></span>, which
+                                removes a file (using the <span class="emphasis"><em>unlink()</em></span> system call)
+                                or a directory (using the <span class="emphasis"><em>rmdir()</em></span> system call).
+                                Errors from these functions can be diagnosed in the same way as
+                                errors from system calls.</p></li><li class="listitem"><p>Some library functions return a value other than -1 on error, but
+                                nevertheless set <span class="emphasis"><em>errno</em></span> to indicate the specific
+                                error condition. For example, <span class="emphasis"><em>fopen()</em></span> returns a
+                                    <code class="literal">NULL</code> pointer on error, and
+                                the setting of <span class="emphasis"><em>errno</em></span> depends on which
+                                underlying system call failed. The <span class="emphasis"><em>perror()</em></span> and
+                                    <span class="emphasis"><em>strerror()</em></span> functions can be used to
+                                diagnose these errors.</p></li><li class="listitem"><p>Other library functions don’t use <span class="emphasis"><em>errno</em></span> at
+                                all. The method for determining the existence and cause of errors
+                                depends on the particular function and is documented in the
+                                function’s manual page. For these functions, it is a mistake to use
+                                    <span class="emphasis"><em>errno</em></span>, <span class="emphasis"><em>perror()</em></span>, or
+                                    <span class="emphasis"><em>strerror()</em></span> to diagnose errors.</p></li></ul></div></div></div></div><div class="sect1" title="Notes on the Example Programs in This Book"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="notes_on_the_example_programs_in_this_bo">Notes on the Example Programs in This Book</h2></div></div></div><p>In this section, we describe various conventions and features commonly employed by
+                the example programs presented in this book.</p><div class="sect2" title="Command-Line Options and Arguments"><div class="titlepage"><div><div><h3 class="title" id="command-line_options_and_arguments">Command-Line Options and Arguments</h3></div></div></div><p>Many of the example programs in this book rely on command-line options and
+                    arguments to determine their behavior.</p><p>Traditional UNIX command-line options consist of an initial hyphen, a letter
+                    that identifies the option, and an optional argument. (GNU utilities provide an
+                    extended option syntax consisting of two initial hyphens, followed by a string
+                    identifying the option and an optional argument.) To parse these options, we use
+                    the standard <span class="emphasis"><em>getopt()</em></span> library function (described in <a class="xref" href="apb.html" title="Appendix B. Parsing Command-Line Options">Appendix B</a>).</p><p>Each of our example programs that has a nontrivial command-line syntax
+                    provides a simple help facility for the user: if invoked with the
+                        —<span class="emphasis"><em>help</em></span> option, the program displays a usage message that
+                    indicates the syntax for command-line options and arguments.</p></div><div class="sect2" title="Common Functions and Header Files"><div class="titlepage"><div><div><h3 class="title" id="common_functions_and_header_files">Common Functions and Header Files</h3></div></div></div><p>Most of the example programs include a header file containing commonly
+                    required definitions, and they also use a set of common functions. We discuss
+                    the header file and functions in this section.<a id="IDX-CHP-3-0457" class="indexterm"/><a id="IDX-CHP-3-0458" class="indexterm"/><a id="IDX-CHP-3-0459" class="indexterm"/><a id="IDX-CHP-3-0460" class="indexterm"/><a id="IDX-CHP-3-0461" class="indexterm"/></p><div class="sect3" title="Common header file"><div class="titlepage"><div><div><h4 class="title" id="common_header_file">Common header file</h4></div></div></div><p><a class="xref" href="ch03.html#header_file_used_by_most_example_program" title="Example 3-1. Header file used by most example programs">Example 3-1</a> is the header
+                        file used by nearly every program in this book. This header file includes
+                        various other header files used by many of the example programs, defines a
+                            <span class="emphasis"><em>Boolean</em></span> data type, and defines macros for
+                        calculating the minimum and maximum of two numeric values. Using this header
+                        file allows us to make the example programs a bit shorter.<a id="IDX-CHP-3-0462" class="indexterm"/></p><div class="example"><a id="header_file_used_by_most_example_program"/><div class="example-title">Example 3-1. Header file used by most example programs</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>lib/tlpi_hdr.h</code></strong>
+#ifndef TLPI_HDR_H
+#define TLPI_HDR_H      /* Prevent accidental double inclusion */
+
+#include &lt;sys/types.h&gt;  /* Type definitions used by many programs */
+#include &lt;stdio.h&gt;      /* Standard I/O functions */
+#include &lt;stdlib.h&gt;     /* Prototypes of commonly used library functions,
+                           plus EXIT_SUCCESS and EXIT_FAILURE constants */
+#include &lt;unistd.h&gt;     /* Prototypes for many system calls */
+#include &lt;errno.h&gt;      /* Declares errno and defines error constants */
+#include &lt;string.h&gt;     /* Commonly used string-handling functions */
+
+#include "get_num.h"    /* Declares our functions for handling numeric
+                           arguments (getInt(), getLong()) */
+
+#include "error_functions.h"  /* Declares our error-handling functions */
+
+typedef enum { FALSE, TRUE } Boolean;
+
+#define min(m,n) ((m) &lt; (n) ? (m) : (n))
+#define max(m,n) ((m) &gt; (n) ? (m) : (n))
+
+#endif
+      <strong class="userinput"><code>lib/tlpi_hdr.h</code></strong></pre></div></div></div><div class="sect3" title="Error-diagnostic functions"><div class="titlepage"><div><div><h4 class="title" id="error-diagnostic_functions">Error-diagnostic functions</h4></div></div></div><p>To simplify error handling in our example programs, we use the
+                        error-diagnostic functions whose declarations are shown in <a class="xref" href="ch03.html#declarations_for_common_error-handling_f" title="Example 3-2. Declarations for common error-handling functions">Example 3-2</a>.<a id="IDX-CHP-3-0463" class="indexterm"/><a id="IDX-CHP-3-0464" class="indexterm"/><a id="IDX-CHP-3-0465" class="indexterm"/><a id="IDX-CHP-3-0466" class="indexterm"/><a id="IDX-CHP-3-0467" class="indexterm"/><a id="IDX-CHP-3-0468" class="indexterm"/><a id="IDX-CHP-3-0469" class="indexterm"/><a id="IDX-CHP-3-0470" class="indexterm"/><a id="IDX-CHP-3-0471" class="indexterm"/><a id="IDX-CHP-3-0472" class="indexterm"/><a id="IDX-CHP-3-0473" class="indexterm"/><a id="IDX-CHP-3-0474" class="indexterm"/><a id="IDX-CHP-3-0475" class="indexterm"/><a id="IDX-CHP-3-0476" class="indexterm"/><a id="IDX-CHP-3-0477" class="indexterm"/><a id="IDX-CHP-3-0478" class="indexterm"/><a id="IDX-CHP-3-0479" class="indexterm"/><a id="IDX-CHP-3-0480" class="indexterm"/><a id="IDX-CHP-3-0481" class="indexterm"/><a id="IDX-CHP-3-0482" class="indexterm"/><a id="IDX-CHP-3-0483" class="indexterm"/><a id="IDX-CHP-3-0484" class="indexterm"/></p><div class="example"><a id="declarations_for_common_error-handling_f"/><div class="example-title">Example 3-2. Declarations for common error-handling functions</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>lib/error_functions.h</code></strong>
+#ifndef ERROR_FUNCTIONS_H
+#define ERROR_FUNCTIONS_H
+
+void errMsg(const char *format, ...);
+
+#ifdef __GNUC__
+
+/* This macro stops 'gcc -Wall' complaining that "control reaches
+       end of non-void function" if we use the following functions to
+       terminate main() or some other non-void function. */
+
+#define NORETURN __attribute__ ((__noreturn__))
+#else
+#define NORETURN
+#endif
+
+void errExit(const char *format, ...) NORETURN ;
+
+void err_exit(const char *format, ...) NORETURN ;
+
+void errExitEN(int errnum, const char *format, ...) NORETURN ;
+
+void fatal(const char *format, ...) NORETURN ;
+
+void usageErr(const char *format, ...) NORETURN ;
+
+void cmdLineErr(const char *format, ...) NORETURN ;
+
+#endif
+      <strong class="userinput"><code>lib/error_functions.h</code></strong></pre></div></div><p>To diagnose errors from system calls and library functions, we use
+                            <span class="emphasis"><em>errMsg()</em></span>, <span class="emphasis"><em>errExit()</em></span>,
+                            <span class="emphasis"><em>err_exit()</em></span>, and
+                            <span class="emphasis"><em>errExitEN()</em></span>.<a id="IDX-CHP-3-0485" class="indexterm"/><a id="IDX-CHP-3-0486" class="indexterm"/><a id="IDX-CHP-3-0487" class="indexterm"/><a id="IDX-CHP-3-0488" class="indexterm"/></p><a id="I_programlisting3_d1e5748"/><pre class="programlisting">#include "tlpi_hdr.h"
+
+void <strong class="userinput"><code>errMsg</code></strong>(const char *<span class="emphasis"><em>format</em></span>, ...);
+void <strong class="userinput"><code>errExit</code></strong>(const char *<span class="emphasis"><em>format</em></span>, ...);
+void <strong class="userinput"><code>err_exit</code></strong>(const char *<span class="emphasis"><em>format</em></span>, ...);
+void <strong class="userinput"><code>errExitEN</code></strong>(int <span class="emphasis"><em>errnum</em></span>, const char *<span class="emphasis"><em>format</em></span>, ...);</pre><p>The <span class="emphasis"><em>errMsg()</em></span> function prints a message on standard
+                        error. Its argument list is the same as for <span class="emphasis"><em>printf()</em></span>,
+                        except that a terminating newline character is automatically appended to the
+                        output string. The <span class="emphasis"><em>errMsg()</em></span> function prints the error
+                        text corresponding to the current value of <span class="emphasis"><em>errno</em></span>—this
+                        consists of the error name, such as <code class="literal">EPERM</code>, plus the error description as returned by
+                            <span class="emphasis"><em>strerror()</em></span>—followed by the formatted output
+                        specified in the argument list.</p><p>The <span class="emphasis"><em>errExit()</em></span> function operates like
+                            <span class="emphasis"><em>errMsg()</em></span>, but also terminates the program, either
+                        by calling <span class="emphasis"><em>exit()</em></span> or, if the environment variable
+                            <code class="literal">EF_DUMPCORE</code> is defined with a
+                        nonempty string value, by calling <span class="emphasis"><em>abort()</em></span> to produce a
+                        core dump file for use with the debugger. (We explain core dump files in
+                        Section 22.1.)</p><p>The <span class="emphasis"><em>err_exit()</em></span> function is similar to
+                            <span class="emphasis"><em>errExit()</em></span>, but differs in two respects:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>It doesn’t flush standard output before printing the error
+                                message.</p></li><li class="listitem"><p>It terminates the process by calling _<span class="emphasis"><em>exit()</em></span>
+                                instead of <span class="emphasis"><em>exit()</em></span>. This causes the process to
+                                terminate without flushing <span class="emphasis"><em>stdio</em></span> buffers or
+                                invoking exit handlers.</p></li></ul></div><p>The details of these differences in the operation of
+                            <span class="emphasis"><em>err_exit()</em></span> will become clearer in <a class="xref" href="ch25.html" title="Chapter 25. Process Termination">Chapter 25</a>, where we describe the differences
+                        between _<span class="emphasis"><em>exit()</em></span> and <span class="emphasis"><em>exit()</em></span>, and
+                        consider the treatment of <span class="emphasis"><em>stdio</em></span> buffers and exit
+                        handlers in a child created by <span class="emphasis"><em>fork()</em></span>. For now, we
+                        simply note that <span class="emphasis"><em>err_exit()</em></span> is especially useful if we
+                        write a library function that creates a child process that needs to
+                        terminate because of an error. This termination should occur without
+                        flushing the child’s copy of the parent’s (i.e., the calling process’s)
+                            <span class="emphasis"><em>stdio</em></span> buffers and without invoking exit handlers
+                        established by the parent.</p><p>The <span class="emphasis"><em>errExitEN()</em></span> function is the same as
+                            <span class="emphasis"><em>errExit()</em></span>, except that instead of printing the
+                        error text corresponding to the current value of <span class="emphasis"><em>errno</em></span>,
+                        it prints the text corresponding to the error number (thus, the
+                            <span class="emphasis"><em>EN</em></span> suffix) given in the argument
+                            <span class="emphasis"><em>errnum</em></span>.</p><p>Mainly, we use <span class="emphasis"><em>errExitEN()</em></span> in programs that employ
+                        the POSIX threads API. Unlike traditional UNIX system calls, which return -1
+                        on error, the POSIX threads functions diagnose an error by returning an
+                        error number (i.e., a positive number of the type normally placed in
+                            <span class="emphasis"><em>errno</em></span>) as their function result. (The POSIX threads
+                        functions return 0 on success.)</p><p>We could diagnose errors from the POSIX threads functions using code such
+                        as the following:</p><a id="I_programlisting3_d1e5894"/><pre class="programlisting">errno = pthread_create(&amp;thread, NULL, func, &amp;arg);
+if (errno != 0)
+    errExit("pthread_create");</pre><p>However, this approach is inefficient because <span class="emphasis"><em>errno</em></span>
+                        is defined in threaded programs as a macro that expands into a function call
+                        that returns a modifiable lvalue. Thus, each use of
+                            <span class="emphasis"><em>errno</em></span> results in a function call. The
+                            <span class="emphasis"><em>errExitEN()</em></span> function allows us to write a more
+                        efficient equivalent of the above code:<a id="IDX-CHP-3-0489" class="indexterm"/></p><a id="I_programlisting3_d1e5910"/><pre class="programlisting">int s;
+
+s = pthread_create(&amp;thread, NULL, func, &amp;arg);
+if (s != 0)
+    errExitEN(s, "pthread_create");</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>In C terminology, an <span class="emphasis"><em>lvalue</em></span> is an expression
+                            referring to a region of storage. The most common example of an lvalue
+                            is an identifier for a variable. Some operators also yield lvalues. For
+                            example, if <span class="emphasis"><em>p</em></span> is a pointer to a storage area, then
+                                *<span class="emphasis"><em>p</em></span> is an lvalue. Under the POSIX threads API,
+                                <span class="emphasis"><em>errno</em></span> is redefined to be a function that
+                            returns a pointer to a thread-specific storage area (see <a class="xref" href="ch31.html#thread-specific_data" title="Thread-Specific Data">Thread-Specific Data</a>).</p></div><p>To diagnose other types of errors, we use <span class="emphasis"><em>fatal()</em></span>,
+                            <span class="emphasis"><em>usageErr()</em></span>, and
+                            <span class="emphasis"><em>cmdLineErr()</em></span>.<a id="IDX-CHP-3-0490" class="indexterm"/><a id="IDX-CHP-3-0491" class="indexterm"/></p><a id="I_programlisting3_d1e5948"/><pre class="programlisting">#include "tlpi_hdr.h"
+
+void <strong class="userinput"><code>fatal</code></strong>(const char *<span class="emphasis"><em>format</em></span>, ...);
+void <strong class="userinput"><code>usageErr</code></strong>(const char *<span class="emphasis"><em>format</em></span>, ...);
+void <strong class="userinput"><code>cmdLineErr</code></strong>(const char *<span class="emphasis"><em>format</em></span>, ...);</pre><p>The <span class="emphasis"><em>fatal()</em></span> function is used to diagnose general
+                        errors, including errors from library functions that don’t set
+                            <span class="emphasis"><em>errno</em></span>. Its argument list is the same as for
+                            <span class="emphasis"><em>printf()</em></span>, except that a terminating newline
+                        character is automatically appended to the output string. It prints the
+                        formatted output on standard error and then terminates the program as with
+                            <span class="emphasis"><em>errExit()</em></span>.<a id="IDX-CHP-3-0492" class="indexterm"/></p><p>The <span class="emphasis"><em>usageErr()</em></span> function is used to diagnose errors in
+                        command-line argument usage. It takes an argument list in the style of
+                            <span class="emphasis"><em>printf()</em></span> and prints the string
+                            <span class="emphasis"><em>Usage</em></span>: followed by the formatted output on standard
+                        error, and then terminates the program by calling
+                            <span class="emphasis"><em>exit()</em></span>. (Some of the example programs in this book
+                        provide their own extended version of the <span class="emphasis"><em>usageErr()</em></span>
+                        function, under the name <span class="emphasis"><em>usageError()</em></span>.)<a id="IDX-CHP-3-0493" class="indexterm"/></p><p>The <span class="emphasis"><em>cmdLineErr()</em></span> function is similar to
+                            <span class="emphasis"><em>usageErr()</em></span>, but is intended for diagnosing errors
+                        in the command-line arguments specified to a program.</p><p>The implementations of our error-diagnostic functions are shown in <a class="xref" href="ch03.html#error-handling_functions_used_by_all_pro" title="Example 3-3. Error-handling functions used by all programs">Example 3-3</a>.</p><div class="example"><a id="error-handling_functions_used_by_all_pro"/><div class="example-title">Example 3-3. Error-handling functions used by all programs</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>lib/error_functions.c</code></strong>
+#include &lt;stdarg.h&gt;
+#include "error_functions.h"
+#include "tlpi_hdr.h"
+#include "ename.c.inc"          /* Defines ename and MAX_ENAME */
+
+#ifdef __GNUC__
+__attribute__ ((__noreturn__))
+#endif
+static void
+terminate(Boolean useExit3)
+{
+    char *s;
+
+    /* Dump core if EF_DUMPCORE environment variable is defined and
+       is a nonempty string; otherwise call exit(3) or _exit(2),
+       depending on the value of 'useExit3'. */
+
+    s = getenv("EF_DUMPCORE");
+
+    if (s != NULL &amp;&amp; *s != '\0')
+        abort();
+    else if (useExit3)
+        exit(EXIT_FAILURE);
+    else
+        _exit(EXIT_FAILURE);
+}
+
+static void
+outputError(Boolean useErr, int err, Boolean flushStdout,
+        const char *format, va_list ap)
+{
+#define BUF_SIZE 500
+    char buf[BUF_SIZE], userMsg[BUF_SIZE], errText[BUF_SIZE];
+
+    vsnprintf(userMsg, BUF_SIZE, format, ap);
+
+    if (useErr)
+        snprintf(errText, BUF_SIZE, " [%s %s]",
+                (err &gt; 0 &amp;&amp; err &lt;= MAX_ENAME) ?
+                ename[err] : "?UNKNOWN?", strerror(err));
+    else
+        snprintf(errText, BUF_SIZE, ":");
+
+    snprintf(buf, BUF_SIZE, "ERROR%s %s\n", errText, userMsg);
+
+    if (flushStdout)
+        fflush(stdout);       /* Flush any pending stdout */
+    fputs(buf, stderr);
+    fflush(stderr);           /* In case stderr is not line-buffered */
+}
+
+void
+errMsg(const char *format, ...)
+{
+    va_list argList;
+    int savedErrno;
+
+    savedErrno = errno;       /* In case we change it here */
+
+    va_start(argList, format);
+    outputError(TRUE, errno, TRUE, format, argList);
+    va_end(argList);
+
+    errno = savedErrno;
+}
+
+void
+errExit(const char *format, ...)
+{
+    va_list argList;
+
+    va_start(argList, format);
+    outputError(TRUE, errno, TRUE, format, argList);
+    va_end(argList);
+
+    terminate(TRUE);
+}
+
+void
+err_exit(const char *format, ...)
+{
+    va_list argList;
+
+    va_start(argList, format);
+    outputError(TRUE, errno, FALSE, format, argList);
+    va_end(argList);
+
+    terminate(FALSE);
+}
+
+void
+errExitEN(int errnum, const char *format, ...)
+{
+    va_list argList;
+
+    va_start(argList, format);
+    outputError(TRUE, errnum, TRUE, format, argList);
+    va_end(argList);
+
+    terminate(TRUE);
+}
+
+void
+fatal(const char *format, ...)
+{
+    va_list argList;
+
+    va_start(argList, format);
+    outputError(FALSE, 0, TRUE, format, argList);
+    va_end(argList);
+
+    terminate(TRUE);
+}
+
+void
+usageErr(const char *format, ...)
+{
+    va_list argList;
+
+    fflush(stdout);           /* Flush any pending stdout */
+
+    fprintf(stderr, "Usage: ");
+    va_start(argList, format);
+    vfprintf(stderr, format, argList);
+    va_end(argList);
+
+    fflush(stderr);           /* In case stderr is not line-buffered */
+    exit(EXIT_FAILURE);
+}
+
+void
+cmdLineErr(const char *format, ...)
+{
+    va_list argList;
+
+    fflush(stdout);           /* Flush any pending stdout */
+
+    fprintf(stderr, "Command-line usage error: ");
+    va_start(argList, format);
+    vfprintf(stderr, format, argList);
+    va_end(argList);
+
+    fflush(stderr);           /* In case stderr is not line-buffered */
+    exit(EXIT_FAILURE);
+}
+     <strong class="userinput"><code>lib/error_functions.c</code></strong></pre></div></div><p>The file <code class="literal">enames.c.inc</code> included by <a class="xref" href="ch03.html#error-handling_functions_used_by_all_pro" title="Example 3-3. Error-handling functions used by all programs">Example 3-3</a> is shown in <a class="xref" href="ch03.html#linux_error_names_open_parenthesis_x86" title="Example 3-4. Linux error names (x86-32 version)">Example 3-4</a>. This file defines an
+                        array of strings, <span class="emphasis"><em>ename</em></span>, that are the symbolic names
+                        corresponding to each of the possible <span class="emphasis"><em>errno</em></span> values. Our
+                        error-handling functions use this array to print out the symbolic name
+                        corresponding to a particular error number. This is a workaround to deal
+                        with the facts that, on the one hand, the string returned by
+                            <span class="emphasis"><em>strerror()</em></span> doesn’t identify the symbolic constant
+                        corresponding to its error message, while, on the other hand, the manual
+                        pages describe errors using their symbolic names. Printing out the symbolic
+                        name gives us an easy way of looking up the cause of an error in the manual
+                        pages.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The content of the <code class="literal">ename.c.inc</code> file
+                            is architecture-specific, because <span class="emphasis"><em>errno</em></span> values vary
+                            somewhat from one Linux hardware architecture to another. The version
+                            shown in <a class="xref" href="ch03.html#linux_error_names_open_parenthesis_x86" title="Example 3-4. Linux error names (x86-32 version)">Example 3-4</a> is for
+                            a Linux 2.6/x86-32 system. This file was built using a script (<code class="literal">lib/Build_ename.sh</code>) included in the source
+                            code distribution for this book. This script can be used to build a
+                            version of <code class="literal">ename.c.inc</code> that should be
+                            suitable for a specific hardware platform and kernel version.</p></div><p>Note that some of the strings in the <span class="emphasis"><em>ename</em></span> array are
+                        empty. These correspond to unused error values. Furthermore, some of the
+                        strings in <span class="emphasis"><em>ename</em></span> consist of two error names separated
+                        by a slash. These strings correspond to cases where two symbolic error names
+                        have the same numeric value.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>From the <code class="literal">ename.c.inc</code> file, we can
+                            see that the <code class="literal">EAGAIN</code> and <code class="literal">EWOULDBLOCK</code> errors have the same value.
+                            (SUSv3 explicitly permits this, and the values of these constants are
+                            the same on most, but not all, other UNIX systems.) These errors are
+                            returned by a system call in circumstances in which it would normally
+                            block (i.e., be forced to wait before completing), but the caller
+                            requested that the system call return an error instead of blocking.
+                                <code class="literal">EAGAIN</code> originated on System V,
+                            and it was the error returned for system calls performing I/O, semaphore
+                            operations, message queue operations, and file locking
+                                (<span class="emphasis"><em>fcntl()</em></span>). <code class="literal">EWOULDBLOCK</code> originated on BSD, and it was returned by
+                            file locking (<span class="emphasis"><em>flock()</em></span>) and socket-related system
+                            calls.</p><p>Within SUSv3, <code class="literal">EWOULDBLOCK</code> is
+                            mentioned only in the specifications of various interfaces related to
+                            sockets. For these interfaces, SUSv3 permits either <code class="literal">EAGAIN</code> or <code class="literal">EWOULDBLOCK</code> to be returned by nonblocking calls. For all
+                            other nonblocking calls, only the error <code class="literal">EAGAIN</code> is specified in SUSv3.</p></div><div class="example"><a id="linux_error_names_open_parenthesis_x86"/><div class="example-title">Example 3-4. Linux error names (x86-32 version)</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>lib/ename.c.inc</code></strong>
+static char *ename[] = {
+    /*   0 */ "",
+    /*   1 */ "EPERM", "ENOENT", "ESRCH", "EINTR", "EIO", "ENXIO", "E2BIG",
+    /*   8 */ "ENOEXEC", "EBADF", "ECHILD", "EAGAIN/EWOULDBLOCK", "ENOMEM",
+    /*  13 */ "EACCES", "EFAULT", "ENOTBLK", "EBUSY", "EEXIST", "EXDEV",
+    /*  19 */ "ENODEV", "ENOTDIR", "EISDIR", "EINVAL", "ENFILE", "EMFILE",
+    /*  25 */ "ENOTTY", "ETXTBSY", "EFBIG", "ENOSPC", "ESPIPE", "EROFS",
+    /*  31 */ "EMLINK", "EPIPE", "EDOM", "ERANGE", "EDEADLK/EDEADLOCK",
+    /*  36 */ "ENAMETOOLONG", "ENOLCK", "ENOSYS", "ENOTEMPTY", "ELOOP", "",
+    /*  42 */ "ENOMSG", "EIDRM", "ECHRNG", "EL2NSYNC", "EL3HLT", "EL3RST",
+    /*  48 */ "ELNRNG", "EUNATCH", "ENOCSI", "EL2HLT", "EBADE", "EBADR",
+    /*  54 */ "EXFULL", "ENOANO", "EBADRQC", "EBADSLT", "", "EBFONT", "ENOSTR",
+    /*  61 */ "ENODATA", "ETIME", "ENOSR", "ENONET", "ENOPKG", "EREMOTE",
+    /*  67 */ "ENOLINK", "EADV", "ESRMNT", "ECOMM", "EPROTO", "EMULTIHOP",
+    /*  73 */ "EDOTDOT", "EBADMSG", "EOVERFLOW", "ENOTUNIQ", "EBADFD",
+    /*  78 */ "EREMCHG", "ELIBACC", "ELIBBAD", "ELIBSCN", "ELIBMAX",
+    /*  83 */ "ELIBEXEC", "EILSEQ", "ERESTART", "ESTRPIPE", "EUSERS",
+    /*  88 */ "ENOTSOCK", "EDESTADDRREQ", "EMSGSIZE", "EPROTOTYPE",
+    /*  92 */ "ENOPROTOOPT", "EPROTONOSUPPORT", "ESOCKTNOSUPPORT",
+    /*  95 */ "EOPNOTSUPP/ENOTSUP", "EPFNOSUPPORT", "EAFNOSUPPORT",
+    /*  98 */ "EADDRINUSE", "EADDRNOTAVAIL", "ENETDOWN", "ENETUNREACH",
+    /* 102 */ "ENETRESET", "ECONNABORTED", "ECONNRESET", "ENOBUFS", "EISCONN",
+    /* 107 */ "ENOTCONN", "ESHUTDOWN", "ETOOMANYREFS", "ETIMEDOUT",
+    /* 111 */ "ECONNREFUSED", "EHOSTDOWN", "EHOSTUNREACH", "EALREADY",
+    /* 115 */ "EINPROGRESS", "ESTALE", "EUCLEAN", "ENOTNAM", "ENAVAIL",
+    /* 120 */ "EISNAM", "EREMOTEIO", "EDQUOT", "ENOMEDIUM", "EMEDIUMTYPE",
+    /* 125 */ "ECANCELED", "ENOKEY", "EKEYEXPIRED", "EKEYREVOKED",
+    /* 129 */ "EKEYREJECTED", "EOWNERDEAD", "ENOTRECOVERABLE", "ERFKILL"
+};
+
+#define MAX_ENAME 132
+     <strong class="userinput"><code>lib/ename.c.inc</code></strong></pre></div></div></div><div class="sect3" title="Functions for parsing numeric command-line arguments"><div class="titlepage"><div><div><h4 class="title" id="functions_for_parsing_numeric_command-li">Functions for parsing numeric command-line arguments</h4></div></div></div><p>The header file in <a class="xref" href="ch03.html#header_file_for_get_underscore_num.c" title="Example 3-5. Header file for get_num.c">Example 3-5</a>
+                        provides the declaration of two functions that we frequently use for parsing
+                        integer command-line arguments: <span class="emphasis"><em>getInt()</em></span> and
+                            <span class="emphasis"><em>getLong()</em></span>. The primary advantage of using these
+                        functions instead of <span class="emphasis"><em>atoi()</em></span>,
+                            <span class="emphasis"><em>atol()</em></span>, and <span class="emphasis"><em>strtol()</em></span> is that
+                        they provide some basic validity checking of numeric arguments.<a id="IDX-CHP-3-0494" class="indexterm"/><a id="IDX-CHP-3-0495" class="indexterm"/><a id="IDX-CHP-3-0496" class="indexterm"/><a id="IDX-CHP-3-0497" class="indexterm"/><a id="IDX-CHP-3-0498" class="indexterm"/><a id="IDX-CHP-3-0499" class="indexterm"/><a id="IDX-CHP-3-0500" class="indexterm"/><a id="IDX-CHP-3-0501" class="indexterm"/></p><a id="I_programlisting3_d1e6193"/><pre class="programlisting">#include "tlpi_hdr.h"
+
+int <strong class="userinput"><code>getInt</code></strong>(const char *<span class="emphasis"><em>arg</em></span>, int <span class="emphasis"><em>flags</em></span>, const char *<span class="emphasis"><em>name</em></span>);
+long <strong class="userinput"><code>getLong</code></strong>(const char *<span class="emphasis"><em>arg</em></span>, int <span class="emphasis"><em>flags</em></span>, const char *<span class="emphasis"><em>name</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Both return <span class="emphasis"><em>arg</em></span> converted to numeric form</p></div><p>The <span class="emphasis"><em>getInt()</em></span> and <span class="emphasis"><em>getLong()</em></span>
+                        functions convert the string pointed to by <span class="emphasis"><em>arg</em></span> to an
+                            <span class="emphasis"><em>int</em></span> or a <span class="emphasis"><em>long</em></span>, respectively.
+                        If <span class="emphasis"><em>arg</em></span> doesn’t contain a valid integer string (i.e.,
+                        only digits and the characters <code class="literal">+</code> and
+                            <code class="literal">-</code>), then these functions print an
+                        error message and terminate the program.</p><p>If the <span class="emphasis"><em>name</em></span> argument is non-<code class="literal">NULL</code>, it should contain a string identifying the argument in
+                            <span class="emphasis"><em>arg</em></span>. This string is included as part of any error
+                        message displayed by these functions.</p><p>The <span class="emphasis"><em>flags</em></span> argument provides some control over the
+                        operation of the <span class="emphasis"><em>getInt()</em></span> and
+                            <span class="emphasis"><em>getLong()</em></span> functions. By default, these functions
+                        expect strings containing signed decimal integers. By ORing (|) one or more
+                        of the <code class="literal">GN_*</code> constants defined in <a class="xref" href="ch03.html#header_file_for_get_underscore_num.c" title="Example 3-5. Header file for get_num.c">Example 3-5</a> into
+                            <span class="emphasis"><em>flags</em></span>, we can select alternative bases for
+                        conversion and restrict the range of the number to being nonnegative or
+                        greater than 0.</p><p>The implementations of the <span class="emphasis"><em>getInt()</em></span> and
+                            <span class="emphasis"><em>getLong()</em></span> functions are provided in <a class="xref" href="ch03.html#functions_for_parsing_numeric_comman" title="Example 3-6. Functions for parsing numeric command-line arguments">Example 3-6</a>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Although the <span class="emphasis"><em>flags</em></span> argument allows us to enforce
+                            the range checks described in the main text, in some cases, we don’t
+                            request such checks in our example programs, even though it might seem
+                            logical to do so. For example, in <a class="xref" href="ch47.html#creating_and_operating_on_system_v_semap" title="Example 47-1. Creating and operating on System V semaphores">Example 47-1</a>, we don’t check
+                            the <span class="emphasis"><em>init-value</em></span> argument. This means that the user
+                            could specify a negative number as the initial value for a semaphore,
+                            which would result in an error (<code class="literal">ERANGE</code>) in the subsequent <span class="emphasis"><em>semctl()</em></span>
+                            system call, because a semaphore can’t have a negative value. Omitting
+                            range checks in such cases allows us to experiment not just with the
+                            correct use of system calls and library functions, but also to see what
+                            happens when invalid arguments are supplied. Real-world applications
+                            would usually impose stronger checks on their command-line
+                            arguments.</p></div><div class="example"><a id="header_file_for_get_underscore_num.c"/><div class="example-title">Example 3-5. Header file for <code class="literal">get_num.c</code></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>lib/get_num.h</code></strong>
+#ifndef GET_NUM_H
+#define GET_NUM_H
+
+#define GN_NONNEG       01      /* Value must be &gt;= 0 */
+#define GN_GT_0         02      /* Value must be &gt; 0 */
+
+                                /* By default, integers are decimal */
+#define GN_ANY_BASE   0100      /* Can use any base - like strtol(3) */
+#define GN_BASE_8     0200      /* Value is expressed in octal */
+#define GN_BASE_16    0400      /* Value is expressed in hexadecimal */
+
+long getLong(const char *arg, int flags, const char *name);
+
+int getInt(const char *arg, int flags, const char *name);
+
+#endif
+      <strong class="userinput"><code>lib/get_num.h</code></strong></pre></div></div><div class="example"><a id="functions_for_parsing_numeric_comman"/><div class="example-title">Example 3-6. Functions for parsing numeric command-line arguments</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>lib/get_num.c</code></strong>
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+#include &lt;limits.h&gt;
+#include &lt;errno.h&gt;
+#include "get_num.h"
+
+static void
+gnFail(const char *fname, const char *msg, const char *arg, const char *name)
+{
+    fprintf(stderr, "%s error", fname);
+    if (name != NULL)
+        fprintf(stderr, " (in %s)", name);
+    fprintf(stderr, ": %s\n", msg);
+    if (arg != NULL &amp;&amp; *arg != '\0')
+        fprintf(stderr, "        offending text: %s\n", arg);
+
+    exit(EXIT_FAILURE);
+}
+
+static long
+getNum(const char *fname, const char *arg, int flags, const char *name)
+{
+    long res;
+    char *endptr;
+    int base;
+
+    if (arg == NULL || *arg == '\0')
+        gnFail(fname, "null or empty string", arg, name);
+
+    base = (flags &amp; GN_ANY_BASE) ? 0 : (flags &amp; GN_BASE_8) ? 8 :
+                        (flags &amp; GN_BASE_16) ? 16 : 10;
+
+    errno = 0;
+    res = strtol(arg, &amp;endptr, base);
+    if (errno != 0)
+        gnFail(fname, "strtol() failed", arg, name);
+
+    if (*endptr != '\0')
+        gnFail(fname, "nonnumeric characters", arg, name);
+
+    if ((flags &amp; GN_NONNEG) &amp;&amp; res &lt; 0)
+        gnFail(fname, "negative value not allowed", arg, name);
+
+    if ((flags &amp; GN_GT_0) &amp;&amp; res &lt;= 0)
+        gnFail(fname, "value must be &gt; 0", arg, name);
+
+    return res;
+}
+
+long
+getLong(const char *arg, int flags, const char *name)
+{
+    return getNum("getLong", arg, flags, name);
+}
+
+int
+getInt(const char *arg, int flags, const char *name)
+{
+    long res;
+
+    res = getNum("getInt", arg, flags, name);
+
+    if (res &gt; INT_MAX || res &lt; INT_MIN)
+        gnFail("getInt", "integer out of range", arg, name);
+
+    return (int) res;
+}
+     <strong class="userinput"><code>lib/get_num.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Portability Issues"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="portability_issues">Portability Issues</h2></div></div></div><p>In this section, we consider the topic of writing portable system programs. We
+                introduce feature test macros and the standard system data types defined by SUSv3,
+                and then look at some other portability issues.<a id="IDX-CHP-3-0503" class="indexterm"/><a id="IDX-CHP-3-0504" class="indexterm"/><a id="IDX-CHP-3-0505" class="indexterm"/><a id="IDX-CHP-3-0502" class="indexterm"/></p><div class="sect2" title="Feature Test Macros"><div class="titlepage"><div><div><h3 class="title" id="feature_test_macros">Feature Test Macros</h3></div></div></div><p>Various standards govern the behavior of the system call and library function
+                    APIs (see <a class="xref" href="ch01.html#standardization" title="Standardization">Standardization</a>). Some of these standards are
+                    defined by standards bodies such The Open Group (Single UNIX Specification),
+                    while others are defined by the two historically important UNIX implementations:
+                    BSD and System V Release 4 (and the associated System V Interface
+                    Definition).</p><p>Sometimes, when writing a portable application, we may want the various header
+                    files to expose only the definitions (constants, function prototypes, and so on)
+                    that follow a particular standard. To do this, we define one or more of the
+                        <span class="emphasis"><em>feature test macros</em></span> listed below when compiling a
+                    program. One way that we can do this is by defining the macro in the program
+                    source code before including any header files:</p><a id="I_programlisting3_d1e6365"/><pre class="programlisting">#define _BSD_SOURCE 1</pre><p>Alternatively, we can use the <span class="emphasis"><em>-D</em></span> option to the C
+                    compiler:</p><a id="I_programlisting3_d1e6372"/><pre class="programlisting"><strong class="userinput"><code>$ cc -D_BSD_SOURCE prog.c</code></strong></pre><div class="note" title="Note"><h3 class="title">Note</h3><p>The term <span class="emphasis"><em>feature test macro</em></span> may seem confusing, but
+                        it makes sense if we look at things from the perspective of the
+                        implementation. The implementation decides which of the
+                            <span class="emphasis"><em>features</em></span> available in each header it should make
+                        visible, by <span class="emphasis"><em>testing</em></span> (with <code class="literal">#if</code>) which values the application has defined for these
+                            <span class="emphasis"><em>macros</em></span>.<a id="IDX-CHP-3-0506" class="indexterm"/></p></div><p>The following feature test macros are specified by the relevant standards, and
+                    consequently their usage is portable to all systems that support these
+                    standards:</p><div class="variablelist"><dl><dt><span class="term">
+                            <code class="literal">_POSIX_SOURCE</code>
+                        </span></dt><dd><p>If defined (with any value), expose definitions conforming to
+                                POSIX.1-1990 and ISO C (1990). This macro is superseded by <code class="literal">_POSIX_C_SOURCE</code>.</p></dd><dt><span class="term">
+                            <code class="literal">_POSIX_C_SOURCE</code>
+                        </span></dt><dd><p>If defined with the value 1, this has the same effect as <code class="literal">_POSIX_SOURCE</code>. If defined with a value
+                                greater than or equal to 199309, also expose definitions for
+                                POSIX.1b (realtime). If defined with a value greater than or equal
+                                to 199506, also expose definitions for POSIX.1c (threads). If
+                                defined with the value 200112, also expose definitions for the
+                                POSIX.1-2001 base specification (i.e., the XSI extension is
+                                excluded). (Prior to version 2.3.3, the <span class="emphasis"><em>glibc</em></span>
+                                headers don’t interpret the value 200112 for <code class="literal">_POSIX_C_SOURCE</code>.) If defined with the
+                                value 200809, also expose definitions for the POSIX.1-2008 base
+                                specification. (Prior to version 2.10, the
+                                    <span class="emphasis"><em>glibc</em></span> headers don’t interpret the value
+                                200809 for <code class="literal">_POSIX_C_SOURCE</code>.)<a id="IDX-CHP-3-0507" class="indexterm"/><a id="IDX-CHP-3-0508" class="indexterm"/></p></dd><dt><span class="term">
+                            <code class="literal">_XOPEN_SOURCE</code>
+                        </span></dt><dd><p>If defined (with any value), expose POSIX.1, POSIX.2, and X/Open
+                                (XPG4) definitions. If defined with the value 500 or greater, also
+                                expose SUSv2 (UNIX 98 and XPG5) extensions. Setting to 600 or
+                                greater additionally exposes SUSv3 XSI (UNIX 03) extensions and C99
+                                extensions. (Prior to version 2.2, the <span class="emphasis"><em>glibc</em></span>
+                                headers don’t interpret the value 600 for <code class="literal">_XOPEN_SOURCE</code>.) Setting to 700 or greater also
+                                exposes SUSv4 XSI extensions. (Prior to version 2.10, the
+                                    <span class="emphasis"><em>glibc</em></span> headers don’t interpret the value 700
+                                for <code class="literal">_XOPEN_SOURCE</code>.) The values
+                                500, 600, and 700 for <code class="literal">_XOPEN_SOURCE</code> were chosen because SUSv2, SUSv3, and
+                                SUSv4 are Issues 5, 6, and 7, respectively, of the X/Open
+                                specifications.</p></dd></dl></div><p>The following feature test macros listed are
+                    <span class="emphasis"><em>glibc</em></span>-specific:</p><div class="variablelist"><dl><dt><span class="term">
+                            <code class="literal">_BSD_SOURCE</code>
+                        </span></dt><dd><p>If defined (with any value), expose BSD definitions. Defining this
+                                macro also defines <code class="literal">_POSIX_C_SOURCE</code> with the value 199506. Explicitly
+                                setting just this macro causes BSD definitions to be favored in a
+                                few cases where standards conflict.</p></dd><dt><span class="term">
+                            <code class="literal">_SVID_SOURCE</code>
+                        </span></dt><dd><p>If defined (with any value), expose System V Interface Definition
+                                (SVID) definitions.<a id="IDX-CHP-3-0509" class="indexterm"/></p></dd><dt><span class="term">
+                            <code class="literal">_GNU_SOURCE</code>
+                        </span></dt><dd><p>If defined (with any value), expose all of the definitions
+                                provided by setting all of the preceding macros, as well as various
+                                GNU extensions.</p></dd></dl></div><p>When the GNU C compiler is invoked without special options, <code class="literal">_POSIX_SOURCE</code>, <code class="literal">_POSIX_C_SOURCE=200809</code> (200112 with <span class="emphasis"><em>glibc</em></span>
+                    versions 2.5 to 2.9, or 199506 with <span class="emphasis"><em>glibc</em></span> versions earlier
+                    than 2.4), <code class="literal">_BSD_SOURCE</code>, and <code class="literal">_SVID_SOURCE</code> are defined by default.</p><p>If individual macros are defined, or the compiler is invoked in one of its
+                    standard modes (e.g., <span class="emphasis"><em>cc -ansi</em></span> or <span class="emphasis"><em>cc
+                        -std=c99</em></span>), then only the requested definitions are supplied.
+                    There is one exception: if <code class="literal">_POSIX_C_SOURCE</code> is
+                    not otherwise defined, and the compiler is not invoked in one of its standard
+                    modes, then <code class="literal">_POSIX_C_SOURCE</code> is defined with
+                    the value 200809 (200112 with <span class="emphasis"><em>glibc</em></span> versions 2.4 to 2.9, or
+                    199506 with <span class="emphasis"><em>glibc</em></span> versions earlier than 2.4).</p><p>Defining multiple macros is additive, so that we could, for example, use the
+                    following <span class="emphasis"><em>cc</em></span> command to explicitly select the same macro
+                    settings as are provided by default:</p><a id="I_programlisting3_d1e6542"/><pre class="programlisting"><strong class="userinput"><code>$ cc -D_POSIX_SOURCE -D_POSIX_C_SOURCE=199506 \</code></strong>
+                                           <strong class="userinput"><code>-D_BSD_SOURCE -D_SVID_SOURCE prog.c</code></strong></pre><p>The <code class="literal">&lt;features.h&gt;</code> header file
+                    and the <span class="emphasis"><em>feature_test_macros(7)</em></span> manual page provide further
+                    information on precisely what values are assigned to each of the feature test
+                        macros.<a id="IDX-CHP-3-0510" class="indexterm"/></p><div class="sect3" title="_POSIX_C_SOURCE, _XOPEN_SOURCE, and POSIX.1/SUS"><div class="titlepage"><div><div><h4 class="title" id="underscore_posix_underscore_c_underscore"><code class="literal">_POSIX_C_SOURCE</code>, <code class="literal">_XOPEN_SOURCE</code>, and POSIX.1/SUS</h4></div></div></div><p>Only the <code class="literal">_POSIX_C_SOURCE</code> and <code class="literal">_XOPEN_SOURCE</code> feature test macros are
+                        specified in POSIX.1-2001/SUSv3, which requires that these macros be defined
+                        with the values 200112 and 600, respectively, in conforming applications.
+                        Defining <code class="literal">_POSIX_C_SOURCE</code> as 200112
+                        provides conformance to the POSIX.1-2001 base specification (i.e.,
+                            <span class="emphasis"><em>POSIX conformance</em></span>, excluding the XSI extension).
+                        Defining <code class="literal">_XOPEN_SOURCE</code> as 600 provides
+                        conformance to SUSv3 (i.e., <span class="emphasis"><em>XSI conformance</em></span>, the base
+                        specification plus the XSI extension). Analogous statements apply for
+                        POSIX.1-2008/SUSv4, which require that the two macros be defined with the
+                        values 200809 and 700.<a id="IDX-CHP-3-0511" class="indexterm"/></p><p>SUSv3 specifies that setting <code class="literal">_XOPEN_SOURCE</code> to 600 should supply all of the features that
+                        are enabled if <code class="literal">_POSIX_C_SOURCE</code> is set to
+                        200112. Thus, an application needs to define only <code class="literal">_XOPEN_SOURCE</code> for SUSv3 (i.e., XSI) conformance. SUSv4 makes
+                        an analogous specification that setting <code class="literal">_XOPEN_SOURCE</code> to 700 should supply all of the features that
+                        are enabled if <code class="literal">_POSIX_C_SOURCE</code> is set to
+                        200809.</p></div><div class="sect3" title="Feature test macros in function prototypes and source code examples"><div class="titlepage"><div><div><h4 class="title" id="feature_test_macros_in_function_prototyp">Feature test macros in function prototypes and source code
+                        examples</h4></div></div></div><p>The manual pages describe which feature test macro(s) must be defined in
+                        order to make a particular constant definition or function declaration
+                        visible from a header file.<a id="IDX-CHP-3-0512" class="indexterm"/><a id="IDX-CHP-3-0513" class="indexterm"/></p><p>All of the source code examples in this book are written so that they will
+                        compile using either the default GNU C compiler options or the following
+                        options:</p><a id="I_programlisting3_d1e6627"/><pre class="programlisting"><strong class="userinput"><code>$ cc -std=c99 -D_XOPEN_SOURCE=600</code></strong></pre><p>The prototype of each function shown in this book indicates any feature
+                        test macro(s) that must be defined in order to employ that function in a
+                        program compiled with either the default compiler options or the options in
+                        the <span class="emphasis"><em>cc</em></span> command just shown. The manual pages provide
+                        more precise descriptions of the feature test macro(s) required to expose
+                        the declaration of each function.</p></div></div><div class="sect2" title="System Data Types"><div class="titlepage"><div><div><h3 class="title" id="system_data_types">System Data Types</h3></div></div></div><p>Various implementation data types are represented using standard C types, for
+                    example, process IDs, user IDs, and file offsets. Although it would be possible
+                    to use the C fundamental types such as <span class="emphasis"><em>int</em></span> and
+                        <span class="emphasis"><em>long</em></span> to declare variables storing such information,
+                    this reduces portability across UNIX systems, for the following
+                        reasons:<a id="IDX-CHP-3-0514" class="indexterm"/><a id="IDX-CHP-3-0515" class="indexterm"/><a id="IDX-CHP-3-0516" class="indexterm"/><a id="IDX-CHP-3-0517" class="indexterm"/><a id="IDX-CHP-3-0518" class="indexterm"/><a id="IDX-CHP-3-0519" class="indexterm"/><a id="IDX-CHP-3-0520" class="indexterm"/><a id="IDX-CHP-3-0521" class="indexterm"/><a id="IDX-CHP-3-0522" class="indexterm"/><a id="IDX-CHP-3-0523" class="indexterm"/><a id="IDX-CHP-3-0524" class="indexterm"/><a id="IDX-CHP-3-0525" class="indexterm"/><a id="IDX-CHP-3-0526" class="indexterm"/><a id="IDX-CHP-3-0527" class="indexterm"/><a id="IDX-CHP-3-0528" class="indexterm"/><a id="IDX-CHP-3-0529" class="indexterm"/><a id="IDX-CHP-3-0530" class="indexterm"/><a id="IDX-CHP-3-0531" class="indexterm"/><a id="IDX-CHP-3-0532" class="indexterm"/><a id="IDX-CHP-3-0533" class="indexterm"/><a id="IDX-CHP-3-0534" class="indexterm"/><a id="IDX-CHP-3-0535" class="indexterm"/><a id="IDX-CHP-3-0536" class="indexterm"/><a id="IDX-CHP-3-0537" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The sizes of these fundamental types vary across UNIX implementations
+                            (e.g., a <span class="emphasis"><em>long</em></span> may be 4 bytes on one system and 8
+                            bytes on another), or sometimes even in different compilation
+                            environments on the same implementation. Furthermore, different
+                            implementations may use different types to represent the same
+                            information. For example, a process ID might be an
+                                <span class="emphasis"><em>int</em></span> on one system but a
+                                <span class="emphasis"><em>long</em></span> on another.</p></li><li class="listitem"><p>Even on a single UNIX implementation, the types used to represent
+                            information may differ between releases of the implementation. Notable
+                            examples on Linux are user and group IDs. On Linux 2.2 and earlier,
+                            these values were represented in 16 bits. On Linux 2.4 and later, they
+                            are 32-bit values.</p></li></ul></div><p>To avoid such portability problems, SUSv3 specifies various standard system
+                    data types, and requires an implementation to define and use these types
+                    appropriately. Each of these types is defined using the C <code class="literal">typedef</code> feature. For example, the
+                        <span class="emphasis"><em>pid_t</em></span> data type is intended for representing process
+                    IDs, and on Linux/x86-32 this type is defined as follows:<a id="IDX-CHP-3-0538" class="indexterm"/></p><a id="I_programlisting3_d1e6787"/><pre class="programlisting">typedef int pid_t;</pre><p>Most of the standard system data types have names ending in
+                        <span class="emphasis"><em>_t</em></span>. Many of them are declared in the header file
+                        <code class="literal">&lt;sys/types.h&gt;</code>, although a
+                    few are defined in other header files.</p><p>An application should employ these type definitions to portably declare the
+                    variables it uses. For example, the following declaration would allow an
+                    application to correctly represent process IDs on any SUSv3-conformant
+                    system:</p><a id="I_programlisting3_d1e6799"/><pre class="programlisting">pid_t mypid;</pre><p><a class="xref" href="ch03.html#selected_system_data_types" title="Table 3-1. Selected system data types">Table 3-1</a> lists some of the system data
+                    types we’ll encounter in this book. For certain types in this table, SUSv3
+                    requires that the type be implemented as an <span class="emphasis"><em>arithmetic
+                    type</em></span>. This means that the implementation may choose the underlying
+                    type as either an integer or a floating-point (real or complex) type.</p><div class="table"><a id="selected_system_data_types"/><div class="table-title">Table 3-1. Selected system data types</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>Data type</p>
+                                </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>SUSv3 type requirement</p>
+                                </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                    <p>Description</p>
+                                </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>blkcnt_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>signed integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>File block count (<a class="xref" href="ch15.html#retrieving_file_information_colon_stat_o" title="Retrieving File Information: stat()">Retrieving File Information: <span class="emphasis"><em>stat()</em></span></a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>blksize_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>signed integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>File block size (<a class="xref" href="ch15.html#retrieving_file_information_colon_stat_o" title="Retrieving File Information: stat()">Retrieving File Information: <span class="emphasis"><em>stat()</em></span></a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>cc_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Terminal special character (<a class="xref" href="ch62.html#terminal_special_characters" title="Terminal Special Characters">Terminal Special Characters</a>)<a id="IDX-CHP-3-0539" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>clock_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>integer or real-floating</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>System time in clock ticks (<a class="xref" href="ch10.html#process_time" title="Process Time">Process Time</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>clockid_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>an arithmetic type</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Clock identifier for POSIX.1b clock and timer functions
+                                            (<a class="xref" href="ch23.html#posix_interval_timers" title="POSIX Interval Timers">POSIX Interval Timers</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>comp_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>not in SUSv3</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Compressed clock ticks (<a class="xref" href="ch28.html#process_accounting" title="Process Accounting">Process Accounting</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>dev_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>an arithmetic type</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Device number, consisting of major and minor numbers
+                                            (<a class="xref" href="ch15.html#retrieving_file_information_colon_stat_o" title="Retrieving File Information: stat()">Retrieving File Information: <span class="emphasis"><em>stat()</em></span></a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>DIR</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>no type requirement</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Directory stream (<a class="xref" href="ch18.html#reading_directories_colon_opendir_open_p" title="Reading Directories: opendir() and readdir()">Reading Directories: <span class="emphasis"><em>opendir()</em></span> and
+                    <span class="emphasis"><em>readdir()</em></span></a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>fd_set</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>structure type</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>File descriptor set for <span class="emphasis"><em>select()</em></span>
+                                            (<a class="xref" href="ch63.html#the_select_open_parenthesis_close_parent" title="The select() System Call">The <span class="emphasis"><em>select()</em></span> System Call</a>)<a id="IDX-CHP-3-0540" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>fsblkcnt_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>File-system block count (<a class="xref" href="ch14.html#obtaining_information_about_a_file_syste" title="Obtaining Information About a File System: statvfs()">Obtaining Information About a File System: <span class="emphasis"><em>statvfs()</em></span></a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>fsfilcnt_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>File count (<a class="xref" href="ch14.html#obtaining_information_about_a_file_syste" title="Obtaining Information About a File System: statvfs()">Obtaining Information About a File System: <span class="emphasis"><em>statvfs()</em></span></a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>gid_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Numeric group identifier (<a class="xref" href="ch08.html#the_group_file_colon__solidus_etc_solidu" title="The Group File: /etc/group">The Group File: <code class="literal">/etc/group</code></a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>id_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>A generic type for holding identifiers; large enough to
+                                        hold at least <span class="emphasis"><em>pid_t</em></span>,
+                                            <span class="emphasis"><em>uid_t</em></span>, and
+                                            <span class="emphasis"><em>gid_t</em></span></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>in_addr_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>32-bit unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>IPv4 address (<a class="xref" href="ch59.html#internet_socket_addresses" title="Internet Socket Addresses">Internet Socket Addresses</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>in_port_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>16-bit unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>IP port number (<a class="xref" href="ch59.html#internet_socket_addresses" title="Internet Socket Addresses">Internet Socket Addresses</a>)<a id="IDX-CHP-3-0541" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>ino_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>File i-node number (<a class="xref" href="ch15.html#retrieving_file_information_colon_stat_o" title="Retrieving File Information: stat()">Retrieving File Information: <span class="emphasis"><em>stat()</em></span></a>)<a id="IDX-CHP-3-0542" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>key_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>an arithmetic type</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>System V IPC key (<a class="xref" href="ch45.html#ipc_keys" title="IPC Keys">IPC Keys</a>)<a id="IDX-CHP-3-0543" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>mode_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>File permissions and type (<a class="xref" href="ch15.html#retrieving_file_information_colon_stat_o" title="Retrieving File Information: stat()">Retrieving File Information: <span class="emphasis"><em>stat()</em></span></a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>mqd_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>no type requirement, but shall not be an array type</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>POSIX message queue descriptor</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>msglen_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Number of bytes allowed in System V message queue (<a class="xref" href="ch46.html#message_queue_associated_data_structure" title="Message Queue Associated Data Structure">Message Queue Associated Data Structure</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>msgqnum_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Counts of messages in System V message queue (<a class="xref" href="ch46.html#message_queue_associated_data_structure" title="Message Queue Associated Data Structure">Message Queue Associated Data Structure</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>nfds_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Number of file descriptors for <span class="emphasis"><em>poll()</em></span>
+                                            (<a class="xref" href="ch63.html#the_poll_open_parenthesis_close_parenthe" title="The poll() System Call">The <span class="emphasis"><em>poll()</em></span> System Call</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>nlink_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Count of (hard) links to a file (<a class="xref" href="ch15.html#retrieving_file_information_colon_stat_o" title="Retrieving File Information: stat()">Retrieving File Information: <span class="emphasis"><em>stat()</em></span></a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>off_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>signed integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>File offset or size (<a class="xref" href="ch04.html#changing_the_file_offset_colon_lseek_ope" title="Changing the File Offset: lseek()">Changing the File Offset: <span class="emphasis"><em>lseek()</em></span></a> and
+                                            <a class="xref" href="ch15.html#retrieving_file_information_colon_stat_o" title="Retrieving File Information: stat()">Retrieving File Information: <span class="emphasis"><em>stat()</em></span></a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>pid_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>signed integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Process ID, process group ID, or session ID (<a class="xref" href="ch06.html#process_id_and_parent_process" title="Process ID and Parent Process ID">Process ID and Parent Process ID</a>, <a class="xref" href="ch34.html#process_groups" title="Process Groups">Process Groups</a>, and <a class="xref" href="ch34.html#sessions" title="Sessions">Sessions</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>ptrdiff_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>signed integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Difference between two pointer values, as a signed
+                                        integer</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>rlim_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Resource limit (<a class="xref" href="ch36.html#process_resource_limits" title="Process Resource Limits">Process Resource Limits</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>sa_family_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Socket address family (<a class="xref" href="ch56.html#generic_socket_address_structures_colon" title="Generic Socket Address Structures: struct sockaddr">Generic Socket Address Structures: <span class="emphasis"><em>struct sockaddr</em></span></a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>shmatt_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Count of attached processes for a System V shared memory
+                                        segment (<a class="xref" href="ch48.html#shared_memory_associated_data_structure" title="Shared Memory Associated Data Structure">Shared Memory Associated Data Structure</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>sig_atomic_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Data type that can be atomically accessed (<a class="xref" href="ch21.html#global_variables_and_the_sig_underscore" title="Global Variables and the sig_atomic_t Data Type">Global Variables and the <span class="emphasis"><em>sig_atomic_t</em></span> Data Type</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>siginfo_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>structure type</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Information about the origin of a signal (<a class="xref" href="ch21.html#the_sa_underscore_siginfo_flag" title="The SA_SIGINFO Flag">The <code class="literal">SA_SIGINFO</code> Flag</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>sigset_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>integer or structure type</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Signal set (<a class="xref" href="ch20.html#signal_sets" title="Signal Sets">Signal Sets</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>size_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Size of an object in bytes</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>socklen_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>integer type of at least 32 bits</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Size of a socket address structure in bytes (<a class="xref" href="ch56.html#binding_a_socket_to_an_address_colon_bin" title="Binding a Socket to an Address: bind()">Binding a Socket to an Address: <span class="emphasis"><em>bind()</em></span></a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>speed_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Terminal line speed (<a class="xref" href="ch62.html#terminal_line_speed_open_parenthesis_bit" title="Terminal Line Speed (Bit Rate)">Terminal Line Speed (Bit Rate)</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>ssize_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>signed integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Byte count or (negative) error indication</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>stack_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>structure type</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Description of an alternate signal stack (<a class="xref" href="ch21.html#handling_a_signal_on_an_alternate_stack" title="Handling a Signal on an Alternate Stack: sigaltstack()">Handling a Signal on an Alternate Stack:
+                <span class="emphasis"><em>sigaltstack()</em></span></a>)<a id="IDX-CHP-3-0544" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>suseconds_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>signed integer allowing range [-1, 1000000]</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Microsecond time interval (<a class="xref" href="ch10.html#calendar_time" title="Calendar Time">Calendar Time</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>tcflag_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>unsigned integer</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Terminal mode flag bit mask (<a class="xref" href="ch62.html#retrieving_and_modifying_terminal_attrib" title="Retrieving and Modifying Terminal Attributes">Retrieving and Modifying Terminal Attributes</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>time_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>integer or real-floating</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Calendar time in seconds since the Epoch (<a class="xref" href="ch10.html#calendar_time" title="Calendar Time">Calendar Time</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>timer_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>an arithmetic type</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Timer identifier for POSIX.1b interval timer functions
+                                            (<a class="xref" href="ch23.html#posix_interval_timers" title="POSIX Interval Timers">POSIX Interval Timers</a>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                    <p>
+                                        <span class="emphasis"><em>uid_t</em></span>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                    <p>integer</p>
+                                </td><td style="text-align: left; vertical-align: top; ">
+                                    <p>Numeric user identifier (<a class="xref" href="ch08.html#the_password_file_colon__solidus_etc_sol" title="The Password File: /etc/passwd">The Password File: <code class="literal">/etc/passwd</code></a>)</p>
+                                </td></tr></tbody></table></div></div><p>When discussing the data types in <a class="xref" href="ch03.html#selected_system_data_types" title="Table 3-1. Selected system data types">Table 3-1</a>
+                    in later chapters, we’ll often make statements that some type “is an integer
+                    type [specified by SUSv3].” This means that SUSv3 requires the type to be
+                    defined as an integer, but doesn’t require that a particular native integer type
+                    (e.g., <span class="emphasis"><em>short</em></span>, <span class="emphasis"><em>int</em></span>, or
+                        <span class="emphasis"><em>long</em></span>) be used. (Often, we won’t say which particular
+                    native data type is actually used to represent each of the system data types in
+                    Linux, because a portable application should be written so that it doesn’t care
+                    which data type is used.)</p><div class="sect3" title="Printing system data type values"><div class="titlepage"><div><div><h4 class="title" id="printing_system_data_type_values">Printing system data type values</h4></div></div></div><p>When printing values of one of the numeric system data types shown in
+                            <a class="xref" href="ch03.html#selected_system_data_types" title="Table 3-1. Selected system data types">Table 3-1</a> (e.g.,
+                            <span class="emphasis"><em>pid_t</em></span> and <span class="emphasis"><em>uid_t</em></span>), we must be
+                        careful not to include a representation dependency in the
+                            <span class="emphasis"><em>printf()</em></span> call. A representation dependency can
+                        occur because C’s argument promotion rules convert values of type
+                            <span class="emphasis"><em>short</em></span> to <span class="emphasis"><em>int</em></span>, but leave values
+                        of type <span class="emphasis"><em>int</em></span> and <span class="emphasis"><em>long</em></span> unchanged.
+                        This means that, depending on the definition of the system data type, either
+                        an <span class="emphasis"><em>int</em></span> or a <span class="emphasis"><em>long</em></span> is passed in the
+                            <span class="emphasis"><em>printf()</em></span> call. However, because
+                            <span class="emphasis"><em>printf()</em></span> has no way to determine the types of its
+                        arguments at run time, the caller must explicitly provide this information
+                        using the <code class="literal">%d</code> or <code class="literal">%ld</code> format specifier. The problem is that simply coding one
+                        of these specifiers within the <span class="emphasis"><em>printf()</em></span> call creates an
+                        implementation dependency. The usual solution is to use the <code class="literal">%ld</code> specifier and always cast the
+                        corresponding value to <span class="emphasis"><em>long</em></span>, like so:</p><a id="I_programlisting3_d1e7480"/><pre class="programlisting">pid_t mypid;
+
+mypid = getpid();           /* Returns process ID of calling process */
+printf("My PID is %ld\n", (long) mypid);</pre><p>We make one exception to the above technique. Because the
+                            <span class="emphasis"><em>off_t</em></span> data type is the size of <span class="emphasis"><em>long
+                            long</em></span> in some compilation environments, we cast
+                            <span class="emphasis"><em>off_t</em></span> values to this type and use the <code class="literal">%lld</code> specifier, as described in <a class="xref" href="ch05.html#i_solidus_o_on_large_files" title="I/O on Large Files">I/O on Large Files</a>.<a id="IDX-CHP-3-0545" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The C99 standard defines the <code class="literal">z</code>
+                            length modifier for <span class="emphasis"><em>printf()</em></span>, to indicate that the
+                            following integer conversion corresponds to a
+                                <span class="emphasis"><em>size_t</em></span> or <span class="emphasis"><em>ssize_t</em></span> type.
+                            Thus, we could write <code class="literal">%zd</code> instead of
+                            using <code class="literal">%ld</code> plus a cast for these
+                            types. Although this specifier is available in
+                                <span class="emphasis"><em>glibc</em></span>, we avoid it because it is not available
+                            on all UNIX implementations.</p><p>The C99 standard also defines the <code class="literal">j</code>
+                            length modifier, which specifies that the corresponding argument is of
+                            type <span class="emphasis"><em>intmax_t</em></span> (or <span class="emphasis"><em>uintmax_t</em></span>),
+                            an integer type that is guaranteed to be large enough to be able to
+                            represent an integer of any type. Ultimately, the use of an
+                                <span class="emphasis"><em>(intmax_t)</em></span> cast plus the <code class="literal">%jd</code> specifier should replace the
+                                <span class="emphasis"><em>(long)</em></span> cast plus the <code class="literal">%ld</code> specifier as the best way of printing numeric system
+                            data type values, since the former approach also handles <span class="emphasis"><em>long
+                                long</em></span> values and any extended integer types such as
+                                <span class="emphasis"><em>int128_t</em></span>. However, (again) we avoid this
+                            technique since it is not possible on all UNIX implementations.</p></div></div></div><div class="sect2" title="Miscellaneous Portability Issues"><div class="titlepage"><div><div><h3 class="title" id="miscellaneous_portability_issues">Miscellaneous Portability Issues</h3></div></div></div><p>In this section, we consider a few other portability issues that we may
+                    encounter when writing system programs.<a id="IDX-CHP-3-0546" class="indexterm"/><a id="IDX-CHP-3-0547" class="indexterm"/><a id="IDX-CHP-3-0548" class="indexterm"/><a id="IDX-CHP-3-0549" class="indexterm"/><a id="IDX-CHP-3-0550" class="indexterm"/></p><div class="sect3" title="Initializing and using structures"><div class="titlepage"><div><div><h4 class="title" id="initializing_and_using_structures">Initializing and using structures</h4></div></div></div><p>Each UNIX implementation specifies a range of standard structures that are
+                        used in various system calls and library functions. As an example, consider
+                        the <span class="emphasis"><em>sembuf</em></span> structure, which is used to represent a
+                        semaphore operation to be performed by the <span class="emphasis"><em>semop()</em></span>
+                        system call:</p><a id="I_programlisting3_d1e7603"/><pre class="programlisting">struct sembuf {
+    unsigned short sem_num;         /* Semaphore number */
+    short          sem_op;          /* Operation to be performed */
+    short          sem_flg;         /* Operation flags */
+};</pre><p>Although SUSv3 specifies structures such as <span class="emphasis"><em>sembuf</em></span>,
+                        it is important to realize the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>In general, the order of field definitions within such structures
+                                is not specified.</p></li><li class="listitem"><p>In some cases, extra implementation-specific fields may be
+                                included in such structures.</p></li></ul></div><p>Consequently, it is not portable to use a structure initializer such as
+                        the following:</p><a id="I_programlisting3_d1e7619"/><pre class="programlisting">struct sembuf s = { 3, -1, SEM_UNDO };</pre><p>Although this initializer will work on Linux, it won’t work on another
+                        implementation where the fields in the <span class="emphasis"><em>sembuf</em></span> structure
+                        are defined in a different order. To portably initialize such structures, we
+                        must use explicit assignment statements, as in the following:</p><a id="I_programlisting3_d1e7626"/><pre class="programlisting">struct sembuf s;
+
+s.sem_num = 3;
+s.sem_op  = -1;
+s.sem_flg = SEM_UNDO;</pre><p>If we are using C99, then we can employ that language’s new syntax for
+                        structure initializers to write an equivalent initialization:</p><a id="I_programlisting3_d1e7630"/><pre class="programlisting">struct sembuf s = { .sem_num = 3, .sem_op = -1, .sem_flg = SEM_UNDO };</pre><p>Considerations about the order of the members of standard structures also
+                        apply if we want to write the contents of a standard structure to a file. To
+                        do this portably, we can’t simply do a binary write of the structure.
+                        Instead, the structure fields must be written individually (probably in text
+                        form) in a specified order.</p></div><div class="sect3" title="Using macros that may not be present on all implementations"><div class="titlepage"><div><div><h4 class="title" id="using_macros_that_may_not_be_present_on">Using macros that may not be present on all implementations</h4></div></div></div><p>In some cases, a macro may not be defined on all UNIX implementations. For
+                        example, the <code class="literal">WCOREDUMP()</code> macro (which
+                        checks whether a child process produced a core dump file) is widely
+                        available, but it is not specified in SUSv3. Therefore, this macro might not
+                        be present on some UNIX implementations. In order to portably handle such
+                        possibilities, we can use the C preprocessor <code class="literal">#ifdef</code> directive, as in the following example:<a id="IDX-CHP-3-0551" class="indexterm"/></p><a id="I_programlisting3_d1e7651"/><pre class="programlisting">#ifdef WCOREDUMP
+    /* Use WCOREDUMP() macro */
+#endif</pre></div><div class="sect3" title="Variation in required header files across implementations"><div class="titlepage"><div><div><h4 class="title" id="variation_in_required_header_files_acros">Variation in required header files across implementations</h4></div></div></div><p>In some cases, the header files required to prototype various system calls
+                        and library functions vary across UNIX implementations. In this book, we
+                        show the requirements on Linux and note any variations from SUSv3.</p><p>Some of the function synopses in this book show a particular header file
+                        with the accompanying comment <span class="emphasis"><em>/* For portability */</em></span>.
+                        This indicates that the header file is not required on Linux or by SUSv3,
+                        but because some other (especially older) implementations may require it, we
+                        should include it in portable programs.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>For many of the functions that it specified, POSIX.1-1990 required
+                            that the header <code class="literal">&lt;sys/types.h&gt;</code> be included before any other
+                            headers associated with the function. However, this requirement was
+                            redundant, because most contemporary UNIX implementations did not
+                            require applications to include this header for these functions.
+                            Consequently, SUSv1 removed this requirement. Nevertheless, when writing
+                            portable programs, it is wise to make this one of the first header files
+                            included. (However, we omit this header from our example programs
+                            because it is not required on Linux and omitting it allows us to make
+                            the example programs one line shorter.)</p></div></div></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id2">Summary</h2></div></div></div><p>System calls allow processes to request services from the kernel. Even the
+                simplest system calls have a significant overhead by comparison with a user-space
+                function call, since the system must temporarily switch to kernel mode to execute
+                the system call, and the kernel must verify system call arguments and transfer data
+                between user memory and kernel memory.<a id="IDX-CHP-3-0552" class="indexterm"/></p><p>The standard C library provides a multitude of library functions that perform a
+                wide range of tasks. Some library functions employ system calls to do their work;
+                others perform tasks entirely within user space. On Linux, the usual standard C
+                library implementation that is used is <span class="emphasis"><em>glibc</em></span>.</p><p>Most system calls and library functions return a status indicating whether a call
+                has succeeded or failed. Such status returns should always be checked.</p><p>We introduced a number of functions that we have implemented for use in the
+                example programs in this book. The tasks performed by these functions include
+                diagnosing errors and parsing command-line arguments.</p><p>We discussed various guidelines and techniques that can help us write portable
+                system programs that run on any standards-conformant system.</p><p>When compiling an application, we can define various feature test macros that
+                control the definitions exposed by header files. This is useful if we want to ensure
+                that a program conforms to some formal or implementation-defined standard(s).</p><p>We can improve the portability of system programs by using the system data types
+                defined in various standards, rather than native C types. SUSv3 specifies a wide
+                range of system data types that an implementation should support and that an
+                application should employ.</p></div><div class="sect1" title="Exercise"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercise-id1">Exercise</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>When using the Linux-specific <span class="emphasis"><em>reboot()</em></span> system call to
+                        reboot the system, the second argument, <span class="emphasis"><em>magic2</em></span>, must be
+                        specified as one of a set of magic numbers (e.g., <code class="literal">LINUX_REBOOT_MAGIC2</code>). What is the significance of these
+                        numbers? (Converting them to hexadecimal provides a clue.)</p></li></ol></div></div></section></body></html>

@@ -1,0 +1,1416 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 44. Pipes and FIFOs</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch43.html" title="Chapter 43. Interprocess Communication Overview"/><link rel="next" href="ch45.html" title="Chapter 45. Introduction to System V IPC"/></head><body><section class="chapter" title="Chapter 44. Pipes and FIFOs" epub:type="chapter" id="pipes_and_fifos"><div class="titlepage"><div><div><h2 class="title">Chapter 44. Pipes and FIFOs</h2></div></div></div><p>This chapter describes pipes and FIFOs. Pipes are the oldest method of IPC on the UNIX
+            system, having appeared in Third Edition UNIX in the early 1970s. Pipes provide an
+            elegant solution to a frequent requirement: having created two processes to run
+            different programs (commands), how can the shell allow the output produced by one
+            process to be used as the input to the other process? Pipes can be used to pass data
+            between related processes (the meaning of <span class="emphasis"><em>related</em></span> will become clear
+            later). FIFOs are a variation on the pipe concept. The important difference is that
+            FIFOs can be used for communication between <span class="emphasis"><em>any</em></span>
+                processes.<a id="IDX-CHP-44-6082" class="indexterm"/></p><div class="sect1" title="Overview"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="overview-id11">Overview</h2></div></div></div><p>Every user of the shell is familiar with the use of pipes in commands such as the
+                following, which counts the number of files in a directory:</p><a id="I_programlisting44_d1e116263"/><pre class="programlisting">$ <strong class="userinput"><code>ls | wc -l</code></strong></pre><p>In order to execute the above command, the shell creates two processes, executing
+                    <span class="emphasis"><em>ls</em></span> and <span class="emphasis"><em>wc</em></span>, respectively. (This is done
+                using <span class="emphasis"><em>fork()</em></span> and <span class="emphasis"><em>exec()</em></span>, which are
+                described in <a class="xref" href="ch24.html" title="Chapter 24. Process Creation">Chapter 24</a> and <a class="xref" href="ch27.html" title="Chapter 27. Program Execution">Chapter 27</a>.) <a class="xref" href="ch44.html#using_a_pipe_to_connect_two_processes" title="Figure 44-1. Using a pipe to connect two processes">Figure 44-1</a> shows how the two processes
+                employ the pipe.</p><p>Among other things, <a class="xref" href="ch44.html#using_a_pipe_to_connect_two_processes" title="Figure 44-1. Using a pipe to connect two processes">Figure 44-1</a> is
+                intended to illustrate how pipes got their name. We can think of a pipe as a piece
+                of plumbing that allows data to flow from one process to another.</p><div class="figure"><a id="using_a_pipe_to_connect_two_processes"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject44_d1e116295"/><img src="figs/web/44-1_PIPE-overview-scale90.png.jpg" alt="Using a pipe to connect two processes"/></div></div><div class="figure-title">Figure 44-1. Using a pipe to connect two processes</div></div><p>One point to note in <a class="xref" href="ch44.html#using_a_pipe_to_connect_two_processes" title="Figure 44-1. Using a pipe to connect two processes">Figure 44-1</a> is
+                that the two processes are connected to the pipe so that the writing process
+                    (<span class="emphasis"><em>ls</em></span>) has its standard output (file descriptor 1) joined to
+                the write end of the pipe, while the reading process (<span class="emphasis"><em>wc</em></span>) has
+                its standard input (file descriptor 0) joined to the read end of the pipe. In
+                effect, these two processes are unaware of the existence of the pipe; they just read
+                from and write to the standard file descriptors. The shell must do some work in
+                order to set things up in this way, and we see how this is done in Section
+                44.4.</p><p>In the following paragraphs, we cover a number of important characteristics of
+                pipes.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="a_pipe_is_a_byte_stream"/></div></div></div><div class="sect3" title="A pipe is a byte stream"><div class="titlepage"><div><div><h4 class="title" id="a_pipe_is_a_byte_stream-id1">A pipe is a byte stream</h4></div></div></div><p>When we say that a pipe is a byte stream, we mean that there is no concept
+                        of messages or message boundaries when using a pipe. The process reading
+                        from a pipe can read blocks of data of any size, regardless of the size of
+                        blocks written by the writing process. Furthermore, the data passes through
+                        the pipe sequentially—bytes are read from a pipe in exactly the order they
+                        were written. It is not possible to randomly access the data in a pipe using
+                            <span class="emphasis"><em>lseek()</em></span>.<a id="IDX-CHP-44-6084" class="indexterm"/><a id="IDX-CHP-44-6085" class="indexterm"/><a id="IDX-CHP-44-6083" class="indexterm"/></p><p>If we want to implement the notion of discrete messages in a pipe, we must
+                        do this within our application. While this is feasible (refer to <a class="xref" href="ch44.html#a_client-server_application_using_fifos" title="A Client-Server Application Using FIFOs">A Client-Server Application Using FIFOs</a>), it may be
+                        preferable to use alternative IPC mechanisms, such as message queues and
+                        datagram sockets, which we discuss in later chapters.</p></div><div class="sect3" title="Reading from a pipe"><div class="titlepage"><div><div><h4 class="title" id="reading_from_a_pipe">Reading from a pipe</h4></div></div></div><p>Attempts to read from a pipe that is currently empty block until at least
+                        one byte has been written to the pipe. If the write end of a pipe is closed,
+                        then a process reading from the pipe will see end-of-file (i.e.,
+                            <span class="emphasis"><em>read()</em></span> returns 0) once it has read all remaining
+                        data in the pipe.</p></div><div class="sect3" title="Pipes are unidirectional"><div class="titlepage"><div><div><h4 class="title" id="pipes_are_unidirectional">Pipes are unidirectional</h4></div></div></div><p>Data can travel only in one direction through a pipe. One end of the pipe
+                        is used for writing, and the other end is used for reading.</p><p>On some other UNIX implementations—notably those derived from System V
+                        Release 4—pipes are bidirectional (so-called <span class="emphasis"><em>stream
+                            pipes</em></span>). Bidirectional pipes are not specified by any UNIX
+                        standards, so that, even on implementations where they are provided, it is
+                        best to avoid reliance on their semantics. As an alternative, we can use
+                        UNIX domain stream socket pairs (created using the
+                            <span class="emphasis"><em>socketpair()</em></span> system call described in <a class="xref" href="ch57.html#creating_a_connected_socket_pair_colon_s" title="Creating a Connected Socket Pair: socketpair()">Creating a Connected Socket Pair: <span class="emphasis"><em>socketpair()</em></span></a>), which provide a
+                        standardized bidirectional communication mechanism that is semantically
+                        equivalent to stream pipes.<a id="IDX-CHP-44-6086" class="indexterm"/></p></div><div class="sect3" title="Writes of up to PIPE_BUF bytes are guaranteed to be atomic"><div class="titlepage"><div><div><h4 class="title" id="writes_of_up_to_pipe_underscore_buf_byte">Writes of up to <code class="literal">PIPE_BUF</code> bytes are
+                        guaranteed to be atomic</h4></div></div></div><p>If multiple processes are writing to a single pipe, then it is guaranteed
+                        that their data won’t be intermingled if they write no more than <code class="literal">PIPE_BUF</code> bytes at a time.</p><p>SUSv3 requires that <code class="literal">PIPE_BUF</code> be at
+                        least <code class="literal">_POSIX_PIPE_BUF</code> (512). An
+                        implementation should define <code class="literal">PIPE_BUF</code> (in
+                            <code class="literal">&lt;limits.h&gt;</code>) and/or
+                        allow the call <span class="emphasis"><em>fpathconf(fd, _PC_PIPE_BUF)</em></span> to return
+                        the actual upper limit for atomic writes. <code class="literal">PIPE_BUF</code> varies across UNIX implementations; for example, it
+                        is 512 bytes on FreeBSD 6.0, 4096 bytes on Tru64 5.1, and 5120 bytes on
+                        Solaris 8. On Linux, <code class="literal">PIPE_BUF</code> has the
+                        value 4096.</p><p>When writing blocks of data larger than <code class="literal">PIPE_BUF</code> bytes to a pipe, the kernel may transfer the data in
+                        multiple smaller pieces, appending further data as the reader removes bytes
+                        from the pipe. (The <span class="emphasis"><em>write()</em></span> call blocks until all of
+                        the data has been written to the pipe.) When there is only a single process
+                        writing to a pipe (the usual case), this doesn’t matter. However, if there
+                        are multiple writer processes, then writes of large blocks may be broken
+                        into segments of arbitrary size (which may be smaller than <code class="literal">PIPE_BUF</code> bytes) and interleaved with writes by
+                        other processes.</p><p>The <code class="literal">PIPE_BUF</code> limit affects exactly when
+                        data is transferred to the pipe. When writing up to <code class="literal">PIPE_BUF</code> bytes, <span class="emphasis"><em>write()</em></span> will block if
+                        necessary until sufficient space is available in the pipe so that it can
+                        complete the operation atomically. When more than <code class="literal">PIPE_BUF</code> bytes are being written,
+                            <span class="emphasis"><em>write()</em></span> transfers as much data as possible to fill
+                        the pipe, and then blocks until data has been removed from the pipe by some
+                        reading process. If such a blocked <span class="emphasis"><em>write()</em></span> is
+                        interrupted by a signal handler, then the call unblocks and returns a count
+                        of the number of bytes successfully transferred, which will be less than was
+                        requested (a so-called <span class="emphasis"><em>partial write</em></span>).<a id="IDX-CHP-44-6087" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>On Linux 2.2, pipe writes of <span class="emphasis"><em>any</em></span> size are atomic,
+                            unless interrupted by a signal handler. On Linux 2.4 and later, any
+                            write greater than <code class="literal">PIPE_BUF</code> bytes may
+                            be interleaved with writes by other processes. (The kernel code
+                            implementing pipes underwent substantial changes between kernel versions
+                            2.2 and 2.4.)</p></div></div><div class="sect3" title="Pipes have a limited capacity"><div class="titlepage"><div><div><h4 class="title" id="pipes_have_a_limited_capacity">Pipes have a limited capacity</h4></div></div></div><p>A pipe is simply a buffer maintained in kernel memory. This buffer has a
+                        maximum capacity. Once a pipe is full, further writes to the pipe block
+                        until the reader removes some data from the pipe.<a id="IDX-CHP-44-6089" class="indexterm"/><a id="IDX-CHP-44-6090" class="indexterm"/><a id="IDX-CHP-44-6091" class="indexterm"/><a id="IDX-CHP-44-6092" class="indexterm"/><a id="IDX-CHP-44-6093" class="indexterm"/><a id="IDX-CHP-44-6088" class="indexterm"/></p><p>SUSv3 makes no requirement about the capacity of a pipe. In Linux kernels
+                        before 2.6.11, the pipe capacity is the same as the system page size (e.g.,
+                        4096 bytes on x86-32); since Linux 2.6.11, the pipe capacity is 65,536
+                        bytes. Other UNIX implementations have different pipe capacities.</p><p>In general, an application never needs to know the exact capacity of a
+                        pipe. If we want to prevent the writer process(es) from blocking, the
+                        process(es) reading from the pipe should be designed to read data as soon as
+                        it is available.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>In theory, there is no reason why a pipe couldn’t operate with smaller
+                            capacities, even with a single-byte buffer. The reason for employing
+                            large buffer sizes is efficiency: each time a writer fills the pipe, the
+                            kernel must perform a context switch to allow the reader to be scheduled
+                            so that it can empty some data from the pipe. Employing a larger buffer
+                            size means that fewer context switches are required.</p><p>Starting with Linux 2.6.35, the capacity of a pipe can be modified.
+                            The Linux-specific call <span class="emphasis"><em>fcntl(fd, F_SETPIPE_SZ,
+                                size)</em></span> changes the capacity of the pipe referred to by
+                                <span class="emphasis"><em>fd</em></span> to be at least <span class="emphasis"><em>size</em></span>
+                            bytes. An unprivileged process can change the pipe capacity to any value
+                            in the range from the system page size up to the value in <code class="literal">/proc/sys/fs/pipe-max-size</code>. The default
+                            value for <code class="literal">pipe-max-size</code> is 1,048,576
+                            bytes. A privileged (<code class="literal">CAP_SYS_RESOURCE</code>) process can override this limit. When
+                            allocating space for the pipe, the kernel may round
+                                <span class="emphasis"><em>size</em></span> up to some value convenient for the
+                            implementation. The <span class="emphasis"><em>fcntl(fd, F_GETPIPE_SZ)</em></span> call
+                            returns the actual size allocated for the pipe.</p></div></div></div></div><div class="sect1" title="Creating and Using Pipes"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="creating_and_using_pipes">Creating and Using Pipes</h2></div></div></div><p>The <span class="emphasis"><em>pipe()</em></span> system call creates a new pipe.<a id="IDX-CHP-44-6094" class="indexterm"/><a id="IDX-CHP-44-6095" class="indexterm"/><a id="IDX-CHP-44-6096" class="indexterm"/><a id="IDX-CHP-44-6097" class="indexterm"/><a id="IDX-CHP-44-6098" class="indexterm"/><a id="IDX-CHP-44-6099" class="indexterm"/><a id="IDX-CHP-44-6100" class="indexterm"/></p><a id="I_programlisting44_d1e116566"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+int <strong class="userinput"><code>pipe</code></strong>(int <span class="emphasis"><em>filedes</em></span>[2]);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>A successful call to <span class="emphasis"><em>pipe()</em></span> returns two open file descriptors
+                in the array <span class="emphasis"><em>filedes</em></span>: one for the read end of the pipe
+                    (<span class="emphasis"><em>filedes[0]</em></span>) and one for the write end
+                    (<span class="emphasis"><em>filedes[1]</em></span>).</p><p>As with any file descriptor, we can use the <span class="emphasis"><em>read()</em></span> and
+                    <span class="emphasis"><em>write()</em></span> system calls to perform I/O on the pipe. Once
+                written to the write end of a pipe, data is immediately available to be read from
+                the read end. A <span class="emphasis"><em>read()</em></span> from a pipe obtains the lesser of the
+                number of bytes requested and the number of bytes currently available in the pipe
+                (but blocks if the pipe is empty).</p><p>We can also use the <span class="emphasis"><em>stdio</em></span> functions
+                    (<span class="emphasis"><em>printf()</em></span>, <span class="emphasis"><em>scanf()</em></span>, and so on) with
+                pipes by first using <span class="emphasis"><em>fdopen()</em></span> to obtain a file stream
+                corresponding to one of the descriptors in <span class="emphasis"><em>filedes</em></span> (<a class="xref" href="ch13.html#mixing_library_functions_and_system_call" title="Mixing Library Functions and System Calls for File I/O">Mixing Library Functions and System Calls for File I/O</a>). However, when doing this,
+                we must be aware of the <span class="emphasis"><em>stdio</em></span> buffering issues described in
+                Section 44.6.<a id="IDX-CHP-44-6101" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The call <span class="emphasis"><em>ioctl(fd, FIONREAD, &amp;cnt)</em></span> returns the
+                    number of unread bytes in the pipe or FIFO referred to by the file descriptor
+                        <span class="emphasis"><em>fd</em></span>. This feature is also available on some other
+                    implementations, but is not specified in SUSv3.</p></div><p><a class="xref" href="ch44.html#process_file_descriptors_after_creating" title="Figure 44-2. Process file descriptors after creating a pipe">Figure 44-2</a> shows the situation
+                after a pipe has been created by <span class="emphasis"><em>pipe()</em></span>, with the calling
+                process having file descriptors referring to each end.</p><div class="figure"><a id="process_file_descriptors_after_creating"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject44_d1e116647"/><img src="figs/web/44-2_PIPE-creation-scale90.png.jpg" alt="Process file descriptors after creating a pipe"/></div></div><div class="figure-title">Figure 44-2. Process file descriptors after creating a pipe</div></div><p>A pipe has few uses within a single process (we consider one in <a class="xref" href="ch63.html#the_self-pipe_trick" title="The Self-Pipe Trick">The Self-Pipe Trick</a>). Normally, we use a pipe to allow communication
+                between two processes. To connect two processes using a pipe, we follow the
+                    <span class="emphasis"><em>pipe()</em></span> call with a call to <span class="emphasis"><em>fork()</em></span>.
+                During a <span class="emphasis"><em>fork()</em></span>, the child process inherits copies of its
+                parent’s file descriptors (<a class="xref" href="ch24.html#file_sharing_between_parent_and_child" title="File Sharing Between Parent and Child">File Sharing Between Parent and Child</a>),
+                bringing about the situation shown on the left side of <a class="xref" href="ch44.html#setting_up_a_pipe_to_transfer_data_from" title="Figure 44-3. Setting up a pipe to transfer data from a parent to a child">Figure 44-3</a>.<a id="IDX-CHP-44-6102" class="indexterm"/></p><div class="figure"><a id="setting_up_a_pipe_to_transfer_data_from"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject44_d1e116679"/><img src="figs/web/44-3_PIPE-after-fork-scale90.png.jpg" alt="Setting up a pipe to transfer data from a parent to a child"/></div></div><div class="figure-title">Figure 44-3. Setting up a pipe to transfer data from a parent to a child</div></div><p>While it is possible for the parent and child to both read from and write to the
+                pipe, this is not usual. Therefore, immediately after the
+                    <span class="emphasis"><em>fork()</em></span>, one process closes its descriptor for the write end
+                of the pipe, and the other closes its descriptor for the read end. For example, if
+                the parent is to send data to the child, then it would close its read descriptor for
+                the pipe, <span class="emphasis"><em>filedes[0]</em></span>, while the child would close its write
+                descriptor for the pipe, <span class="emphasis"><em>filedes[1]</em></span>, bringing about the
+                situation shown on the right side of <a class="xref" href="ch44.html#setting_up_a_pipe_to_transfer_data_from" title="Figure 44-3. Setting up a pipe to transfer data from a parent to a child">Figure 44-3</a>. The code to create this
+                setup is shown in <a class="xref" href="ch44.html#steps_in_creating_a_pipe_to_transfer_dat" title="Example 44-1. Steps in creating a pipe to transfer data from a parent to a child">Example 44-1</a>.</p><div class="example"><a id="steps_in_creating_a_pipe_to_transfer_dat"/><div class="example-title">Example 44-1. Steps in creating a pipe to transfer data from a parent to a child</div><div class="example-contents"><pre class="programlisting">int filedes[2];
+
+    if (pipe(filedes) == -1)                    /* Create the pipe */
+        errExit("pipe");
+
+    switch (fork()) {                           /* Create a child process */
+    case -1:
+        errExit("fork");
+
+    case 0:  /* Child */
+        if (close(filedes[1]) == -1)            /* Close unused write end */
+            errExit("close");
+
+        /* Child now reads from pipe */
+        break;
+
+    default: /* Parent */
+        if (close(filedes[0]) == -1)            /* Close unused read end */
+            errExit("close");
+
+        /* Parent now writes to pipe */
+        break;
+    }</pre></div></div><p>One reason that it is not usual to have both the parent and child reading from a
+                single pipe is that if two processes try to simultaneously read from a pipe, we
+                can’t be sure which process will be the first to succeed—the two processes race for
+                data. Preventing such races would require the use of some synchronization mechanism.
+                However, if we require bidirectional communication, there is a simpler way: just
+                create two pipes, one for sending data in each direction between the two processes.
+                (If employing this technique, then we need to be wary of deadlocks that may occur if
+                both processes block while trying to read from empty pipes or while trying to write
+                to pipes that are already full.)</p><p>While it is possible to have multiple processes writing to a pipe, it is typical
+                to have only a single writer. (We show one example of where it is useful to have
+                multiple writers to a pipe in Section 44.3.) By contrast, there are situations where
+                it can be useful to have multiple writers on a FIFO, and we see an example of this
+                in Section 44.8.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Starting with kernel 2.6.27, Linux supports a new, nonstandard system call,
+                        <span class="emphasis"><em>pipe2()</em></span>. This system call performs the same task as
+                        <span class="emphasis"><em>pipe()</em></span>, but supports an additional argument,
+                        <span class="emphasis"><em>flags</em></span>, that can be used to modify the behavior of the
+                    system call. Two flags are supported. The <code class="literal">O_CLOEXEC</code> flag causes the kernel to enable the close-on-exec flag
+                        (<code class="literal">FD_CLOEXEC</code>) for the two new file
+                    descriptors. This flag is useful for the same reasons as the
+                        <span class="emphasis"><em>open()</em></span>
+                    <code class="literal">O_CLOEXEC</code> flag described in <a class="xref" href="ch04.html#file_descriptor_number_returned_by-id1" title="File descriptor number returned by open()">File descriptor number returned by <span class="emphasis"><em>open()</em></span></a>. The <code class="literal">O_NONBLOCK</code> flag causes the kernel to mark both underlying open
+                    file descriptions as nonblocking, so that future I/O operations will be
+                    nonblocking. This saves additional calls to <span class="emphasis"><em>fcntl()</em></span> to
+                    achieve the same result.<a id="IDX-CHP-44-6103" class="indexterm"/><a id="IDX-CHP-44-6104" class="indexterm"/></p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="pipes_allow_communication_between"/></div></div></div><div class="sect3" title="Pipes allow communication between related processes"><div class="titlepage"><div><div><h4 class="title" id="pipes_allow_communication_between-id1">Pipes allow communication between related processes</h4></div></div></div><p>In the discussion so far, we have talked about using pipes for
+                        communication between a parent and a child process. However, pipes can be
+                        used for communication between any two (or more) related processes, as long
+                        as the pipe was created by a common ancestor before the series of
+                            <span class="emphasis"><em>fork()</em></span> calls that led to the existence of the
+                        processes. (This is what we meant when we referred to <span class="emphasis"><em>related
+                            processes</em></span> at the beginning of this chapter.) For example, a
+                        pipe could be used for communication between a process and its grandchild.
+                        The first process creates the pipe, and then forks a child that in turn
+                        forks to yield the grandchild. A common scenario is that a pipe is used for
+                        communication between two siblings—their parent creates the pipe, and then
+                        creates the two children. This is what the shell does when building a
+                            pipeline.<a id="IDX-CHP-44-6105" class="indexterm"/><a id="IDX-CHP-44-6106" class="indexterm"/><a id="IDX-CHP-44-6107" class="indexterm"/><a id="IDX-CHP-44-6108" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>There is an exception to the statement that pipes can be used to
+                            communicate only between related processes. Passing a file descriptor
+                            over a UNIX domain socket (a technique that we briefly describe in <a class="xref" href="ch61.html#passing_file_descriptors" title="Passing File Descriptors">Passing File Descriptors</a>) makes it possible to pass a
+                            file descriptor for a pipe to an unrelated process.</p></div></div><div class="sect3" title="Closing unused pipe file descriptors"><div class="titlepage"><div><div><h4 class="title" id="closing_unused_pipe_file_descriptors">Closing unused pipe file descriptors</h4></div></div></div><p>Closing unused pipe file descriptors is more than a matter of ensuring
+                        that a process doesn’t exhaust its limited set of file descriptors—it is
+                        essential to the correct use of pipes. We now consider why the unused file
+                        descriptors for both the read and write ends of the pipe must be
+                        closed.</p><p>The process reading from the pipe closes its write descriptor for the
+                        pipe, so that, when the other process completes its output and closes its
+                        write descriptor, the reader sees end-of-file (once it has read any
+                        outstanding data in the pipe).</p><p>If the reading process doesn’t close the write end of the pipe, then,
+                        after the other process closes its write descriptor, the reader won’t see
+                        end-of-file, even after it has read all data from the pipe. Instead, a
+                            <span class="emphasis"><em>read()</em></span> would block waiting for data, because the
+                        kernel knows that there is still at least one write descriptor open for the
+                        pipe. That this descriptor is held open by the reading process itself is
+                        irrelevant; in theory, that process could still write to the pipe, even if
+                        it is blocked trying to read. For example, the <span class="emphasis"><em>read()</em></span>
+                        might be interrupted by a signal handler that writes data to the pipe. (This
+                        is a realistic scenario, as we’ll see in <a class="xref" href="ch63.html#the_self-pipe_trick" title="The Self-Pipe Trick">The Self-Pipe Trick</a>.)</p><p>The writing process closes its read descriptor for the pipe for a
+                        different reason. When a process tries to write to a pipe for which no
+                        process has an open read descriptor, the kernel sends the <code class="literal">SIGPIPE</code> signal to the writing process. By
+                        default, this signal kills a process. A process can instead arrange to catch
+                        or ignore this signal, in which case the <span class="emphasis"><em>write()</em></span> on the
+                        pipe fails with the error <code class="literal">EPIPE</code> (broken
+                        pipe). Receiving the <code class="literal">SIGPIPE</code> signal or
+                        getting the <code class="literal">EPIPE</code> error is a useful
+                        indication about the status of the pipe, and this is why unused read
+                        descriptors for the pipe should be closed.<a id="IDX-CHP-44-6109" class="indexterm"/><a id="IDX-CHP-44-6110" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Note that the treatment of a <span class="emphasis"><em>write()</em></span> that is
+                            interrupted by a <code class="literal">SIGPIPE</code> handler is
+                            special. Normally, when a <span class="emphasis"><em>write()</em></span> (or other “slow”
+                            system call) is interrupted by a signal handler, the call is either
+                            automatically restarted or fails with the error <code class="literal">EINTR</code>, depending on whether the handler was installed
+                            with the <span class="emphasis"><em>sigaction()</em></span>
+                            <code class="literal">SA_RESTART</code> flag (<a class="xref" href="ch21.html#interruption_and_restarting_of_system_ca" title="Interruption and Restarting of System Calls">Interruption and Restarting of System Calls</a>). The behavior
+                            in the case of <code class="literal">SIGPIPE</code> is different
+                            because it makes no sense either to automatically restart the
+                                <span class="emphasis"><em>write()</em></span> or to simply indicate that the
+                                <span class="emphasis"><em>write()</em></span> was interrupted by a handler (thus
+                            implying that the <span class="emphasis"><em>write()</em></span> could usefully be
+                            manually restarted). In neither case can a subsequent
+                                <span class="emphasis"><em>write()</em></span> attempt succeed, because the pipe will
+                            still be broken.</p></div><p>If the writing process doesn’t close the read end of the pipe, then, even
+                        after the other process closes the read end of the pipe, the writing process
+                        will still be able to write to the pipe. Eventually, the writing process
+                        will fill the pipe, and a further attempt to write will block
+                        indefinitely.</p><p>One final reason for closing unused file descriptors is that it is only
+                        after all file descriptors in all processes that refer to a pipe are closed
+                        that the pipe is destroyed and its resources released for reuse by other
+                        processes. At this point, any unread data in the pipe is lost.</p></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id57">Example program</h4></div></div></div><p>The program in <a class="xref" href="ch44.html#using_a_pipe_to_communicate_between_a_pa" title="Example 44-2. Using a pipe to communicate between a parent and child process">Example 44-2</a>
+                        demonstrates the use of a pipe for communication between parent and child
+                        processes. This example demonstrates the byte-stream nature of pipes
+                        referred to earlier—the parent writes its data in a single operation, while
+                        the child reads data from the pipe in small blocks.<a id="IDX-CHP-44-6111" class="indexterm"/><a id="IDX-CHP-44-6112" class="indexterm"/></p><p>The main program calls <span class="emphasis"><em>pipe()</em></span> to create a pipe
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e116899"/><img src="figs/web/U001.png" alt=""/></span>, and then calls <span class="emphasis"><em>fork()</em></span> to create a
+                        child <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e116908"/><img src="figs/web/U002.png" alt=""/></span>. After the <span class="emphasis"><em>fork()</em></span>, the parent
+                        process closes its file descriptor for the read end of the pipe
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e116918"/><img src="figs/web/U008.png" alt=""/></span>, and writes the string given as the program’s
+                        command-line argument to the write end of the pipe <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e116924"/><img src="figs/web/U009.png" alt=""/></span>. The parent then closes the read end of the pipe
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e116930"/><img src="figs/web/U010.png" alt=""/></span>, and calls <span class="emphasis"><em>wait()</em></span> to wait for the
+                        child to terminate <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e116939"/><img src="figs/web/U011.png" alt=""/></span>. After closing its file descriptor for the write end of
+                        the pipe <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e116945"/><img src="figs/web/U003.png" alt=""/></span>, the child process enters a loop where it reads
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e116952"/><img src="figs/web/U004.png" alt=""/></span> blocks of data (of up to <code class="literal">BUF_SIZE</code> bytes) from the pipe and writes <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e116961"/><img src="figs/web/U006.png" alt=""/></span> them to standard output. When the child encounters
+                        end-of-file on the pipe <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e116967"/><img src="figs/web/U005.png" alt=""/></span>, it exits the loop <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e116973"/><img src="figs/web/U007.png" alt=""/></span>, writes a trailing newline character, closes its
+                        descriptor for the read end of the pipe, and terminates.</p><p>Here’s an example of what we might see when running the program in <a class="xref" href="ch44.html#using_a_pipe_to_communicate_between_a_pa" title="Example 44-2. Using a pipe to communicate between a parent and child process">Example 44-2</a>:</p><a id="I_programlisting44_d1e116983"/><pre class="programlisting">$ <strong class="userinput"><code>./simple_pipe 'It was a bright cold day in April, '\</code></strong>
+<strong class="userinput"><code>'and the clocks were striking thirteen.'</code></strong>
+It was a bright cold day in April, and the clocks were striking thirteen.</pre><div class="example"><a id="using_a_pipe_to_communicate_between_a_pa"/><div class="example-title">Example 44-2. Using a pipe to communicate between a parent and child
+                            process</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pipes/simple_pipe.c</code></strong>
+    #include &lt;sys/wait.h&gt;
+    #include "tlpi_hdr.h"
+
+    #define BUF_SIZE 10
+
+    int
+    main(int argc, char *argv[])
+    {
+        int pfd[2];                             /* Pipe file descriptors */
+        char buf[BUF_SIZE];
+        ssize_t numRead;
+
+        if (argc != 2 || strcmp(argv[1], "--help") == 0)
+            usageErr("%s string\n", argv[0]);
+
+<img src="figs/web/U001.png" alt=""/>    if (pipe(pfd) == -1)                    /* Create the pipe */
+            errExit("pipe");
+
+<img src="figs/web/U002.png" alt=""/>    switch (fork()) {xs
+        case -1:
+            errExit("fork");
+
+        case 0:             /* Child  - reads from pipe */
+<img src="figs/web/U003.png" alt=""/>        if (close(pfd[1]) == -1)            /* Write end is unused */
+                errExit("close - child");
+
+            for (;;) {              /* Read data from pipe, echo on stdout */
+<img src="figs/web/U004.png" alt=""/>            numRead = read(pfd[0], buf, BUF_SIZE);
+                if (numRead == -1)
+                    errExit("read");
+<img src="figs/web/U005.png" alt=""/>            if (numRead == 0)
+                    break;                      /* End-of-file */
+<img src="figs/web/U006.png" alt=""/>            if (write(STDOUT_FILENO, buf, numRead) != numRead)
+                    fatal("child - partial/failed write");
+            }
+
+<img src="figs/web/U007.png" alt=""/>        write(STDOUT_FILENO, "\n", 1);
+            if (close(pfd[0]) == -1)
+                errExit("close");
+            _exit(EXIT_SUCCESS);
+
+        default:            /* Parent - writes to pipe */
+<img src="figs/web/U008.png" alt=""/>        if (close(pfd[0]) == -1)            /* Read end is unused */
+                errExit("close - parent");
+
+<img src="figs/web/U009.png" alt=""/>if (write(pfd[1], argv[1], strlen(argv[1])) != strlen(argv[1]))
+                fatal("parent - partial/failed write");
+
+<img src="figs/web/U010.png" alt=""/>        if (close(pfd[1]) == -1)            /* Child will see EOF */
+                errExit("close");
+<img src="figs/web/U011.png" alt=""/>        wait(NULL);                         /* Wait for child to finish */
+            exit(EXIT_SUCCESS);
+        }
+    }
+         <strong class="userinput"><code>pipes/simple_pipe.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Pipes as a Method of Process Synchronization"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="pipes_as_a_method_of_process_synchroniza">Pipes as a Method of Process Synchronization</h2></div></div></div><p>In <a class="xref" href="ch24.html#avoiding_race_conditions_by_synchronizin" title="Avoiding Race Conditions by Synchronizing with Signals">Avoiding Race Conditions by Synchronizing with Signals</a>, we looked at how
+                signals could be used to synchronize the actions of parent and child processes in
+                order to avoid race conditions. Pipes can be used to achieve a similar result, as
+                shown by the skeleton program in <a class="xref" href="ch44.html#using_a_pipe_to_synchronize_multiple_pro" title="Example 44-3. Using a pipe to synchronize multiple processes">Example 44-3</a>. This program creates
+                multiple child processes (one for each command-line argument), each of which is
+                intended to accomplish some action, simulated in the example program by sleeping for
+                some time. The parent waits until all children have completed their
+                    actions.<a id="IDX-CHP-44-6113" class="indexterm"/><a id="IDX-CHP-44-6114" class="indexterm"/><a id="IDX-CHP-44-6115" class="indexterm"/><a id="IDX-CHP-44-6116" class="indexterm"/></p><p>To perform the synchronization, the parent builds a pipe <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e117098"/><img src="figs/web/U001.png" alt=""/></span> before creating the child processes <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e117104"/><img src="figs/web/U002.png" alt=""/></span>. Each child inherits a file descriptor for the write end of the
+                pipe and closes this descriptor once it has completed its action <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e117110"/><img src="figs/web/U003.png" alt=""/></span>. After all of the children have closed their file descriptors
+                for the write end of the pipe, the parent’s <span class="emphasis"><em>read()</em></span>
+                <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e117119"/><img src="figs/web/U005.png" alt=""/></span> from the pipe will complete, returning end-of-file (0). At this
+                point, the parent is free to carry on to do other work. (Note that closing the
+                unused write end of the pipe in the parent <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e117126"/><img src="figs/web/U004.png" alt=""/></span> is essential to the correct operation of this technique;
+                otherwise, the parent would block forever when trying to read from the pipe.)</p><p>The following is an example of what we see when we use the program in <a class="xref" href="ch44.html#using_a_pipe_to_synchronize_multiple_pro" title="Example 44-3. Using a pipe to synchronize multiple processes">Example 44-3</a> to create three children
+                that sleep for 4, 2, and 6 seconds:</p><a id="I_programlisting44_d1e117136"/><pre class="programlisting">$ <strong class="userinput"><code>./pipe_sync 4 2 6</code></strong>
+08:22:16  Parent started
+08:22:18  Child 2 (PID=2445) closing pipe
+08:22:20  Child 1 (PID=2444) closing pipe
+08:22:22  Child 3 (PID=2446) closing pipe
+08:22:22  Parent ready to go</pre><div class="example"><a id="using_a_pipe_to_synchronize_multiple_pro"/><div class="example-title">Example 44-3. Using a pipe to synchronize multiple processes</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pipes/pipe_sync.c</code></strong>
+    #include "curr_time.h"                      /* Declaration of currTime() */
+    #include "tlpi_hdr.h"
+
+    int
+    main(int argc, char *argv[])
+    {
+        int pfd[2];                             /* Process synchronization pipe */
+        int j, dummy;
+
+            if (argc &lt; 2 || strcmp(argv[1], "--help") == 0)
+            usageErr("%s sleep-time...\n", argv[0]);
+
+        setbuf(stdout, NULL);                   /* Make stdout unbuffered, since we
+                                                   terminate child with _exit() */
+        printf("%s  Parent started\n", currTime("%T"));
+
+<img src="figs/web/U001.png" alt=""/>    if (pipe(pfd) == -1)
+            errExit("pipe");
+
+        for (j = 1; j &lt; argc; j++) {
+<img src="figs/web/U002.png" alt=""/>        switch (fork()) {
+            case -1:
+                errExit("fork %d", j);
+
+            case 0: /* Child */
+                if (close(pfd[0]) == -1)        /* Read end is unused */
+                    errExit("close");
+
+                /* Child does some work, and lets parent know it's done */
+
+                sleep(getInt(argv[j], GN_NONNEG, "sleep-time"));
+                                                /* Simulate processing */
+                printf("%s  Child %d (PID=%ld) closing pipe\n",
+                        currTime("%T"), j, (long) getpid());
+<img src="figs/web/U003.png" alt=""/>            if (close(pfd[1]) == -1)
+                    errExit("close");
+
+                /* Child now carries on to do other things... */
+
+                _exit(EXIT_SUCCESS);
+
+            default: /* Parent loops to create next child */
+                break;
+            }
+        }
+
+        /* Parent comes here; close write end of pipe so we can see EOF */
+
+<img src="figs/web/U004.png" alt=""/>    if (close(pfd[1]) == -1)                /* Write end is unused */
+            errExit("close");
+
+        /* Parent may do other work, then synchronizes with children */
+
+<img src="figs/web/U005.png" alt=""/>    if (read(pfd[0], &amp;dummy, 1) != 0)
+            fatal("parent didn't get EOF");
+        printf("%s  Parent ready to go\n", currTime("%T"));
+
+        /* Parent can now carry on to do other things... */
+
+        exit(EXIT_SUCCESS);
+    }
+          <strong class="userinput"><code>pipes/pipe_sync.c</code></strong></pre></div></div><p>Synchronization using pipes has an advantage over the earlier example of
+                synchronization using signals: it can be used to coordinate the actions of one
+                process with multiple other (related) processes. The fact that multiple (standard)
+                signals can’t be queued makes signals unsuitable in this case. (Conversely, signals
+                have the advantage that they can be broadcast by one process to all of the members
+                of a process group.)</p><p>Other synchronization topologies are possible (e.g., using multiple pipes).
+                Furthermore, this technique could be extended so that, instead of closing the pipe,
+                each child writes a message to the pipe containing its process ID and some status
+                information. Alternatively, each child might write a single byte to the pipe. The
+                parent process could then count and analyze these messages. This approach guards
+                against the possibility of the child accidentally terminating, rather than
+                explicitly closing the pipe.</p></div><div class="sect1" title="Using Pipes to Connect Filters"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="using_pipes_to_connect_filters">Using Pipes to Connect Filters</h2></div></div></div><p>When a pipe is created, the file descriptors used for the two ends of the pipe are
+                the next lowest-numbered descriptors available. Since, in normal circumstances,
+                descriptors 0, 1, and 2 are already in use for a process, some higher-numbered
+                descriptors will be allocated for the pipe. So how do we bring about the situation
+                shown in <a class="xref" href="ch44.html#using_a_pipe_to_connect_two_processes" title="Figure 44-1. Using a pipe to connect two processes">Figure 44-1</a>, where two filters
+                (i.e., programs that read from <span class="emphasis"><em>stdin</em></span> and write to
+                    <span class="emphasis"><em>stdout</em></span>) are connected using a pipe, such that the standard
+                output of one program is directed into the pipe and the standard input of the other
+                is taken from the pipe? And in particular, how can we do this without modifying the
+                code of the filters themselves?<a id="IDX-CHP-44-6117" class="indexterm"/><a id="IDX-CHP-44-6118" class="indexterm"/></p><p>The answer is to use the techniques described in <a class="xref" href="ch05.html#duplicating_file_descriptors" title="Duplicating File Descriptors">Duplicating File Descriptors</a> for duplicating file descriptors.
+                Traditionally, the following series of calls was used to accomplish the desired
+                result:</p><a id="I_programlisting44_d1e117210"/><pre class="programlisting">int pfd[2];
+
+pipe(pfd);          /* Allocates (say) file descriptors 3 and 4 for pipe */
+
+/* Other steps here, e.g., fork() */
+
+close(STDOUT_FILENO);           /* Free file descriptor 1 */
+dup(pfd[1]);                    /* Duplication uses lowest free file
+                                   descriptor, i.e., fd 1 */</pre><p>The end result of the above steps is that the process’s standard output is bound
+                to the write end of the pipe. A corresponding set of calls can be used to bind a
+                process’s standard input to the read end of the pipe.</p><p>Note that these steps depend on the assumption that file descriptors 0, 1, and 2
+                for a process are already open. (The shell normally ensures this for each program it
+                executes.) If file descriptor 0 was already closed prior to the above steps, then we
+                would erroneously bind the process’s standard <span class="emphasis"><em>input</em></span> to the
+                write end of the pipe. To avoid this possibility, we can replace the calls to
+                    <span class="emphasis"><em>close()</em></span> and <span class="emphasis"><em>dup()</em></span> with the following
+                    <span class="emphasis"><em>dup2()</em></span> call, which allows us to explicitly specify the
+                descriptor to be bound to the pipe end:<a id="IDX-CHP-44-6119" class="indexterm"/></p><a id="I_programlisting44_d1e117232"/><pre class="programlisting">dup2(pfd[1], STDOUT_FILENO);    /* Close descriptor 1, and reopen bound
+                                   to write end of pipe */</pre><p>After duplicating <span class="emphasis"><em>pfd[1]</em></span>, we now have two file descriptors
+                referring to the write end of the pipe: descriptor 1 and
+                <span class="emphasis"><em>pfd[1]</em></span>. Since unused pipe file descriptors should be closed,
+                after the <span class="emphasis"><em>dup2()</em></span> call, we close the superfluous
+                    descriptor:<a id="IDX-CHP-44-6120" class="indexterm"/></p><a id="I_programlisting44_d1e117249"/><pre class="programlisting">close(pfd[1]);</pre><p>The code we have shown so far relies on standard output having been previously
+                open. Suppose that, prior to the <span class="emphasis"><em>pipe()</em></span> call, standard input
+                and standard output had both been closed. In this case, <span class="emphasis"><em>pipe()</em></span>
+                would have allocated these two descriptors to the pipe, perhaps with
+                    <span class="emphasis"><em>pfd[0]</em></span> having the value 0 and <span class="emphasis"><em>pfd[1]</em></span>
+                having the value 1. Consequently, the preceding <span class="emphasis"><em>dup2()</em></span> and
+                    <span class="emphasis"><em>close()</em></span> calls would be equivalent to the following:</p><a id="I_programlisting44_d1e117272"/><pre class="programlisting">dup2(1, 1);         /* Does nothing */
+close(1);           /* Closes sole descriptor for write end of pipe */</pre><p>Therefore, it is good defensive programming practice to bracket these calls with
+                an <code class="literal">if</code> statement of the following form:</p><a id="I_programlisting44_d1e117280"/><pre class="programlisting">if (pfd[1] != STDOUT_FILENO) {
+    dup2(pfd[1], STDOUT_FILENO);
+    close(pfd[1]);
+}</pre><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="example_program-id58"/></div></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id59">Example program</h4></div></div></div><p>The program in <a class="xref" href="ch44.html#using_a_pipe_to_connect_ls_and_wc" title="Example 44-4. Using a pipe to connect ls and wc">Example 44-4</a> uses
+                        the techniques described in this section to bring about the setup shown in
+                            <a class="xref" href="ch44.html#using_a_pipe_to_connect_two_processes" title="Figure 44-1. Using a pipe to connect two processes">Figure 44-1</a>. After building
+                        a pipe, this program creates two child processes. The first child binds its
+                        standard output to the write end of the pipe and then execs
+                            <span class="emphasis"><em>ls</em></span>. The second child binds its standard input to
+                        the read end of the pipe and then execs <span class="emphasis"><em>wc</em></span>.<a id="IDX-CHP-44-6121" class="indexterm"/><a id="IDX-CHP-44-6122" class="indexterm"/><a id="IDX-CHP-44-6123" class="indexterm"/><a id="IDX-CHP-44-6124" class="indexterm"/><a id="IDX-CHP-44-6125" class="indexterm"/><a id="IDX-CHP-44-6126" class="indexterm"/></p><div class="example"><a id="using_a_pipe_to_connect_ls_and_wc"/><div class="example-title">Example 44-4. Using a pipe to connect <span class="emphasis"><em>ls</em></span> and
+                                <span class="emphasis"><em>wc</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pipes/pipe_ls_wc.c</code></strong>
+#include &lt;sys/wait.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int pfd[2];                                     /* Pipe file descriptors */
+
+    if (pipe(pfd) == -1)                            /* Create pipe */
+        errExit("pipe");
+
+    switch (fork()) {
+    case -1:
+        errExit("fork");
+
+    case 0:             /* First child: exec 'ls' to write to pipe */
+        if (close(pfd[0]) == -1)                    /* Read end is unused */
+            errExit("close 1");
+
+        /* Duplicate stdout on write end of pipe; close duplicated descriptor */
+
+        if (pfd[1] != STDOUT_FILENO) {              /* Defensive check */
+            if (dup2(pfd[1], STDOUT_FILENO) == -1)
+                errExit("dup2 1");
+            if (close(pfd[1]) == -1)
+                errExit("close 2");
+        }
+
+        execlp("ls", "ls", (char *) NULL);          /* Writes to pipe */
+        errExit("execlp ls");
+
+    default:            /* Parent falls through to create next child */
+        break;
+    }
+
+    switch (fork()) {
+    case -1:
+        errExit("fork");
+
+    case 0:             /* Second child: exec 'wc' to read from pipe */
+        if (close(pfd[1]) == -1)                    /* Write end is unused */
+            errExit("close 3");
+
+        /* Duplicate stdin on read end of pipe; close duplicated descriptor */
+
+        if (pfd[0] != STDIN_FILENO) {               /* Defensive check */
+            if (dup2(pfd[0], STDIN_FILENO) == -1)
+                errExit("dup2 2");
+            if (close(pfd[0]) == -1)
+                errExit("close 4");
+        }
+
+        execlp("wc", "wc", "-l", (char *) NULL);    /* Reads from pipe */
+        errExit("execlp wc");
+
+    default:            /* Parent falls through */
+        break;
+    }
+
+    /* Parent closes unused file descriptors for pipe, and waits for children */
+
+    if (close(pfd[0]) == -1)
+        errExit("close 5");
+    if (close(pfd[1]) == -1)
+        errExit("close 6");
+    if (wait(NULL) == -1)
+        errExit("wait 1");
+    if (wait(NULL) == -1)
+        errExit("wait 2");
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>pipes/pipe_ls_wc.c</code></strong></pre></div></div><p>When we run the program in <a class="xref" href="ch44.html#using_a_pipe_to_connect_ls_and_wc" title="Example 44-4. Using a pipe to connect ls and wc">Example 44-4</a>, we see the
+                        following:</p><a id="I_programlisting44_d1e117357"/><pre class="programlisting">$ <strong class="userinput"><code>./pipe_ls_wc</code></strong>
+     24
+$ <strong class="userinput"><code>ls | wc -l</code></strong>                    <em class="lineannotation"><span class="lineannotation">Verify the results using shell commands</span></em>
+     24</pre></div></div></div><div class="sect1" title="Talking to a Shell Command via a Pipe: popen()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="talking_to_a_shell_command_via_a_pipe_co">Talking to a Shell Command via a Pipe: <span class="emphasis"><em>popen()</em></span></h2></div></div></div><p>A common use for pipes is to execute a shell command and either read its output or
+                send it some input. The <span class="emphasis"><em>popen()</em></span> and
+                    <span class="emphasis"><em>pclose()</em></span> functions are provided to simplify this
+                    task.<a id="IDX-CHP-44-6128" class="indexterm"/><a id="IDX-CHP-44-6129" class="indexterm"/><a id="IDX-CHP-44-6130" class="indexterm"/><a id="IDX-CHP-44-6131" class="indexterm"/><a id="IDX-CHP-44-6127" class="indexterm"/><a id="IDX-CHP-44-6132" class="indexterm"/></p><a id="I_programlisting44_d1e117415"/><pre class="programlisting">#include &lt;stdio.h&gt;
+
+FILE *<strong class="userinput"><code>popen</code></strong>(const char *<span class="emphasis"><em>command</em></span>, const char *<span class="emphasis"><em>mode</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns file stream, or <code class="literal">NULL</code> on
+                    error</p></div><a id="I_programlisting44_d1e117432"/><pre class="programlisting">int <strong class="userinput"><code>pclose</code></strong>(FILE *<span class="emphasis"><em>stream</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns termination status of child process, or -1 on error</p></div><p>The <span class="emphasis"><em>popen()</em></span> function creates a pipe, and then forks a child
+                process that execs a shell, which in turn creates a child process to execute the
+                string given in <span class="emphasis"><em>command</em></span>. The <span class="emphasis"><em>mode</em></span> argument
+                is a string that determines whether the calling process will read from the pipe
+                    (<span class="emphasis"><em>mode</em></span> is <span class="emphasis"><em>r</em></span>) or write to it
+                    (<span class="emphasis"><em>mode</em></span> is <span class="emphasis"><em>w</em></span>). (Since pipes are
+                unidirectional, two-way communication with the executed <span class="emphasis"><em>command</em></span>
+                is not possible.) The value of <span class="emphasis"><em>mode</em></span> determines whether the
+                standard output of the executed command is connected to the write end of the pipe or
+                its standard input is connected to the read end of the pipe, as shown in <a class="xref" href="ch44.html#overview_of_process_relationships_and_pi" title="Figure 44-4. Overview of process relationships and pipe usage for popen()">Figure 44-4</a>.</p><div class="figure"><a id="overview_of_process_relationships_and_pi"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject44_d1e117480"/><img src="figs/web/44-4_PIPE-popen.png.jpg" alt="Overview of process relationships and pipe usage for popen()"/></div></div><div class="figure-title">Figure 44-4. Overview of process relationships and pipe usage for
+                        <span class="emphasis"><em>popen()</em></span></div></div><p>On success, <span class="emphasis"><em>popen()</em></span> returns a file stream pointer that can be
+                used with the <span class="emphasis"><em>stdio</em></span> library functions. If an error occurs
+                (e.g., <span class="emphasis"><em>mode</em></span> is not <span class="emphasis"><em>r</em></span> or
+                    <span class="emphasis"><em>w</em></span>, pipe creation fails, or the <span class="emphasis"><em>fork()</em></span>
+                to create the child fails), then <span class="emphasis"><em>popen()</em></span> returns <code class="literal">NULL</code> and sets <span class="emphasis"><em>errno</em></span> to indicate
+                the cause of the error.</p><p>After the <span class="emphasis"><em>popen()</em></span> call, the calling process uses the pipe to
+                read the output of <span class="emphasis"><em>command</em></span> or to send input to it. Just as with
+                pipes created using <span class="emphasis"><em>pipe()</em></span>, when reading from the pipe, the
+                calling process encounters end-of-file once <span class="emphasis"><em>command</em></span> has closed
+                the write end of the pipe; when writing to the pipe, it is sent a <code class="literal">SIGPIPE</code> signal, and gets the <code class="literal">EPIPE</code> error, if <span class="emphasis"><em>command</em></span> has closed the read end
+                of the pipe.<a id="IDX-CHP-44-6133" class="indexterm"/></p><p>Once I/O is complete, the <span class="emphasis"><em>pclose()</em></span> function is used to close
+                the pipe and wait for the child shell to terminate. (The
+                    <span class="emphasis"><em>fclose()</em></span> function should not be used, since it doesn’t wait
+                for the child.) On success, <span class="emphasis"><em>pclose()</em></span> yields the termination
+                status (<a class="xref" href="ch26.html#the_wait_status_value" title="The Wait Status Value">The Wait Status Value</a>) of the child shell (which is the
+                termination status of the last command that the shell executed, unless the shell was
+                killed by a signal). As with <span class="emphasis"><em>system()</em></span> (<a class="xref" href="ch27.html#executing_a_shell_command_colon_system_o" title="Executing a Shell Command: system()">Executing a Shell Command: <span class="emphasis"><em>system()</em></span></a>), if a shell could not be
+                execed, then <span class="emphasis"><em>pclose()</em></span> returns a value as though the child shell
+                had terminated with the call <span class="emphasis"><em>_exit(127)</em></span>. If some other error
+                occurs, <span class="emphasis"><em>pclose()</em></span> returns -1. One possible error is that the
+                termination status could not be obtained. We explain how this may occur
+                shortly.</p><p>When performing a wait to obtain the status of the child shell, SUSv3 requires
+                that <span class="emphasis"><em>pclose()</em></span>, like <span class="emphasis"><em>system()</em></span>, should
+                automatically restart the internal call that it makes to
+                    <span class="emphasis"><em>waitpid()</em></span> if that call is interrupted by a signal
+                handler.</p><p>In general, we can make the same statements for <span class="emphasis"><em>popen()</em></span> as
+                were made in <a class="xref" href="ch27.html#executing_a_shell_command_colon_system_o" title="Executing a Shell Command: system()">Executing a Shell Command: <span class="emphasis"><em>system()</em></span></a> for
+                    <span class="emphasis"><em>system()</em></span>. Using <span class="emphasis"><em>popen()</em></span> offers
+                convenience. It builds the pipe, performs descriptor duplication, closes unused
+                descriptors, and handles all of the details of <span class="emphasis"><em>fork()</em></span> and
+                    <span class="emphasis"><em>exec()</em></span> on our behalf. In addition, shell processing is
+                performed on the command. This convenience comes at the cost of efficiency. At least
+                two extra processes must be created: one for the shell and one or more for the
+                command(s) executed by the shell. As with <span class="emphasis"><em>system()</em></span>,
+                    <span class="emphasis"><em>popen()</em></span> should never be used from privileged
+                programs.</p><p>While there are several similarities between <span class="emphasis"><em>system()</em></span> and
+                    <span class="emphasis"><em>popen()</em></span> plus <span class="emphasis"><em>pclose()</em></span>, there are also
+                significant differences. These stem from the fact that, with
+                    <span class="emphasis"><em>system()</em></span>, the execution of the shell command is
+                encapsulated within a single function call, whereas with
+                    <span class="emphasis"><em>popen()</em></span>, the calling process runs in parallel with the
+                shell command and then calls <span class="emphasis"><em>pclose()</em></span>. The differences are as
+                follows:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Since the calling process and the executed command are operating in
+                        parallel, SUSv3 requires that <span class="emphasis"><em>popen()</em></span> should
+                            <span class="emphasis"><em>not</em></span> ignore <code class="literal">SIGINT</code> and <code class="literal">SIGQUIT</code>. If
+                        generated from the keyboard, these signals are sent to both the calling
+                        process and the executed command. This occurs because both processes reside
+                        in the same process group, and terminal-generated signals are sent to all of
+                        the members of the (foreground) process group, as described in Section
+                        34.5.</p></li><li class="listitem"><p>Since the calling process may create other child processes between the
+                        execution of <span class="emphasis"><em>popen()</em></span> and <span class="emphasis"><em>pclose()</em></span>,
+                        SUSv3 requires that <span class="emphasis"><em>popen()</em></span> should
+                            <span class="emphasis"><em>not</em></span> block <code class="literal">SIGCHLD</code>. This means that if the calling process performs a
+                        wait operation before the <span class="emphasis"><em>pclose()</em></span> call, it may
+                        retrieve the status of the child created by <span class="emphasis"><em>popen()</em></span>. In
+                        this case, when <span class="emphasis"><em>pclose()</em></span> is later called, it will
+                        return -1, with <span class="emphasis"><em>errno</em></span> set to <code class="literal">ECHILD</code>, indicating that <span class="emphasis"><em>pclose()</em></span> could
+                        not retrieve the status of the child.</p></li></ul></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="example_program-id60"/></div></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id61">Example program</h4></div></div></div><p><a class="xref" href="ch44.html#globbing_filename_patterns_with_popen_op" title="Example 44-5. Globbing filename patterns with popen()">Example 44-5</a> demonstrates
+                        the use of <span class="emphasis"><em>popen()</em></span> and <span class="emphasis"><em>pclose()</em></span>.
+                        This program repeatedly reads a filename wildcard pattern <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e117698"/><img src="figs/web/U002.png" alt=""/></span>, and then uses <span class="emphasis"><em>popen()</em></span> to obtain
+                        the results from passing this pattern to the <span class="emphasis"><em>ls</em></span> command
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e117711"/><img src="figs/web/U005.png" alt=""/></span>. (Techniques similar to this were used on older UNIX
+                        implementations to perform filename generation, also known as
+                            <span class="emphasis"><em>globbing</em></span>, prior to the existence of the
+                            <span class="emphasis"><em>glob()</em></span> library function.)<a id="IDX-CHP-44-6134" class="indexterm"/><a id="IDX-CHP-44-6135" class="indexterm"/><a id="IDX-CHP-44-6136" class="indexterm"/><a id="IDX-CHP-44-6137" class="indexterm"/><a id="IDX-CHP-44-6138" class="indexterm"/></p><div class="example"><a id="globbing_filename_patterns_with_popen_op"/><div class="example-title">Example 44-5. Globbing filename patterns with <span class="emphasis"><em>popen()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pipes/popen_glob.c</code></strong>
+    #include &lt;ctype.h&gt;
+    #include &lt;limits.h&gt;
+    #include "print_wait_status.h"          /* For printWaitStatus() */
+    #include "tlpi_hdr.h"
+
+<img src="figs/web/U001.png" alt=""/>#define POPEN_FMT "/bin/ls -d %s 2&gt; /dev/null"
+    #define PAT_SIZE 50
+    #define PCMD_BUF_SIZE (sizeof(POPEN_FMT) + PAT_SIZE)
+
+    int
+    main(int argc, char *argv[])
+    {
+        char pat[PAT_SIZE];                 /* Pattern for globbing */
+        char popenCmd[PCMD_BUF_SIZE];
+        FILE *fp;                           /* File stream returned by popen() */
+        Boolean badPattern;                 /* Invalid characters in 'pat'? */
+        int len, status, fileCnt, j;
+        char pathname[PATH_MAX];
+
+        for (;;) {                  /* Read pattern, display results of globbing */
+            printf("pattern: ");
+            fflush(stdout);
+<img src="figs/web/U002.png" alt=""/>        if (fgets(pat, PAT_SIZE, stdin) == NULL)
+                break;                      /* EOF */
+            len = strlen(pat);
+            if (len &lt;= 1)                   /* Empty line */
+                continue;
+
+            if (pat[len - 1] == '\n')       /* Strip trailing newline */
+                pat[len - 1] = '\0';
+
+            /* Ensure that the pattern contains only valid characters,
+               i.e., letters, digits, underscore, dot, and the shell
+               globbing characters. (Our definition of valid is more
+               restrictive than the shell, which permits other characters
+               to be included in a filename if they are quoted.) */
+
+<img src="figs/web/U003.png" alt=""/>        for (j = 0, badPattern = FALSE; j &lt; len &amp;&amp; !badPattern; j++)
+                if (!isalnum((unsigned char) pat[j]) &amp;&amp;
+                        strchr("_*?[^-].", pat[j]) == NULL)
+                    badPattern = TRUE;
+
+            if (badPattern) {
+                printf("Bad pattern character: %c\n", pat[j - 1]);
+                continue;
+            }
+
+            /* Build and execute command to glob 'pat' */
+
+<img src="figs/web/U004.png" alt=""/>        snprintf(popenCmd, PCMD_BUF_SIZE, POPEN_FMT, pat);
+            popenCmd[PCMD_BUF_SIZE - 1] = '\0';     /* Ensure string is
+                                                       null-terminated */
+    <img src="figs/web/U005.png" alt=""/>        fp = popen(popenCmd, "r");
+            if (fp == NULL) {
+                printf("popen() failed\n");
+                continue;
+            }
+
+            /* Read resulting list of pathnames until EOF */
+
+            fileCnt = 0;
+            while (fgets(pathname, PATH_MAX, fp) != NULL) {
+                printf("%s", pathname);
+                fileCnt++;
+            }
+
+            /* Close pipe, fetch and display termination status */
+
+            status = pclose(fp);
+            printf("    %d matching file%s\n", fileCnt, (fileCnt != 1) ? "s" : "");
+            printf("    pclose() status == %#x\n", (unsigned int) status);
+            if (status != -1)
+                printWaitStatus("\t", status);
+        }
+
+        exit(EXIT_SUCCESS);
+    }
+         <strong class="userinput"><code>pipes/popen_glob.c</code></strong></pre></div></div><p>The following shell session demonstrates the use of the program in <a class="xref" href="ch44.html#globbing_filename_patterns_with_popen_op" title="Example 44-5. Globbing filename patterns with popen()">Example 44-5</a>. In this example,
+                        we first provide a pattern that matches two filenames, and then a pattern
+                        that matches no filename:</p><a id="I_programlisting44_d1e117795"/><pre class="programlisting">$ <strong class="userinput"><code>./popen_glob</code></strong>
+pattern: <strong class="userinput"><code>popen_glob*</code></strong>                          <em class="lineannotation"><span class="lineannotation">Matches two filenames</span></em>
+popen_glob
+popen_glob.c
+    2 matching files
+    pclose() status = 0
+        child exited, status=0
+pattern: <strong class="userinput"><code>x*</code></strong>                                   <em class="lineannotation"><span class="lineannotation">Matches no filename</span></em>
+    0 matching files
+    pclose() status = 0x100                   <span class="emphasis"><em>ls(1)</em></span> <em class="lineannotation"><span class="lineannotation">exits with status 1</span></em>
+        child exited, status=1
+pattern: <strong class="userinput"><code>^D</code></strong>$                                  <em class="lineannotation"><span class="lineannotation">Type Control-D to terminate</span></em></pre><p>The construction of the command <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e117826"/><img src="figs/web/U001.png" alt=""/></span><span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e117831"/><img src="figs/web/U004.png" alt=""/></span> for globbing in <a class="xref" href="ch44.html#globbing_filename_patterns_with_popen_op" title="Example 44-5. Globbing filename patterns with popen()">Example 44-5</a> requires some
+                        explanation. Actual globbing of a pattern is performed by the shell. The
+                            <span class="emphasis"><em>ls</em></span> command is merely being used to list the
+                        matching filenames, one per line. We could have tried using the
+                            <span class="emphasis"><em>echo</em></span> command instead, but this would have had the
+                        undesirable result that if a pattern matched no filenames, then the shell
+                        would leave the pattern unchanged, and <span class="emphasis"><em>echo</em></span> would
+                        simply display the pattern. By contrast, if <span class="emphasis"><em>ls</em></span> is given
+                        the name of a file that doesn’t exist, it prints an error message on
+                            <span class="emphasis"><em>stderr</em></span> (which we dispose of by redirecting
+                            <span class="emphasis"><em>stderr</em></span> to <code class="literal">/dev/null</code>), prints nothing on <span class="emphasis"><em>stdout</em></span>,
+                        and exits with a status of 1.</p><p>Note also the input checking performed in <a class="xref" href="ch44.html#globbing_filename_patterns_with_popen_op" title="Example 44-5. Globbing filename patterns with popen()">Example 44-5</a>
+                        <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e117868"/><img src="figs/web/U003.png" alt=""/></span>. This is done to prevent invalid input causing
+                            <span class="emphasis"><em>popen()</em></span> to execute an unexpected shell command.
+                        Suppose that these checks were omitted, and the user entered the following
+                        input:</p><a id="I_programlisting44_d1e117877"/><pre class="programlisting">pattern: <strong class="userinput"><code>; rm *</code></strong></pre><p>The program would then pass the following command to
+                            <span class="emphasis"><em>popen()</em></span>, with disastrous results:</p><a id="I_programlisting44_d1e117886"/><pre class="programlisting">/bin/ls -d ; rm * 2&gt; /dev/null</pre><p>Such checking of input is always required in programs that use
+                            <span class="emphasis"><em>popen()</em></span> (or <span class="emphasis"><em>system()</em></span>) to
+                        execute a shell command built from user input. (An alternative would be for
+                        the application to quote any characters other than those being checked for,
+                        so that those characters don’t undergo special processing by the
+                        shell.)</p></div></div></div><div class="sect1" title="Pipes and stdio Buffering"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="pipes_and_stdio_buffering">Pipes and <span class="emphasis"><em>stdio</em></span> Buffering</h2></div></div></div><p>Since the file stream pointer returned by a call to <span class="emphasis"><em>popen()</em></span>
+                doesn’t refer to a terminal, the <span class="emphasis"><em>stdio</em></span> library applies block
+                buffering to the file stream (<a class="xref" href="ch13.html#buffering_in_the_stdio_library" title="Buffering in the stdio Library">Buffering in the <span class="emphasis"><em>stdio</em></span> Library</a>).
+                This means that when we call <span class="emphasis"><em>popen()</em></span> with a
+                    <span class="emphasis"><em>mode</em></span> of <span class="emphasis"><em>w</em></span>, then, by default, output is
+                sent to the child process at the other end of the pipe only when the
+                    <span class="emphasis"><em>stdio</em></span> buffer is filled or we close the pipe with
+                    <span class="emphasis"><em>pclose()</em></span>. In many cases, this presents no problem. If,
+                however, we need to ensure that the child process receives data on the pipe
+                immediately, then we can either use periodic calls to <span class="emphasis"><em>fflush()</em></span>
+                or disable <span class="emphasis"><em>stdio</em></span> buffering using the call <span class="emphasis"><em>setbuf(fp,
+                    NULL)</em></span>. This technique can also be used if we create a pipe using the
+                    <span class="emphasis"><em>pipe()</em></span> system call and then use
+                    <span class="emphasis"><em>fdopen()</em></span> to obtain a <span class="emphasis"><em>stdio</em></span> stream
+                corresponding to the write end of the pipe.<a id="IDX-CHP-44-6139" class="indexterm"/><a id="IDX-CHP-44-6140" class="indexterm"/></p><p>If the process calling <span class="emphasis"><em>popen()</em></span> is reading from the pipe
+                (i.e., <span class="emphasis"><em>mode</em></span> is <span class="emphasis"><em>r</em></span>), things may not be so
+                straightforward. In this case, if the child process is using the
+                    <span class="emphasis"><em>stdio</em></span> library, then—unless it includes explicit calls to
+                    <span class="emphasis"><em>fflush()</em></span> or <span class="emphasis"><em>setbuf()</em></span>—its output will
+                be available to the calling process only when the child either fills the
+                    <span class="emphasis"><em>stdio</em></span> buffer or calls <span class="emphasis"><em>fclose()</em></span>. (The
+                same statement applies if we are reading from a pipe created using
+                    <span class="emphasis"><em>pipe()</em></span> and the process writing on the other end is using
+                the <span class="emphasis"><em>stdio</em></span> library.) If this is a problem, there is little we
+                can do unless we can modify the source code of the program running in the child
+                process to include calls to <span class="emphasis"><em>setbuf()</em></span> of
+                    <span class="emphasis"><em>fflush()</em></span>.</p><p>If modifying the source code is not an option, then instead of using a pipe, we
+                could use a pseudoterminal. A pseudoterminal is an IPC channel that appears to the
+                process on one end as though it is a terminal. Consequently, the
+                    <span class="emphasis"><em>stdio</em></span> library line buffers output. We describe
+                pseudoterminals in <a class="xref" href="ch64.html" title="Chapter 64. Pseudoterminals">Chapter 64</a>.</p></div><div class="sect1" title="FIFOs"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="fifos">FIFOs</h2></div></div></div><p>Semantically, a FIFO is similar to a pipe. The principal difference is that a FIFO
+                has a name within the file system and is opened in the same way as a regular file.
+                This allows a FIFO to be used for communication between unrelated processes (e.g., a
+                client and server).<a id="IDX-CHP-44-6141" class="indexterm"/><a id="IDX-CHP-44-6142" class="indexterm"/><a id="IDX-CHP-44-6143" class="indexterm"/><a id="IDX-CHP-44-6144" class="indexterm"/><a id="IDX-CHP-44-6145" class="indexterm"/><a id="IDX-CHP-44-6146" class="indexterm"/></p><p>Once a FIFO has been opened, we use the same I/O system calls as are used with
+                pipes and other files (i.e., <span class="emphasis"><em>read()</em></span>,
+                    <span class="emphasis"><em>write()</em></span>, and <span class="emphasis"><em>close()</em></span>). Just as with
+                pipes, a FIFO has a write end and a read end, and data is read from the pipe in the
+                same order as it is written. This fact gives FIFOs their name: <span class="emphasis"><em>first in,
+                    first out</em></span>. FIFOs are also sometimes known as <span class="emphasis"><em>named
+                    pipes</em></span>.</p><p>As with pipes, when all descriptors referring to a FIFO have been closed, any
+                outstanding data is discarded.</p><p>We can create a FIFO from the shell using the <span class="emphasis"><em>mkfifo</em></span>
+                command:</p><a id="I_programlisting44_d1e118064"/><pre class="programlisting">$ <strong class="userinput"><code>mkfifo</code></strong> [<strong class="userinput"><code>-m</code></strong> <strong class="userinput"><code><em class="replaceable"><code>mode</code></em></code></strong>] <strong class="userinput"><code><em class="replaceable"><code>pathname</code></em></code></strong></pre><p>The <span class="emphasis"><em>pathname</em></span> is the name of the FIFO to be created, and the
+                    <span class="emphasis"><em>-m</em></span> option is used to specify a permission
+                    <span class="emphasis"><em>mode</em></span> in the same way as for the <span class="emphasis"><em>chmod</em></span>
+                command.</p><p>When applied to a FIFO (or pipe), <span class="emphasis"><em>fstat()</em></span> and
+                    <span class="emphasis"><em>stat()</em></span> return a file type of <code class="literal">S_IFIFO</code> in the <span class="emphasis"><em>st_mode</em></span> field of the
+                    <span class="emphasis"><em>stat</em></span> structure (<a class="xref" href="ch15.html#retrieving_file_information_colon_stat_o" title="Retrieving File Information: stat()">Retrieving File Information: <span class="emphasis"><em>stat()</em></span></a>). When listed with
+                    <span class="emphasis"><em>ls -l</em></span>, a FIFO is shown with the type <span class="emphasis"><em>p</em></span>
+                in the first column, and <span class="emphasis"><em>ls -F</em></span> appends an the pipe symbol
+                    (<code class="literal">|</code>) to the FIFO pathname.<a id="IDX-CHP-44-6147" class="indexterm"/><a id="IDX-CHP-44-6148" class="indexterm"/></p><p>The <span class="emphasis"><em>mkfifo()</em></span> function creates a new FIFO with the given
+                    <span class="emphasis"><em>pathname</em></span>.<a id="IDX-CHP-44-6149" class="indexterm"/></p><a id="I_programlisting44_d1e118146"/><pre class="programlisting">#include &lt;sys/stat.h&gt;
+
+int <strong class="userinput"><code>mkfifo</code></strong>(const char *<span class="emphasis"><em>pathname</em></span>, mode_t <span class="emphasis"><em>mode</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>mode</em></span> argument specifies the permissions for the new FIFO.
+                These permissions are specified by ORing the desired combination of constants from
+                    <a class="xref" href="ch15.html#constants_for_file_permission_bits" title="Table 15-4. Constants for file permission bits">Table 15-4</a>, in <a class="xref" href="ch15.html#permissions_on_directories" title="Permissions on Directories">Permissions on Directories</a>. As usual, these permissions are masked
+                against the process umask value (<a class="xref" href="ch15.html#the_process_file_mode_creation_mask_colo" title="The Process File Mode Creation Mask: umask()">The Process File Mode Creation Mask: <span class="emphasis"><em>umask()</em></span></a>).<a id="IDX-CHP-44-6150" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Historically, FIFOs were created using the system call
+                        <span class="emphasis"><em>mknod(pathname, S_IFIFO, 0)</em></span>. POSIX.1-1990 specified
+                        <span class="emphasis"><em>mkfifo()</em></span> as a simpler API avoiding the generality of
+                        <span class="emphasis"><em>mknod()</em></span>, which allows creation of various types of
+                    files, including device files. (SUSv3 specifies <span class="emphasis"><em>mknod()</em></span>,
+                    but weakly, defining only its use for creating FIFOs.) Most UNIX implementations
+                    provide <span class="emphasis"><em>mkfifo()</em></span> as a library function layered on top of
+                        <span class="emphasis"><em>mknod()</em></span>.<a id="IDX-CHP-44-6151" class="indexterm"/></p></div><p>Once a FIFO has been created, any process can open it, subject to the usual file
+                permission checks (<a class="xref" href="ch15.html#permission-checking_algorithm" title="Permission-Checking Algorithm">Permission-Checking Algorithm</a>).</p><p>Opening a FIFO has somewhat unusual semantics. Generally, the only sensible use of
+                a FIFO is to have a reading process and a writing process on each end. Therefore, by
+                default, opening a FIFO for reading (the <span class="emphasis"><em>open()</em></span>
+                <code class="literal">O_RDONLY</code> flag) blocks until another process opens
+                the FIFO for writing (the <span class="emphasis"><em>open()</em></span>
+                <code class="literal">O_WRONLY</code> flag). Conversely, opening the FIFO for
+                writing blocks until another process opens the FIFO for reading. In other words,
+                opening a FIFO synchronizes the reading and writing processes. If the opposite end
+                of a FIFO is already open (perhaps because a pair of processes have already opened
+                each end of the FIFO), then <span class="emphasis"><em>open()</em></span> succeeds immediately.</p><p>Under most UNIX implementations (including Linux), it is possible to circumvent
+                the blocking behavior when opening FIFOs by specifying the <code class="literal">O_RDWR</code> flag when opening a FIFO. In this case,
+                    <span class="emphasis"><em>open()</em></span> returns immediately with a file descriptor that can
+                be used for reading and writing on the FIFO. Doing this rather subverts the I/O
+                model for FIFOs, and SUSv3 explicitly notes that opening a FIFO with the <code class="literal">O_RDWR</code> flag is unspecified; therefore, for portability
+                reasons, this technique should be avoided. In circumstances where we need to prevent
+                blocking when opening a FIFO, the <span class="emphasis"><em>open()</em></span>
+                <code class="literal">O_NONBLOCK</code> flag provides a standardized method
+                for doing so (refer to <a class="xref" href="ch44.html#nonblocking_i_solidus_o-id1" title="Nonblocking I/O">Nonblocking I/O</a>).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Avoiding the use of the <code class="literal">O_RDWR</code> flag when
+                    opening a FIFO can be desirable for a another reason. After such an
+                        <span class="emphasis"><em>open()</em></span>, the calling process will never see end-of-file
+                    when reading from the resulting file descriptor, because there will always be at
+                    least one descriptor open for writing to the FIFO—the same descriptor from which
+                    the process is reading.</p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="using_fifos_and_tee_open_parenthesis"/></div></div></div><div class="sect3" title="Using FIFOs and tee(1) to create a dual pipeline"><div class="titlepage"><div><div><h4 class="title" id="using_fifos_and_tee_open_parenthesis-id1">Using FIFOs and <span class="emphasis"><em>tee(1)</em></span> to create a dual
+                        pipeline</h4></div></div></div><p>One of the characteristics of shell pipelines is that they are linear;
+                        each process in the pipeline reads data produced by its predecessor and
+                        sends data to its successor. Using FIFOs, it is possible to create a fork in
+                        a pipeline, so that a duplicate copy of the output of a process is sent to
+                        another process in addition to its successor in the pipeline. In order to do
+                        this, we need to use the <span class="emphasis"><em>tee</em></span> command, which writes two
+                        copies of what it reads from its standard input: one to standard output and
+                        the other to the file named in its command-line argument.<a id="IDX-CHP-44-6152" class="indexterm"/><a id="IDX-CHP-44-6153" class="indexterm"/></p><p>Making the <span class="emphasis"><em>file</em></span> argument to <span class="emphasis"><em>tee</em></span>
+                        a FIFO allows us to have two processes simultaneously reading the duplicate
+                        output produced by <span class="emphasis"><em>tee</em></span>. We demonstrate this in the
+                        following shell session, which creates a FIFO named <code class="literal">myfifo</code>, starts a background <span class="emphasis"><em>wc</em></span> command
+                        that opens the FIFO for reading (this will block until the FIFO is opened
+                        for writing), and then executes a pipeline that sends the output of
+                            <span class="emphasis"><em>ls</em></span> to <span class="emphasis"><em>tee</em></span>, which both passes
+                        the output further down the pipeline to <span class="emphasis"><em>sort</em></span> and sends
+                        it to the <code class="literal">myfifo</code> FIFO. (The
+                            <span class="emphasis"><em>-k5n</em></span> option to <span class="emphasis"><em>sort</em></span> causes the
+                        output of <span class="emphasis"><em>ls</em></span> to be sorted in increasing numerical order
+                        on the fifth space-delimited field.)</p><a id="I_programlisting44_d1e118321"/><pre class="programlisting">$ <strong class="userinput"><code>mkfifo myfifo</code></strong>
+$ <strong class="userinput"><code>wc -l &lt; myfifo &amp;</code></strong>
+$ <strong class="userinput"><code>ls -l | tee myfifo | sort -k5n</code></strong>
+<em class="lineannotation"><span class="lineannotation">(Resulting output not shown)</span></em></pre><p>Diagrammatically, the above commands create the situation shown in <a class="xref" href="ch44.html#using_a_fifo_and_tee_open_parenthesis_1" title="Figure 44-5. Using a FIFO and tee(1) to create a dual pipeline">Figure 44-5</a>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>tee</em></span> program is so named because of its shape.
+                            We can consider <span class="emphasis"><em>tee</em></span> as functioning similarly to a
+                            pipe, but with an additional branch that sends duplicate output.
+                            Diagrammatically, this has the shape of a capital letter
+                                <span class="emphasis"><em>T</em></span> (see <a class="xref" href="ch44.html#using_a_fifo_and_tee_open_parenthesis_1" title="Figure 44-5. Using a FIFO and tee(1) to create a dual pipeline">Figure 44-5</a>). In addition to
+                            the purpose described here, <span class="emphasis"><em>tee</em></span> is also useful for
+                            debugging pipelines and for saving the results produced at some
+                            intervening point in a complex pipeline.</p></div><div class="figure"><a id="using_a_fifo_and_tee_open_parenthesis_1"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject44_d1e118361"/><img src="figs/web/44-5_PIPE-fifo-and-tee-scale90.png.jpg" alt="Using a FIFO and tee(1) to create a dual pipeline"/></div></div><div class="figure-title">Figure 44-5. Using a FIFO and <span class="emphasis"><em>tee(1)</em></span> to create a dual
+                            pipeline</div></div></div></div></div><div class="sect1" title="A Client-Server Application Using FIFOs"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="a_client-server_application_using_fifos">A Client-Server Application Using FIFOs</h2></div></div></div><p>In this section, we present a simple client-server application that employs FIFOs
+                for IPC. The server provides the (trivial) service of assigning unique sequential
+                numbers to each client that requests them. In the course of discussing this
+                application, we introduce a few concepts and techniques in server design.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="application_overview"/></div></div></div><div class="sect3" title="Application overview"><div class="titlepage"><div><div><h4 class="title" id="application_overview-id1">Application overview</h4></div></div></div><p>In the example application, all clients send their requests to the server
+                        using a single server FIFO. The header file (<a class="xref" href="ch44.html#header_file_for_fifo_underscore_seqnum_u" title="Example 44-6. Header file for fifo_seqnum_server.c and fifo_seqnum_client.c">Example 44-6</a>) defines the
+                        well-known name (<code class="literal">/tmp/seqnum_sv</code>) that the
+                        server uses for its FIFO. This name is fixed, so that all clients know how
+                        to contact the server. (In this example application, we create the FIFOs in
+                        the <code class="literal">/tmp</code> directory, since this allows us
+                        to conveniently run the programs without change on most systems. However, as
+                        noted in <a class="xref" href="ch38.html#pitfalls_when_performing_file_operations" title="Pitfalls When Performing File Operations and File I/O">Pitfalls When Performing File Operations and File I/O</a>,
+                        creating files in publicly writable directories such as <code class="literal">/tmp</code> can lead to various security
+                        vulnerabilities and should be avoided in real-world applications.)<a id="IDX-CHP-44-6154" class="indexterm"/><a id="IDX-CHP-44-6155" class="indexterm"/><a id="IDX-CHP-44-6156" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>In client-server applications, we’ll repeatedly encounter the concept
+                            of a <span class="emphasis"><em>well-known address</em></span> or name used by a server to
+                            make its service visible to clients. Using a well-known address is one
+                            solution to the problem of how clients can know where to contact a
+                            server. Another possible solution is to provide some kind of name server
+                            with which servers can register the names of their services. Each client
+                            then contacts the name server to obtain the location of the service it
+                            desires. This solution allows the location of servers to be flexible, at
+                            the cost of some extra programming effort. Of course, clients and
+                            servers then need to know where to contact the name server; typically,
+                            it resides at a well-known address.<a id="IDX-CHP-44-6157" class="indexterm"/></p></div><p>It is not, however, possible to use a single FIFO to send responses to all
+                        clients, since multiple clients would race to read from the FIFO, and
+                        possibly read each other’s response messages rather than their own.
+                        Therefore, each client creates a unique FIFO that the server uses for
+                        delivering the response for that client, and the server needs to know how to
+                        find each client’s FIFO. One possible way to do this is for the client to
+                        generate its FIFO pathname, and then pass the pathname as part of its
+                        request message. Alternatively, the client and server can agree on a
+                        convention for constructing a client FIFO pathname, and, as part of its
+                        request, the client can pass the server the information required to
+                        construct the pathname specific to this client. This latter solution is used
+                        in our example. Each client’s FIFO name is built from a template (<code class="literal">CLIENT_FIFO_TEMPLATE</code>) consisting of a pathname
+                        containing the client’s process ID. The inclusion of the process ID provides
+                        an easy way of generating a name unique to this client.</p><p><a class="xref" href="ch44.html#using_fifos_in_a_single-server_comma_mul" title="Figure 44-6. Using FIFOs in a single-server, multiple-client application">Figure 44-6</a> shows how this
+                        application uses FIFOs for communication between the client and server
+                        processes of our application.</p><p>The header file (<a class="xref" href="ch44.html#header_file_for_fifo_underscore_seqnum_u" title="Example 44-6. Header file for fifo_seqnum_server.c and fifo_seqnum_client.c">Example 44-6</a>) defines the formats for the request messages sent from clients to the
+                        server, and for the response messages sent from the server to
+                        clients.</p><div class="figure"><a id="using_fifos_in_a_single-server_comma_mul"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject44_d1e118433"/><img src="figs/web/44-6_PIPE-seqnum-scale90.png.jpg" alt="Using FIFOs in a single-server, multiple-client application"/></div></div><div class="figure-title">Figure 44-6. Using FIFOs in a single-server, multiple-client application</div></div><p>Recall that the data in pipes and FIFOs is a byte stream; boundaries
+                        between multiple messages are not preserved. This means that when multiple
+                        messages are being delivered to a single process, such as the server in our
+                        example, then the sender and receiver must agree on some convention for
+                        separating the messages. Various approaches are possible:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Terminate each message with a <span class="emphasis"><em>delimiter
+                                    character</em></span>, such as a newline character. (For an
+                                example of this technique, see the <span class="emphasis"><em>readLine()</em></span>
+                                function in <a class="xref" href="ch59.html#reading_data_a_line_at_a_time" title="Example 59-1. Reading data a line at a time">Example 59-1</a>, in
+                                    <a class="xref" href="ch59.html#data_representation" title="Data Representation">Data Representation</a>.) In this case, either the
+                                delimiter character must be one that never appears as part of the
+                                message, or we must adopt a convention for escaping the delimiter if
+                                it does occur within the message. For example, if we use a newline
+                                delimiter, then the characters \ plus newline could be used to
+                                represent a real newline character within the message, while \\
+                                could represent a real \. One drawback of this approach is that the
+                                process reading messages must scan data from the FIFO a byte at a
+                                time until the delimiter character is found.</p></li><li class="listitem"><p>Include a <span class="emphasis"><em>fixed-size header with a length
+                                    field</em></span> in each message specifying the number of bytes
+                                in the remaining variable-length component of the message. In this
+                                case, the reading process first reads the header from the FIFO, and
+                                then uses the header’s length field to determine the number of bytes
+                                to read for the remainder of the message. This approach has the
+                                advantage of efficiently allowing messages of arbitrary size, but
+                                could lead to problems if a malformed message (e.g., bad
+                                    <span class="emphasis"><em>length</em></span> field) is written to the
+                                pipe.</p></li><li class="listitem"><p>Use <span class="emphasis"><em>fixed-length messages</em></span>, and have the
+                                server always read messages of this fixed size. This has the
+                                advantage of being simple to program. However, it places an upper
+                                limit on our message size and means that some channel capacity is
+                                wasted (since short messages must be padded to the fixed length).
+                                Furthermore, if one of the clients accidentally or deliberately
+                                sends a message that is not of the right length, then all subsequent
+                                messages will be out of step; in this situation, the server can’t
+                                easily recover.</p></li></ul></div><p>These three techniques are illustrated in <a class="xref" href="ch44.html#separating_messages_in_a_byte_stream" title="Figure 44-7. Separating messages in a byte stream">Figure 44-7</a>. Be aware that for each
+                        of these techniques, the total length of each message must be smaller than
+                            <code class="literal">PIPE_BUF</code> bytes in order to avoid the
+                        possibility of messages being broken up by the kernel and interleaved with
+                        messages from other writers.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>In the three techniques described in the main text, a single channel
+                            (FIFO) is used for all messages from all clients. An alternative is to
+                            use a <span class="emphasis"><em>single connection</em></span> for each message. The
+                            sender opens the communication channel, sends its message, and then
+                            closes the channel. The reading process knows that the message is
+                            complete when it encounters end-of-file. If multiple writers hold a FIFO
+                            open, then this approach is not feasible, because the reader won’t see
+                            end-of-file when one of the writers closes the FIFO. This approach is,
+                            however, feasible when using stream sockets, where a server process
+                            creates a unique communication channel for each incoming client
+                            connection.</p></div><div class="figure"><a id="separating_messages_in_a_byte_stream"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject44_d1e118486"/><img src="figs/web/44-7_PIPE-msg-formats.png.jpg" alt="Separating messages in a byte stream"/></div></div><div class="figure-title">Figure 44-7. Separating messages in a byte stream</div></div><p>In our example application, we use the third of the techniques described
+                        above, with each client sending messages of a fixed size to the server. This
+                        message is defined by the <span class="emphasis"><em>request</em></span> structure defined in
+                            <a class="xref" href="ch44.html#header_file_for_fifo_underscore_seqnum_u" title="Example 44-6. Header file for fifo_seqnum_server.c and fifo_seqnum_client.c">Example 44-6</a>. Each request
+                        to the server includes the client’s process ID, which enables the server to
+                        construct the name of the FIFO used by the client to receive a response. The
+                        request also contains a field (<span class="emphasis"><em>seqLen</em></span>) specifying how
+                        many sequence numbers should be allocated to this client. The response
+                        message sent from server to client consists of a single field,
+                            <span class="emphasis"><em>seqNum</em></span>, which is the starting value of the range of
+                        sequence numbers allocated to this client.</p><div class="example"><a id="header_file_for_fifo_underscore_seqnum_u"/><div class="example-title">Example 44-6. Header file for <code class="literal">fifo_seqnum_server.c</code> and <code class="literal">fifo_seqnum_client.c</code></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pipes/fifo_seqnum.h</code></strong>
+#include &lt;sys/types.h&gt;
+#include &lt;sys/stat.h&gt;
+#include &lt;fcntl.h&gt;
+#include "tlpi_hdr.h"
+
+#define SERVER_FIFO "/tmp/seqnum_sv"
+                                /* Well-known name for server's FIFO */
+#define CLIENT_FIFO_TEMPLATE "/tmp/seqnum_cl.%ld"
+                                /* Template for building client FIFO name */
+#define CLIENT_FIFO_NAME_LEN (sizeof(CLIENT_FIFO_TEMPLATE) + 20)
+                                /* Space required for client FIFO pathname
+                                   (+20 as a generous allowance for the PID) */
+
+struct request {                /* Request (client --&gt; server) */
+    pid_t pid;                  /* PID of client */
+    int seqLen;                 /* Length of desired sequence */
+};
+
+struct response {               /* Response (server --&gt; client) */
+    int seqNum;                 /* Start of sequence */
+};
+     <strong class="userinput"><code>pipes/fifo_seqnum.h</code></strong></pre></div></div></div><div class="sect3" title="Server program"><div class="titlepage"><div><div><h4 class="title" id="server_program">Server program</h4></div></div></div><p><a class="xref" href="ch44.html#an_iterative_server_using_fifos" title="Example 44-7. An iterative server using FIFOs">Example 44-7</a> is the code for the
+                        server. The server performs the following steps:<a id="IDX-CHP-44-6158" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Create the server’s well-known FIFO <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118532"/><img src="figs/web/U001.png" alt=""/></span> and open the FIFO for reading
+                                    <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118538"/><img src="figs/web/U002.png" alt=""/></span>. The server must be run before any clients, so
+                                that the server FIFO exists by the time a client attempts to open
+                                it. The server’s <span class="emphasis"><em>open()</em></span> blocks until the first
+                                client opens the other end of the server FIFO for writing.</p></li><li class="listitem"><p>Open the server’s FIFO once more <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118550"/><img src="figs/web/U003.png" alt=""/></span>, this time for writing. This will never block,
+                                since the FIFO has already been opened for reading. This second open
+                                is a convenience to ensure that the server doesn’t see end-of-file
+                                if all clients close the write end of the FIFO.</p></li><li class="listitem"><p>Ignore the <code class="literal">SIGPIPE</code> signal
+                                    <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118562"/><img src="figs/web/U004.png" alt=""/></span>, so that if the server attempts to write to a
+                                client FIFO that doesn’t have a reader, then, rather than being sent
+                                a <code class="literal">SIGPIPE</code> signal (which kills a
+                                process by default), it receives an <code class="literal">EPIPE</code> error from the <span class="emphasis"><em>write()</em></span>
+                                system call.<a id="IDX-CHP-44-6159" class="indexterm"/><a id="IDX-CHP-44-6160" class="indexterm"/></p></li><li class="listitem"><p>Enter a loop that reads and responds to each incoming client
+                                request <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118591"/><img src="figs/web/U005.png" alt=""/></span>. To send the response, the server constructs
+                                the name of the client FIFO <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118597"/><img src="figs/web/U006.png" alt=""/></span> and then opens that FIFO <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118603"/><img src="figs/web/U007.png" alt=""/></span>.</p></li><li class="listitem"><p>If the server encounters an error in opening the client FIFO, it
+                                abandons that client’s request <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118612"/><img src="figs/web/U008.png" alt=""/></span>.</p></li></ul></div><p>This is an example of an <span class="emphasis"><em>iterative server</em></span>, in which
+                        the server reads and handles each client request before going on to handle
+                        the next client. An iterative server design is suitable when each client
+                        request can be quickly processed and responded to, so that other client
+                        requests are not delayed. An alternative design is a <span class="emphasis"><em>concurrent
+                            server</em></span>, in which the main server process employs a separate
+                        child process (or thread) to handle each client request. We discuss server
+                        design further in <a class="xref" href="ch60.html" title="Chapter 60. Sockets: Server Design">Chapter 60</a>.<a id="IDX-CHP-44-6161" class="indexterm"/><a id="IDX-CHP-44-6162" class="indexterm"/></p><div class="example"><a id="an_iterative_server_using_fifos"/><div class="example-title">Example 44-7. An iterative server using FIFOs</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pipes/fifo_seqnum_server.c</code></strong>
+    #include &lt;signal.h&gt;
+    #include "fifo_seqnum.h"
+
+    int
+    main(int argc, char *argv[])
+    {
+        int serverFd, dummyFd, clientFd;
+        char clientFifo[CLIENT_FIFO_NAME_LEN];
+        struct request req;
+        struct response resp;
+        int seqNum = 0;                     /* This is our "service" */
+
+            /* Create well-known FIFO, and open it for reading */
+
+        umask(0);                           /* So we get the permissions we want */
+<img src="figs/web/U001.png" alt=""/>    if (mkfifo(SERVER_FIFO, S_IRUSR | S_IWUSR | S_IWGRP) == -1
+                &amp;&amp; errno != EEXIST)
+            errExit("mkfifo %s", SERVER_FIFO);<img src="figs/web/U002.png" alt=""/>
+    serverFd = open(SERVER_FIFO, O_RDONLY);
+        if (serverFd == -1)
+            errExit("open %s", SERVER_FIFO);
+
+        /* Open an extra write descriptor, so that we never see EOF */
+
+<img src="figs/web/U003.png" alt=""/>    dummyFd = open(SERVER_FIFO, O_WRONLY);
+        if (dummyFd == -1)
+            errExit("open %s", SERVER_FIFO);
+
+<img src="figs/web/U004.png" alt=""/>    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR)
+            errExit("signal");
+
+<img src="figs/web/U005.png" alt=""/>    for (;;) {                          /* Read requests and send responses */
+            if (read(serverFd, &amp;req, sizeof(struct request))
+                    != sizeof(struct request)) {
+                fprintf(stderr, "Error reading request; discarding\n");
+                continue;                   /* Either partial read or error */
+            }
+
+            /* Open client FIFO (previously created by client) */
+
+<img src="figs/web/U006.png" alt=""/>        snprintf(clientFifo, CLIENT_FIFO_NAME_LEN, CLIENT_FIFO_TEMPLATE,
+                    (long) req.pid);
+<img src="figs/web/U007.png" alt=""/>        clientFd = open(clientFifo, O_WRONLY);
+            if (clientFd == -1) {           /* Open failed, give up on client */
+                errMsg("open %s", clientFifo);
+<img src="figs/web/U008.png" alt=""/>            continue;
+            }
+
+            /* Send response and close FIFO */
+
+            resp.seqNum = seqNum;
+            if (write(clientFd, &amp;resp, sizeof(struct response))
+                    != sizeof(struct response))
+                fprintf(stderr, "Error writing to FIFO %s\n", clientFifo);
+            if (close(clientFd) == -1)
+                errMsg("close");
+
+            seqNum += req.seqLen;           /* Update our sequence number */
+        }
+    }
+         <strong class="userinput"><code>pipes/fifo_seqnum_server.c</code></strong></pre></div></div></div><div class="sect3" title="Client program"><div class="titlepage"><div><div><h4 class="title" id="client_program">Client program</h4></div></div></div><p><a class="xref" href="ch44.html#client_for_the_sequence-number_server" title="Example 44-8. Client for the sequence-number server">Example 44-8</a> is the code for
+                        the client. The client performs the following steps:<a id="IDX-CHP-44-6163" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Create a FIFO to be used for receiving a response from the server
+                                    <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118706"/><img src="figs/web/U002.png" alt=""/></span>. This is done before sending the request, in
+                                order to ensure that the FIFO exists by the time the server attempts
+                                to open it and send a response message.</p></li><li class="listitem"><p>Construct a message for the server containing the client’s process
+                                ID and a number (taken from an optional command-line argument)
+                                specifying the length of the sequence that the client wishes the
+                                server to assign to it <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118715"/><img src="figs/web/U004.png" alt=""/></span>. (If no command-line argument is supplied, the
+                                default sequence length is 1.)</p></li><li class="listitem"><p>Open the server FIFO <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118724"/><img src="figs/web/U005.png" alt=""/></span> and send the message to the server
+                                    <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118730"/><img src="figs/web/U006.png" alt=""/></span>.</p></li><li class="listitem"><p>Open the client FIFO <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118739"/><img src="figs/web/U007.png" alt=""/></span>, and read and print the server’s response
+                                    <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118745"/><img src="figs/web/U008.png" alt=""/></span>.</p></li></ul></div><p>The only other detail of note is the exit handler <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118753"/><img src="figs/web/U001.png" alt=""/></span>, established with <span class="emphasis"><em>atexit()</em></span>
+                        <span class="inlinemediaobject"><a id="I_inlinemediaobject44_d1e118762"/><img src="figs/web/U003.png" alt=""/></span>, which ensures that the client’s FIFO is deleted when
+                        the process exits. Alternatively, we could have simply placed an
+                            <span class="emphasis"><em>unlink()</em></span> call immediately after the
+                            <span class="emphasis"><em>open()</em></span> of the client FIFO. This would work because,
+                        at that point, after they have both performed blocking
+                            <span class="emphasis"><em>open()</em></span> calls, the server and the client would each
+                        hold open file descriptors for the FIFO, and removing the FIFO name from the
+                        file system doesn’t affect these descriptors or the open file descriptions
+                        to which they refer.</p><p>Here is an example of what we see when we run the client and server
+                        programs:</p><a id="I_programlisting44_d1e118780"/><pre class="programlisting">$ <strong class="userinput"><code>./fifo_seqnum_server &amp;</code></strong>
+[1] 5066
+$ <strong class="userinput"><code>./fifo_seqnum_client 3</code></strong>                <em class="lineannotation"><span class="lineannotation">Request a sequence of three numbers</span></em>
+0                                       <em class="lineannotation"><span class="lineannotation">Assigned sequence begins at 0</span></em>
+$ <strong class="userinput"><code>./fifo_seqnum_client 2</code></strong>                <em class="lineannotation"><span class="lineannotation">Request a sequence of two numbers</span></em>
+3                                       <em class="lineannotation"><span class="lineannotation">Assigned sequence begins at 3</span></em>
+$ <strong class="userinput"><code>./fifo_seqnum_client</code></strong>                  <em class="lineannotation"><span class="lineannotation">Request a single number</span></em>
+5</pre><div class="example"><a id="client_for_the_sequence-number_server"/><div class="example-title">Example 44-8. Client for the sequence-number server</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pipes/fifo_seqnum_client.c</code></strong>
+    #include "fifo_seqnum.h"
+
+    static char clientFifo[CLIENT_FIFO_NAME_LEN];
+
+    static void             /* Invoked on exit to delete client FIFO */
+<img src="figs/web/U001.png" alt=""/>removeFifo(void)
+    {
+        unlink(clientFifo);
+    }
+
+    int
+    main(int argc, char *argv[])
+    {
+        int serverFd, clientFd;
+        struct request req;
+        struct response resp;
+
+            if (argc &gt; 1 &amp;&amp; strcmp(argv[1], "--help") == 0)
+            usageErr("%s [seq-len...]\n", argv[0]);
+
+        /* Create our FIFO (before sending request, to avoid a race) */
+
+        umask(0);                   /* So we get the permissions we want */
+<img src="figs/web/U002.png" alt=""/>    snprintf(clientFifo, CLIENT_FIFO_NAME_LEN, CLIENT_FIFO_TEMPLATE,
+                (long) getpid());
+        if (mkfifo(clientFifo, S_IRUSR | S_IWUSR | S_IWGRP) == -1
+                    &amp;&amp; errno != EEXIST)
+            errExit("mkfifo %s", clientFifo);
+
+<img src="figs/web/U003.png" alt=""/>    if (atexit(removeFifo) != 0)
+            errExit("atexit");
+
+        /* Construct request message, open server FIFO, and send request */
+
+<img src="figs/web/U004.png" alt=""/>    req.pid = getpid();
+        req.seqLen = (argc &gt; 1) ? getInt(argv[1], GN_GT_0, "seq-len") : 1;
+
+<img src="figs/web/U005.png" alt=""/>    serverFd = open(SERVER_FIFO, O_WRONLY);
+        if (serverFd == -1)
+            errExit("open %s", SERVER_FIFO);
+
+<img src="figs/web/U006.png" alt=""/>    if (write(serverFd, &amp;req, sizeof(struct request)) !=
+                sizeof(struct request))
+            fatal("Can't write to server");
+
+        /* Open our FIFO, read and display response */
+
+<img src="figs/web/U007.png" alt=""/>    clientFd = open(clientFifo, O_RDONLY);
+        if (clientFd == -1)
+            errExit("open %s", clientFifo);
+
+<img src="figs/web/U008.png" alt=""/>    if (read(clientFd, &amp;resp, sizeof(struct response))
+                != sizeof(struct response))
+            fatal("Can't read response from server");
+
+        printf("%d\n", resp.seqNum);
+        exit(EXIT_SUCCESS);
+    }
+         <strong class="userinput"><code>pipes/fifo_seqnum_client.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Nonblocking I/O"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="nonblocking_i_solidus_o-id1">Nonblocking I/O</h2></div></div></div><p>As noted earlier, when a process opens one end of a FIFO, it blocks if the other
+                end of the FIFO has not yet been opened. Sometimes, it is desirable not to block,
+                and for this purpose, the <code class="literal">O_NONBLOCK</code> flag can be
+                specified when calling <span class="emphasis"><em>open()</em></span>:<a id="IDX-CHP-44-6164" class="indexterm"/><a id="IDX-CHP-44-6165" class="indexterm"/><a id="IDX-CHP-44-6166" class="indexterm"/><a id="IDX-CHP-44-6167" class="indexterm"/><a id="IDX-CHP-44-6168" class="indexterm"/><a id="IDX-CHP-44-6169" class="indexterm"/><a id="IDX-CHP-44-6170" class="indexterm"/><a id="IDX-CHP-44-6171" class="indexterm"/></p><a id="I_programlisting44_d1e118923"/><pre class="programlisting">fd = open("fifopath", O_RDONLY | O_NONBLOCK);
+if (fd == -1)
+    errExit("open");</pre><p>If the other end of the FIFO is already open, then the <code class="literal">O_NONBLOCK</code> flag has no effect on the <span class="emphasis"><em>open()</em></span>
+                call—it successfully opens the FIFO immediately, as usual. The <code class="literal">O_NONBLOCK</code> flag changes things only if the other end
+                of the FIFO is not yet open, and the effect depends on whether we are opening the
+                FIFO for reading or writing:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If the FIFO is being opened for reading, and no process currently has the
+                        write end of the FIFO open, then the <span class="emphasis"><em>open()</em></span> call
+                        succeeds immediately (just as though the other end of the FIFO was already
+                        open).</p></li><li class="listitem"><p>If the FIFO is being opened FIFO for writing, and the other end of the
+                        FIFO is not already open for reading, then <span class="emphasis"><em>open()</em></span>
+                        fails, setting <span class="emphasis"><em>errno</em></span> to <code class="literal">ENXIO</code>.</p></li></ul></div><p>The asymmetry of the <code class="literal">O_NONBLOCK</code> flag depending
+                on whether the FIFO is being opened for reading or for writing can be explained as
+                follows. It is okay to open a FIFO for reading when there is no writer at the other
+                end of the FIFO, since any attempt to read from the FIFO simply returns no data.
+                However, attempting to write to a FIFO for which there is no reader would result in
+                the generation of the <code class="literal">SIGPIPE</code> signal and an
+                    <code class="literal">EPIPE</code> error from
+                <span class="emphasis"><em>write()</em></span>.</p><p><a class="xref" href="ch44.html#semantics_of_open_open_parenthesis_close" title="Table 44-1. Semantics of open() for a FIFO">Table 44-1</a> summarizes the
+                semantics of opening a FIFO, including the effects of <code class="literal">O_NONBLOCK</code> described above.</p><div class="table"><a id="semantics_of_open_open_parenthesis_close"/><div class="table-title">Table 44-1. Semantics of <span class="emphasis"><em>open()</em></span> for a FIFO</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/><col class="col4"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; " colspan="2">
+                                <p>Type of <span class="emphasis"><em>open()</em></span></p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; " colspan="2">
+                                <p>Result of <span class="emphasis"><em>open()</em></span></p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>open for</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>additional flags</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>other end of FIFO open</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>other end of FIFO closed</p>
+                            </td></tr></thead><tbody><tr><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; " rowspan="2">
+                                <p>reading</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>none (blocking)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>succeeds immediately</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>blocks</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">O_NONBLOCK</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>succeeds immediately</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>succeeds immediately</p>
+                            </td></tr><tr><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; " rowspan="2">
+                                <p>writing</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>none (blocking)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>succeeds immediately</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>blocks</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">O_NONBLOCK</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>succeeds immediately</p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>fails (<code class="literal">ENXIO</code>)</p>
+                            </td></tr></tbody></table></div></div><p>Using the <code class="literal">O_NONBLOCK</code> flag when opening a FIFO
+                serves two main purposes:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>It allows a single process to open both ends of a FIFO. The process first
+                        opens the FIFO for reading specifying <code class="literal">O_NONBLOCK</code>, and then opens the FIFO for writing.</p></li><li class="listitem"><p>It prevents deadlocks between processes opening two FIFOs.</p></li></ul></div><p>A <span class="emphasis"><em>deadlock</em></span> is a situation where two or more process are
+                blocked because each is waiting on the other process(es) to complete some action.
+                The two processes shown in <a class="xref" href="ch44.html#deadlock_between_processes_opening_two_f" title="Figure 44-8. Deadlock between processes opening two FIFOs">Figure 44-8</a> are deadlocked. Each process is blocked waiting to open a FIFO for reading. This
+                blocking would not happen if each process could perform its second step (opening the
+                other FIFO for writing). This particular deadlock problem could be solved by
+                reversing the order of steps 1 and 2 in process Y, while leaving the order in
+                process X unchanged, or vice versa. However, such an arrangement of steps may not be
+                easy to achieve in some applications. Instead, we can resolve the problem by having
+                either process, or both, specify the <code class="literal">O_NONBLOCK</code>
+                flag when opening the FIFOs for reading.</p><div class="figure"><a id="deadlock_between_processes_opening_two_f"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject44_d1e119092"/><img src="figs/web/44-8_PIPE-deadlock-scale90.png.jpg" alt="Deadlock between processes opening two FIFOs"/></div></div><div class="figure-title">Figure 44-8. Deadlock between processes opening two FIFOs</div></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="nonblocking_read_open_parenthesis"/></div></div></div><div class="sect3" title="Nonblocking read() and write()"><div class="titlepage"><div><div><h4 class="title" id="nonblocking_read_open_parenthesis-id1">Nonblocking <span class="emphasis"><em>read()</em></span> and
+                        <span class="emphasis"><em>write()</em></span></h4></div></div></div><p>The <code class="literal">O_NONBLOCK</code> flag affects not only
+                        the semantics of <span class="emphasis"><em>open()</em></span> but also—because the flag then
+                        remains set for the open file description—the semantics of subsequent
+                            <span class="emphasis"><em>read()</em></span> and <span class="emphasis"><em>write()</em></span> calls. We
+                        describe these effects in the next section.<a id="IDX-CHP-44-6172" class="indexterm"/><a id="IDX-CHP-44-6173" class="indexterm"/><a id="IDX-CHP-44-6174" class="indexterm"/><a id="IDX-CHP-44-6175" class="indexterm"/><a id="IDX-CHP-44-6176" class="indexterm"/><a id="IDX-CHP-44-6177" class="indexterm"/><a id="IDX-CHP-44-6178" class="indexterm"/></p><p>Sometimes, we need to change the state of the <code class="literal">O_NONBLOCK</code> flag for a FIFO (or another type of file) that is
+                        already open. Scenarios where this need may arise include the
+                        following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>We opened a FIFO using <code class="literal">O_NONBLOCK</code>, but we want subsequent
+                                    <span class="emphasis"><em>read()</em></span> and <span class="emphasis"><em>write()</em></span>
+                                calls to operate in blocking mode.</p></li><li class="listitem"><p>We want to enable nonblocking mode for a file descriptor that was
+                                returned by <span class="emphasis"><em>pipe()</em></span>. More generally, we might
+                                want to change the nonblocking status of any file descriptor that
+                                was obtained other than from a call to
+                                <span class="emphasis"><em>open()</em></span>—for example, one of the three standard
+                                descriptors that are automatically opened for each new program run
+                                by the shell or a file descriptor returned by
+                                    <span class="emphasis"><em>socket()</em></span>.</p></li><li class="listitem"><p>For some application-specific purpose, we need to switch the
+                                setting of the <code class="literal">O_NONBLOCK</code> setting
+                                of a file descriptor on and off.</p></li></ul></div><p>For these purposes, we can use <span class="emphasis"><em>fcntl()</em></span> to enable or
+                        disable the <code class="literal">O_NONBLOCK</code> open file status
+                        flag. To enable the flag, we write the following (omitting error
+                        checking):</p><a id="I_programlisting44_d1e119216"/><pre class="programlisting">int flags;
+
+flags = fcntl(fd, F_GETFL);       /* Fetch open files status flags */
+flags |= O_NONBLOCK;              /* Enable O_NONBLOCK bit */
+fcntl(fd, F_SETFL, flags);        /* Update open files status flags */</pre><p>And to disable it, we write the following:</p><a id="I_programlisting44_d1e119220"/><pre class="programlisting">flags = fcntl(fd, F_GETFL);
+flags &amp;= ~O_NONBLOCK;             /* Disable O_NONBLOCK bit */
+fcntl(fd, F_SETFL, flags);</pre></div></div></div><div class="sect1" title="Semantics of read() and write() on Pipes and FIFOs"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="semantics_of_read_open_parenthesis_close">Semantics of <span class="emphasis"><em>read()</em></span> and <span class="emphasis"><em>write()</em></span> on
+                Pipes and FIFOs</h2></div></div></div><p><a class="xref" href="ch44.html#semantics_of_reading_n_bytes_from_a_pipe" title="Table 44-2. Semantics of reading n bytes from a pipe or FIFO containing p bytes">Table 44-2</a> summarizes the
+                operation of <span class="emphasis"><em>read()</em></span> for pipes and FIFOs, and includes the
+                effect of the <code class="literal">O_NONBLOCK</code> flag.</p><p>The only difference between blocking and nonblocking reads occurs when no data is
+                present and the write end is open. In this case, a normal
+                    <span class="emphasis"><em>read()</em></span> blocks, while a nonblocking
+                    <span class="emphasis"><em>read()</em></span> fails with the error <code class="literal">EAGAIN</code>.</p><div class="table"><a id="semantics_of_reading_n_bytes_from_a_pipe"/><div class="table-title">Table 44-2. Semantics of reading <span class="emphasis"><em>n</em></span> bytes from a pipe or FIFO
+                    containing <span class="emphasis"><em>p</em></span> bytes</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/><col class="col4"/><col class="col5"/></colgroup><thead><tr><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; " rowspan="2">
+                                <p><code class="literal">O_NONBLOCK</code> enabled?</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; " colspan="4">
+                                <p>Data bytes available in pipe or FIFO
+                                        (<span class="emphasis"><em>p</em></span>)<a id="IDX-CHP-44-6179" class="indexterm"/><a id="IDX-CHP-44-6180" class="indexterm"/><a id="IDX-CHP-44-6181" class="indexterm"/><a id="IDX-CHP-44-6182" class="indexterm"/></p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p><span class="emphasis"><em>p = 0</em></span>, write end open</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p><span class="emphasis"><em>p = 0</em></span>, write end closed</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <span class="emphasis"><em>p &lt; n</em></span>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <span class="emphasis"><em>p &gt;= n</em></span>
+                                </p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>No</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>block</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>return 0 (EOF)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>read <span class="emphasis"><em>p</em></span> bytes</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>read <span class="emphasis"><em>n</em></span> bytes</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>Yes</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>fail (<code class="literal">EAGAIN</code>)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>return 0 (EOF)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>read <span class="emphasis"><em>p</em></span> bytes</p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>read <span class="emphasis"><em>n</em></span> bytes</p>
+                            </td></tr></tbody></table></div></div><p>The impact of the <code class="literal">O_NONBLOCK</code> flag when writing
+                to a pipe or FIFO is made complex by interactions with the <code class="literal">PIPE_BUF</code> limit. The <span class="emphasis"><em>write()</em></span> behavior is
+                summarized in <a class="xref" href="ch44.html#semantics_of_writing_n_bytes_to_a_pipe_o" title="Table 44-3. Semantics of writing n bytes to a pipe or FIFO">Table 44-3</a>.</p><div class="table"><a id="semantics_of_writing_n_bytes_to_a_pipe_o"/><div class="table-title">Table 44-3. Semantics of writing <span class="emphasis"><em>n</em></span> bytes to a pipe or FIFO</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/><col class="col4"/></colgroup><thead><tr><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; " rowspan="2">
+                                <p><code class="literal">O_NONBLOCK</code> enabled?</p>
+                            </td><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; " colspan="2">
+                                <p>Read end open</p>
+                            </td><td style="text-align: center; vertical-align: bottom; " rowspan="2">
+                                <p>Read end closed</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <span class="emphasis"><em>n &lt;= PIPE_BUF</em></span>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <span class="emphasis"><em>n &gt; PIPE_BUF</em></span>
+                                </p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>No</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Atomically write <span class="emphasis"><em>n</em></span> bytes; may block until
+                                    sufficient data is read for <span class="emphasis"><em>write()</em></span> to be
+                                    performed</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Write <span class="emphasis"><em>n</em></span> bytes; may block until sufficient
+                                    data read for <span class="emphasis"><em>write()</em></span> to complete; data may
+                                    be interleaved with writes by other processes</p>
+                            </td><td style="text-align: center; vertical-align: top; " rowspan="2">
+                                <p>
+                                    <code class="literal">SIGPIPE</code>
+                                </p>
+                                <p>+</p>
+                                <p>
+                                    <code class="literal">EPIPE</code>
+                                </p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>Yes</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>If sufficient space is available to immediately write
+                                        <span class="emphasis"><em>n</em></span> bytes, then
+                                        <span class="emphasis"><em>write()</em></span> succeeds atomically; otherwise,
+                                    it fails (<code class="literal">EAGAIN</code>)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>If there is sufficient space to immediately write some bytes,
+                                    then write between 1 and <span class="emphasis"><em>n</em></span> bytes (which may
+                                    be interleaved with data written by other processes); otherwise,
+                                        <span class="emphasis"><em>write()</em></span> fails (<code class="literal">EAGAIN</code>)</p>
+                            </td></tr></tbody></table></div></div><p>The <code class="literal">O_NONBLOCK</code> flag causes a
+                    <span class="emphasis"><em>write()</em></span> on a pipe or FIFO to fail (with the error <code class="literal">EAGAIN</code>) in any case where data can’t be transferred
+                immediately. This means that if we are writing up to <code class="literal">PIPE_BUF</code> bytes, then the <span class="emphasis"><em>write()</em></span> will fail if
+                there is not sufficient space in the pipe or FIFO, because the kernel can’t complete
+                the operation immediately and can’t perform a partial write, since that would break
+                the requirement that writes of up to <code class="literal">PIPE_BUF</code>
+                bytes are atomic.</p><p>When writing more than <code class="literal">PIPE_BUF</code> bytes at a
+                time, a write is not required to be atomic. For this reason,
+                    <span class="emphasis"><em>write()</em></span> transfers as many bytes as possible (a partial
+                write) to fill up the pipe or FIFO. In this case, the return value from
+                    <span class="emphasis"><em>write()</em></span> is the number of bytes actually transferred, and
+                the caller must retry later in order to write the remaining bytes. However, if the
+                pipe or FIFO is full, so that not even one byte can be transferred, then
+                    <span class="emphasis"><em>write()</em></span> fails with the error <code class="literal">EAGAIN</code>.</p></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id43">Summary</h2></div></div></div><p>Pipes were the first method of IPC under the UNIX system, and they are used
+                frequently by the shell, as well as in other applications. A pipe is a
+                unidirectional, limited-capacity byte stream that can be used for communication
+                between related processes. Although blocks of data of any size can be written to a
+                pipe, only writes that do not exceed <code class="literal">PIPE_BUF</code>
+                bytes are guaranteed to be atomic. As well as being used as a method of IPC, pipes
+                can also be used for process synchronization.<a id="IDX-CHP-44-6183" class="indexterm"/><a id="IDX-CHP-44-6184" class="indexterm"/><a id="IDX-CHP-44-6185" class="indexterm"/><a id="IDX-CHP-44-6186" class="indexterm"/><a id="IDX-CHP-44-6187" class="indexterm"/></p><p>When using pipes, we must be careful to close unused descriptors in order to
+                ensure that reading processes detect end-of-file and writing processes receive the
+                    <code class="literal">SIGPIPE</code> signal or the <code class="literal">EPIPE</code> error. (Usually, it is easiest to have the
+                application writing to a pipe ignore <code class="literal">SIGPIPE</code> and
+                detect a “broken” pipe via the <code class="literal">EPIPE</code>
+                error.)</p><p>The <span class="emphasis"><em>popen()</em></span> and <span class="emphasis"><em>pclose()</em></span> functions allow
+                a program to transfer data to or from a standard shell command, without needing to
+                handle the details of creating a pipe, execing a shell, and closing unused file
+                    descriptors.<a id="IDX-CHP-44-6188" class="indexterm"/><a id="IDX-CHP-44-6189" class="indexterm"/></p><p>FIFOs operate in exactly the same way as pipes, except that they are created using
+                    <span class="emphasis"><em>mkfifo()</em></span>, have a name in the file system, and can be opened
+                by any process with appropriate permissions. By default, opening a FIFO for reading
+                blocks until another process opens the FIFO for writing, and vice versa.</p><p>In the course of this chapter, we looked at a number of related topics. First, we
+                saw how to duplicate file descriptors in such a manner that the standard input or
+                output of a filter can be bound to a pipe. While presenting a client-server example
+                using FIFOs, we touched on a number of topics in client-server design, including the
+                use of a well-known address for a server and iterative versus concurrent server
+                design. In developing the example FIFO application, we noted that, although data
+                transmitted through a pipe is a byte stream, it is sometimes useful for
+                communicating processes to package the data into messages, and we looked at various
+                ways in which this could be accomplished.</p><p>Finally, we noted the effect of the <code class="literal">O_NONBLOCK</code>
+                (nonblocking I/O) flag when opening and performing I/O on a FIFO. The <code class="literal">O_NONBLOCK</code> flag is useful if we don’t want to block
+                while opening a FIFO. It is also useful if we don’t want reads to block if no data
+                is available, or writes to block if there is insufficient space within a pipe or
+                FIFO.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id59"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id60">Further information</h4></div></div></div><p>The implementation of pipes is discussed in [Bach, 1986] and [Bovet
+                        &amp; Cesati, 2005]. Useful details about pipes and FIFOs can also be
+                        found in [Vahalia, 1996].<a id="IDX-CHP-44-6190" class="indexterm"/><a id="IDX-CHP-44-6191" class="indexterm"/><a id="IDX-CHP-44-6192" class="indexterm"/></p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id29">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Write a program that uses two pipes to enable bidirectional communication
+                        between a parent and child process. The parent process should loop reading a
+                        block of text from standard input and use one of the pipes to send the text
+                        to the child, which converts it to uppercase and sends it back to the parent
+                        via the other pipe. The parent reads the data coming back from the child and
+                        echoes it on standard output before continuing around the loop once
+                        more.</p></li><li class="listitem"><p>Implement <span class="emphasis"><em>popen()</em></span> and <span class="emphasis"><em>pclose()</em></span>.
+                        Although these functions are simplified by not requiring the signal handling
+                        employed in the implementation of <span class="emphasis"><em>system()</em></span> (<a class="xref" href="ch27.html#implementing_system_open_parenthesis_clo" title="Implementing system()">Implementing <span class="emphasis"><em>system()</em></span></a>), you will need to
+                        be careful to correctly bind the pipe ends to file streams in each process,
+                        and to ensure that all unused descriptors referring to the pipe ends are
+                        closed. Since children created by multiple calls to
+                            <span class="emphasis"><em>popen()</em></span> may be running at one time, you will need
+                        to maintain a data structure that associates the file stream pointers
+                        allocated by <span class="emphasis"><em>popen()</em></span> with the corresponding child
+                        process IDs. (If using an array for this purpose, the value returned by the
+                            <span class="emphasis"><em>fileno()</em></span> function, which obtains the file
+                        descriptor corresponding to a file stream, can be used to index the array.)
+                        Obtaining the correct process ID from this structure will allow
+                            <span class="emphasis"><em>pclose()</em></span> to select the child upon which to wait.
+                        This structure will also assist with the SUSv3 requirement that any
+                        still-open file streams created by earlier calls to
+                            <span class="emphasis"><em>popen()</em></span> must be closed in the new child
+                        process.</p></li><li class="listitem"><p>The server in <a class="xref" href="ch44.html#an_iterative_server_using_fifos" title="Example 44-7. An iterative server using FIFOs">Example 44-7</a> (<code class="literal">fifo_seqnum_server.c</code>) always starts assigning
+                        sequence numbers from 0 each time it is started. Modify the program to use a
+                        backup file that is updated each time a sequence number is assigned. (The
+                            <span class="emphasis"><em>open()</em></span>
+                        <code class="literal">O_SYNC</code> flag, described in <a class="xref" href="ch04.html#file_descriptor_number_returned_by-id1" title="File descriptor number returned by open()">File descriptor number returned by <span class="emphasis"><em>open()</em></span></a>, may be useful.) At
+                        startup, the program should check for the existence of this file, and if it
+                        is present, use the value it contains to initialize the sequence number. If
+                        the backup file can’t be found on startup, the program should create a new
+                        file and start assigning sequence numbers beginning at 0. (An alternative to
+                        this technique would be to use memory-mapped files, described in <a class="xref" href="ch49.html" title="Chapter 49. Memory Mappings">Chapter 49</a>.)<a id="IDX-CHP-44-6193" class="indexterm"/></p></li><li class="listitem"><p>Add code to the server in <a class="xref" href="ch44.html#an_iterative_server_using_fifos" title="Example 44-7. An iterative server using FIFOs">Example 44-7</a> (<code class="literal">fifo_seqnum_server.c</code>) so that if the
+                        program receives the <code class="literal">SIGINT</code> or <code class="literal">SIGTERM</code> signals, it removes the server FIFO
+                        and terminates.</p></li><li class="listitem"><p>The server in <a class="xref" href="ch44.html#an_iterative_server_using_fifos" title="Example 44-7. An iterative server using FIFOs">Example 44-7</a> (<code class="literal">fifo_seqnum_server.c</code>) performs a second
+                            <code class="literal">O_WRONLY</code> open of the FIFO so that it
+                        never sees end-of-file when reading from the reading descriptor
+                            (<span class="emphasis"><em>serverFd</em></span>) of the FIFO. Instead of doing this, an
+                        alternative approach could be tried: whenever the server sees end-of-file on
+                        the reading descriptor, it closes the descriptor, and then once more opens
+                        the FIFO for reading. (This open would block until the next client opened
+                        the FIFO for writing.) What is wrong with this approach?</p></li><li class="listitem"><p>The server in <a class="xref" href="ch44.html#an_iterative_server_using_fifos" title="Example 44-7. An iterative server using FIFOs">Example 44-7</a> (<code class="literal">fifo_seqnum_server.c</code>) assumes that the client
+                        process is well behaved. If a misbehaving client created a client FIFO and
+                        sent a request to the server, but did not open its FIFO, then the server’s
+                        attempt to open the client FIFO would block, and other client’s requests
+                        would be indefinitely delayed. (If done maliciously, this would constitute a
+                            <span class="emphasis"><em>denial-of-service attack</em></span>.) Devise a scheme to deal
+                        with this problem. Extend the server (and possibly the client in <a class="xref" href="ch44.html#client_for_the_sequence-number_server" title="Example 44-8. Client for the sequence-number server">Example 44-8</a>)
+                            accordingly.<a id="IDX-CHP-44-6194" class="indexterm"/></p></li><li class="listitem"><p>Write programs to verify the operation of nonblocking opens and
+                        nonblocking I/O on FIFOs (see <a class="xref" href="ch44.html#nonblocking_i_solidus_o-id1" title="Nonblocking I/O">Nonblocking I/O</a>).</p></li></ol></div></div></section></body></html>

@@ -1,0 +1,1083 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 49. Memory Mappings</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch48.html" title="Chapter 48. System V Shared Memory"/><link rel="next" href="ch50.html" title="Chapter 50. Virtual Memory Operations"/></head><body><section class="chapter" title="Chapter 49. Memory Mappings" epub:type="chapter" id="memory_mappings-id1"><div class="titlepage"><div><div><h2 class="title">Chapter 49. Memory Mappings</h2></div></div></div><p>This chapter discusses the use of the <span class="emphasis"><em>mmap()</em></span> system call to
+            create memory mappings. Memory mappings can be used for IPC, as well as a range of other
+            purposes. We begin with an overview of some fundamental concepts before considering
+                <span class="emphasis"><em>mmap()</em></span> in depth.</p><div class="sect1" title="Overview"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="overview-id14">Overview</h2></div></div></div><p>The <span class="emphasis"><em>mmap()</em></span> system call creates a new <span class="emphasis"><em>memory
+                    mapping</em></span> in the calling process’s virtual address space. A mapping can
+                be of two types:<a id="IDX-CHP-49-6683" class="indexterm"/><a id="IDX-CHP-49-6684" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>File mapping</em></span>: A file mapping maps a region of a file
+                        directly into the calling process’s virtual memory. Once a file is mapped,
+                        its contents can be accessed by operations on the bytes in the corresponding
+                        memory region. The pages of the mapping are (automatically) loaded from the
+                        file as required. This type of mapping is also known as a
+                            <span class="emphasis"><em>file-based mapping</em></span> or <span class="emphasis"><em>memory-mapped
+                            file</em></span>.<a id="IDX-CHP-49-6685" class="indexterm"/></p></li><li class="listitem"><p><span class="emphasis"><em>Anonymous mapping</em></span>: An anonymous mapping doesn’t have
+                        a corresponding file. Instead, the pages of the mapping are initialized to
+                            0.<a id="IDX-CHP-49-6686" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Another way of thinking of an anonymous mapping (and one that is close
+                            to the truth) is that it is a mapping of a virtual file whose contents
+                            are always initialized with zeros.</p></div></li></ul></div><p>The memory in one process’s mapping may be shared with mappings in other processes
+                (i.e., the page-table entries of each process point to the same pages of RAM). This
+                can occur in two ways:<a id="IDX-CHP-49-6687" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>When two processes map the same region of a file, they share the same
+                        pages of physical memory.</p></li><li class="listitem"><p>A child process created by <span class="emphasis"><em>fork()</em></span> inherits copies of
+                        its parent’s mappings, and these mappings refer to the same pages of
+                        physical memory as the corresponding mappings in the parent.</p></li></ul></div><p>When two or more processes share the same pages, each process can potentially see
+                the changes to the page contents made by other processes, depending on whether the
+                mapping is <span class="emphasis"><em>private</em></span> or <span class="emphasis"><em>shared</em></span>:<a id="IDX-CHP-49-6688" class="indexterm"/><a id="IDX-CHP-49-6689" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>Private mapping</em></span> (<code class="literal">MAP_PRIVATE</code>): Modifications to the contents of the mapping
+                        are not visible to other processes and, for a file mapping, are not carried
+                        through to the underlying file. Although the pages of a private mapping are
+                        initially shared in the circumstances described above, changes to the
+                        contents of the mapping are nevertheless private to each process. The kernel
+                        accomplishes this using the copy-on-write technique (<a class="xref" href="ch24.html#memory_semantics_of_fork_open_parenthesi" title="Memory Semantics of fork()">Memory Semantics of <span class="emphasis"><em>fork()</em></span></a>). This means that
+                        whenever a process attempts to modify the contents of a page, the kernel
+                        first creates a new, separate copy of that page for the process (and adjusts
+                        the process’s page tables). For this reason, a <code class="literal">MAP_PRIVATE</code> mapping is sometimes referred to as a
+                            <span class="emphasis"><em>private, copy-on-write mapping</em></span>.<a id="IDX-CHP-49-6690" class="indexterm"/><a id="IDX-CHP-49-6691" class="indexterm"/></p></li><li class="listitem"><p><span class="emphasis"><em>Shared mapping</em></span> (<code class="literal">MAP_SHARED</code>): Modifications to the contents of the mapping are
+                        visible to other processes that share the same mapping and, for a file
+                        mapping, are carried through to the underlying file.</p></li></ul></div><p>The two mapping attributes described above (file versus anonymous and private
+                versus shared) can be combined in four different ways, as summarized in <a class="xref" href="ch49.html#purposes_of_various_types_of_memory_mapp" title="Table 49-1. Purposes of various types of memory mappings">Table 49-1</a>.</p><div class="table"><a id="purposes_of_various_types_of_memory_mapp"/><div class="table-title">Table 49-1. Purposes of various types of memory mappings</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/></colgroup><thead><tr><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; " rowspan="2">
+                                <p>Visibility of modifications</p>
+                            </td><td style="text-align: center; vertical-align: bottom; border-bottom: 0.5pt solid ; " colspan="2">
+                                <p>Mapping type</p>
+                            </td></tr><tr><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>File</p>
+                            </td><td style="text-align: center; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>Anonymous</p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <span class="strong"><strong>Private</strong></span>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Initializing memory from contents of file</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Memory allocation</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <span class="strong"><strong>Shared</strong></span>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>Memory-mapped I/O; sharing memory between processes
+                                    (IPC)</p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>Sharing memory between processes (IPC)</p>
+                            </td></tr></tbody></table></div></div><p>The four different types of memory mappings are created and used as
+                follows:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>Private file mapping</em></span>: The contents of the mapping are
+                        initialized from a file region. Multiple processes mapping the same file
+                        initially share the same physical pages of memory, but the copy-on-write
+                        technique is employed, so that changes to the mapping by one process are
+                        invisible to other processes. The main use of this type of mapping is to
+                        initialize a region of memory from the contents of a file. Some common
+                        examples are initializing a process’s text and initialized data segments
+                        from the corresponding parts of a binary executable file or a shared library
+                            file.<a id="IDX-CHP-49-6692" class="indexterm"/><a id="IDX-CHP-49-6693" class="indexterm"/></p></li><li class="listitem"><p><span class="emphasis"><em>Private anonymous mapping</em></span>: Each call to
+                            <span class="emphasis"><em>mmap()</em></span> to create a private anonymous mapping yields
+                        a new mapping that is distinct from (i.e., does not share physical pages
+                        with) other anonymous mappings created by the same (or a different) process.
+                        Although a child process inherits its parent’s mappings, copy-on-write
+                        semantics ensure that, after the <span class="emphasis"><em>fork()</em></span>, the parent and
+                        child don’t see changes made to the mapping by the other process. The
+                        primary purpose of private anonymous mappings is to allocate new
+                        (zero-filled) memory for a process (e.g., <span class="emphasis"><em>malloc()</em></span>
+                        employs <span class="emphasis"><em>mmap()</em></span> for this purpose when allocating large
+                        blocks of memory).<a id="IDX-CHP-49-6694" class="indexterm"/></p></li><li class="listitem"><p><span class="emphasis"><em>Shared file mapping</em></span>: All processes mapping the same
+                        region of a file share the same physical pages of memory, which are
+                        initialized from a file region. Modifications to the contents of the mapping
+                        are carried through to the file. This type of mapping serves two purposes.
+                        First, it permits <span class="emphasis"><em>memory-mapped I/O</em></span>. By this, we mean
+                        that a file is loaded into a region of the process’s virtual memory, and
+                        modifications to that memory are automatically written to the file. Thus,
+                        memory-mapped I/O provides an alternative to using
+                            <span class="emphasis"><em>read()</em></span> and <span class="emphasis"><em>write()</em></span> for
+                        performing file I/O. A second purpose of this type of mapping is to allow
+                        unrelated processes to share a region of memory in order to perform (fast)
+                        IPC in a manner similar to System V shared memory segments (<a class="xref" href="ch48.html" title="Chapter 48. System V Shared Memory">Chapter 48</a>).<a id="IDX-CHP-49-6695" class="indexterm"/><a id="IDX-CHP-49-6696" class="indexterm"/></p></li><li class="listitem"><p><span class="emphasis"><em>Shared anonymous mapping</em></span>: As with a private anonymous
+                        mapping, each call to <span class="emphasis"><em>mmap()</em></span> to create a shared
+                        anonymous mapping creates a new, distinct mapping that doesn’t share pages
+                        with any other mapping. The difference is that the pages of the mapping are
+                        not copied-on-write. This means that when a child inherits the mapping after
+                        a <span class="emphasis"><em>fork()</em></span>, the parent and child share the same pages of
+                        RAM, and changes made to the contents of the mapping by one process are
+                        visible to the other process. Shared anonymous mappings allow IPC in a
+                        manner similar to System V shared memory segments, but only between related
+                        processes.</p></li></ul></div><p>We consider each of these types of mapping in more detail in the remainder of this
+                chapter.</p><p>Mappings are lost when a process performs an <span class="emphasis"><em>exec()</em></span>, but are
+                inherited by the child of a <span class="emphasis"><em>fork()</em></span>. The mapping type (<code class="literal">MAP_PRIVATE</code> or <code class="literal">MAP_SHARED</code>) is also inherited.</p><p>Information about all of a process’s mappings is visible in the Linux-specific
+                    <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/maps</code> file, which we described in Section
+                    48.5.<a id="IDX-CHP-49-6697" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>One further use of <span class="emphasis"><em>mmap()</em></span> is with POSIX shared memory
+                    objects, which allow a region of memory to be shared between unrelated processes
+                    without having to create an associated disk file (as is required for a shared
+                    file mapping). We describe POSIX shared memory objects in <a class="xref" href="ch54.html" title="Chapter 54. POSIX Shared Memory">Chapter 54</a>.</p></div></div><div class="sect1" title="Creating a Mapping: mmap()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="creating_a_mapping_colon_mmap_open_paren">Creating a Mapping: <span class="emphasis"><em>mmap()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>mmap()</em></span> system call creates a new mapping in the calling
+                process’s virtual address space.<a id="IDX-CHP-49-6699" class="indexterm"/><a id="IDX-CHP-49-6700" class="indexterm"/><a id="IDX-CHP-49-6701" class="indexterm"/><a id="IDX-CHP-49-6702" class="indexterm"/><a id="IDX-CHP-49-6703" class="indexterm"/><a id="IDX-CHP-49-6704" class="indexterm"/><a id="IDX-CHP-49-6705" class="indexterm"/><a id="IDX-CHP-49-6706" class="indexterm"/><a id="IDX-CHP-49-6698" class="indexterm"/></p><a id="I_programlisting49_d1e130455"/><pre class="programlisting">#include &lt;sys/mman.h&gt;
+
+void *<strong class="userinput"><code>mmap</code></strong>(void *<span class="emphasis"><em>addr</em></span>, size_t <span class="emphasis"><em>length</em></span>, int <span class="emphasis"><em>prot</em></span>, int
+ <span class="emphasis"><em>flags</em></span>, int <span class="emphasis"><em>fd</em></span>, off_t <span class="emphasis"><em>offset</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns starting address of mapping on success, or <code class="literal">MAP_FAILED</code> on error</p></div><p>The <span class="emphasis"><em>addr</em></span> argument indicates the virtual address at which the
+                mapping is to be located. If we specify <span class="emphasis"><em>addr</em></span> as <code class="literal">NULL</code>, the kernel chooses a suitable address for the
+                mapping. This is the preferred way of creating a mapping. Alternatively, we can
+                specify a non-<code class="literal">NULL</code> value in
+                    <span class="emphasis"><em>addr</em></span>, which the kernel takes as a hint about the address at
+                which the mapping should be placed. In practice, the kernel will at the very least
+                round the address to a nearby page boundary. In either case, the kernel will choose
+                an address that doesn’t conflict with any existing mapping. (If the value <code class="literal">MAP_FIXED</code> is included in <span class="emphasis"><em>flags</em></span>,
+                then <span class="emphasis"><em>addr</em></span> must be page-aligned. We describe this flag in <a class="xref" href="ch49.html#the_map_underscore_fixed_flag" title="The MAP_FIXED Flag">The <code class="literal">MAP_FIXED</code> Flag</a>.)<a id="IDX-CHP-49-6707" class="indexterm"/></p><p>On success, <span class="emphasis"><em>mmap()</em></span> returns the starting address of the new
+                mapping. On error, <span class="emphasis"><em>mmap()</em></span> returns <code class="literal">MAP_FAILED</code>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On Linux (and on most other UNIX implementations), the <code class="literal">MAP_FAILED</code> constant equates to <span class="emphasis"><em>((void *)
+                        -1)</em></span>. However, SUSv3 specifies this constant because the C
+                    standards can’t guarantee that <span class="emphasis"><em>((void *) -1)</em></span> is distinct
+                    from a successful <span class="emphasis"><em>mmap()</em></span> return value.<a id="IDX-CHP-49-6708" class="indexterm"/></p></div><p>The <span class="emphasis"><em>length</em></span> argument specifies the size of the mapping in
+                bytes. Although <span class="emphasis"><em>length</em></span> doesn’t need to be a multiple of the
+                system page size (as returned by <span class="emphasis"><em>sysconf(_SC_PAGESIZE)</em></span>), the
+                kernel creates mappings in units of this size, so that <span class="emphasis"><em>length</em></span>
+                is, in effect, rounded up to the next multiple of the page size.</p><p>The <span class="emphasis"><em>prot</em></span> argument is a bit mask specifying the protection to
+                be placed on the mapping. It can be either <code class="literal">PROT_NONE</code> or a combination (ORing) of any of the other three flags
+                listed in <a class="xref" href="ch49.html#memory_protection_values" title="Table 49-2. Memory protection values">Table 49-2</a>.</p><div class="table"><a id="memory_protection_values"/><div class="table-title">Table 49-2. Memory protection values</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Value</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>Description</p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">PROT_NONE</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>The region may not be accessed</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">PROT_READ</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>The contents of the region can be read</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">PROT_WRITE</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>The contents of the region can be modified</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">PROT_EXEC</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>The contents of the region can be executed</p>
+                            </td></tr></tbody></table></div></div><p>The <span class="emphasis"><em>flags</em></span> argument is a bit mask of options controlling
+                various aspects of the mapping operation. Exactly one of the following values must
+                be included in this mask:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">MAP_PRIVATE</code>
+                    </span></dt><dd><p>Create a private mapping. Modifications to the contents of the region
+                            are not visible to other processes employing the same mapping, and, in
+                            the case of a file mapping, are not carried through to the underlying
+                                file.<a id="IDX-CHP-49-6709" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">MAP_SHARED</code>
+                    </span></dt><dd><p>Create a shared mapping. Modifications to the contents of the region
+                            are visible to other processes mapping the same region with the <code class="literal">MAP_SHARED</code> attribute and, in the case of a
+                            file mapping, are carried through to the underlying file. Updates to the
+                            file are not guaranteed to be immediate; see the discussion of the
+                                <span class="emphasis"><em>msync()</em></span> system call in Section 49.5.<a id="IDX-CHP-49-6710" class="indexterm"/></p></dd></dl></div><p>Aside from <code class="literal">MAP_PRIVATE</code> and <code class="literal">MAP_SHARED</code>, other flag values can optionally be ORed
+                in <span class="emphasis"><em>flags</em></span>. We discuss these flags in <a class="xref" href="ch49.html#additional_mmap_open_parenthesis_close_p" title="Additional mmap() Flags">Additional <span class="emphasis"><em>mmap()</em></span> Flags</a> and <a class="xref" href="ch49.html#the_map_underscore_fixed_flag" title="The MAP_FIXED Flag">The <code class="literal">MAP_FIXED</code> Flag</a>.</p><p>The remaining arguments, <span class="emphasis"><em>fd</em></span> and <span class="emphasis"><em>offset</em></span>,
+                are used with file mappings (they are ignored for anonymous mappings). The
+                    <span class="emphasis"><em>fd</em></span> argument is a file descriptor identifying the file to be
+                mapped. The <span class="emphasis"><em>offset</em></span> argument specifies the starting point of the
+                mapping in the file, and must be a multiple of the system page size. To map the
+                entire file, we would specify <span class="emphasis"><em>offset</em></span> as 0 and
+                    <span class="emphasis"><em>length</em></span> as the size of the file. We say more about file
+                mappings in Section 49.5.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="memory_protection_in_more_detail"/></div></div></div><div class="sect3" title="Memory protection in more detail"><div class="titlepage"><div><div><h4 class="title" id="memory_protection_in_more_detail-id1">Memory protection in more detail</h4></div></div></div><p>As noted above, the <span class="emphasis"><em>mmap() prot</em></span> argument specifies
+                        the protection on a new memory mapping. It can contain the value <code class="literal">PROT_NONE</code>, or a mask of one of more of the
+                        flags <code class="literal">PROT_READ</code>, <code class="literal">PROT_WRITE</code>, and <code class="literal">PROT_EXEC</code>.
+                        If a process attempts to access a memory region in a way that violates the
+                        protection on the region, then the kernel delivers the <code class="literal">SIGSEGV</code> signal to a process.<a id="IDX-CHP-49-6711" class="indexterm"/><a id="IDX-CHP-49-6712" class="indexterm"/><a id="IDX-CHP-49-6713" class="indexterm"/><a id="IDX-CHP-49-6714" class="indexterm"/><a id="IDX-CHP-49-6715" class="indexterm"/><a id="IDX-CHP-49-6716" class="indexterm"/><a id="IDX-CHP-49-6717" class="indexterm"/><a id="IDX-CHP-49-6718" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Although SUSv3 specifies that <code class="literal">SIGSEGV</code> should be used to signal memory protection
+                            violations, on some implementations, <code class="literal">SIGBUS</code> is used instead.</p></div><p>One use of pages of memory marked <code class="literal">PROT_NONE</code> is as guard pages at the start or end of a region
+                        of memory that a process has allocated. If the process accidentally steps
+                        into one of the pages marked <code class="literal">PROT_NONE</code>,
+                        the kernel informs it of that fact by generating a <code class="literal">SIGSEGV</code> signal.</p><p>Memory protections reside in process-private virtual memory tables. Thus,
+                        different processes may map the same memory region with different
+                        protections.</p><p>Memory protection can be changed using the <span class="emphasis"><em>mprotect()</em></span>
+                        system call (<a class="xref" href="ch50.html#changing_memory_protection_colon_mprotec" title="Changing Memory Protection: mprotect()">Changing Memory Protection: <span class="emphasis"><em>mprotect()</em></span></a>).</p><p>On some UNIX implementations, the actual protections placed on the pages
+                        of a mapping may not be exactly those specified in
+                        <span class="emphasis"><em>prot</em></span>. In particular, limitations of the protection
+                        granularity of the underlying hardware (e.g., older x86-32 architectures)
+                        mean that, on many UNIX implementations, <code class="literal">PROT_READ</code> implies <code class="literal">PROT_EXEC</code> and vice versa, and on some implementations,
+                        specifying <code class="literal">PROT_WRITE</code> implies <code class="literal">PROT_READ</code>. However, applications should not
+                        rely on such behavior; <span class="emphasis"><em>prot</em></span> should always specify
+                        exactly the memory protections that are required.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Modern x86-32 architectures provide hardware support for marking pages
+                            tables as <span class="emphasis"><em>NX</em></span> (no execute), and, since kernel 2.6.8,
+                            Linux makes use of this feature to properly separate <code class="literal">PROT_READ</code> and <code class="literal">PROT_EXEC</code> permissions on Linux/x86-32.</p></div></div><div class="sect3" title="Alignment restrictions specified in standards for offset and addr"><div class="titlepage"><div><div><h4 class="title" id="alignment_restrictions_specified_in_stan">Alignment restrictions specified in standards for
+                            <span class="emphasis"><em>offset</em></span> and <span class="emphasis"><em>addr</em></span></h4></div></div></div><p>SUSv3 specifies that the <span class="emphasis"><em>offset</em></span> argument of
+                            <span class="emphasis"><em>mmap()</em></span> must be page-aligned, and that the
+                            <span class="emphasis"><em>addr</em></span> argument must also be page-aligned if <code class="literal">MAP_FIXED</code> is specified. Linux conforms to
+                        these requirements. However, it was later noted that the SUSv3 requirements
+                        differed from earlier standards, which imposed looser requirements on these
+                        arguments. The consequence of the SUSv3 wording was to (unnecessarily)
+                        render some formerly standards-conformant implementations nonconforming.
+                        SUSv4 returns to the looser requirement:<a id="IDX-CHP-49-6719" class="indexterm"/><a id="IDX-CHP-49-6720" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>An implementation may require that <span class="emphasis"><em>offset</em></span> be
+                                a multiple of the system page size.</p></li><li class="listitem"><p>If <code class="literal">MAP_FIXED</code> is specified, then
+                                an implementation may require that <span class="emphasis"><em>addr</em></span> be
+                                page-aligned.</p></li><li class="listitem"><p>If <code class="literal">MAP_FIXED</code> is specified, and
+                                    <span class="emphasis"><em>addr</em></span> is nonzero, then
+                                    <span class="emphasis"><em>addr</em></span> and <span class="emphasis"><em>offset</em></span> shall
+                                have the same remainder modulo the system page size.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>A similar situation arose for the <span class="emphasis"><em>addr</em></span>
+                                    argument of <span class="emphasis"><em>mprotect()</em></span>,
+                                        <span class="emphasis"><em>msync()</em></span>, and
+                                        <span class="emphasis"><em>munmap()</em></span>. SUSv3 specified that this
+                                    argument must be page-aligned. SUSv4 says that an implementation
+                                    may require this argument to be page-aligned.<a id="IDX-CHP-49-6721" class="indexterm"/><a id="IDX-CHP-49-6722" class="indexterm"/><a id="IDX-CHP-49-6723" class="indexterm"/></p></div></li></ul></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id65">Example program</h4></div></div></div><p><a class="xref" href="ch49.html#using_mmap_open_parenthesis_close_parent" title="Example 49-1. Using mmap() to create a private file mapping">Example 49-1</a> demonstrates
+                        the use of <span class="emphasis"><em>mmap()</em></span> to create a private file mapping.
+                        This program is a simple version of <span class="emphasis"><em>cat(1)</em></span>. It maps the
+                        (entire) file named in its command-line argument, and then writes the
+                        contents of the mapping to standard output.</p><div class="example"><a id="using_mmap_open_parenthesis_close_parent"/><div class="example-title">Example 49-1. Using <span class="emphasis"><em>mmap()</em></span> to create a private file
+                            mapping</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>mmap/mmcat.c</code></strong>
+#include &lt;sys/mman.h&gt;
+#include &lt;sys/stat.h&gt;
+#include &lt;fcntl.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    char *addr;
+    int fd;
+    struct stat sb;
+
+    if (argc != 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s file\n", argv[0]);
+
+    fd = open(argv[1], O_RDONLY);
+    if (fd == -1)
+        errExit("open");
+
+    /* Obtain the size of the file and use it to specify the size of
+       the mapping and the size of the buffer to be written */
+
+    if (fstat(fd, &amp;sb) == -1)
+        errExit("fstat");
+
+    addr = mmap(NULL, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (addr == MAP_FAILED)
+        errExit("mmap");
+
+    if (write(STDOUT_FILENO, addr, sb.st_size) != sb.st_size)
+        fatal("partial/failed write");
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>mmap/mmcat.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Unmapping a Mapped Region: munmap()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="unmapping_a_mapped_region_colon_munmap_o">Unmapping a Mapped Region: <span class="emphasis"><em>munmap()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>munmap()</em></span> system call performs the converse of
+                    <span class="emphasis"><em>mmap()</em></span>, removing a mapping from the calling process’s
+                virtual address space.<a id="IDX-CHP-49-6725" class="indexterm"/><a id="IDX-CHP-49-6726" class="indexterm"/><a id="IDX-CHP-49-6727" class="indexterm"/><a id="IDX-CHP-49-6728" class="indexterm"/><a id="IDX-CHP-49-6729" class="indexterm"/><a id="IDX-CHP-49-6730" class="indexterm"/><a id="IDX-CHP-49-6724" class="indexterm"/></p><a id="I_programlisting49_d1e130994"/><pre class="programlisting">#include &lt;sys/mman.h&gt;
+
+int <strong class="userinput"><code>munmap</code></strong>(void *<span class="emphasis"><em>addr</em></span>, size_t <span class="emphasis"><em>length</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>addr</em></span> argument is the starting address of the address
+                range to be unmapped. It must be aligned to a page boundary. (SUSv3 specified that
+                    <span class="emphasis"><em>addr must</em></span> be page-aligned. SUSv4 says that an
+                implementation <span class="emphasis"><em>may</em></span> require this argument to be
+                page-aligned.)</p><p>The <span class="emphasis"><em>length</em></span> argument is a nonnegative integer specifying the
+                size (in bytes) of the region to be unmapped. The address range up to the next
+                multiple of the system page size will be unmapped.</p><p>Commonly, we unmap an entire mapping. Thus, we specify <span class="emphasis"><em>addr</em></span>
+                as the address returned by a previous call to <span class="emphasis"><em>mmap()</em></span>, and
+                specify the same <span class="emphasis"><em>length</em></span> value as was used in the
+                    <span class="emphasis"><em>mmap()</em></span> call. Here’s an example:</p><a id="I_programlisting49_d1e131038"/><pre class="programlisting">addr = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+if (addr == MAP_FAILED)
+    errExit("mmap");
+
+/* Code for working with mapped region */
+
+if (munmap(addr, length) == -1)
+    errExit("munmap");</pre><p>Alternatively, we can unmap part of a mapping, in which case the mapping either
+                shrinks or is cut in two, depending on where the unmapping occurs. It is also
+                possible to specify an address range spanning several mappings, in which case all of
+                the mappings are unmapped.<a id="IDX-CHP-49-6731" class="indexterm"/></p><p>If there are no mappings in the address range specified by
+                    <span class="emphasis"><em>addr</em></span> and <span class="emphasis"><em>length</em></span>, then
+                    <span class="emphasis"><em>munmap()</em></span> has no effect, and returns 0 (for success).</p><p>During unmapping, the kernel removes any memory locks that the process holds for
+                the specified address range. (Memory locks are established using
+                    <span class="emphasis"><em>mlock()</em></span> or <span class="emphasis"><em>mlockall()</em></span>, as described in
+                Section 50.2.)</p><p>All of a process’s mappings are automatically unmapped when it terminates or
+                performs an <span class="emphasis"><em>exec()</em></span>.</p><p>To ensure that the contents of a shared file mapping are written to the underlying
+                file, a call to <span class="emphasis"><em>msync()</em></span> (<a class="xref" href="ch49.html#synchronizing_a_mapped_region_colon_msyn" title="Synchronizing a Mapped Region: msync()">Synchronizing a Mapped Region: <span class="emphasis"><em>msync()</em></span></a>) should be made before
+                unmapping a mapping with <span class="emphasis"><em>munmap()</em></span>.<a id="IDX-CHP-49-6732" class="indexterm"/><a id="IDX-CHP-49-6733" class="indexterm"/></p></div><div class="sect1" title="File Mappings"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="file_mappings">File Mappings</h2></div></div></div><p>To create a file mapping, we perform the following steps:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Obtain a descriptor for the file, typically via a call to
+                            <span class="emphasis"><em>open()</em></span>.</p></li><li class="listitem"><p>Pass that file descriptor as the <span class="emphasis"><em>fd</em></span> argument in a
+                        call to <span class="emphasis"><em>mmap()</em></span>.</p></li></ol></div><p>As a result of these steps, <span class="emphasis"><em>mmap()</em></span> maps the contents of the
+                open file into the address space of the calling process. Once
+                    <span class="emphasis"><em>mmap()</em></span> has been called, we can close the file descriptor
+                without affecting the mapping. However, in some cases it may be useful to keep this
+                file descriptor open—see, for example, <a class="xref" href="ch49.html#using_mmap_open_parenthesis_close_parent" title="Example 49-1. Using mmap() to create a private file mapping">Example 49-1</a> and also <a class="xref" href="ch54.html" title="Chapter 54. POSIX Shared Memory">Chapter 54</a>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>As well as normal disk files, it is possible to use
+                        <span class="emphasis"><em>mmap()</em></span> to map the contents of various real and virtual
+                    devices, such as hard disks, optical disks, and <code class="literal">/dev/mem</code>.</p></div><p>The file referred to by the descriptor <span class="emphasis"><em>fd</em></span> must have been
+                opened with permissions appropriate for the values specified in
+                    <span class="emphasis"><em>prot</em></span> and <span class="emphasis"><em>flags</em></span>. In particular, the
+                file must always be opened for reading, and, if <code class="literal">PROT_WRITE</code> and <code class="literal">MAP_SHARED</code> are
+                specified in <span class="emphasis"><em>flags</em></span>, then the file must be opened for both
+                reading and writing.</p><p>The <span class="emphasis"><em>offset</em></span> argument specifies the starting byte of the region
+                to be mapped from the file, and must be a multiple of the system page size.
+                Specifying <span class="emphasis"><em>offset</em></span> as 0 causes the file to be mapped from the
+                beginning. The <span class="emphasis"><em>length</em></span> argument specifies the number of bytes to
+                be mapped. Together, the <span class="emphasis"><em>offset</em></span> and <span class="emphasis"><em>length</em></span>
+                arguments determine which region of the file is to be mapped into memory, as shown
+                in <a class="xref" href="ch49.html#overview_of_memory-mapped_file" title="Figure 49-1. Overview of memory-mapped file">Figure 49-1</a>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On Linux, the pages of a file mapping are mapped in on the first access. This
+                    means that if changes are made to a file region after the
+                        <span class="emphasis"><em>mmap()</em></span> call, but before the corresponding part (i.e.,
+                    page) of the mapping is accessed, then the changes may be visible to the
+                    process, if the page has not otherwise already been loaded into memory. This
+                    behavior is implementation-dependent; portable applications should avoid relying
+                    on a particular kernel behavior in this scenario.</p></div><div class="sect2" title="Private File Mappings"><div class="titlepage"><div><div><h3 class="title" id="private_file_mappings">Private File Mappings</h3></div></div></div><p>The two most common uses of private file mappings are the following:<a id="IDX-CHP-49-6734" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>To allow multiple processes executing the same program or using the
+                            same shared library to share the same (read-only) text segment, which is
+                            mapped from the corresponding part of the underlying executable or
+                            library file.<a id="IDX-CHP-49-6735" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Although the executable text segment is normally protected to
+                                allow only read and execute access (<code class="literal">PROT_READ | PROT_EXEC</code>), it is mapped using <code class="literal">MAP_PRIVATE</code> rather than <code class="literal">MAP_SHARED</code>, because a debugger or a
+                                self-modifying program can modify the program text (after first
+                                changing the protection on the memory), and such changes should not
+                                be carried through to the underlying file or affect other
+                                processes.</p></div></li><li class="listitem"><p>To map the initialized data segment of an executable or shared
+                            library. Such mappings are made private so that modifications to the
+                            contents of the mapped data segment are not carried through to the
+                            underlying file.<a id="IDX-CHP-49-6736" class="indexterm"/><a id="IDX-CHP-49-6737" class="indexterm"/></p></li></ul></div><p>Both of these uses of <span class="emphasis"><em>mmap()</em></span> are normally invisible to a
+                    program, because these mappings are created by the program loader and dynamic
+                    linker. Examples of both kinds of mappings can be seen in the <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/maps</code> output shown in Section 48.5.</p><p>One other, less frequent, use of a private file mapping is to simplify the
+                    file-input logic of a program. This is similar to the use of shared file
+                    mappings for memory-mapped I/O (described in the next section), but allows only
+                    for file input.</p><div class="figure"><a id="overview_of_memory-mapped_file"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject49_d1e131235"/><img src="figs/web/49-1_MMAP-overview-scale90.png.jpg" alt="Overview of memory-mapped file"/></div></div><div class="figure-title">Figure 49-1. Overview of memory-mapped file</div></div></div><div class="sect2" title="Shared File Mappings"><div class="titlepage"><div><div><h3 class="title" id="shared_file_mappings">Shared File Mappings</h3></div></div></div><p>When multiple processes create shared mappings of the same file region, they
+                    all share the same physical pages of memory. In addition, modifications to the
+                    contents of the mapping are carried through to the file. In effect, the file is
+                    being treated as the paging store for this region of memory, as shown in <a class="xref" href="ch49.html#two_processes_with_a_shared_mapping_of_t" title="Figure 49-2. Two processes with a shared mapping of the same region of a file">Figure 49-2</a>. (We simplify things in
+                    this diagram by omitting to show that the mapped pages are typically not
+                    contiguous in physical memory.)<a id="IDX-CHP-49-6738" class="indexterm"/><a id="IDX-CHP-49-6739" class="indexterm"/><a id="IDX-CHP-49-6740" class="indexterm"/></p><p>Shared file mappings serve two purposes: memory-mapped I/O and IPC. We
+                    consider each of these uses below.</p><div class="figure"><a id="two_processes_with_a_shared_mapping_of_t"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject49_d1e131274"/><img src="figs/web/49-2_MMAP-shared-mapping.png.jpg" alt="Two processes with a shared mapping of the same region of a file"/></div></div><div class="figure-title">Figure 49-2. Two processes with a shared mapping of the same region of a file</div></div><div class="sect3" title="Memory-mapped I/O"><div class="titlepage"><div><div><h4 class="title" id="memory-mapped_i_solidus_o">Memory-mapped I/O</h4></div></div></div><p>Since the contents of the shared file mapping are initialized from the
+                        file, and any modifications to the contents of the mapping are automatically
+                        carried through to the file, we can perform file I/O simply by accessing
+                        bytes of memory, relying on the kernel to ensure that the changes to memory
+                        are propagated to the mapped file. (Typically, a program would define a
+                        structured data type that corresponds to the contents of the disk file, and
+                        then use that data type to cast the contents of the mapping.) This technique
+                        is referred to as <span class="emphasis"><em>memory-mapped I/O</em></span>, and is an
+                        alternative to using <span class="emphasis"><em>read()</em></span> and
+                            <span class="emphasis"><em>write()</em></span> to access the contents of a file.<a id="IDX-CHP-49-6741" class="indexterm"/><a id="IDX-CHP-49-6742" class="indexterm"/></p><p>Memory-mapped I/O has two potential advantages:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>By replacing <span class="emphasis"><em>read()</em></span> and
+                                    <span class="emphasis"><em>write()</em></span> system calls with memory accesses,
+                                it can simplify the logic of some applications.</p></li><li class="listitem"><p>It can, in some circumstances, provide better performance than
+                                file I/O carried out using the conventional I/O system calls.</p></li></ul></div><p>The reasons that memory-mapped I/O can provide performance benefits are as
+                            follows:<a id="IDX-CHP-49-6743" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>A normal <span class="emphasis"><em>read()</em></span> or
+                                    <span class="emphasis"><em>write()</em></span> involves two transfers: one between
+                                the file and the kernel buffer cache, and the other between the
+                                buffer cache and a user-space buffer. Using
+                                    <span class="emphasis"><em>mmap()</em></span> eliminates the second of these
+                                transfers. For input, the data is available to the user process as
+                                soon as the kernel has mapped the corresponding file blocks into
+                                memory. For output, the user process merely needs to modify the
+                                contents of the memory, and can then rely on the kernel memory
+                                manager to automatically update the underlying file.</p></li><li class="listitem"><p>In addition to saving a transfer between kernel space and user
+                                space, <span class="emphasis"><em>mmap()</em></span> can also improve performance by
+                                lowering memory requirements. When using <span class="emphasis"><em>read()</em></span>
+                                or <span class="emphasis"><em>write()</em></span>, the data is maintained in two
+                                buffers: one in user space and the other in kernel space. When using
+                                    <span class="emphasis"><em>mmap()</em></span>, a single buffer is shared between
+                                the kernel space and user space. Furthermore, if multiple processes
+                                are performing I/O on the same file, then, using
+                                    <span class="emphasis"><em>mmap()</em></span>, they can all share the same kernel
+                                buffer, resulting in an additional memory saving.</p></li></ul></div><p>Performance benefits from memory-mapped I/O are most likely to be realized
+                        when performing repeated random accesses in a large file. If we are
+                        performing sequential access of a file, then <span class="emphasis"><em>mmap()</em></span>
+                        will probably provide little or no gain over <span class="emphasis"><em>read()</em></span> and
+                            <span class="emphasis"><em>write()</em></span>, assuming that we perform I/O using buffer
+                        sizes big enough to avoid making a large number of I/O system calls. The
+                        reason that there is little performance benefit is that, regardless of which
+                        technique we use, the entire contents of the file will be transferred
+                        between disk and memory exactly once, and the efficiency gains of
+                        eliminating a data transfer between user space and kernel space and reducing
+                        memory usage are typically negligible compared to the time required for disk
+                        I/O.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Memory-mapped I/O can also have disadvantages. For small I/Os, the
+                            cost of memory-mapped I/O (i.e., mapping, page faulting, unmapping, and
+                            updating the hardware memory management unit’s translation look-aside
+                            buffer) can actually be higher than for a simple
+                                <span class="emphasis"><em>read()</em></span> or <span class="emphasis"><em>write()</em></span>. In
+                            addition, it can sometimes be difficult for the kernel to efficiently
+                            handle write-back for writable mappings (the use of
+                                <span class="emphasis"><em>msync()</em></span> or
+                                <span class="emphasis"><em>sync_file_range()</em></span> can help improve efficiency
+                            in this case).<a id="IDX-CHP-49-6744" class="indexterm"/><a id="IDX-CHP-49-6745" class="indexterm"/></p></div></div><div class="sect3" title="IPC using a shared file mapping"><div class="titlepage"><div><div><h4 class="title" id="ipc_using_a_shared_file_mapping">IPC using a shared file mapping</h4></div></div></div><p>Since all processes with a shared mapping of the same file region share
+                        the same physical pages of memory, the second use of a shared file mapping
+                        is as a method of (fast) IPC. The feature that distinguishes this type of
+                        shared memory region from a System V shared memory object (<a class="xref" href="ch48.html" title="Chapter 48. System V Shared Memory">Chapter 48</a>) is that modifications to the
+                        contents of the region are carried through to the underlying mapped file.
+                        This feature is useful in an application that requires the shared memory
+                        contents to persist across application or system restarts.</p></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id66">Example program</h4></div></div></div><p><a class="xref" href="ch49.html#using_mmap_open_parenthesis_close_pa" title="Example 49-2. Using mmap() to create a shared file mapping">Example 49-2</a> provides a simple
+                        example of the use of <span class="emphasis"><em>mmap()</em></span> to create a shared file
+                        mapping. This program begins by mapping the file named in its first
+                        command-line argument. It then prints the value of the string lying at the
+                        start of the mapped region. Finally, if a second command-line argument is
+                        supplied, that string is copied into the shared memory region.<a id="IDX-CHP-49-6746" class="indexterm"/></p><p>The following shell session log demonstrates the use of this program. We
+                        begin by creating a 1024-byte file that is populated with zeros:</p><a id="I_programlisting49_d1e131410"/><pre class="programlisting">$ <strong class="userinput"><code>dd if=/dev/zero of=s.txt bs=1 count=1024</code></strong>
+1024+0 records in
+1024+0 records out</pre><p>We then use our program to map the file and copy a string into the mapped
+                        region:</p><a id="I_programlisting49_d1e131417"/><pre class="programlisting">$ <strong class="userinput"><code>./t_mmap s.txt hello</code></strong>
+Current string=
+Copied "hello" to shared memory</pre><p>The program displayed nothing for the current string because the initial
+                        value of the mapped files began with a null byte (i.e., zero-length
+                        string).</p><p>Next, we use our program to again map the file and copy a new string into
+                        the mapped region:</p><a id="I_programlisting49_d1e131426"/><pre class="programlisting">$ <strong class="userinput"><code>./t_mmap s.txt goodbye</code></strong>
+Current string=hello
+Copied "goodbye" to shared memory</pre><p>Finally, we dump the contents of the file, 8 characters per line, to
+                        verify its contents:</p><a id="I_programlisting49_d1e131433"/><pre class="programlisting">$ <strong class="userinput"><code>od -c -w8 s.txt</code></strong>
+0000000   g   o   o   d   b   y   e nul
+0000010 nul nul nul nul nul nul nul nul
+*
+0002000</pre><p>Our trivial program doesn’t use any mechanism to synchronize access by
+                        multiple processes to the mapped file. However, real-world applications
+                        typically need to synchronize access to shared mappings. This can be done
+                        using a variety of techniques, including semaphores (<a class="xref" href="ch47.html" title="Chapter 47. System V Semaphores">Chapter 47</a> and <a class="xref" href="ch53.html" title="Chapter 53. POSIX Semaphores">Chapter 53</a>)
+                        and file locking (<a class="xref" href="ch55.html" title="Chapter 55. File Locking">Chapter 55</a>).</p><p>We explain the <span class="emphasis"><em>msync()</em></span> system call used in <a class="xref" href="ch49.html#using_mmap_open_parenthesis_close_pa" title="Example 49-2. Using mmap() to create a shared file mapping">Example 49-2</a> in Section 49.5.</p><div class="example"><a id="using_mmap_open_parenthesis_close_pa"/><div class="example-title">Example 49-2. Using <span class="emphasis"><em>mmap()</em></span> to create a shared file
+                            mapping</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>mmap/t_mmap.c</code></strong>
+#include &lt;sys/mman.h&gt;
+#include &lt;fcntl.h&gt;
+#include "tlpi_hdr.h"
+
+#define MEM_SIZE 10
+
+int
+main(int argc, char *argv[])
+{
+    char *addr;
+    int fd;
+
+    if (argc &lt; 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s file [new-value]\n", argv[0]);
+
+    fd = open(argv[1], O_RDWR);
+    if (fd == -1)
+        errExit("open");
+
+    addr = mmap(NULL, MEM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (addr == MAP_FAILED)
+        errExit("mmap");
+
+    if (close(fd) == -1)                /* No longer need 'fd' */
+        errExit("close");
+
+    printf("Current string=%.*s\n", MEM_SIZE, addr);
+                /* Secure practice: output at most MEM_SIZE bytes */
+
+    if (argc &gt; 2) {                     /* Update contents of region */
+        if (strlen(argv[2]) &gt;= MEM_SIZE)
+            cmdLineErr("'new-value' too large\n");
+
+        memset(addr, 0, MEM_SIZE);      /* Zero out region */
+        strncpy(addr, argv[2], MEM_SIZE - 1);
+        if (msync(addr, MEM_SIZE, MS_SYNC) == -1)
+            errExit("msync");
+
+        printf("Copied \"%s\" to shared memory\n", argv[2]);
+    }
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>mmap/t_mmap.c</code></strong></pre></div></div></div></div><div class="sect2" title="Boundary Cases"><div class="titlepage"><div><div><h3 class="title" id="boundary_cases">Boundary Cases</h3></div></div></div><p>In many cases, the size of a mapping is a multiple of the system page size,
+                    and the mapping falls entirely within the bounds of the mapped file. However,
+                    this is not necessarily so, and we now look at what happens when these
+                    conditions don’t hold.<a id="IDX-CHP-49-6747" class="indexterm"/><a id="IDX-CHP-49-6748" class="indexterm"/><a id="IDX-CHP-49-6749" class="indexterm"/><a id="IDX-CHP-49-6750" class="indexterm"/><a id="IDX-CHP-49-6751" class="indexterm"/><a id="IDX-CHP-49-6752" class="indexterm"/><a id="IDX-CHP-49-6753" class="indexterm"/><a id="IDX-CHP-49-6754" class="indexterm"/></p><p><a class="xref" href="ch49.html#memory_mapping_whose_length_is_not_a_mul" title="Figure 49-3. Memory mapping whose length is not a multiple of the system page size">Figure 49-3</a> portrays the case
+                    where the mapping falls entirely within the bounds of the mapped file, but the
+                    size of the region is not a multiple of the system page size (which we assume is
+                    4096 bytes for the purposes of this discussion).</p><div class="figure"><a id="memory_mapping_whose_length_is_not_a_mul"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject49_d1e131541"/><img src="figs/web/49-3_MMAP-size-part-1.png.jpg" alt="Memory mapping whose length is not a multiple of the system page size"/></div></div><div class="figure-title">Figure 49-3. Memory mapping whose <span class="emphasis"><em>length</em></span> is not a multiple of the
+                        system page size</div></div><p>Since the size of the mapping is not a multiple of the system page size, it is
+                    rounded up to the next multiple of the system page size. Because the file is
+                    larger than this rounded-up size, the corresponding bytes of the file are mapped
+                    as shown in <a class="xref" href="ch49.html#memory_mapping_whose_length_is_not_a_mul" title="Figure 49-3. Memory mapping whose length is not a multiple of the system page size">Figure 49-3</a>.</p><p>Attempts to access bytes beyond the end of the mapping result in the
+                    generation of a <code class="literal">SIGSEGV</code> signal (assuming that
+                    there is no other mapping at that location). The default action for this signal
+                    is to terminate the process with a core dump.<a id="IDX-CHP-49-6755" class="indexterm"/></p><p>When the mapping extends beyond the end of the underlying file (see <a class="xref" href="ch49.html#memory_mapping_extending_beyond_end_of_m" title="Figure 49-4. Memory mapping extending beyond end of mapped file">Figure 49-4</a>), the situation is more
+                    complex. As before, because the size of the mapping is not a multiple of the
+                    system page size, it is rounded up. However, in this case, while the bytes in
+                    the rounded-up region (i.e., bytes 2200 to 4095 in the diagram) are accessible,
+                    they are not mapped to the underlying file (since no corresponding bytes exist
+                    in the file). Instead, they are initialized to 0 (SUSv3 requires this). These
+                    bytes will nevertheless be shared with other processes mapping the file, if they
+                    specify a sufficiently large <span class="emphasis"><em>length</em></span> argument. Changes to
+                    these bytes are not written to the file.</p><p>If the mapping includes pages beyond the rounded-up region (i.e., bytes 4096
+                    and beyond in <a class="xref" href="ch49.html#memory_mapping_extending_beyond_end_of_m" title="Figure 49-4. Memory mapping extending beyond end of mapped file">Figure 49-4</a>), then
+                    attempts to access addresses in these pages result in the generation of a
+                        <code class="literal">SIGBUS</code> signal, which warns the process
+                    that there is no region of the file corresponding to these addresses. As before,
+                    attempts to access addresses beyond the end of the mapping result in the
+                    generation of a <code class="literal">SIGSEGV</code> signal.<a id="IDX-CHP-49-6756" class="indexterm"/></p><p>From the above description, it may appear pointless to create a mapping whose
+                    size exceeds that of the underlying file. However, by extending the size of the
+                    file (e.g., using <span class="emphasis"><em>ftruncate()</em></span> or
+                        <span class="emphasis"><em>write()</em></span>), we can render previously inaccessible parts
+                    of such a mapping usable.</p><div class="figure"><a id="memory_mapping_extending_beyond_end_of_m"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject49_d1e131593"/><img src="figs/web/49-4_MMAP-size-part-2.png.jpg" alt="Memory mapping extending beyond end of mapped file"/></div></div><div class="figure-title">Figure 49-4. Memory mapping extending beyond end of mapped file</div></div></div><div class="sect2" title="Memory Protection and File Access Mode Interactions"><div class="titlepage"><div><div><h3 class="title" id="memory_protection_and_file_access_mode_i">Memory Protection and File Access Mode Interactions</h3></div></div></div><p>One point that we have not so far explained in detail is the interaction
+                    between the memory protection specified in the <span class="emphasis"><em>mmap() prot</em></span>
+                    argument and the mode in which the mapped file is opened. As a general
+                    principle, we can say that the <code class="literal">PROT_READ</code> and
+                        <code class="literal">PROT_EXEC</code> protections require that the
+                    mapped file is opened <code class="literal">O_RDONLY</code> or <code class="literal">O_RDWR</code>, and that the <code class="literal">PROT_WRITE</code> protection requires that the mapped file is opened
+                        <code class="literal">O_WRONLY</code> or <code class="literal">O_RDWR</code>.<a id="IDX-CHP-49-6757" class="indexterm"/><a id="IDX-CHP-49-6758" class="indexterm"/><a id="IDX-CHP-49-6759" class="indexterm"/><a id="IDX-CHP-49-6760" class="indexterm"/><a id="IDX-CHP-49-6761" class="indexterm"/><a id="IDX-CHP-49-6762" class="indexterm"/><a id="IDX-CHP-49-6763" class="indexterm"/></p><p>However, the situation is complicated by the limited granularity of memory
+                    protections provided by some hardware architectures (<a class="xref" href="ch49.html#creating_a_mapping_colon_mmap_open_paren" title="Creating a Mapping: mmap()">Creating a Mapping: <span class="emphasis"><em>mmap()</em></span></a>). For such
+                    architectures, we make the following observations:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>All combinations of memory protection are compatible with opening the
+                            file with the <code class="literal">O_RDWR</code> flag.</p></li><li class="listitem"><p>No combination of memory protections—not even just <code class="literal">PROT_WRITE</code>—is compatible with a file
+                            opened <code class="literal">O_WRONLY</code> (the error <code class="literal">EACCES</code> results). This is consistent with
+                            the fact that some hardware architectures don’t allow us write-only
+                            access to a page. As noted in <a class="xref" href="ch49.html#creating_a_mapping_colon_mmap_open_paren" title="Creating a Mapping: mmap()">Creating a Mapping: <span class="emphasis"><em>mmap()</em></span></a>, <code class="literal">PROT_WRITE</code> implies <code class="literal">PROT_READ</code> on those architectures, which
+                            means that if the page can be written, then it can also be read. A read
+                            operation is incompatible with <code class="literal">O_WRONLY</code>, which must not reveal the original contents of
+                            the file.</p></li><li class="listitem"><p>The results when a file is opened with the <code class="literal">O_RDONLY</code> flag depend on whether we specify <code class="literal">MAP_PRIVATE</code> or <code class="literal">MAP_SHARED</code> when calling <span class="emphasis"><em>mmap()</em></span>. For
+                            a <code class="literal">MAP_PRIVATE</code> mapping, we can specify
+                            any combination of memory protection in
+                            <span class="emphasis"><em>mmap()</em></span>—because modifications to the contents of a
+                                <code class="literal">MAP_PRIVATE</code> page are never
+                            written to the file, the inability to write to the file is not a
+                            problem. For a <code class="literal">MAP_SHARED</code> mapping,
+                            the only memory protections that are compatible with <code class="literal">O_RDONLY</code> are <code class="literal">PROT_READ</code> and <code class="literal">(PROT_READ |
+                                PROT_EXEC)</code>. This is logical, since a <code class="literal">PROT_WRITE</code>, <code class="literal">MAP_SHARED</code> mapping allows updates to the mapped
+                            file.</p></li></ul></div></div></div><div class="sect1" title="Synchronizing a Mapped Region: msync()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="synchronizing_a_mapped_region_colon_msyn">Synchronizing a Mapped Region: <span class="emphasis"><em>msync()</em></span></h2></div></div></div><p>The kernel automatically carries modifications of the contents of a <code class="literal">MAP_SHARED</code> mapping through to the underlying file,
+                but, by default, provides no guarantees about when such synchronization will occur.
+                (SUSv3 doesn’t require an implementation to provide such guarantees.)<a id="IDX-CHP-49-6765" class="indexterm"/><a id="IDX-CHP-49-6766" class="indexterm"/><a id="IDX-CHP-49-6767" class="indexterm"/><a id="IDX-CHP-49-6768" class="indexterm"/><a id="IDX-CHP-49-6769" class="indexterm"/><a id="IDX-CHP-49-6764" class="indexterm"/></p><p>The <span class="emphasis"><em>msync()</em></span> system call gives an application explicit control
+                over when a shared mapping is synchronized with the mapped file. Synchronizing a
+                mapping with the underlying file is useful in various scenarios. For example, to
+                ensure data integrity, a database application may call <span class="emphasis"><em>msync()</em></span>
+                to force data to be written to the disk. Calling <span class="emphasis"><em>msync()</em></span> also
+                allows an application to ensure that updates to a writable mapping are visible to
+                some other process that performs a <span class="emphasis"><em>read()</em></span> on the file.</p><a id="I_programlisting49_d1e131807"/><pre class="programlisting">#include &lt;sys/mman.h&gt;
+
+int <strong class="userinput"><code>msync</code></strong>(void *<span class="emphasis"><em>addr</em></span>, size_t <span class="emphasis"><em>length</em></span>, int <span class="emphasis"><em>flags</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>addr</em></span> and <span class="emphasis"><em>length</em></span> arguments to
+                    <span class="emphasis"><em>msync()</em></span> specify the starting address and size of the memory
+                region to be synchronized. The address specified in <span class="emphasis"><em>addr</em></span> must
+                be page-aligned, and <span class="emphasis"><em>len</em></span> is rounded up to the next multiple of
+                the system page size. (SUSv3 specified that <span class="emphasis"><em>addr must</em></span> be
+                page-aligned. SUSv4 says that an implementation <span class="emphasis"><em>may</em></span> require
+                this argument to be page-aligned.)</p><p>Possible values for the <span class="emphasis"><em>flags</em></span> argument include one of the
+                following:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">MS_SYNC</code>
+                    </span></dt><dd><p>Perform a synchronous file write. The call blocks until all modified
+                            pages of the memory region have been written to the disk.</p></dd><dt><span class="term">
+                        <code class="literal">MS_ASYNC</code>
+                    </span></dt><dd><p>Perform an asynchronous file write. The modified pages of the memory
+                            region are written to the disk at some later point and are immediately
+                            made visible to other processes performing a <span class="emphasis"><em>read()</em></span>
+                            on the corresponding file region.</p></dd></dl></div><p>Another way of distinguishing these two values is to say that after an <code class="literal">MS_SYNC</code> operation, the memory region is synchronized
+                with the disk, while after an <code class="literal">MS_ASYNC</code> operation,
+                the memory region is merely synchronized with the kernel buffer cache.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>If we take no further action after an <code class="literal">MS_ASYNC</code> operation, then the modified pages in the memory region
+                    will eventually be flushed as part of the automatic buffer flushing performed by
+                    the <span class="emphasis"><em>pdflush</em></span> kernel thread (<span class="emphasis"><em>kupdated</em></span> in
+                    Linux 2.4 and earlier). On Linux, there are two (nonstandard) methods of
+                    initiating the output sooner. We can follow the call to
+                        <span class="emphasis"><em>msync()</em></span> with a call to <span class="emphasis"><em>fsync()</em></span> (or
+                        <span class="emphasis"><em>fdatasync()</em></span>) on the file descriptor corresponding to
+                    the mapping. This call will block until the buffer cache is synchronized with
+                    the disk. Alternatively, we can initiate asynchronous write out of the pages
+                    using the <span class="emphasis"><em>posix_fadvise()</em></span>
+                    <code class="literal">POSIX_FADV_DONTNEED</code> operation. (The
+                    Linux-specific details in these two cases are not specified by SUSv3.)<a id="IDX-CHP-49-6770" class="indexterm"/><a id="IDX-CHP-49-6771" class="indexterm"/><a id="IDX-CHP-49-6772" class="indexterm"/></p></div><p>One other value can additionally be specified for
+                <span class="emphasis"><em>flags</em></span>:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">MS_INVALIDATE</code>
+                    </span></dt><dd><p>Invalidate cached copies of mapped data. After any modified pages in
+                            the memory region have been synchronized with the file, all pages of the
+                            memory region that are inconsistent with the underlying file data are
+                            marked as invalid. When next referenced, the contents of the pages will
+                            be copied from the corresponding locations in the file. As a
+                            consequence, any updates that have been made to the file by another
+                            process are made visible in the memory region.</p></dd></dl></div><p>Like many other modern UNIX implementations, Linux provides a so-called
+                    <span class="emphasis"><em>unified virtual memory</em></span> system. This means that, where
+                possible, memory mappings and blocks of the buffer cache share the same pages of
+                physical memory. Thus, the views of a file obtained via a mapping and via I/O system
+                calls (<span class="emphasis"><em>read()</em></span>, <span class="emphasis"><em>write()</em></span>, and so on) are
+                always consistent, and the only use of <span class="emphasis"><em>msync()</em></span> is to force the
+                contents of a mapped region to be flushed to disk.<a id="IDX-CHP-49-6773" class="indexterm"/></p><p>However, a unified virtual memory system is not required by SUSv3 and is not
+                employed on all UNIX implementations. On such systems, a call to
+                    <span class="emphasis"><em>msync()</em></span> is required to make changes to the contents of a
+                mapping visible to other processes that <span class="emphasis"><em>read()</em></span> the file, and
+                the <code class="literal">MS_INVALIDATE</code> flag is required to perform the
+                converse action of making writes to the file by another process visible in the
+                mapped region. Multiprocess applications that employ both
+                    <span class="emphasis"><em>mmap()</em></span> and I/O system calls to operate on the same file
+                should be designed to make appropriate use of <span class="emphasis"><em>msync()</em></span> if they
+                are to be portable to systems that don’t have a unified virtual memory
+                system.</p></div><div class="sect1" title="Additional mmap() Flags"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="additional_mmap_open_parenthesis_close_p">Additional <span class="emphasis"><em>mmap()</em></span> Flags</h2></div></div></div><p>In addition to <code class="literal">MAP_PRIVATE</code> and <code class="literal">MAP_SHARED</code>, Linux allows a number of other values to
+                be included (ORed) in the <span class="emphasis"><em>mmap() flags</em></span> argument. <a class="xref" href="ch49.html#bit-mask_values_for_the_mmap_open_parent" title="Table 49-3. Bit-mask values for the mmap() flags argument">Table 49-3</a> summarizes these values.
+                Other than <code class="literal">MAP_PRIVATE</code> and <code class="literal">MAP_SHARED</code>, only the <code class="literal">MAP_FIXED</code> flag is specified in SUSv3.<a id="IDX-CHP-49-6774" class="indexterm"/><a id="IDX-CHP-49-6775" class="indexterm"/><a id="IDX-CHP-49-6776" class="indexterm"/><a id="IDX-CHP-49-6777" class="indexterm"/><a id="IDX-CHP-49-6778" class="indexterm"/><a id="IDX-CHP-49-6779" class="indexterm"/><a id="IDX-CHP-49-6780" class="indexterm"/><a id="IDX-CHP-49-6781" class="indexterm"/><a id="IDX-CHP-49-6782" class="indexterm"/><a id="IDX-CHP-49-6783" class="indexterm"/></p><div class="table"><a id="bit-mask_values_for_the_mmap_open_parent"/><div class="table-title">Table 49-3. Bit-mask values for the <span class="emphasis"><em>mmap() flags</em></span> argument</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Value</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Description</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>SUSv3</p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">MAP_ANONYMOUS</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Create an anonymous mapping<a id="IDX-CHP-49-6784" class="indexterm"/></p>
+                            </td><td style="border-bottom: 0.5pt solid ; "> </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">MAP_FIXED</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Interpret <span class="emphasis"><em>addr</em></span> argument exactly (<a class="xref" href="ch49.html#the_map_underscore_fixed_flag" title="The MAP_FIXED Flag">The <code class="literal">MAP_FIXED</code> Flag</a>)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">MAP_LOCKED</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Lock mapped pages into memory (since Linux 2.6)</p>
+                            </td><td style="border-bottom: 0.5pt solid ; "> </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">MAP_HUGETLB</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Create a mapping that uses huge pages (since Linux
+                                    2.6.32)</p>
+                            </td><td style="border-bottom: 0.5pt solid ; "> </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">MAP_NORESERVE</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Control reservation of swap space (<a class="xref" href="ch49.html#map_underscore_noreserve_and_swap_space" title="MAP_NORESERVE and Swap Space Overcommitting"><code class="literal">MAP_NORESERVE</code> and Swap Space
+                Overcommitting</a>)</p>
+                            </td><td style="border-bottom: 0.5pt solid ; "> </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">MAP_PRIVATE</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Modifications to mapped data are private</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">MAP_POPULATE</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Populate the pages of a mapping (since Linux 2.6)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">MAP_SHARED</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Modifications to mapped data are visible to other processes
+                                    and propagated to underlying file (converse of <code class="literal">MAP_PRIVATE</code>)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">MAP_UNINITIALIZED</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>Don’t clear an anonymous mapping (since Linux 2.6.33)</p>
+                            </td><td> </td></tr></tbody></table></div></div><p>The following list provides further details on the <span class="emphasis"><em>flags</em></span>
+                values listed in <a class="xref" href="ch49.html#bit-mask_values_for_the_mmap_open_parent" title="Table 49-3. Bit-mask values for the mmap() flags argument">Table 49-3</a> (other
+                than <code class="literal">MAP_PRIVATE</code> and <code class="literal">MAP_SHARED</code>, which have already been discussed):</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">MAP_ANONYMOUS</code>
+                    </span></dt><dd><p>Create an anonymous mapping—that is, a mapping that is not backed by a
+                            file. We describe this flag further in Section 49.7.</p></dd><dt><span class="term">
+                        <code class="literal">MAP_FIXED</code>
+                    </span></dt><dd><p>We describe this flag in <a class="xref" href="ch49.html#the_map_underscore_fixed_flag" title="The MAP_FIXED Flag">The <code class="literal">MAP_FIXED</code> Flag</a>.</p></dd><dt><span class="term"><code class="literal">MAP_HUGETLB</code> (since Linux 2.6.32)</span></dt><dd><p>This flag serves the same purpose for <span class="emphasis"><em>mmap()</em></span> as
+                            the <code class="literal">SHM_HUGETLB</code> flag serves for
+                            System V shared memory segments. See Section 48.2.</p></dd><dt><span class="term"><code class="literal">MAP_LOCKED</code> (since Linux 2.6)</span></dt><dd><p>Preload and lock the mapped pages into memory in the manner of
+                                <span class="emphasis"><em>mlock()</em></span>. We describe the privileges required to
+                            use this flag and the limits governing its operation in Section
+                            50.2.</p></dd><dt><span class="term">
+                        <code class="literal">MAP_NORESERVE</code>
+                    </span></dt><dd><p>This flag is used to control whether reservation of swap space for the
+                            mapping is performed in advance. See <a class="xref" href="ch49.html#map_underscore_noreserve_and_swap_space" title="MAP_NORESERVE and Swap Space Overcommitting"><code class="literal">MAP_NORESERVE</code> and Swap Space
+                Overcommitting</a> for
+                            details.</p></dd><dt><span class="term"><code class="literal">MAP_POPULATE</code> (since Linux 2.6)</span></dt><dd><p>Populate the pages of a mapping. For a file mapping, this will perform
+                            read-ahead on the file. This means that later accesses of the contents
+                            of the mapping won’t be blocked by page faults (assuming that memory
+                            pressure has not in the meantime caused the pages to be swapped
+                            out).</p></dd><dt><span class="term"><code class="literal">MAP_UNINITIALIZED</code> (since Linux
+                        2.6.33)</span></dt><dd><p>Specifying this flag prevents the pages of an anonymous mapping from
+                            being zeroed. It provides a performance benefit, but carries a security
+                            risk, because the allocated pages may contain sensitive information left
+                            by a previous process. This flag is thus only intended for use on
+                            embedded systems, where performance may be critical, and the entire
+                            system is under the control of the embedded application(s). This flag is
+                            only honored if the kernel was configured with the <code class="literal">CONFIG_MMAP_ALLOW_UNINITIALIZED</code>
+                                option.<a id="IDX-CHP-49-6785" class="indexterm"/></p></dd></dl></div></div><div class="sect1" title="Anonymous Mappings"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="anonymous_mappings">Anonymous Mappings</h2></div></div></div><p>An <span class="emphasis"><em>anonymous mapping</em></span> is one that doesn’t have a corresponding
+                file. In this section, we show how to create anonymous mappings, and look at the
+                purposes served by private and shared anonymous mappings.<a id="IDX-CHP-49-6786" class="indexterm"/><a id="IDX-CHP-49-6787" class="indexterm"/><a id="IDX-CHP-49-6788" class="indexterm"/><a id="IDX-CHP-49-6789" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="map_underscore_anonymous_and_solidus"/></div></div></div><div class="sect3" title="MAP_ANONYMOUS and /dev/zero"><div class="titlepage"><div><div><h4 class="title" id="map_underscore_anonymous_and_solidus-id1"><code class="literal">MAP_ANONYMOUS</code> and <code class="literal">/dev/zero</code></h4></div></div></div><p>On Linux, there are two different, equivalent methods of creating an
+                        anonymous mapping with <span class="emphasis"><em>mmap()</em></span>:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Specify <code class="literal">MAP_ANONYMOUS</code> in
+                                    <span class="emphasis"><em>flags</em></span> and specify <span class="emphasis"><em>fd</em></span>
+                                as -1. (On Linux, the value of <span class="emphasis"><em>fd</em></span> is ignored
+                                when <code class="literal">MAP_ANONYMOUS</code> is specified.
+                                However, some UNIX implementations require fd to be -1 when
+                                employing <code class="literal">MAP_ANONYMOUS</code>, and
+                                portable applications should ensure that they do this.)</p><div class="note" title="Note"><h3 class="title">Note</h3><p>We must define either the <code class="literal">_BSD_SOURCE</code> or the <code class="literal">_SVID_SOURCE</code> feature test macros to get the
+                                    definition of <code class="literal">MAP_ANONYMOUS</code>
+                                    from <code class="literal">&lt;sys/mman.h&gt;</code>. Linux provides the
+                                    constant <code class="literal">MAP_ANON</code> as a
+                                    synonym for <code class="literal">MAP_ANONYMOUS</code> for
+                                    compatibility with some other UNIX implementations using this
+                                    alternative name.</p></div></li><li class="listitem"><p>Open the <code class="literal">/dev/zero</code> device file
+                                and pass the resulting file descriptor to
+                                    <span class="emphasis"><em>mmap()</em></span>.<a id="IDX-CHP-49-6790" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p><code class="literal">/dev/zero</code> is a virtual
+                                    device that always returns zeros when we read from it. Writes to
+                                    this device are always discarded. A common use of <code class="literal">/dev/zero</code> is to populate a file
+                                    with zeros (e.g., using the <span class="emphasis"><em>dd(1)</em></span>
+                                    command).</p></div></li></ul></div><p>With both the <code class="literal">MAP_ANONYMOUS</code> and the
+                            <code class="literal">/dev/zero</code> techniques, the bytes of
+                        the resulting mapping are initialized to 0. For both techniques, the
+                            <span class="emphasis"><em>offset</em></span> argument is ignored (since there is no
+                        underlying file in which to specify an offset). We show examples of each
+                        technique shortly.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <code class="literal">MAP_ANONYMOUS</code> and <code class="literal">/dev/zero</code> techniques are not specified in
+                            SUSv3, although most UNIX implementations support one or both of them.
+                            The reason for the existence of two different techniques with the same
+                            semantics is that one (<code class="literal">MAP_ANONYMOUS</code>)
+                            derives from BSD, while the other (<code class="literal">/dev/zero</code>) derives from System V.</p></div></div><div class="sect3" title="MAP_PRIVATE anonymous mappings"><div class="titlepage"><div><div><h4 class="title" id="map_underscore_private_anonymous_mapping"><code class="literal">MAP_PRIVATE</code> anonymous mappings</h4></div></div></div><p><code class="literal">MAP_PRIVATE</code> anonymous mappings are used
+                        to allocate blocks of process-private memory initialized to 0. We can use
+                        the <code class="literal">/dev/zero</code> technique to create a
+                            <code class="literal">MAP_PRIVATE</code> anonymous mapping as
+                            follows:<a id="IDX-CHP-49-6791" class="indexterm"/></p><a id="I_programlisting49_d1e132420"/><pre class="programlisting">fd = open("/dev/zero", O_RDWR);
+if (fd == -1)
+    errExit("open");
+addr = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+if (addr == MAP_FAILED)
+    errExit("mmap");</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>glibc</em></span> implementation of
+                                <span class="emphasis"><em>malloc()</em></span> uses <code class="literal">MAP_PRIVATE</code> anonymous mappings to allocate blocks of
+                            memory larger than <code class="literal">MMAP_THRESHOLD</code>
+                            bytes. This makes it possible to efficiently deallocate such blocks (via
+                                <span class="emphasis"><em>munmap()</em></span>) if they are later given to
+                                <span class="emphasis"><em>free()</em></span>. (It also reduces the possibility of
+                            memory fragmentation when repeatedly allocating and deallocating large
+                            blocks of memory.) <code class="literal">MMAP_THRESHOLD</code> is
+                            128 kB by default, but this parameter is adjustable via the
+                                <span class="emphasis"><em>mallopt()</em></span> library function.<a id="IDX-CHP-49-6792" class="indexterm"/><a id="IDX-CHP-49-6793" class="indexterm"/></p></div></div><div class="sect3" title="MAP_SHARED anonymous mappings"><div class="titlepage"><div><div><h4 class="title" id="map_underscore_shared_anonymous_mappings"><code class="literal">MAP_SHARED</code> anonymous mappings</h4></div></div></div><p>A <code class="literal">MAP_SHARED</code> anonymous mapping allows
+                        related processes (e.g., parent and child) to share a region of memory
+                        without needing a corresponding mapped file.<a id="IDX-CHP-49-6794" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p><code class="literal">MAP_SHARED</code> anonymous mappings are
+                            available only with Linux 2.4 and later.</p></div><p>We can use the <code class="literal">MAP_ANONYMOUS</code> technique
+                        to create a <code class="literal">MAP_SHARED</code> anonymous mapping
+                        as follows:</p><a id="I_programlisting49_d1e132486"/><pre class="programlisting">addr = mmap(NULL, length, PROT_READ | PROT_WRITE,
+            MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+if (addr == MAP_FAILED)
+    errExit("mmap");</pre><p>If the above code is followed by a call to <span class="emphasis"><em>fork()</em></span>,
+                        then, because the child produced by <span class="emphasis"><em>fork()</em></span> inherits the
+                        mapping, both processes share the memory region.</p></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id67">Example program</h4></div></div></div><p>The program in <a class="xref" href="ch49.html#sharing_an_anonymous_mapping_between_par" title="Example 49-3. Sharing an anonymous mapping between parent and child processes">Example 49-3</a>
+                        demonstrates the use of either <code class="literal">MAP_ANONYMOUS</code> or <code class="literal">/dev/zero</code>
+                        to share a mapped region between parent and child processes. The choice of
+                        technique is determined by whether <code class="literal">USE_MAP_ANON</code> is defined when compiling the program. The
+                        parent initializes an integer in the shared region to 1 prior to calling
+                            <span class="emphasis"><em>fork()</em></span>. The child then increments the shared
+                        integer and exits, while the parent waits for the child to exit and then
+                        prints the value of the integer. When we run this program, we see the
+                            following:<a id="IDX-CHP-49-6795" class="indexterm"/><a id="IDX-CHP-49-6796" class="indexterm"/><a id="IDX-CHP-49-6797" class="indexterm"/><a id="IDX-CHP-49-6798" class="indexterm"/><a id="IDX-CHP-49-6799" class="indexterm"/><a id="IDX-CHP-49-6800" class="indexterm"/><a id="IDX-CHP-49-6801" class="indexterm"/></p><a id="I_programlisting49_d1e132567"/><pre class="programlisting">$ <strong class="userinput"><code>./anon_mmap</code></strong>
+Child started, value = 1
+In parent, value = 2</pre><div class="example"><a id="sharing_an_anonymous_mapping_between_par"/><div class="example-title">Example 49-3. Sharing an anonymous mapping between parent and child
+                            processes</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>mmap/anon_mmap.c</code></strong>
+#ifdef USE_MAP_ANON
+#define _BSD_SOURCE             /* Get MAP_ANONYMOUS definition */
+#endif
+#include &lt;sys/wait.h&gt;
+#include &lt;sys/mman.h&gt;
+#include &lt;fcntl.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int *addr;                  /* Pointer to shared memory region */
+
+#ifdef USE_MAP_ANON             /* Use MAP_ANONYMOUS */
+    addr = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE,
+                MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (addr == MAP_FAILED)
+        errExit("mmap");
+
+#else                           /* Map /dev/zero */
+    int fd;
+
+    fd = open("/dev/zero", O_RDWR);
+    if (fd == -1)
+        errExit("open");
+
+    addr = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (addr == MAP_FAILED)
+        errExit("mmap");
+
+    if (close(fd) == -1)        /* No longer needed */
+        errExit("close");
+#endif
+
+    *addr = 1;                  /* Initialize integer in mapped region */
+
+    switch (fork()) {           /* Parent and child share mapping */
+    case -1:
+        errExit("fork");
+
+    case 0:                     /* Child: increment shared integer and exit */
+        printf("Child started, value = %d\n", *addr);
+        (*addr)++;
+
+        if (munmap(addr, sizeof(int)) == -1)
+            errExit("munmap");
+        exit(EXIT_SUCCESS);
+
+    default:                    /* Parent: wait for child to terminate */
+        if (wait(NULL) == -1)
+            errExit("wait");
+        printf("In parent, value = %d\n", *addr);
+        if (munmap(addr, sizeof(int)) == -1)
+            errExit("munmap");
+        exit(EXIT_SUCCESS);
+    }
+}
+      <strong class="userinput"><code>mmap/anon_mmap.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Remapping a Mapped Region: mremap()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="remapping_a_mapped_region_colon_mremap_o">Remapping a Mapped Region: <span class="emphasis"><em>mremap()</em></span></h2></div></div></div><p>On most UNIX implementations, once a mapping has been created, its location and
+                size can’t be changed. However, Linux provides the (nonportable)
+                    <span class="emphasis"><em>mremap()</em></span> system call, which permits such changes.<a id="IDX-CHP-49-6803" class="indexterm"/><a id="IDX-CHP-49-6804" class="indexterm"/><a id="IDX-CHP-49-6805" class="indexterm"/><a id="IDX-CHP-49-6806" class="indexterm"/><a id="IDX-CHP-49-6807" class="indexterm"/><a id="IDX-CHP-49-6808" class="indexterm"/><a id="IDX-CHP-49-6802" class="indexterm"/></p><a id="I_programlisting49_d1e132627"/><pre class="programlisting">#define _GNU_SOURCE
+#include &lt;sys/mman.h&gt;
+
+void *<strong class="userinput"><code>mremap</code></strong>(void *<span class="emphasis"><em>old_address</em></span>, size_t <span class="emphasis"><em>old_size</em></span>, size_t <span class="emphasis"><em>new_size</em></span>,
+ int <span class="emphasis"><em>flags</em></span>, ...);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns starting address of remapped region on success, or <code class="literal">MAP_FAILED</code> on error</p></div><p>The <span class="emphasis"><em>old_address</em></span> and <span class="emphasis"><em>old_size</em></span> arguments
+                specify the location and size of an existing mapping that we wish to expand or
+                shrink. The address specified in <span class="emphasis"><em>old_address</em></span> must be
+                page-aligned, and is normally a value returned by a previous call to
+                    <span class="emphasis"><em>mmap()</em></span>. The desired new size of the mapping is specified in
+                    <span class="emphasis"><em>new_size</em></span>. The values specified in
+                    <span class="emphasis"><em>old_size</em></span> and <span class="emphasis"><em>new_size</em></span> are both rounded
+                up to the next multiple of the system page size.</p><p>While carrying out the remapping, the kernel may relocate the mapping within the
+                process’s virtual address space. Whether or not this is permitted is controlled by
+                the <span class="emphasis"><em>flags</em></span> argument, which is a bit mask that may either be 0 or
+                include the following values:<a id="IDX-CHP-49-6809" class="indexterm"/></p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">MREMAP_MAYMOVE</code>
+                    </span></dt><dd><p>If this flag is specified, then, as space requirements dictate, the
+                            kernel may relocate the mapping within the process’s virtual address
+                            space. If this flag is not specified, and there is insufficient space to
+                            expand the mapping at the current location, then the error <code class="literal">ENOMEM</code> results.</p></dd><dt><span class="term"><code class="literal">MREMAP_FIXED</code> (since Linux 2.4)</span></dt><dd><p>This flag can be used only in conjunction with <code class="literal">MREMAP_MAYMOVE</code>. It serves a purpose for
+                                <span class="emphasis"><em>mremap()</em></span> that is analogous to that served by
+                                <code class="literal">MAP_FIXED</code> for
+                                <span class="emphasis"><em>mmap()</em></span> (<a class="xref" href="ch49.html#the_map_underscore_fixed_flag" title="The MAP_FIXED Flag">The <code class="literal">MAP_FIXED</code> Flag</a>). If this flag is
+                            specified, then <span class="emphasis"><em>mremap()</em></span> takes an additional
+                            argument, <span class="emphasis"><em>void *new_address</em></span>, that specifies a
+                            page-aligned address to which the mapping should be moved. Any previous
+                            mapping in the address range specified by
+                                <span class="emphasis"><em>new_address</em></span> and <span class="emphasis"><em>new_size</em></span>
+                            is unmapped.</p></dd></dl></div><p>On success, <span class="emphasis"><em>mremap()</em></span> returns the starting address of the
+                mapping. Since (if the <code class="literal">MREMAP_MAYMOVE</code> flag is
+                specified) this address may be different from the previous starting address,
+                pointers into the region may cease to be valid. Therefore, applications that use
+                    <span class="emphasis"><em>mremap()</em></span> should use only offsets (not absolute pointers)
+                when referring to addresses in the mapped region (see <a class="xref" href="ch48.html#storing_pointers_in_shared_memory" title="Storing Pointers in Shared Memory">Storing Pointers in Shared Memory</a>).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On Linux, the <span class="emphasis"><em>realloc()</em></span> function uses
+                        <span class="emphasis"><em>mremap()</em></span> to efficiently reallocate large blocks of
+                    memory that <span class="emphasis"><em>malloc()</em></span> previously allocated using
+                        <span class="emphasis"><em>mmap()</em></span>
+                    <code class="literal">MAP_ANONYMOUS</code>. (We mentioned this feature of
+                    the <span class="emphasis"><em>glibc malloc()</em></span> implementation in Section 49.7.) Using
+                        <span class="emphasis"><em>mremap()</em></span> for this task makes it possible to avoid
+                    copying of bytes during the reallocation.<a id="IDX-CHP-49-6810" class="indexterm"/></p></div></div><div class="sect1" title="MAP_NORESERVE and Swap Space Overcommitting"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="map_underscore_noreserve_and_swap_space"><code class="literal">MAP_NORESERVE</code> and Swap Space
+                Overcommitting</h2></div></div></div><p>Some applications create large (usually private anonymous) mappings, but use only
+                a small part of the mapped region. For example, certain types of scientific
+                applications allocate a very large array, but operate on only a few widely separated
+                elements of the array (a so-called <span class="emphasis"><em>sparse array</em></span>).<a id="IDX-CHP-49-6811" class="indexterm"/><a id="IDX-CHP-49-6812" class="indexterm"/></p><p>If the kernel always allocated (or reserved) enough swap space for the whole of
+                such mappings, then a lot of swap space would potentially be wasted. Instead, the
+                kernel can reserve swap space for the pages of a mapping only as they are actually
+                required (i.e., when the application accesses a page). This approach is called
+                    <span class="emphasis"><em>lazy swap reservation</em></span>, and has the advantage that the total
+                virtual memory used by applications can exceed the total size of RAM plus swap
+                    space.<a id="IDX-CHP-49-6813" class="indexterm"/></p><p>To put things another way, lazy swap reservation allows swap space to be
+                overcommitted. This works fine, as long as all processes don’t attempt to access the
+                entire range of their mappings. However, if all applications do attempt to access
+                the full range of their mappings, RAM and swap space will be exhausted. In this
+                situation, the kernel reduces memory pressure by killing one or more of the
+                processes on the system. Ideally, the kernel attempts to select the process causing
+                the memory problems (see the discussion of the <span class="emphasis"><em>OOM killer</em></span>
+                below), but this isn’t guaranteed. For this reason, we may choose to prevent lazy
+                swap reservation, instead forcing the system to allocate all of the necessary swap
+                space when the mapping is created.</p><p>How the kernel handles reservation of swap space is controlled by the use of the
+                    <code class="literal">MAP_NORESERVE</code> flag when calling
+                    <span class="emphasis"><em>mmap()</em></span>, and via <code class="literal">/proc</code>
+                interfaces that affect the system-wide operation of swap space overcommitting. These
+                factors are summarized in <a class="xref" href="ch49.html#handling_of_swap_space_reservation_durin" title="Table 49-4. Handling of swap space reservation during mmap()">Table 49-4</a>.<a id="IDX-CHP-49-6814" class="indexterm"/></p><div class="table"><a id="handling_of_swap_space_reservation_durin"/><div class="table-title">Table 49-4. Handling of swap space reservation during <span class="emphasis"><em>mmap()</em></span></div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/></colgroup><thead><tr><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; " rowspan="2">
+                                <p><code class="literal">overcommit_memory</code>
+                                    value</p>
+                            </td><td style="text-align: center; vertical-align: bottom; border-bottom: 0.5pt solid ; " colspan="2">
+                                <p><code class="literal">MAP_NORESERVE</code> specified in
+                                        <span class="emphasis"><em>mmap()</em></span> call?</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>No</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>Yes</p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>0</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Deny obvious overcommits</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Allow overcommits</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>1</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Allow overcommits</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Allow overcommits</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>2 (since Linux 2.6)</p>
+                            </td><td style="text-align: left; vertical-align: top; " colspan="2">
+                                <p>Strict overcommitting</p>
+                            </td></tr></tbody></table></div></div><p>The Linux-specific <code class="literal">/proc/sys/vm/overcommit_memory</code> file contains an integer value that
+                controls the kernel’s handling of swap space overcommits. Linux versions before 2.6
+                differentiated only two values in this file: 0, meaning deny obvious overcommits
+                (subject to the use of the <code class="literal">MAP_NORESERVE</code> flag),
+                and greater than 0, meaning that overcommits should be permitted in all
+                    cases.<a id="IDX-CHP-49-6815" class="indexterm"/></p><p>Denying obvious overcommits means that new mappings whose size doesn’t exceed the
+                amount of currently available free memory are permitted. Existing allocations may be
+                overcommitted (since they may not be using all of the pages that they
+                mapped).</p><p>Since Linux 2.6, a value of 1 has the same meaning as a positive value in earlier
+                kernels, but the value 2 (or greater) causes <span class="emphasis"><em>strict
+                    overcommitting</em></span> to be employed. In this case, the kernel performs
+                strict accounting on all <span class="emphasis"><em>mmap()</em></span> allocations and limits the
+                system-wide total of all such allocations to be less than or equal to:</p><a id="I_programlisting49_d1e132901"/><pre class="programlisting">[swap size] + [RAM size] * overcommit_ratio / 100</pre><p>The <code class="literal">overcommit_ratio</code> value is an
+                integer—expressing a percentage—contained in the Linux-specific <code class="literal">/proc/sys/vm/overcommit_ratio</code> file. The default value
+                contained in this file is 50, meaning that the kernel can overallocate up to 50% of
+                the size of the system’s RAM, and this will be successful, as long as not all
+                processes try to use their full allocation.<a id="IDX-CHP-49-6816" class="indexterm"/></p><p>Note that overcommit monitoring comes into play only for the following types of
+                mappings:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>private writable mappings (both file and anonymous mappings), for which
+                        the swap “cost” of the mapping is equal to the size of the mapping for each
+                        process that employs the mapping; and</p></li><li class="listitem"><p>shared anonymous mappings, for which the swap “cost” of the mapping is the
+                        size of the mapping (since all processes share that mapping).</p></li></ul></div><p>Reserving swap space for a read-only private mapping is unnecessary: since the
+                contents of the mapping can’t be modified, there is no need to employ swap space.
+                Swap space is also not required for shared file mappings, because the mapped file
+                itself acts as the swap space for the mapping.</p><p>When a child process inherits a mapping across a <span class="emphasis"><em>fork()</em></span>, it
+                inherits the <code class="literal">MAP_NORESERVE</code> setting for the
+                mapping. The <code class="literal">MAP_NORESERVE</code> flag is not specified
+                in SUSv3, but it is supported on a few other UNIX implementations.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>In this section, we have discussed how a call to <span class="emphasis"><em>mmap()</em></span>
+                    may fail to increase the address space of a process because of the system
+                    limitations on RAM and swap space. A call to <span class="emphasis"><em>mmap()</em></span> can
+                    also fail because it encounters the per-process <code class="literal">RLIMIT_AS</code> resource limit (described in <a class="xref" href="ch36.html#details_of_specific_resource_limits" title="Details of Specific Resource Limits">Details of Specific Resource Limits</a>), which places an upper
+                    limit on the size of the address space of the calling process.<a id="IDX-CHP-49-6817" class="indexterm"/></p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="the_oom_killer"/></div></div></div><div class="sect3" title="The OOM killer"><div class="titlepage"><div><div><h4 class="title" id="the_oom_killer-id1">The OOM killer</h4></div></div></div><p>Above, we noted that when we employ lazy swap reservation, memory may
+                        become exhausted if applications attempt to employ the entire range of their
+                        mappings. In this case, the kernel relieves memory exhaustion by killing
+                            processes.<a id="IDX-CHP-49-6818" class="indexterm"/></p><p>The kernel code dedicated to selecting a process to kill when memory is
+                        exhausted is commonly known as the out-of-memory (OOM) killer. The OOM
+                        killer tries to choose the best process to kill in order to relieve the
+                        memory exhaustion, where “best” is determined by a range of factors. For
+                        example, the more memory a process is consuming, the more likely it will be
+                        a candidate for the OOM killer. Other factors that increase a process’s
+                        likelihood of selection are forking to create many child processes and
+                        having a low nice value (i.e., one that is greater than 0). The kernel
+                        disfavors killing the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>processes that are privileged, since they are probably performing
+                                important tasks;</p></li><li class="listitem"><p>processes that are performing raw device access, since killing
+                                them may leave the device in an unusable state; and</p></li><li class="listitem"><p>processes that have been running for a long time or have consumed
+                                a lot of CPU, since killing them would result in a lot of lost
+                                “work.”</p></li></ul></div><p>To kill the selected process, the OOM killer delivers a <code class="literal">SIGKILL</code> signal.<a id="IDX-CHP-49-6819" class="indexterm"/></p><p>The Linux-specific <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/oom_score</code> file, available since kernel 2.6.11, shows the
+                        weighting that the kernel gives to a process if it is necessary to invoke
+                        the OOM killer. The greater the value in this file, the more likely the
+                        process is to be selected, if necessary, by the OOM killer. The
+                        Linux-specific <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/oom_adj</code> file, also available since kernel 2.6.11, can be
+                        used to influence the <code class="literal">oom_score</code> of a
+                        process. This file can be set to any value in the range -16 to +15, where
+                        negative values decrease the <code class="literal">oom_score</code>
+                        and positive values increase it. The special value -17 removes the process
+                        altogether as a candidate for selection by the OOM killer. For further
+                        details, see the <span class="emphasis"><em>proc(5)</em></span> manual page.<a id="IDX-CHP-49-6820" class="indexterm"/><a id="IDX-CHP-49-6821" class="indexterm"/></p></div></div></div><div class="sect1" title="The MAP_FIXED Flag"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_map_underscore_fixed_flag">The <code class="literal">MAP_FIXED</code> Flag</h2></div></div></div><p>Specifying <code class="literal">MAP_FIXED</code> in the <span class="emphasis"><em>mmap()
+                    flags</em></span> argument forces the kernel to interpret the address in
+                    <span class="emphasis"><em>addr</em></span> exactly, rather than take it as a hint. If we specify
+                    <code class="literal">MAP_FIXED</code>, <span class="emphasis"><em>addr</em></span> must be
+                    page-aligned.<a id="IDX-CHP-49-6822" class="indexterm"/></p><p>Generally, a portable application should omit the use of <code class="literal">MAP_FIXED</code>, and specify <span class="emphasis"><em>addr</em></span> as <code class="literal">NULL</code>, which allows the system to choose the address at
+                which to place the mapping. The reasons for this are the same as those that we
+                outlined in <a class="xref" href="ch48.html#using_shared_memory" title="Using Shared Memory">Using Shared Memory</a> when explaining why it usually
+                preferable to specify <span class="emphasis"><em>shmaddr</em></span> as <code class="literal">NULL</code> when attaching a System V shared memory segment using
+                    <span class="emphasis"><em>shmat()</em></span>.</p><p>There is, however, one situation where a portable application might use <code class="literal">MAP_FIXED</code>. If <code class="literal">MAP_FIXED</code> is specified when calling <span class="emphasis"><em>mmap()</em></span>, and
+                the memory region beginning at <span class="emphasis"><em>addr</em></span> and running for
+                    <span class="emphasis"><em>length</em></span> bytes overlaps the pages of any previous mapping,
+                then the overlapped pages are replaced by the new mapping. We can use this feature
+                to portably map multiple parts of a file (or files) into a contiguous region of
+                memory, as follows:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Use <span class="emphasis"><em>mmap()</em></span> to create an anonymous mapping (<a class="xref" href="ch49.html#anonymous_mappings" title="Anonymous Mappings">Anonymous Mappings</a>). In the <span class="emphasis"><em>mmap()</em></span>
+                        call, we specify <span class="emphasis"><em>addr</em></span> as <code class="literal">NULL</code> and don’t specify the <code class="literal">MAP_FIXED</code> flag. This allows the kernel to choose an address
+                        for the mapping.</p></li><li class="listitem"><p>Use a series of <span class="emphasis"><em>mmap()</em></span> calls specifying <code class="literal">MAP_FIXED</code> to map (i.e., overlay) file regions
+                        into different parts of the mapping created in the preceding step.</p></li></ol></div><p>Although we could skip the first step, and use a series of
+                    <span class="emphasis"><em>mmap()</em></span>
+                <code class="literal">MAP_FIXED</code> operations to create a set of
+                contiguous mappings at an address range selected by the application, this approach
+                is less portable than performing both steps. As noted above, a portable application
+                should avoid trying to create a new mapping at a fixed address. The first step
+                avoids the portability problem, because we let the kernel select a contiguous
+                address range, and then create new mappings within that address range.</p><p>From Linux 2.6 onward, the <span class="emphasis"><em>remap_file_pages()</em></span> system call,
+                which we describe in the next section, can also be used to achieve the same effect.
+                However, the use of <code class="literal">MAP_FIXED</code> is more portable
+                than <span class="emphasis"><em>remap_file_pages()</em></span>, which is Linux-specific.<a id="IDX-CHP-49-6823" class="indexterm"/></p></div><div class="sect1" title="Nonlinear Mappings: remap_file_pages()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="nonlinear_mappings_colon_remap_underscor">Nonlinear Mappings: <span class="emphasis"><em>remap_file_pages()</em></span></h2></div></div></div><p>File mappings created with <span class="emphasis"><em>mmap()</em></span> are linear: there is a
+                sequential, one-to-one correspondence between the pages of the mapped file and the
+                pages of the memory region. For most applications, a linear mapping suffices.
+                However, some applications need to create large numbers of nonlinear
+                mappings—mappings where the pages of the file appear in a different order within
+                contiguous memory. We show an example of a nonlinear mapping in <a class="xref" href="ch49.html#a_nonlinear_file_mapping" title="Figure 49-5. A nonlinear file mapping">Figure 49-5</a>.<a id="IDX-CHP-49-6824" class="indexterm"/><a id="IDX-CHP-49-6825" class="indexterm"/><a id="IDX-CHP-49-6826" class="indexterm"/></p><p>We described one way of creating nonlinear mappings in the previous section: using
+                multiple calls to <span class="emphasis"><em>mmap()</em></span> with the <code class="literal">MAP_FIXED</code> flag. However, this approach doesn’t scale well. The
+                problem is that each of these <span class="emphasis"><em>mmap()</em></span> calls creates a separate
+                kernel virtual memory area (VMA) data structure. Each VMA takes time to set up and
+                consumes some nonswappable kernel memory. Furthermore, the presence of a large
+                number of VMAs can degrade the performance of the virtual memory manager; in
+                particular, the time taken to process each page fault can significantly increase
+                when there are tens of thousands of VMAs. (This was a problem for some large
+                database management systems that maintain multiple different views in a database
+                file.)</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Each line in the <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/maps</code> file (<a class="xref" href="ch48.html#location_of_shared_memory_in_virtual_mem" title="Location of Shared Memory in Virtual Memory">Location of Shared Memory in Virtual Memory</a>) represents one
+                        VMA.<a id="IDX-CHP-49-6827" class="indexterm"/></p></div><p>From kernel 2.6 onward, Linux provides the <span class="emphasis"><em>remap_file_pages()</em></span>
+                system call to create nonlinear mappings without creating multiple VMAs. We do this
+                as follows:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Create a mapping with <span class="emphasis"><em>mmap()</em></span>.</p></li><li class="listitem"><p>Use one or more calls to <span class="emphasis"><em>remap_file_pages()</em></span> to
+                        rearrange the correspondence between the pages of memory and the pages of
+                        the file. (All that <span class="emphasis"><em>remap_file_pages()</em></span> is doing is
+                        manipulating process page tables.)</p><div class="note" title="Note"><h3 class="title">Note</h3><p>It is possible to use <span class="emphasis"><em>remap_file_pages()</em></span> to map
+                            the same page of a file into multiple locations within the mapped
+                            region.</p></div></li></ol></div><a id="I_programlisting49_d1e133246"/><pre class="programlisting">#define _GNU_SOURCE
+#include &lt;sys/mman.h&gt;
+
+int <strong class="userinput"><code>remap_file_pages</code></strong>(void *<span class="emphasis"><em>addr</em></span>, size_t <span class="emphasis"><em>size</em></span>, int <span class="emphasis"><em>prot</em></span>, size_t
+ <span class="emphasis"><em>pgoff</em></span>, int <span class="emphasis"><em>flags</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>pgoff</em></span> and <span class="emphasis"><em>size</em></span> arguments identify a
+                file region whose position in memory is to be changed. The
+                    <span class="emphasis"><em>pgoff</em></span> argument specifies the start of the file region in
+                units of the system page size (as returned by
+                    <span class="emphasis"><em>sysconf(_SC_PAGESIZE)</em></span>). The <span class="emphasis"><em>size</em></span>
+                argument specifies the length of the file region, in bytes. The
+                    <span class="emphasis"><em>addr</em></span> argument serves two purposes:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>It identifies the existing mapping whose pages we want to rearrange. In
+                        other words, <span class="emphasis"><em>addr</em></span> must be an address that falls
+                        somewhere within a region that was previously mapped with
+                            <span class="emphasis"><em>mmap()</em></span>.</p></li><li class="listitem"><p>It specifies the memory address at which the file pages identified by
+                            <span class="emphasis"><em>pgoff</em></span> and <span class="emphasis"><em>size</em></span> are to be
+                        located.</p></li></ul></div><p>Both <span class="emphasis"><em>addr</em></span> and <span class="emphasis"><em>size</em></span> should be specified
+                as multiples of the system page size. If they are not, they are rounded down to the
+                nearest multiple of the page size.</p><p>Suppose that we use the following call to <span class="emphasis"><em>mmap()</em></span> to map three
+                pages of the open file referred to by the descriptor <span class="emphasis"><em>fd</em></span>, and
+                that the call assigns the returned address <code class="literal">0x4001a000</code> to <span class="emphasis"><em>addr</em></span>:</p><a id="I_programlisting49_d1e133333"/><pre class="programlisting">ps = sysconf(_SC_PAGESIZE);               /* Obtain system page size */
+addr = mmap(0, 3 * ps, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);</pre><p>The following calls would then create the nonlinear mapping shown in <a class="xref" href="ch49.html#a_nonlinear_file_mapping" title="Figure 49-5. A nonlinear file mapping">Figure 49-5</a>:</p><a id="I_programlisting49_d1e133339"/><pre class="programlisting">remap_file_pages(addr, ps, 0, 2, 0);
+                            /* Maps page 0 of file into page 2 of region */
+remap_file_pages(addr + 2 * ps, ps, 0, 0, 0);
+                            /* Maps page 2 of file into page 0 of region */</pre><div class="figure"><a id="a_nonlinear_file_mapping"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject49_d1e133344"/><img src="figs/web/49-5_MMAP-nonlinear.png.jpg" alt="A nonlinear file mapping"/></div></div><div class="figure-title">Figure 49-5. A nonlinear file mapping</div></div><p>There are two other arguments to <span class="emphasis"><em>remap_file_pages()</em></span> that we
+                haven’t yet described:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>prot</em></span> argument is ignored, and must be specified
+                        as 0. In the future, it may be possible to use this argument to change the
+                        protection of the memory region affected by
+                            <span class="emphasis"><em>remap_file_pages()</em></span>. In the current implementation,
+                        the protection remains the same as that on the entire VMA.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Virtual machines and garbage collectors are other applications that
+                            employ multiple VMAs. Some of these applications need to be able to
+                            write-protect individual pages. It was intended that
+                                <span class="emphasis"><em>remap_file_pages()</em></span> would allow permissions on
+                            individual pages within a VMA to be changed, but this facility has not
+                            so far been implemented.</p></div></li><li class="listitem"><p>The <span class="emphasis"><em>flags</em></span> argument is currently unused.</p></li></ul></div><p>As currently implemented, <span class="emphasis"><em>remap_file_pages()</em></span> can be applied
+                only to shared (<code class="literal">MAP_SHARED</code>) mappings.</p><p>The <span class="emphasis"><em>remap_file_pages()</em></span> system call is Linux-specific; it is
+                not specified in SUSv3 and is not available on other UNIX implementations.</p></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id48">Summary</h2></div></div></div><p>The <span class="emphasis"><em>mmap()</em></span> system call creates a new memory mapping in the
+                calling process’s virtual address space. The <span class="emphasis"><em>munmap()</em></span> system
+                call performs the converse operation, removing a mapping from a process’s address
+                space.</p><p>A mapping may be of two types: file-based or anonymous. A file mapping maps the
+                contents of a file region into the process’s virtual address space. An anonymous
+                mapping (created by using the <code class="literal">MAP_ANONYMOUS</code> flag
+                or by mapping <code class="literal">/dev/zero</code>) doesn’t have a
+                corresponding file region; the bytes of the mapping are initialized to 0.</p><p>Mappings can be either private (<code class="literal">MAP_PRIVATE</code>) or
+                shared (<code class="literal">MAP_SHARED</code>). This distinction determines
+                the visibility of changes made to the shared memory, and, in the case of file
+                mappings, determines whether the kernel propagates changes to the contents of the
+                mapping to the underlying file. When a process maps a file with the <code class="literal">MAP_PRIVATE</code> flag, any changes it makes to the contents
+                of the mapping are not visible to other processes and are not carried through to the
+                mapped file. A <code class="literal">MAP_SHARED</code> file mapping is the
+                converse—changes to the mapping are visible to other processes and are carried
+                through to the mapped file.</p><p>Although the kernel automatically propagates changes to the contents of a <code class="literal">MAP_SHARED</code> mapping to the underlying file, it doesn’t
+                provide any guarantees about when this is done. An application can use the
+                    <span class="emphasis"><em>msync()</em></span> system call to explicitly control when the contents
+                of a mapping are synchronized with the mapped file.</p><p>Memory mappings serve a variety of uses, including:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>allocating process-private memory (private anonymous mappings);</p></li><li class="listitem"><p>initializing the contents of the text and initialized data segments of a
+                        process (private file mappings);</p></li><li class="listitem"><p>sharing memory between processes related via <span class="emphasis"><em>fork()</em></span>
+                        (shared anonymous mappings); and</p></li><li class="listitem"><p>performing memory-mapped I/O, optionally combined with memory sharing
+                        between unrelated processes (shared file mappings).</p></li></ul></div><p>Two signals may come into play when accessing the contents of a mapping. <code class="literal">SIGSEGV</code> is generated if we attempt access in a manner
+                that violates the protections on the mapping (or if we access any currently unmapped
+                address). <code class="literal">SIGBUS</code> is generated for file-based
+                mappings if we access a part of the mapping for which no corresponding region exists
+                in the file (i.e., the mapping is larger than the underlying file).</p><p>Swap space overcommitting allows the system to allocate more memory to processes
+                than is actually available in RAM and swap space. Overcommitting is possible
+                because, typically, each process does not make full use of its allocation.
+                Overcommitting can be controlled on a per-<span class="emphasis"><em>mmap()</em></span> basis using
+                the <code class="literal">MAP_NORESERVE</code> flag, and on a system-wide
+                basis using <code class="literal">/proc</code> files.</p><p>The <span class="emphasis"><em>mremap()</em></span> system call allows an existing mapping to be
+                resized. The <span class="emphasis"><em>remap_file_pages()</em></span> system call allows the creation
+                of nonlinear file mappings.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id67"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id68">Further information</h4></div></div></div><p>Information about the implementation of <span class="emphasis"><em>mmap()</em></span> on
+                        Linux can be found in [Bovet &amp; Cesati, 2005]. Information about the
+                        implementation of <span class="emphasis"><em>mmap()</em></span> on other UNIX systems can be
+                        found in [McKusick et al., 1996] (BSD), [Goodheart &amp; Cox, 1994]
+                        (System V Release 4), and [Vahalia, 1996] (System V Release 4).<a id="IDX-CHP-49-6828" class="indexterm"/><a id="IDX-CHP-49-6829" class="indexterm"/><a id="IDX-CHP-49-6830" class="indexterm"/><a id="IDX-CHP-49-6831" class="indexterm"/></p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id34">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Write a program, analogous to <span class="emphasis"><em>cp(1)</em></span>, that uses
+                            <span class="emphasis"><em>mmap()</em></span> and <span class="emphasis"><em>memcpy()</em></span> calls
+                        (instead of <span class="emphasis"><em>read()</em></span> or <span class="emphasis"><em>write()</em></span>) to
+                        copy a source file to a destination file. (Use <span class="emphasis"><em>fstat()</em></span>
+                        to obtain the size of the input file, which can then be used to size the
+                        required memory mappings, and use <span class="emphasis"><em>ftruncate()</em></span> to set
+                        the size of the output file.)</p></li><li class="listitem"><p>Rewrite the programs in <a class="xref" href="ch48.html#transfer_blocks_of_data_from_stdin_to_a" title="Example 48-2. Transfer blocks of data from stdin to a System V shared memory segment">Example 48-2</a> (<code class="literal">svshm_xfr_writer.c</code>, page 1003) and <a class="xref" href="ch48.html#transfer_blocks_of_data_from_a_system_v" title="Example 48-3. Transfer blocks of data from a System V shared memory segment to stdout">Example 48-3</a> (<code class="literal">svshm_xfr_reader.c</code>, page 1005) to use a shared
+                        memory mapping instead of System V shared memory.</p></li><li class="listitem"><p>Write programs to verify that the <code class="literal">SIGBUS</code> and <code class="literal">SIGSEGV</code> signals
+                        are delivered in the circumstances described in <a class="xref" href="ch49.html#boundary_cases" title="Boundary Cases">Boundary Cases</a>.</p></li><li class="listitem"><p>Write a program that uses the <code class="literal">MAP_FIXED</code>
+                        technique described in <a class="xref" href="ch49.html#the_map_underscore_fixed_flag" title="The MAP_FIXED Flag">The <code class="literal">MAP_FIXED</code> Flag</a> to
+                        create a nonlinear mapping similar to that shown in <a class="xref" href="ch49.html#a_nonlinear_file_mapping" title="Figure 49-5. A nonlinear file mapping">Figure 49-5</a>.</p></li></ol></div></div></section></body></html>

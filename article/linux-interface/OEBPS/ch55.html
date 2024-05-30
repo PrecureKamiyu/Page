@@ -1,0 +1,1244 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 55. File Locking</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch54.html" title="Chapter 54. POSIX Shared Memory"/><link rel="next" href="ch56.html" title="Chapter 56. Sockets: Introduction"/></head><body><section class="chapter" title="Chapter 55. File Locking" epub:type="chapter" id="file_locking"><div class="titlepage"><div><div><h2 class="title">Chapter 55. File Locking</h2></div></div></div><p>Previous chapters have covered various techniques that processes can use to
+            synchronize their actions, including signals (<a class="xref" href="ch20.html" title="Chapter 20. Signals: Fundamental Concepts">Chapter 20</a> to <a class="xref" href="ch22.html" title="Chapter 22. Signals: Advanced Features">Chapter 22</a>) and semaphores (<a class="xref" href="ch47.html" title="Chapter 47. System V Semaphores">Chapter 47</a> and <a class="xref" href="ch53.html" title="Chapter 53. POSIX Semaphores">Chapter 53</a>). In this
+            chapter, we look at further synchronization techniques designed specifically for use
+            with files.</p><div class="sect1" title="Overview"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="overview-id18">Overview</h2></div></div></div><p>A frequent application requirement is to read data from a file, make some change
+                to that data, and then write it back to the file. As long as just one process at a
+                time ever uses a file in this way, then there are no problems. However, problems can
+                arise if multiple processes are simultaneously updating a file. Suppose, for
+                example, that each process performs the following steps to update a file containing
+                a sequence number:<a id="IDX-CHP-55-7178" class="indexterm"/><a id="IDX-CHP-55-7179" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Read the sequence number from the file.</p></li><li class="listitem"><p>Use the sequence number for some application-defined purpose.</p></li><li class="listitem"><p>Increment the sequence number and write it back to the file.</p></li></ol></div><p>The problem here is that, in the absence of any synchronization technique, two
+                processes could perform the above steps at the same time with (for example) the
+                consequences shown in <a class="xref" href="ch55.html#two_processes_updating_a_file_at_the_sam" title="Figure 55-1. Two processes updating a file at the same time without synchronization">Figure 55-1</a>
+                (here, we assume that the initial value of the sequence number is 1000).</p><div class="figure"><a id="two_processes_updating_a_file_at_the_sam"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject55_d1e141484"/><img src="figs/web/55-1_FILELOCK-sync-problem.png.jpg" alt="Two processes updating a file at the same time without synchronization"/></div></div><div class="figure-title">Figure 55-1. Two processes updating a file at the same time without
+                    synchronization</div></div><p>The problem is clear: at the end of these steps, the file contains the value 1001,
+                when it should contain the value 1002. (This is an example of a race condition.) To
+                prevent such possibilities, we need some form of interprocess
+                    synchronization.<a id="IDX-CHP-55-7180" class="indexterm"/></p><p>Although we could use (say) semaphores to perform the required synchronization,
+                using file locks is usually preferable, because the kernel automatically associates
+                locks with files.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>[Stevens &amp; Rago, 2005] dates the first UNIX file locking
+                    implementation to 1980, and notes that <span class="emphasis"><em>fcntl()</em></span> locking,
+                    upon which we primarily focus in this chapter, appeared in System V Release 2 in
+                    1984.</p></div><p>In this chapter, we describe two different APIs for placing file locks:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>flock()</em></span>, which places locks on entire files;
+                        and</p></li><li class="listitem"><p><span class="emphasis"><em>fcntl()</em></span>, which places locks on regions of a
+                        file.</p></li></ul></div><p>The <span class="emphasis"><em>flock()</em></span> system call originated on BSD;
+                    <span class="emphasis"><em>fcntl()</em></span> originated on System V.</p><p>The general method of using <span class="emphasis"><em>flock()</em></span> and
+                    <span class="emphasis"><em>fcntl()</em></span> is as follows:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Place a lock on the file.</p></li><li class="listitem"><p>Perform file I/O.</p></li><li class="listitem"><p>Unlock the file so that another process can lock it.</p></li></ol></div><p>Although file locking is normally used in conjunction with file I/O, we can also
+                use it as a more general synchronization technique. Cooperating processes can follow
+                a convention that locking all or part of a file indicates access by a process to
+                some shared resource other than the file itself (e.g., a shared memory
+                region).</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="mixing_locking_and_stdio_functions"/></div></div></div><div class="sect3" title="Mixing locking and stdio functions"><div class="titlepage"><div><div><h4 class="title" id="mixing_locking_and_stdio_functions-id1">Mixing locking and <span class="emphasis"><em>stdio</em></span> functions</h4></div></div></div><p>Because of the user-space buffering performed by the
+                            <span class="emphasis"><em>stdio</em></span> library, we should be cautious when using
+                            <span class="emphasis"><em>stdio</em></span> functions with the locking techniques
+                        described in this chapter. The problem is that an input buffer might be
+                        filled before a lock is placed, or an output buffer may be flushed after a
+                        lock is removed. There are a few ways to avoid these problems:<a id="IDX-CHP-55-7181" class="indexterm"/><a id="IDX-CHP-55-7182" class="indexterm"/><a id="IDX-CHP-55-7183" class="indexterm"/><a id="IDX-CHP-55-7184" class="indexterm"/><a id="IDX-CHP-55-7185" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Perform file I/O using <span class="emphasis"><em>read()</em></span> and
+                                    <span class="emphasis"><em>write()</em></span> (and related system calls) instead
+                                of the <span class="emphasis"><em>stdio</em></span> library.</p></li><li class="listitem"><p>Flush the <span class="emphasis"><em>stdio</em></span> stream immediately after
+                                placing a lock on the file, and flush it once more immediately
+                                before releasing the lock.</p></li><li class="listitem"><p>Perhaps at the cost of some efficiency, disable
+                                    <span class="emphasis"><em>stdio</em></span> buffering altogether using
+                                    <span class="emphasis"><em>setbuf()</em></span> (or similar).</p></li></ul></div></div><div class="sect3" title="Advisory and mandatory locking"><div class="titlepage"><div><div><h4 class="title" id="advisory_and_mandatory_locking">Advisory and mandatory locking</h4></div></div></div><p>In the remainder of this chapter, we’ll distinguish locks as being either
+                        advisory or mandatory. By default, file locks are
+                            <span class="emphasis"><em>advisory</em></span>. This means that a process can simply
+                        ignore a lock placed by another process. In order for an advisory locking
+                        scheme to be workable, each process accessing the file must cooperate, by
+                        placing a lock before performing file I/O. By contrast, a
+                            <span class="emphasis"><em>mandatory</em></span> locking system forces a process
+                        performing I/O to abide by the locks held by other processes. We say more
+                        about this distinction in Section 55.4.<a id="IDX-CHP-55-7186" class="indexterm"/><a id="IDX-CHP-55-7187" class="indexterm"/></p></div></div></div><div class="sect1" title="File Locking with flock()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="file_locking_with_flock_open_parenthesis">File Locking with <span class="emphasis"><em>flock()</em></span></h2></div></div></div><p>Although <span class="emphasis"><em>fcntl()</em></span> provides a superset of the functionality
+                provided by <span class="emphasis"><em>flock()</em></span>, we nevertheless describe
+                    <span class="emphasis"><em>flock()</em></span> because it is still used in some applications, and
+                because it differs from <span class="emphasis"><em>fcntl()</em></span> in some of the semantics of
+                inheritance and release of locks.<a id="IDX-CHP-55-7190" class="indexterm"/><a id="IDX-CHP-55-7191" class="indexterm"/><a id="IDX-CHP-55-7192" class="indexterm"/><a id="IDX-CHP-55-7193" class="indexterm"/><a id="IDX-CHP-55-7194" class="indexterm"/><a id="IDX-CHP-55-7195" class="indexterm"/><a id="IDX-CHP-55-7196" class="indexterm"/><a id="IDX-CHP-55-7197" class="indexterm"/><a id="IDX-CHP-55-7198" class="indexterm"/><a id="IDX-CHP-55-7188" class="indexterm"/><a id="IDX-CHP-55-7189" class="indexterm"/></p><a id="I_programlisting55_d1e141718"/><pre class="programlisting">#include &lt;sys/file.h&gt;
+
+int <strong class="userinput"><code>flock</code></strong>(int <span class="emphasis"><em>fd</em></span>, int <span class="emphasis"><em>operation</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>flock()</em></span> system call places a single lock on an entire
+                file. The file to be locked is specified via an open file descriptor passed in
+                    <span class="emphasis"><em>fd</em></span>. The <span class="emphasis"><em>operation</em></span> argument specifies
+                one of the values <code class="literal">LOCK_SH</code>, <code class="literal">LOCK_EX</code>, or <code class="literal">LOCK_UN</code>, which are described in <a class="xref" href="ch55.html#values_for_the_operation_argument_of_flo" title="Table 55-1. Values for the operation argument of flock()">Table 55-1</a>.</p><p>By default, <span class="emphasis"><em>flock()</em></span> blocks if another process already holds
+                an incompatible lock on a file. If we want to prevent this, we can OR (<code class="literal">|</code>) the value <code class="literal">LOCK_NB</code> into <span class="emphasis"><em>operation</em></span>. In this case, if another
+                process already holds an incompatible lock on the file, <span class="emphasis"><em>flock()</em></span>
+                doesn’t block, but instead returns -1, with <span class="emphasis"><em>errno</em></span> set to
+                    <code class="literal">EWOULDBLOCK</code>.</p><div class="table"><a id="values_for_the_operation_argument_of_flo"/><div class="table-title">Table 55-1. Values for the <span class="emphasis"><em>operation</em></span> argument of
+                        <span class="emphasis"><em>flock()</em></span></div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Value</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>Description</p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">LOCK_SH</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Place a <span class="emphasis"><em>shared</em></span> lock on the file referred
+                                    to by <span class="emphasis"><em>fd</em></span></p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">LOCK_EX</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Place an <span class="emphasis"><em>exclusive</em></span> lock on the file
+                                    referred to by <span class="emphasis"><em>fd</em></span></p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">LOCK_UN</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Unlock the file referred to by <span class="emphasis"><em>fd</em></span></p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">LOCK_NB</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>Make a nonblocking lock request</p>
+                            </td></tr></tbody></table></div></div><p>Any number of processes may simultaneously hold a shared lock on a file. However,
+                only one process at a time can hold an exclusive lock on a file. (In other words,
+                exclusive locks deny both exclusive and shared locks by other processes.) <a class="xref" href="ch55.html#compatibility_of_flock_open_parenthesis" title="Table 55-2. Compatibility of flock() locking types">Table 55-2</a> summarizes the compatibility
+                rules for <span class="emphasis"><em>flock()</em></span> locks. Here, we assume that process A is the
+                first to place the lock, and the table indicates whether process B can then place a
+                lock.</p><div class="table"><a id="compatibility_of_flock_open_parenthesis"/><div class="table-title">Table 55-2. Compatibility of <span class="emphasis"><em>flock()</em></span> locking types</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/></colgroup><thead><tr><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; " rowspan="2">
+                                <p>Process A</p>
+                            </td><td style="text-align: center; vertical-align: top; border-bottom: 0.5pt solid ; " colspan="2">
+                                <p>Process B</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">LOCK_SH</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">LOCK_EX</code>
+                                </p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">LOCK_SH</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Yes</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>No</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">LOCK_EX</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>No</p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>No</p>
+                            </td></tr></tbody></table></div></div><p>A process can place a shared or exclusive lock regardless of the access mode
+                (read, write, or read-write) of the file.</p><p>An existing shared lock can be converted to an exclusive lock (and vice versa) by
+                making another call to <span class="emphasis"><em>flock()</em></span> specifying the appropriate value
+                for <span class="emphasis"><em>operation</em></span>. Converting a shared lock to an exclusive lock
+                will block if another process holds a shared lock on the file, unless <code class="literal">LOCK_NB</code> was also specified.</p><p>A lock conversion is <span class="emphasis"><em>not</em></span> guaranteed to be atomic. During
+                conversion, the existing lock is first removed, and then a new lock is established.
+                Between these two steps, another process’s pending request for an incompatible lock
+                may be granted. If this occurs, then the conversion will block, or, if <code class="literal">LOCK_NB</code> was specified, the conversion will fail and
+                the process will lose its original lock. (This behavior occurred in the original BSD
+                    <span class="emphasis"><em>flock()</em></span> implementation and also occurs on many other UNIX
+                implementations.)</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Although it is not part of SUSv3, <span class="emphasis"><em>flock()</em></span> appears on most
+                    UNIX implementations. Some implementations require the inclusion of either
+                        <code class="literal">&lt;fcntl.h&gt;</code> or <code class="literal">&lt;sys/fcntl.h&gt;</code> instead of <code class="literal">&lt;sys/file.h&gt;</code>. Because
+                        <span class="emphasis"><em>flock()</em></span> originates on BSD, the locks that it places are
+                    sometimes known as <span class="emphasis"><em>BSD file locks</em></span>.<a id="IDX-CHP-55-7199" class="indexterm"/></p></div><p><a class="xref" href="ch55.html#using_flock_open_parenthesis_close_paren" title="Example 55-1. Using flock()">Example 55-1</a> demonstrates the use of
+                    <span class="emphasis"><em>flock()</em></span>. This program locks a file, sleeps for a specified
+                number of seconds, and then unlocks the file. The program takes up to three
+                command-line arguments. The first of these is the file to lock. The second specifies
+                the lock type (shared or exclusive) and whether or not to include the <code class="literal">LOCK_NB</code> (nonblocking) flag. The third argument
+                specifies the number of seconds to sleep between acquiring and releasing the lock;
+                this argument is optional and defaults to 10 seconds.</p><div class="example"><a id="using_flock_open_parenthesis_close_paren"/><div class="example-title">Example 55-1. Using <span class="emphasis"><em>flock()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>filelock/t_flock.c</code></strong>
+#include &lt;sys/file.h&gt;
+#include &lt;fcntl.h&gt;
+#include "curr_time.h"                  /* Declaration of currTime() */
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int fd, lock;
+    const char *lname;
+
+    if (argc &lt; 3 || strcmp(argv[1], "--help") == 0 ||
+            strchr("sx", argv[2][0]) == NULL)
+        usageErr("%s file lock [sleep-time]\n"
+                 "    'lock' is 's' (shared) or 'x' (exclusive)\n"
+                 "        optionally followed by 'n' (nonblocking)\n"
+                 "    'secs' specifies time to hold lock\n", argv[0]);
+
+    lock = (argv[2][0] == 's') ? LOCK_SH : LOCK_EX;
+    if (argv[2][1] == 'n')
+        lock |= LOCK_NB;
+
+    fd = open(argv[1], O_RDONLY);               /* Open file to be locked */
+    if (fd == -1)
+        errExit("open");
+
+    lname = (lock &amp; LOCK_SH) ? "LOCK_SH" : "LOCK_EX";
+
+    printf("PID %ld: requesting %s at %s\n", (long) getpid(), lname,
+            currTime("%T"));
+
+    if (flock(fd, lock) == -1) {
+        if (errno == EWOULDBLOCK)
+            fatal("PID %ld: already locked - bye!", (long) getpid());
+        else
+            errExit("flock (PID=%ld)", (long) getpid());
+    }
+
+    printf("PID %ld: granted    %s at %s\n", (long) getpid(), lname,
+            currTime("%T"));
+
+    sleep((argc &gt; 3) ? getInt(argv[3], GN_NONNEG, "sleep-time") : 10);
+
+    printf("PID %ld: releasing  %s at %s\n", (long) getpid(), lname,
+            currTime("%T"));
+    if (flock(fd, LOCK_UN) == -1)
+        errExit("flock");
+
+    exit(EXIT_SUCCESS);
+}
+    <strong class="userinput"><code>filelock/t_flock.c</code></strong></pre></div></div><p>Using the program in <a class="xref" href="ch55.html#using_flock_open_parenthesis_close_paren" title="Example 55-1. Using flock()">Example 55-1</a>,
+                we can conduct a number of experiments to explore the behavior of
+                    <span class="emphasis"><em>flock()</em></span>. Some examples are shown in the following shell
+                session. We begin by creating a file, and then start an instance of our program that
+                sits in the background and holds a shared lock for 60 seconds:</p><a id="I_programlisting55_d1e141977"/><pre class="programlisting">$ <strong class="userinput"><code>touch tfile</code></strong>
+$ <strong class="userinput"><code>./t_flock tfile s 60 &amp;</code></strong>
+[1] 9777
+PID 9777: requesting LOCK_SH at 21:19:37
+PID 9777: granted    LOCK_SH at 21:19:37</pre><p>Next, we start another instance of the program that successfully requests a shared
+                lock and then releases it:</p><a id="I_programlisting55_d1e141987"/><pre class="programlisting">$ <strong class="userinput"><code>./t_flock tfile s 2</code></strong>
+PID 9778: requesting LOCK_SH at 21:19:49
+PID 9778: granted    LOCK_SH at 21:19:49
+PID 9778: releasing  LOCK_SH at 21:19:51</pre><p>However, when we start another instance of the program that makes a nonblocking
+                requests for an exclusive lock, the request immediately fails:</p><a id="I_programlisting55_d1e141994"/><pre class="programlisting">$ <strong class="userinput"><code>./t_flock tfile xn</code></strong>
+PID 9779: requesting LOCK_EX at 21:20:03
+PID 9779: already locked - bye!</pre><p>When we start another instance of the program that makes a blocking request for an
+                exclusive lock, the program blocks. When the background process that was holding a
+                shared lock for 60 seconds releases its lock, the blocked request is granted:</p><a id="I_programlisting55_d1e142002"/><pre class="programlisting">$ <strong class="userinput"><code>./t_flock tfile x</code></strong>
+PID 9780: requesting LOCK_EX at 21:20:21
+PID 9777: releasing  LOCK_SH at 21:20:37
+PID 9780: granted    LOCK_EX at 21:20:37
+PID 9780: releasing  LOCK_EX at 21:20:47</pre><div class="sect2" title="Semantics of Lock Inheritance and Release"><div class="titlepage"><div><div><h3 class="title" id="semantics_of_lock_inheritance_and_releas">Semantics of Lock Inheritance and Release</h3></div></div></div><p>As shown in <a class="xref" href="ch55.html#values_for_the_operation_argument_of_flo" title="Table 55-1. Values for the operation argument of flock()">Table 55-1</a>, we can
+                    release a file lock via an <span class="emphasis"><em>flock()</em></span> call that specifies
+                        <span class="emphasis"><em>operation</em></span> as <code class="literal">LOCK_UN</code>. In addition, locks are automatically released when the
+                    corresponding file descriptor is closed. However, the story is more complicated
+                    than this. A file lock obtained via <span class="emphasis"><em>flock()</em></span> is associated
+                    with the open file description (<a class="xref" href="ch05.html#relationship_between_file_descriptors_an" title="Relationship Between File Descriptors and Open Files">Relationship Between File Descriptors and Open Files</a>), rather than the file
+                    descriptor or the file (i-node) itself. This means that when a file descriptor
+                    is duplicated (via <span class="emphasis"><em>dup()</em></span>, <span class="emphasis"><em>dup2()</em></span>, or
+                    an <span class="emphasis"><em>fcntl()</em></span>
+                    <code class="literal">F_DUPFD</code> operation), the new file descriptor
+                    refers to the same file lock. For example, if we have obtained a lock on the
+                    file referred to by <span class="emphasis"><em>fd</em></span>, then the following code (which
+                    omits error checking) releases that lock:<a id="IDX-CHP-55-7200" class="indexterm"/></p><a id="I_programlisting55_d1e142054"/><pre class="programlisting">flock(fd, LOCK_EX);               /* Gain lock via 'fd' */
+newfd = dup(fd);                  /* 'newfd' refers to same lock as 'fd' */
+flock(newfd, LOCK_UN);            /* Frees lock acquired via 'fd' */</pre><p>If we have acquired a lock via a particular file descriptor, and we create one
+                    or more duplicates of that descriptor, then—if we don’t explicitly perform an
+                    unlock operation--the lock is released only when all of the duplicate
+                    descriptors have been closed.</p><p>However, if we use <span class="emphasis"><em>open()</em></span> to obtain a second file
+                    descriptor (and associated open file description) referring to the same file,
+                    this second descriptor is treated independently by <span class="emphasis"><em>flock()</em></span>.
+                    For example, a process executing the following code will block on the second
+                        <span class="emphasis"><em>flock()</em></span> call:</p><a id="I_programlisting55_d1e142069"/><pre class="programlisting">fd1 = open("a.txt", O_RDWR);
+fd2 = open("a.txt", O_RDWR);
+flock(fd1, LOCK_EX);
+flock(fd2, LOCK_EX);              /* Locked out by lock on 'fd1' */</pre><p>Thus, a process can lock itself out of a file using
+                        <span class="emphasis"><em>flock()</em></span>. As we’ll see later, this can’t happen with
+                    record locks obtained by <span class="emphasis"><em>fcntl()</em></span>.</p><p>When we create a child process using <span class="emphasis"><em>fork()</em></span>, that child
+                    obtains duplicates of its parent’s file descriptors, and, as with descriptors
+                    duplicated via <span class="emphasis"><em>dup()</em></span> and so on, these descriptors refer to
+                    the same open file descriptions and thus to the same locks. For example, the
+                    following code causes a child to remove a parent’s lock:</p><a id="I_programlisting55_d1e142087"/><pre class="programlisting">flock(fd, LOCK_EX);               /* Parent obtains lock */
+if (fork() == 0)                  /* If child... */
+    flock(fd, LOCK_UN);           /* Release lock shared with parent */</pre><p>These semantics can sometimes be usefully exploited to (atomically) transfer a
+                    file lock from a parent process to a child process: after the
+                        <span class="emphasis"><em>fork()</em></span>, the parent closes its file descriptor, and the
+                    lock is under sole control of the child process. As we’ll see later, this isn’t
+                    possible using record locks obtained by <span class="emphasis"><em>fcntl()</em></span>.</p><p>Locks created by <span class="emphasis"><em>flock()</em></span> are preserved across an
+                        <span class="emphasis"><em>exec()</em></span> (unless the close-on-exec flag was set for the
+                    file descriptor and that file descriptor was the last one referencing the
+                    underlying open file description).</p><p>The Linux semantics described above conform to the classical BSD
+                    implementation of <span class="emphasis"><em>flock()</em></span>. On some UNIX implementations,
+                        <span class="emphasis"><em>flock()</em></span> is implemented using
+                        <span class="emphasis"><em>fcntl()</em></span>, and we’ll see later that the inheritance and
+                    release semantics of <span class="emphasis"><em>fcntl()</em></span> locks differ from those of
+                        <span class="emphasis"><em>flock()</em></span> locks. Because the interactions between locks
+                    created by <span class="emphasis"><em>flock()</em></span> and <span class="emphasis"><em>fcntl()</em></span> are
+                    undefined, an application should use only one of these locking methods on a
+                    file.</p></div><div class="sect2" title="Limitations of flock()"><div class="titlepage"><div><div><h3 class="title" id="limitations_of_flock_open_parenthesis_cl">Limitations of <span class="emphasis"><em>flock()</em></span></h3></div></div></div><p>Placing locks with <span class="emphasis"><em>flock()</em></span> suffers from a number of
+                        limitations:<a id="IDX-CHP-55-7201" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Only whole files can be locked. Such coarse locking limits the
+                            potential for concurrency among cooperating processes. If, for example,
+                            we have multiple processes, each of which would like to simultaneously
+                            access different parts of the same file, then locking via
+                                <span class="emphasis"><em>flock()</em></span> would needlessly prevent these
+                            processes from operating concurrently.</p></li><li class="listitem"><p>We can place only advisory locks with
+                            <span class="emphasis"><em>flock()</em></span>.</p></li><li class="listitem"><p>Many NFS implementations don’t recognize locks granted by
+                                <span class="emphasis"><em>flock()</em></span>.</p></li></ul></div><p>All of these limitations are addressed by the locking scheme implemented by
+                        <span class="emphasis"><em>fcntl()</em></span>, which we describe in the next section.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Historically, the Linux NFS server did not support
+                            <span class="emphasis"><em>flock()</em></span> locks. Since kernel 2.6.12, the Linux NFS
+                        server supports <span class="emphasis"><em>flock()</em></span> locks by implementing them as
+                        an <span class="emphasis"><em>fcntl()</em></span> lock on the entire file. This can cause some
+                        strange effects when mixing BSD locks on the server and BSD locks on the
+                        client: the clients usually won’t see the server’s locks, and vice
+                            versa.<a id="IDX-CHP-55-7202" class="indexterm"/></p></div></div></div><div class="sect1" title="Record Locking with fcntl()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="record_locking_with_fcntl_open_parenthes">Record Locking with <span class="emphasis"><em>fcntl()</em></span></h2></div></div></div><p>Using <span class="emphasis"><em>fcntl()</em></span> (<a class="xref" href="ch05.html#file_control_operations_colon_fcntl_open" title="File Control Operations: fcntl()">File Control Operations: <span class="emphasis"><em>fcntl()</em></span></a>), we can place a lock on
+                any part of a file, ranging from a single byte to the entire file. This form of file
+                locking is usually called <span class="emphasis"><em>record locking</em></span>. However, this term is
+                a misnomer, because files on the UNIX system are byte sequences, with no concept of
+                record boundaries. Any notion of records within a file is defined purely within an
+                    application.<a id="IDX-CHP-55-7204" class="indexterm"/><a id="IDX-CHP-55-7203" class="indexterm"/></p><p>Typically, <span class="emphasis"><em>fcntl()</em></span> is used to lock byte ranges corresponding
+                to the application-defined record boundaries within the file; hence the origin of
+                the term <span class="emphasis"><em>record locking</em></span>. The terms <span class="emphasis"><em>byte
+                    range</em></span>, <span class="emphasis"><em>file region</em></span>, and <span class="emphasis"><em>file
+                    segment</em></span> are less commonly used, but more accurate, descriptions of
+                this type of lock. (Because this is the only kind of locking specified in the
+                original POSIX.1 standard and in SUSv3, it is sometimes also called POSIX file
+                    locking.)<a id="IDX-CHP-55-7205" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv3 requires record locking to be supported for regular files, and permits
+                    it to be supported for other file types. Although it generally makes sense to
+                    apply record locks only to regular files (since, for most other file types, it
+                    isn’t meaningful to talk about byte ranges for the data contained in the file),
+                    on Linux, it is possible to apply a record lock to any type of file
+                    descriptor.</p></div><p><a class="xref" href="ch55.html#using_record_locks_to_synchronize_access" title="Figure 55-2. Using record locks to synchronize access to the same region of a file">Figure 55-2</a> shows how record
+                locking might be used to synchronize access by two processes to the same region of a
+                file. (In this diagram, we assume that all lock requests are blocking, so that they
+                will wait if a lock is held by another process.)</p><p>The general form of the <span class="emphasis"><em>fcntl()</em></span> call used to create or remove
+                a file lock is as follows:</p><a id="I_programlisting55_d1e142251"/><pre class="programlisting">struct flock flockstr;
+
+/* Set fields of 'flockstr' to describe lock to be placed or removed */
+
+fcntl(fd, cmd, &amp;flockstr);          /* Place lock defined by 'fl' */</pre><p>The <span class="emphasis"><em>fd</em></span> argument is an open file descriptor referring to the
+                file on which we wish to place a lock.</p><p>Before discussing the <span class="emphasis"><em>cmd</em></span> argument, we first describe the
+                    <span class="emphasis"><em>flock</em></span> structure.<a id="IDX-CHP-55-7206" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="the_flock_structure"/></div></div></div><div class="sect3" title="The flock structure"><div class="titlepage"><div><div><h4 class="title" id="the_flock_structure-id1">The <span class="emphasis"><em>flock</em></span> structure</h4></div></div></div><p>The <span class="emphasis"><em>flock</em></span> structure defines the lock that we wish to
+                        acquire or remove. It is defined as follows:<a id="IDX-CHP-55-7207" class="indexterm"/><a id="IDX-CHP-55-7208" class="indexterm"/><a id="IDX-CHP-55-7209" class="indexterm"/><a id="IDX-CHP-55-7210" class="indexterm"/><a id="IDX-CHP-55-7211" class="indexterm"/></p><a id="I_programlisting55_d1e142309"/><pre class="programlisting">struct flock {
+    short l_type;       /* Lock type: F_RDLCK, F_WRLCK, F_UNLCK */
+    short l_whence;     /* How to interpret 'l_start': SEEK_SET,
+                           SEEK_CUR, SEEK_END */
+    off_t l_start;      /* Offset where the lock begins */
+    off_t l_len;        /* Number of bytes to lock; 0 means "until EOF" */
+    pid_t l_pid;        /* Process preventing our lock (F_GETLK only) */
+};</pre><p>The <span class="emphasis"><em>l_type</em></span> field indicates the type of lock we want
+                        to place. It is specified as one of the values in <a class="xref" href="ch55.html#lock_types_for_fcntl_open_parenthesis_cl" title="Table 55-3. Lock types for fcntl() locking">Table 55-3</a>.</p><p>Semantically, read (<code class="literal">F_RDLCK</code>) and write
+                            (<code class="literal">F_WRLCK</code>) locks correspond to the
+                        shared and exclusive locks applied by <span class="emphasis"><em>flock()</em></span>, and they
+                        follow the same compatibility rules (<a class="xref" href="ch55.html#compatibility_of_flock_open_parenthesis" title="Table 55-2. Compatibility of flock() locking types">Table 55-2</a>): any number of
+                        processes can hold read locks on a file region, but only one process can
+                        hold a write lock, and that lock excludes read and write locks by other
+                        processes. Specifying <span class="emphasis"><em>l_type</em></span> as <code class="literal">F_UNLCK</code> is analogous to the
+                            <span class="emphasis"><em>flock()</em></span>
+                        <code class="literal">LOCK_UN</code> operation.</p><div class="table"><a id="lock_types_for_fcntl_open_parenthesis_cl"/><div class="table-title">Table 55-3. Lock types for <span class="emphasis"><em>fcntl()</em></span> locking</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Lock type</p>
+                                    </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                        <p>Description</p>
+                                    </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">F_RDLCK</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Place a read lock</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">F_WRLCK</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Place a write lock</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">F_UNLCK</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; ">
+                                        <p>Remove an existing lock</p>
+                                    </td></tr></tbody></table></div></div><div class="figure"><a id="using_record_locks_to_synchronize_access"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject55_d1e142389"/><img src="figs/web/55-2_FILELOCK-record-locking-overview.png.jpg" alt="Using record locks to synchronize access to the same region of a file"/></div></div><div class="figure-title">Figure 55-2. Using record locks to synchronize access to the same region of a
+                            file</div></div><p>In order to place a read lock on a file, the file must be open for
+                        reading. Similarly, to place a write lock, the file must be open for
+                        writing. To place both types of locks, we open the file read-write (<code class="literal">O_RDWR</code>). Attempting to place a lock that is
+                        incompatible with the file access mode results in the error <code class="literal">EBADF</code>.</p><p>The <span class="emphasis"><em>l_whence</em></span>, <span class="emphasis"><em>l_start</em></span>, and
+                            <span class="emphasis"><em>l_len</em></span> fields together specify the range of bytes to
+                        be locked. The first two of these fields are analogous to the
+                            <span class="emphasis"><em>whence</em></span> and <span class="emphasis"><em>offset</em></span> arguments to
+                            <span class="emphasis"><em>lseek()</em></span> (<a class="xref" href="ch04.html#changing_the_file_offset_colon_lseek_ope" title="Changing the File Offset: lseek()">Changing the File Offset: <span class="emphasis"><em>lseek()</em></span></a>). The
+                            <span class="emphasis"><em>l_start</em></span> field specifies an offset within the file
+                        that is interpreted with respect to one of the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>the start of the file, if <span class="emphasis"><em>l_whence</em></span> is
+                                    <code class="literal">SEEK_SET</code>;</p></li><li class="listitem"><p>the current file offset, if <span class="emphasis"><em>l_whence</em></span> is
+                                    <code class="literal">SEEK_CUR</code>; or</p></li><li class="listitem"><p>the end of the file, if <span class="emphasis"><em>l_whence</em></span> is <code class="literal">SEEK_END</code>.</p></li></ul></div><p>In the last two cases, <span class="emphasis"><em>l_start</em></span> can be a negative
+                        number, as long as the resulting file position doesn’t lie before the start
+                        of the file (byte 0).</p><p>The <span class="emphasis"><em>l_len</em></span> field contains an integer specifying the
+                        number of bytes to lock, starting from the position defined by
+                            <span class="emphasis"><em>l_whence</em></span> and <span class="emphasis"><em>l_start</em></span>. It is
+                        possible to lock nonexistent bytes past the end of the file, but it is not
+                        possible to lock bytes before the start of the file.</p><p>Since kernel 2.4.21, Linux allows a negative value to be supplied in
+                            <span class="emphasis"><em>l_len</em></span>. This is a request to lock the
+                            <span class="emphasis"><em>l_len</em></span> bytes preceding the position specified by
+                            <span class="emphasis"><em>l_whence</em></span> and <span class="emphasis"><em>l_start</em></span> (i.e.,
+                        bytes in the range <span class="emphasis"><em>(l_start - abs(l_len))</em></span> through to
+                            <span class="emphasis"><em>(l_start - 1)</em></span>). SUSv3 permits, but doesn’t require,
+                        this feature. Several other UNIX implementations also provide it.</p><p>In general, applications should lock the minimum range of bytes necessary.
+                        This allows greater concurrency for other processes simultaneously trying to
+                        lock different regions of the same file.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The term <span class="emphasis"><em>minimum range</em></span> needs qualification in
+                            some circumstances. Mixing record locks and calls to
+                                <span class="emphasis"><em>mmap()</em></span> can have unpleasant consequences on
+                            network file systems such as NFS and CIFS. The problem occurs because
+                                <span class="emphasis"><em>mmap()</em></span> maps files in units of the system page
+                            size. If a file lock is page-aligned, then all is well, since the lock
+                            will cover the entire region corresponding to a dirty page. However, if
+                            the lock is not page-aligned, then there is a race condition--the kernel
+                            may write into the area that is not covered by the lock if any part of
+                            the mapped page has been modified.</p></div><p>Specifying 0 in <span class="emphasis"><em>l_len</em></span> has the special meaning “lock
+                        all bytes from the point specified by <span class="emphasis"><em>l_start</em></span> and
+                            <span class="emphasis"><em>l_whence</em></span> through to the end of the file, no matter
+                        how large the file grows.” This is convenient if we don’t know in advance
+                        how many bytes we are going to add to a file. To lock the entire file, we
+                        can specify <span class="emphasis"><em>l_whence</em></span> as <code class="literal">SEEK_SET</code> and both <span class="emphasis"><em>l_start</em></span> and
+                            <span class="emphasis"><em>l_len</em></span> as 0.</p></div><div class="sect3" title="The cmd argument"><div class="titlepage"><div><div><h4 class="title" id="the_cmd_argument">The <span class="emphasis"><em>cmd</em></span> argument</h4></div></div></div><p>When working with file locks, three possible values may be specified for
+                        the <span class="emphasis"><em>cmd</em></span> argument of <span class="emphasis"><em>fcntl()</em></span>. The
+                        first two are used for acquiring and releasing locks:<a id="IDX-CHP-55-7212" class="indexterm"/><a id="IDX-CHP-55-7213" class="indexterm"/><a id="IDX-CHP-55-7214" class="indexterm"/><a id="IDX-CHP-55-7215" class="indexterm"/><a id="IDX-CHP-55-7216" class="indexterm"/></p><div class="variablelist"><dl><dt><span class="term">
+                                <code class="literal">F_SETLK</code>
+                            </span></dt><dd><p>Acquire (<span class="emphasis"><em>l_type</em></span> is <code class="literal">F_RDLCK</code> or <code class="literal">F_WRLCK</code>) or release
+                                        (<span class="emphasis"><em>l_type</em></span> is <code class="literal">F_UNLCK</code>) a lock on the bytes specified by
+                                        <span class="emphasis"><em>flockstr</em></span>. If an incompatible lock is
+                                    held by another process on any part of the region to be locked,
+                                        <span class="emphasis"><em>fcntl()</em></span> fails with the error <code class="literal">EAGAIN</code>. On some UNIX
+                                    implementations, <span class="emphasis"><em>fcntl()</em></span> fails with the
+                                    error <code class="literal">EACCES</code> in this case.
+                                    SUSv3 permits either possibility, and a portable application
+                                    should test for both values.</p></dd><dt><span class="term">
+                                <code class="literal">F_SETLKW</code>
+                            </span></dt><dd><p>This is the same as <code class="literal">F_SETLK</code>, except that if another process holds an
+                                    incompatible lock on any part of the region to be locked, then
+                                    the call blocks until the lock can be granted. If we are
+                                    handling signals and have not specified <code class="literal">SA_RESTART</code> (<a class="xref" href="ch21.html#interruption_and_restarting_of_system_ca" title="Interruption and Restarting of System Calls">Interruption and Restarting of System Calls</a>), then
+                                    an <code class="literal">F_SETLKW</code> operation may be
+                                    interrupted (i.e., fail with the error <code class="literal">EINTR</code>). We can take advantage of this behavior to
+                                    use <span class="emphasis"><em>alarm()</em></span> or
+                                        <span class="emphasis"><em>setitimer()</em></span> to set a timeout on the
+                                    lock request.</p></dd></dl></div><p>Note that <span class="emphasis"><em>fcntl()</em></span> locks either the entire region
+                        specified or nothing at all. There is no notion of locking just those bytes
+                        of the requested region that are currently unlocked.</p><p>The remaining <span class="emphasis"><em>fcntl()</em></span> operation is used to determine
+                        whether we can place a lock on a given region:</p><div class="variablelist"><dl><dt><span class="term">
+                                <code class="literal">F_GETLK</code>
+                            </span></dt><dd><p>Check if it would be possible to acquire the lock specified in
+                                        <span class="emphasis"><em>flockstr</em></span>, but don’t actually acquire
+                                    it. The <span class="emphasis"><em>l_type</em></span> field must be <code class="literal">F_RDLCK</code> or <code class="literal">F_WRLCK</code>. The
+                                        <span class="emphasis"><em>flockstr</em></span> structure is treated as a
+                                    value-result argument; on return, it contains information
+                                    informing us whether or not the specified lock could be placed.
+                                    If the lock would be permitted (i.e., no incompatible locks
+                                    exist on the specified file region), then <code class="literal">F_UNLCK</code> is returned in the
+                                        <span class="emphasis"><em>l_type</em></span> field, and the remaining fields
+                                    are left unchanged. If one or more incompatible locks exist on
+                                    the region, then <span class="emphasis"><em>flockstr</em></span> returns
+                                    information about <span class="emphasis"><em>one</em></span> of those locks (it is
+                                    indeterminate which), including its type
+                                        (<span class="emphasis"><em>l_type</em></span>), range of bytes
+                                        (<span class="emphasis"><em>l_start</em></span> and
+                                    <span class="emphasis"><em>l_len</em></span>; <span class="emphasis"><em>l_whence</em></span> is
+                                    always returned as <code class="literal">SEEK_SET</code>),
+                                    and the process ID of the process holding the lock
+                                        (<span class="emphasis"><em>l_pid</em></span>).</p></dd></dl></div><p>Note that there are potential race conditions when combining the use of
+                            <code class="literal">F_GETLK</code> with a subsequent <code class="literal">F_SETLK</code> or <code class="literal">F_SETLKW</code>. By the time we perform the latter operation, the
+                        information returned by <code class="literal">F_GETLK</code> may
+                        already be out of date. Thus, <code class="literal">F_GETLK</code> is
+                        less useful than it first appears. Even if <code class="literal">F_GETLK</code> says that it is possible to place a lock, we must
+                        still be prepared for an error return from <code class="literal">F_SETLK</code> or for <code class="literal">F_SETLKW</code> to
+                        block.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The GNU C library also implements the function
+                                <span class="emphasis"><em>lockf()</em></span>, which is just a simplified interface
+                            layered on top of <span class="emphasis"><em>fcntl()</em></span>. (SUSv3 specifies
+                                <span class="emphasis"><em>lockf()</em></span>, but doesn’t specify the relationship
+                            between <span class="emphasis"><em>lockf()</em></span> and <span class="emphasis"><em>fcntl()</em></span>.
+                            However, most UNIX systems implement <span class="emphasis"><em>lockf()</em></span> on top
+                            of <span class="emphasis"><em>fcntl()</em></span>.) A call of the form <span class="emphasis"><em>lockf(fd,
+                                operation, size)</em></span> is equivalent to a call to
+                                <span class="emphasis"><em>fcntl()</em></span> with <span class="emphasis"><em>l_whence</em></span> set
+                            to <code class="literal">SEEK_CUR</code>,
+                                <span class="emphasis"><em>l_start</em></span> set to 0, and
+                                <span class="emphasis"><em>l_len</em></span> set to <span class="emphasis"><em>size</em></span>; that
+                            is, <span class="emphasis"><em>lockf()</em></span> locks a sequence of bytes starting at
+                            the current file offset. The <span class="emphasis"><em>operation</em></span> argument to
+                                <span class="emphasis"><em>lockf()</em></span> is analogous to the
+                                <span class="emphasis"><em>cmd</em></span> argument to <span class="emphasis"><em>fcntl()</em></span>,
+                            but different constants are used for acquiring, releasing, and testing
+                            for the presence of locks. The <span class="emphasis"><em>lockf()</em></span> function
+                            places only exclusive (i.e., write) locks. See the
+                                <span class="emphasis"><em>lockf(3)</em></span> manual page for further
+                                details.<a id="IDX-CHP-55-7217" class="indexterm"/></p></div></div><div class="sect3" title="Details of lock acquisition and release"><div class="titlepage"><div><div><h4 class="title" id="details_of_lock_acquisition_and_release">Details of lock acquisition and release</h4></div></div></div><p>Note the following points regarding the acquisition and release of locks
+                        created with <span class="emphasis"><em>fcntl()</em></span>:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Unlocking a file region always immediately succeeds. It is not an
+                                error to unlock a region on which we don’t currently hold a
+                                lock.</p></li><li class="listitem"><p>At any time, a process can hold just one type of lock on a
+                                particular region of a file. Placing a new lock on a region we have
+                                already locked either results in no change (if the lock type is the
+                                same as the existing lock) or atomically converts the existing lock
+                                to the new mode. In the latter case, when converting a read lock to
+                                a write lock, we need to be prepared for the possibility that the
+                                call will yield an error (<code class="literal">F_SETLK</code>) or block (<code class="literal">F_SETLKW</code>). (This differs from
+                                    <span class="emphasis"><em>flock()</em></span>, whose lock conversions are not
+                                atomic.)</p></li><li class="listitem"><p>A process can never lock itself out of a file region, even when
+                                placing locks via multiple file descriptors referring to the same
+                                file. (This contrasts with <span class="emphasis"><em>flock()</em></span>, and we say
+                                more on this point in <a class="xref" href="ch55.html#lock_limits_and_performance" title="Lock Limits and Performance">Lock Limits and Performance</a>.)</p></li><li class="listitem"><p>Placing a lock of a different mode in the middle of a lock we
+                                already hold results in three locks: two smaller locks in the
+                                previous mode are created on either side of the new lock (see <a class="xref" href="ch55.html#splitting_of_an_existing_read_lock_by_a" title="Figure 55-3. Splitting of an existing read lock by a write lock by the same process">Figure 55-3</a>).
+                                Conversely, acquiring a second lock adjacent to or overlapping an
+                                existing lock in the same mode results in a single coalesced lock
+                                covering the combined area of the two locks. Other permutations are
+                                possible. For example, unlocking a region in the middle of a larger
+                                existing lock leaves two smaller locked regions on either side of
+                                the unlocked region. If a new lock overlaps an existing lock with a
+                                different mode, then the existing lock is shrunk, because the
+                                overlapping bytes are incorporated into the new lock.</p></li><li class="listitem"><p>Closing a file descriptor has some unusual semantics with respect
+                                to file region locks. We describe these semantics in <a class="xref" href="ch55.html#lock_limits_and_performance" title="Lock Limits and Performance">Lock Limits and Performance</a>.</p></li></ul></div><div class="figure"><a id="splitting_of_an_existing_read_lock_by_a"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject55_d1e142848"/><img src="figs/web/55-3_FILELOCK-lock-splitting-scale90.png.jpg" alt="Splitting of an existing read lock by a write lock by the same process"/></div></div><div class="figure-title">Figure 55-3. Splitting of an existing read lock by a write lock by the same
+                            process</div></div></div></div><div class="sect2" title="Deadlock"><div class="titlepage"><div><div><h3 class="title" id="deadlock">Deadlock</h3></div></div></div><p>When using <code class="literal">F_SETLKW</code>, we need to be aware of
+                    the type of scenario illustrated in <a class="xref" href="ch55.html#deadlock_when_two_processes_deny_each_ot" title="Figure 55-4. Deadlock when two processes deny each other’s lock requests">Figure 55-4</a>. In this scenario, each
+                    process’s second lock request is blocked by a lock held by the other process.
+                    Such a scenario is referred to as a <span class="emphasis"><em>deadlock</em></span>. If unchecked
+                    by the kernel, this would leave both processes blocked forever. To prevent this
+                    possibility, the kernel checks each new lock request made via <code class="literal">F_SETLKW</code> to see if it would result in a deadlock
+                    situation. If it would, then the kernel selects one of the blocked processes and
+                    causes its <span class="emphasis"><em>fcntl()</em></span> call to unblock and fail with the error
+                        <code class="literal">EDEADLK</code>. (On Linux, the process making
+                    the most recent <span class="emphasis"><em>fcntl()</em></span> call is selected, but this is not
+                    required by SUSv3, and may not hold true on future versions of Linux or on other
+                    UNIX implementations. Any process using <code class="literal">F_SETLKW</code> must be prepared to handle an <code class="literal">EDEADLK</code> error.)<a id="IDX-CHP-55-7219" class="indexterm"/><a id="IDX-CHP-55-7218" class="indexterm"/><a id="IDX-CHP-55-7220" class="indexterm"/></p><div class="figure"><a id="deadlock_when_two_processes_deny_each_ot"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject55_d1e142903"/><img src="figs/web/55-4_FILELOCK-deadlock.png.jpg" alt="Deadlock when two processes deny each other’s lock requests"/></div></div><div class="figure-title">Figure 55-4. Deadlock when two processes deny each other’s lock requests</div></div><p>Deadlock situations are detected even when placing locks on multiple different
+                    files, as are circular deadlocks involving multiple processes. (By
+                        <span class="emphasis"><em>circular deadlock</em></span>, we mean, for example, process A
+                    waiting to acquire a lock on a region locked by process B, process B waiting on
+                    a lock held by process C, and process C waiting on a lock held by process
+                    A.)</p></div><div class="sect2" title="Example: An Interactive Locking Program"><div class="titlepage"><div><div><h3 class="title" id="example_colon_an_interactive_locking_pro">Example: An Interactive Locking Program</h3></div></div></div><p>The program shown in <a class="xref" href="ch55.html#experimenting_with_record_locking" title="Example 55-2. Experimenting with record locking">Example 55-2</a>
+                    allows us to interactively experiment with record locking. This program takes a
+                    single command-line argument: the name of a file on which we wish to place
+                    locks. Using this program, we can verify many of our previous statements
+                    regarding the operation of record locking. The program is designed to be used
+                    interactively and accepts commands of this form:<a id="IDX-CHP-55-7221" class="indexterm"/><a id="IDX-CHP-55-7222" class="indexterm"/><a id="IDX-CHP-55-7223" class="indexterm"/><a id="IDX-CHP-55-7224" class="indexterm"/><a id="IDX-CHP-55-7225" class="indexterm"/><a id="IDX-CHP-55-7226" class="indexterm"/><a id="IDX-CHP-55-7227" class="indexterm"/><a id="IDX-CHP-55-7228" class="indexterm"/><a id="IDX-CHP-55-7229" class="indexterm"/></p><a id="I_programlisting55_d1e142989"/><pre class="programlisting"><span class="emphasis"><em>cmd lock start length</em></span>[<span class="emphasis"><em>whence</em></span>]</pre><p>For <span class="emphasis"><em>cmd</em></span>, we can specify <span class="emphasis"><em>g</em></span> to perform
+                    an <code class="literal">F_GETLK</code>, <span class="emphasis"><em>s</em></span> to perform
+                    an <code class="literal">F_SETLK</code>, or <span class="emphasis"><em>w</em></span> to
+                    perform an <code class="literal">F_SETLKW</code>. The remaining arguments
+                    are used to initialize the <span class="emphasis"><em>flock</em></span> structure passed to
+                        <span class="emphasis"><em>fcntl()</em></span>. The <span class="emphasis"><em>lock</em></span> argument
+                    specifies the value for the <span class="emphasis"><em>l_type</em></span> field and is
+                        <span class="emphasis"><em>r</em></span> for <code class="literal">F_RDLCK</code>,
+                        <span class="emphasis"><em>w</em></span> for <code class="literal">F_WRLCK</code>, or
+                        <span class="emphasis"><em>u</em></span> for <code class="literal">F_UNLCK</code>. The
+                        <span class="emphasis"><em>start</em></span> and <span class="emphasis"><em>length</em></span> arguments are
+                    integers specifying the values for the <span class="emphasis"><em>l_start</em></span> and
+                        <span class="emphasis"><em>l_len</em></span> fields. Finally, the optional
+                        <span class="emphasis"><em>whence</em></span> argument specifies the value for the
+                        <span class="emphasis"><em>l_whence</em></span> field, and may be <span class="emphasis"><em>s</em></span> for
+                        <code class="literal">SEEK_SET</code> (the default),
+                        <span class="emphasis"><em>c</em></span> for <code class="literal">SEEK_CUR</code>, or
+                        <span class="emphasis"><em>e</em></span> for <code class="literal">SEEK_END</code>. (For
+                    an explanation of why we cast the <span class="emphasis"><em>l_start</em></span> and
+                        <span class="emphasis"><em>l_len</em></span> fields to <span class="emphasis"><em>long long</em></span> in the
+                        <span class="emphasis"><em>printf()</em></span> call in <a class="xref" href="ch55.html#experimenting_with_record_locking" title="Example 55-2. Experimenting with record locking">Example 55-2</a>, see <a class="xref" href="ch05.html#i_solidus_o_on_large_files" title="I/O on Large Files">I/O on Large Files</a>.)</p><div class="example"><a id="experimenting_with_record_locking"/><div class="example-title">Example 55-2. Experimenting with record locking</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>filelock/i_fcntl_locking.c</code></strong>
+#include &lt;sys/stat.h&gt;
+#include &lt;fcntl.h&gt;
+#include "tlpi_hdr.h"
+
+#define MAX_LINE 100
+
+static void
+displayCmdFmt(void)
+{
+    printf("\n    Format: cmd lock start length [whence]\n\n");
+    printf("    'cmd' is 'g' (GETLK), 's' (SETLK), or 'w' (SETLKW)\n");
+    printf("    'lock' is 'r' (READ), 'w' (WRITE), or 'u' (UNLOCK)\n");
+    printf("    'start' and 'length' specify byte range to lock\n");
+    printf("    'whence' is 's' (SEEK_SET, default), 'c' (SEEK_CUR), "
+           "or 'e' (SEEK_END)\n\n");
+}
+
+int
+main(int argc, char *argv[])
+{
+    int fd, numRead, cmd, status;
+    char lock, cmdCh, whence, line[MAX_LINE];
+    struct flock fl;
+    long long len, st;
+
+    if (argc != 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s file\n", argv[0]);
+
+    fd = open(argv[1], O_RDWR);
+    if (fd == -1)
+        errExit("open (%s)", argv[1]);
+
+    printf("Enter ? for help\n");
+
+    for (;;) {          /* Prompt for locking command and carry it out */
+        printf("PID=%ld&gt; ", (long) getpid());
+        fflush(stdout);
+
+        if (fgets(line, MAX_LINE, stdin) == NULL)       /* EOF */
+            exit(EXIT_SUCCESS);
+        line[strlen(line) - 1] = '\0';          /* Remove trailing '\n' */
+
+        if (*line == '\0')
+            continue;                           /* Skip blank lines */
+
+        if (line[0] == '?') {
+            displayCmdFmt();
+            continue;
+        }
+
+        whence = 's';                   /* In case not otherwise filled in */
+
+        numRead = sscanf(line, "%c %c %lld %lld %c", &amp;cmdCh, &amp;lock,
+                        &amp;st, &amp;len, &amp;whence);
+        fl.l_start = st;
+        fl.l_len = len;
+
+        if (numRead &lt; 4 || strchr("gsw", cmdCh) == NULL ||
+                strchr("rwu", lock) == NULL || strchr("sce", whence) == NULL) {
+            printf("Invalid command!\n");
+            continue;
+        }
+
+        cmd = (cmdCh == 'g') ? F_GETLK : (cmdCh == 's') ? F_SETLK : F_SETLKW;
+        fl.l_type = (lock == 'r') ? F_RDLCK : (lock == 'w') ? F_WRLCK : F_UNLCK;
+        fl.l_whence = (whence == 'c') ? SEEK_CUR :
+                      (whence == 'e') ? SEEK_END : SEEK_SET;
+
+        status = fcntl(fd, cmd, &amp;fl);           /* Perform request... */
+
+        if (cmd == F_GETLK) {                   /* ... and see what happened */
+            if (status == -1) {
+                errMsg("fcntl - F_GETLK");
+            } else {
+                if (fl.l_type == F_UNLCK)
+                    printf("[PID=%ld] Lock can be placed\n", (long) getpid());
+                else                            /* Locked out by someone else */
+                    printf("[PID=%ld] Denied by %s lock on %lld:%lld "
+                            "(held by PID %ld)\n", (long) getpid(),
+                            (fl.l_type == F_RDLCK) ? "READ" : "WRITE",
+                            (long long) fl.l_start,
+                            (long long) fl.l_len, (long) fl.l_pid);
+            }
+        } else {                /* F_SETLK, F_SETLKW */
+            if (status == 0)
+                printf("[PID=%ld] %s\n", (long) getpid(),
+                        (lock == 'u') ? "unlocked" : "got lock");
+            else if (errno == EAGAIN || errno == EACCES)        /* F_SETLK */
+                printf("[PID=%ld] failed (incompatible lock)\n",
+                        (long) getpid());
+            else if (errno == EDEADLK)                          /* F_SETLKW */
+                printf("[PID=%ld] failed (deadlock)\n", (long) getpid());
+            else
+                errMsg("fcntl - F_SETLK(W)");
+        }
+    }
+}
+    <strong class="userinput"><code>filelock/i_fcntl_locking.c</code></strong></pre></div></div><p>In the following shell session logs, we demonstrate the use of the program in
+                        <a class="xref" href="ch55.html#experimenting_with_record_locking" title="Example 55-2. Experimenting with record locking">Example 55-2</a> by running two instances
+                    to place locks on the same 100-byte file <span class="emphasis"><em>(tfile)</em></span>. <a class="xref" href="ch55.html#state_of_granted_and_queued_lock_request" title="Figure 55-5. State of granted and queued lock requests while running i_fcntl_locking.c">Figure 55-5</a> shows the state of
+                    granted and queued lock requests at various points during this shell session
+                    log, as noted in the commentary below.</p><p>We start a first instance (process A) of the program in <a class="xref" href="ch55.html#experimenting_with_record_locking" title="Example 55-2. Experimenting with record locking">Example 55-2</a>, placing a read lock on bytes
+                    0 to 39 of the file:</p><a id="I_programlisting55_d1e143128"/><pre class="programlisting"><strong class="userinput"><code>Terminal window 1</code></strong>
+$ <strong class="userinput"><code>ls -l tfile</code></strong>
+-rw-r--r--    1 mtk      users         100 Apr 18 12:19 tfile
+$ <strong class="userinput"><code>./i_fcntl_locking tfile</code></strong>
+Enter ? for help
+PID=790&gt; <strong class="userinput"><code>s r 0 40</code></strong>
+[PID=790] got lock</pre><p>Then we start a second instance of the program (process B), placing a read
+                    lock on a bytes 70 through to the end of the file:</p><a id="I_programlisting55_d1e143143"/><pre class="programlisting"><strong class="userinput"><code>Terminal window 2</code></strong>
+                                    $ <strong class="userinput"><code>./i_fcntl_locking tfile</code></strong>
+                                    Enter ? for help
+                                    PID=800&gt; <strong class="userinput"><code>s r -30 0 e</code></strong>
+                                    [PID=800] got lock</pre><p>At this point, things appear as shown in part <span class="emphasis"><em>a</em></span> of <a class="xref" href="ch55.html#state_of_granted_and_queued_lock_request" title="Figure 55-5. State of granted and queued lock requests while running i_fcntl_locking.c">Figure 55-5</a>, where process A
+                    (process ID 790) and process B (process ID 800) hold locks on different parts of
+                    the file.</p><p>Now we return to process A, where we try to place a write lock on the entire
+                    file. We first employ <code class="literal">F_GETLK</code> to test whether
+                    the lock can be placed and are informed that there is a conflicting lock. Then
+                    we try placing the lock with <code class="literal">F_SETLK</code>, which
+                    also fails. Finally, we try placing the lock with <code class="literal">F_SETLKW</code>, which blocks.</p><a id="I_programlisting55_d1e143172"/><pre class="programlisting">PID=790&gt; <strong class="userinput"><code>g w 0 0</code></strong>
+[PID=790] Denied by READ lock on 70:0 (held by PID 800)
+PID=790&gt; <strong class="userinput"><code>s w 0 0</code></strong>
+[PID=790] failed (incompatible lock)
+PID=790&gt; <strong class="userinput"><code>w w 0 0</code></strong></pre><p>At this point, things appear as shown in part <span class="emphasis"><em>b</em></span> of <a class="xref" href="ch55.html#state_of_granted_and_queued_lock_request" title="Figure 55-5. State of granted and queued lock requests while running i_fcntl_locking.c">Figure 55-5</a>, where process A and
+                    process B each hold a lock on different parts of the file, and process A has a
+                    queued lock request on the whole file.</p><p>We continue in process B, by trying to place a write lock on the entire file.
+                    We first test whether the lock can be placed using <code class="literal">F_GETLK</code>, which informs us that there is a conflicting lock. We
+                    then try placing the lock using <code class="literal">F_SETLKW</code>.</p><a id="I_programlisting55_d1e143197"/><pre class="programlisting">PID=800&gt; <strong class="userinput"><code>g w 0 0</code></strong>
+                                    [PID=800] Denied by READ lock on 0:40
+                                    (held by PID 790)
+                                    PID=800&gt; <strong class="userinput"><code>w w 0 0</code></strong>
+                                    [PID=800] failed (deadlock)</pre><p>Part <span class="emphasis"><em>c</em></span> of <a class="xref" href="ch55.html#state_of_granted_and_queued_lock_request" title="Figure 55-5. State of granted and queued lock requests while running i_fcntl_locking.c">Figure 55-5</a> shows what happened
+                    when process B made a blocking request to place a write lock on the entire file:
+                    a deadlock. At this point, the kernel selected one of the lock requests to
+                    fail--in this case, the request by process B, which then receives the <code class="literal">EDEADLK</code> error from its
+                        <span class="emphasis"><em>fcntl()</em></span> call.</p><p>We continue in process B, by removing all of its locks on the file:</p><a id="I_programlisting55_d1e143220"/><pre class="programlisting">PID=800&gt; <strong class="userinput"><code>s u 0 0</code></strong>
+                                    [PID=800] unlocked
+[PID=790] got lock</pre><p>As we see from the last line of output, this allowed process A’s blocked lock
+                    request to be granted.</p><p>It is important to realize that even though process B’s deadlocked request was
+                    canceled, it still held its other lock, and so process A’s queued lock request
+                    remained blocked. Process A’s lock request is granted only when process B
+                    removes its other lock, bringing about the situation shown in part
+                        <span class="emphasis"><em>d</em></span> of <a class="xref" href="ch55.html#state_of_granted_and_queued_lock_request" title="Figure 55-5. State of granted and queued lock requests while running i_fcntl_locking.c">Figure 55-5</a>.</p><div class="figure"><a id="state_of_granted_and_queued_lock_request"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject55_d1e143239"/><img src="figs/web/55-5_FILELOCK-fcntl-example.png" alt="State of granted and queued lock requests while running i_fcntl_locking.c"/></div></div><div class="figure-title">Figure 55-5. State of granted and queued lock requests while running <code class="literal">i_fcntl_locking.c</code></div></div></div><div class="sect2" title="Example: A Library of Locking Functions"><div class="titlepage"><div><div><h3 class="title" id="example_colon_a_library_of_locking_funct">Example: A Library of Locking Functions</h3></div></div></div><p><a class="xref" href="ch55.html#file_region_locking_functions" title="Example 55-3. File region locking functions">Example 55-3</a> provides a set of locking
+                    functions that we can use in other programs. These functions are as
+                        follows:<a id="IDX-CHP-55-7230" class="indexterm"/><a id="IDX-CHP-55-7231" class="indexterm"/><a id="IDX-CHP-55-7232" class="indexterm"/><a id="IDX-CHP-55-7233" class="indexterm"/><a id="IDX-CHP-55-7234" class="indexterm"/><a id="IDX-CHP-55-7235" class="indexterm"/><a id="IDX-CHP-55-7236" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>lockRegion()</em></span> function uses <code class="literal">F_SETLK</code> to place a lock on the open file
+                            referred to by the file descriptor <span class="emphasis"><em>fd</em></span>. The
+                                <span class="emphasis"><em>type</em></span> argument specifies the lock type (<code class="literal">F_RDLCK</code> or <code class="literal">F_WRLCK</code>). The <span class="emphasis"><em>whence</em></span>,
+                                <span class="emphasis"><em>start</em></span>, and <span class="emphasis"><em>len</em></span> arguments
+                            specify the range of bytes to lock. These arguments provide the values
+                            for the similarly named fields of the <span class="emphasis"><em>flockstr</em></span>
+                            structure that is used to place the lock.<a id="IDX-CHP-55-7237" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>lockRegionWait()</em></span> function is like
+                                <span class="emphasis"><em>lockRegion()</em></span>, but makes a blocking lock
+                            request; that is, it uses <code class="literal">F_SETLKW</code>,
+                            rather than <code class="literal">F_SETLK</code>.<a id="IDX-CHP-55-7238" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>regionIsLocked()</em></span> function tests whether a
+                            lock can be placed on a file. The arguments of this function are as for
+                                <span class="emphasis"><em>lockRegion()</em></span>. This function returns 0 (false)
+                            if no process holds a lock that conflicts with the lock specified in the
+                            call. If one of more processes hold conflicting locks, then this
+                            function returns a nonzero value (i.e., true)--the process ID of one the
+                            processes holding a conflicting lock.<a id="IDX-CHP-55-7239" class="indexterm"/></p></li></ul></div><div class="example"><a id="file_region_locking_functions"/><div class="example-title">Example 55-3. File region locking functions</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>filelock/region_locking.c</code></strong>
+#include &lt;fcntl.h&gt;
+#include "region_locking.h"             /* Declares functions defined here */
+
+/* Lock a file region (private; public interfaces below) */
+
+static int
+lockReg(int fd, int cmd, int type, int whence, int start, off_t len)
+{
+    struct flock fl;
+
+    fl.l_type = type;
+    fl.l_whence = whence;
+    fl.l_start = start;
+    fl.l_len = len;
+
+    return fcntl(fd, cmd, &amp;fl);
+}
+
+int                     /* Lock a file region using nonblocking F_SETLK */
+lockRegion(int fd, int type, int whence, int start, int len)
+{
+    return lockReg(fd, F_SETLK, type, whence, start, len);
+}
+
+int                     /* Lock a file region using blocking F_SETLKW */
+lockRegionWait(int fd, int type, int whence, int start, int len)
+{
+    return lockReg(fd, F_SETLKW, type, whence, start, len);
+}
+
+/* Test if a file region is lockable. Return 0 if lockable, or
+   PID of process holding incompatible lock, or -1 on error. */
+
+pid_t
+regionIsLocked(int fd, int type, int whence, int start, int len)
+{
+    struct flock fl;
+
+    fl.l_type = type;
+    fl.l_whence = whence;
+    fl.l_start = start;
+    fl.l_len = len;
+
+    if (fcntl(fd, F_GETLK, &amp;fl) == -1)
+        return -1;
+
+    return (fl.l_type == F_UNLCK) ? 0 : fl.l_pid;
+}
+    <strong class="userinput"><code>filelock/region_locking.c</code></strong></pre></div></div></div><div class="sect2" title="Lock Limits and Performance"><div class="titlepage"><div><div><h3 class="title" id="lock_limits_and_performance">Lock Limits and Performance</h3></div></div></div><p>SUSv3 allows an implementation to place fixed, system-wide upper limits on the
+                    number of record locks that can be acquired. When this limit is reached,
+                        <span class="emphasis"><em>fcntl()</em></span> fails with the error <code class="literal">ENOLCK</code>. Linux doesn’t set a fixed upper limit on the number of
+                    record locks that may be acquired; we are merely limited by availability of
+                    memory. (Many other UNIX implementations are similar.)<a id="IDX-CHP-55-7240" class="indexterm"/><a id="IDX-CHP-55-7241" class="indexterm"/><a id="IDX-CHP-55-7242" class="indexterm"/><a id="IDX-CHP-55-7243" class="indexterm"/><a id="IDX-CHP-55-7244" class="indexterm"/></p><p>How quickly can record locks be acquired and released? There is no fixed
+                    answer to this question, since the speed of these operations is a function of
+                    the kernel data structure used to maintain record locks and the location of a
+                    particular lock within that data structure. We look at this structure in a
+                    moment, but first we consider some requirements that influence its
+                        design:<a id="IDX-CHP-55-7245" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The kernel needs to be able to merge a new lock with any existing
+                            locks (held by the same process) of the same mode that may lie on either
+                            side of the new lock.</p></li><li class="listitem"><p>A new lock may completely replace one or more existing locks held by
+                            the calling process. The kernel needs to be able to easily locate all of
+                            these locks.</p></li><li class="listitem"><p>When creating a new lock with a different mode in the middle of an
+                            existing lock, the job of splitting the existing lock (<a class="xref" href="ch55.html#splitting_of_an_existing_read_lock_by_a" title="Figure 55-3. Splitting of an existing read lock by a write lock by the same process">Figure 55-3</a>) should be
+                            simple.</p></li></ul></div><p>The kernel data structure used to maintain information about locks is designed
+                    to satisfy these requirements. Each open file has an associated linked list of
+                    locks held against that file. Locks within the list are ordered, first by
+                    process ID, and then by starting offset. An example of such a list is shown in
+                        <a class="xref" href="ch55.html#example_of_a_record_lock_list_for_a_sing" title="Figure 55-6. Example of a record lock list for a single file">Figure 55-6</a>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The kernel also maintains <span class="emphasis"><em>flock()</em></span> locks and file
+                        leases in the linked list of locks associated with an open file. (We briefly
+                        describe file leases when discussing the <code class="literal">/proc/locks</code> file in Section 55.5.) However, these types of
+                        locks are typically far fewer in number and therefore less likely to impact
+                        performance, so we ignore them in our discussion.</p></div><div class="figure"><a id="example_of_a_record_lock_list_for_a_sing"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject55_d1e143445"/><img src="figs/web/55-6_FILELOCK-lock-list.png" alt="Example of a record lock list for a single file"/></div></div><div class="figure-title">Figure 55-6. Example of a record lock list for a single file</div></div><p>Whenever a new lock is added to this data structure, the kernel must check for
+                    conflicts with any existing lock on the file. This search is carried out
+                    sequentially, starting at the head of the list.</p><p>Assuming a large number of locks distributed randomly among many processes, we
+                    can say that the time required to add or remove a lock increases roughly
+                    linearly with the number of locks already held on the file.</p></div><div class="sect2" title="Semantics of Lock Inheritance and Release"><div class="titlepage"><div><div><h3 class="title" id="semantics_of_lock_inheritance_and_re">Semantics of Lock Inheritance and Release</h3></div></div></div><p>The semantics of <span class="emphasis"><em>fcntl()</em></span> record lock inheritance and
+                    release differ substantially from those for locks created using
+                        <span class="emphasis"><em>flock()</em></span>. Note the following points:<a id="IDX-CHP-55-7246" class="indexterm"/><a id="IDX-CHP-55-7247" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Record locks are not inherited across a <span class="emphasis"><em>fork()</em></span> by
+                            a child process. This contrasts with <span class="emphasis"><em>flock()</em></span>, where
+                            the child inherits a reference to the <span class="emphasis"><em>same</em></span> lock and
+                            can release this lock, with the consequence that the parent also loses
+                            the lock.</p></li><li class="listitem"><p>Record locks are preserved across an <span class="emphasis"><em>exec()</em></span>.
+                            (However, note the effect of the close-on-exec flag, described
+                            below.)</p></li><li class="listitem"><p>All of the threads in a process share the same set of record
+                            locks.</p></li><li class="listitem"><p>Record locks are associated with both a process and an i-node (refer
+                            to <a class="xref" href="ch05.html#relationship_between_file_descriptors_an" title="Relationship Between File Descriptors and Open Files">Relationship Between File Descriptors and Open Files</a>). An
+                            unsurprising consequence of this association is that when a process
+                            terminates, all of its record locks are released. Less expected is that
+                            whenever a process closes a file descriptor, <span class="emphasis"><em>all</em></span>
+                            locks held by the process on the corresponding file are released,
+                            regardless of the file descriptor(s) through which the locks were
+                            obtained. For example, in the following code, the
+                                <span class="emphasis"><em>close(fd2)</em></span> call releases the lock held by the
+                            calling process on <code class="literal">testfile</code>, even
+                            though the lock was obtained via the file descriptor
+                                <span class="emphasis"><em>fd1</em></span>:</p></li></ul></div><a id="I_programlisting55_d1e143523"/><pre class="programlisting">struct flock fl;
+
+fl.l_type = F_WRLCK;
+fl.l_whence = SEEK_SET;
+fl.l_start = 0;
+fl.l_len = 0;
+
+fd1 = open("testfile", O_RDWR);
+fd2 = open("testfile", O_RDWR);
+
+if (fcntl(fd1, cmd, &amp;fl) == -1)
+    errExit("fcntl");
+
+close(fd2);</pre><p>The semantics described in the last point apply no matter how the various
+                    descriptors referring to the same file were obtained and no matter how the
+                    descriptor is closed. For example, <span class="emphasis"><em>dup()</em></span>,
+                        <span class="emphasis"><em>dup2()</em></span>, and <span class="emphasis"><em>fcntl()</em></span> can all be
+                    used to obtain duplicates of an open file descriptor. And, as well as performing
+                    an explicit <span class="emphasis"><em>close()</em></span>, a descriptor can be closed by an
+                        <span class="emphasis"><em>exec()</em></span> call if the close-on-exec flag was set, or via a
+                        <span class="emphasis"><em>dup2()</em></span> call, which closes its second file descriptor
+                    argument if that descriptor is already open.</p><p>The semantics of <span class="emphasis"><em>fcntl()</em></span> lock inheritance and release are
+                    an architectural blemish. For example, they make the use of record locks from
+                    library packages problematic, since a library function can’t prevent the
+                    possibility that its caller will close a file descriptor referring to a locked
+                    file and thus remove a lock obtained by the library code. An alternative
+                    implementation scheme would have been to associate a lock with a file descriptor
+                    rather than with an i-node. However, the current semantics are the historical
+                    and now standardized behavior of record locks. Unfortunately, these semantics
+                    greatly limit the utility of <span class="emphasis"><em>fcntl()</em></span> locking.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>With <span class="emphasis"><em>flock()</em></span>, a lock is associated only with an open
+                        file description, and remains in effect until either any process holding a
+                        reference to the lock explicitly releases the lock or all file descriptors
+                        referring to the open file description are closed.</p></div></div><div class="sect2" title="Lock Starvation and Priority of Queued Lock Requests"><div class="titlepage"><div><div><h3 class="title" id="lock_starvation_and_priority_of_queued_l">Lock Starvation and Priority of Queued Lock Requests</h3></div></div></div><p>When multiple processes must wait in order to place a lock on a currently
+                    locked region, a couple of questions arise.<a id="IDX-CHP-55-7248" class="indexterm"/><a id="IDX-CHP-55-7249" class="indexterm"/><a id="IDX-CHP-55-7250" class="indexterm"/><a id="IDX-CHP-55-7251" class="indexterm"/></p><p>Can a process waiting to place a write lock be starved by a series of
+                    processes placing read locks on the same region? On Linux (as on many other UNIX
+                    implementations), a series of read locks can indeed starve a blocked write lock,
+                    possibly indefinitely.</p><p>When two or more processes are waiting to place a lock, are there any rules
+                    that determine which process obtains the lock when it becomes available? For
+                    example, are lock requests satisfied in FIFO order? And do the rules depend on
+                    the types of locks being requested by each process (i.e., does a process
+                    requesting a read lock have priority over one requesting a write lock or vice
+                    versa, or neither)? On Linux, the rules are as follows:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The order in which queued lock requests are granted is indeterminate.
+                            If multiple processes are waiting to place locks, then the order in
+                            which they are satisfied depends on how the processes are
+                            scheduled.</p></li><li class="listitem"><p>Writers don’t have priority over readers, and vice versa.</p></li></ul></div><p>Such statements don’t necessarily hold true on other systems. On some UNIX
+                    implementations, lock requests are served in FIFO order, and readers have
+                    priority over writers.</p></div></div><div class="sect1" title="Mandatory Locking"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="mandatory_locking">Mandatory Locking</h2></div></div></div><p>The kinds of locks we have described so far are <span class="emphasis"><em>advisory</em></span>.
+                This means that a process is free to ignore the use of <span class="emphasis"><em>fcntl()</em></span>
+                (or <span class="emphasis"><em>flock()</em></span>) and simply perform I/O on the file. The kernel
+                doesn’t prevent this. When using advisory locking, it is up to the application
+                designer to:<a id="IDX-CHP-55-7252" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>set appropriate ownership (or group ownership) and permissions for the
+                        file, so as to prevent noncooperating process from performing file I/O;
+                        and</p></li><li class="listitem"><p>ensure that the processes composing the application cooperate by obtaining
+                        the appropriate lock on the file before performing I/O.</p></li></ul></div><p>Linux, like many other UNIX implementations, also allows
+                    <span class="emphasis"><em>fcntl()</em></span> record locks to be <span class="emphasis"><em>mandatory</em></span>.
+                This means that every file I/O operation is checked to see whether it is compatible
+                with any locks held by other processes on the region of the file on which I/O is
+                being performed.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Advisory mode locking is sometimes referred to as <span class="emphasis"><em>discretionary
+                        locking</em></span>, while mandatory locking is sometimes referred to as
+                        <span class="emphasis"><em>enforcement-mode locking</em></span>. SUSv3 doesn’t specify
+                    mandatory locking, but it is available (with some variation in the details) on
+                    most modern UNIX implementations.<a id="IDX-CHP-55-7253" class="indexterm"/><a id="IDX-CHP-55-7254" class="indexterm"/></p></div><p>In order to use mandatory locking on Linux, we must enable it on the file system
+                containing the files we wish to lock and on each file to be locked. We enable
+                mandatory locking on a file system by mounting it with the (Linux-specific)
+                    <span class="emphasis"><em>-o mand</em></span> option:</p><a id="I_programlisting55_d1e143650"/><pre class="programlisting"># <strong class="userinput"><code>mount -o mand /dev/sda10 /testfs</code></strong></pre><p>From a program, we can achieve the same result by specifying the <code class="literal">MS_MANDLOCK</code> flag when calling
+                    <span class="emphasis"><em>mount(2)</em></span> (<a class="xref" href="ch14.html#mounting_a_file_system_colon_mount_open" title="Mounting a File System: mount()">Mounting a File System: <span class="emphasis"><em>mount()</em></span></a>).</p><p>We can check whether a mounted file system has mandatory locking enabled by
+                looking at the output of the <span class="emphasis"><em>mount(8)</em></span> command with no
+                options:</p><a id="I_programlisting55_d1e143669"/><pre class="programlisting"># <strong class="userinput"><code>mount | grep sda10</code></strong>
+/dev/sda10 on /testfs type ext3 (rw,mand)</pre><p>Mandatory locking is enabled on a file by the combination of having the
+                set-group-ID permission bit turned on and the group-execute permission turned off.
+                This combination of permission bits was otherwise meaningless and unused in earlier
+                UNIX implementations. In this way, later UNIX systems added mandatory locking
+                without needing to change existing programs or add new system calls. From the shell,
+                we can enable mandatory locking on a file as follows:<a id="IDX-CHP-55-7255" class="indexterm"/></p><a id="I_programlisting55_d1e143680"/><pre class="programlisting">$ <strong class="userinput"><code>chmod g+s,g-x /testfs/file</code></strong></pre><p>From a program, we can enable mandatory locking for a file by setting permissions
+                appropriately using <span class="emphasis"><em>chmod()</em></span> or <span class="emphasis"><em>fchmod()</em></span>
+                    (<a class="xref" href="ch15.html#changing_file_permissions_colon_chmod_op" title="Changing File Permissions: chmod() and fchmod()">Changing File Permissions: <span class="emphasis"><em>chmod()</em></span> and
+                        <span class="emphasis"><em>fchmod()</em></span></a>).</p><p>When displaying permissions for a file whose permission bits are set for mandatory
+                locking, <span class="emphasis"><em>ls(1)</em></span> displays an <span class="emphasis"><em>S</em></span> in the
+                group-execute permission column:</p><a id="I_programlisting55_d1e143702"/><pre class="programlisting">$ <strong class="userinput"><code>ls -l /testfs/file</code></strong>
+-rw-r-Sr--    1 mtk      users       0 Apr 22 14:11 /testfs/file</pre><p>Mandatory locking is supported for all native Linux and UNIX file systems, but may
+                not be supported on some network file systems or on non-UNIX file systems. For
+                example, Microsoft’s VFAT file system has no set-group-ID permission bit, so
+                mandatory locking can’t be used on VFAT file systems.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="effect_of_mandatory_locking_on_file"/></div></div></div><div class="sect3" title="Effect of mandatory locking on file I/O operations"><div class="titlepage"><div><div><h4 class="title" id="effect_of_mandatory_locking_on_file-id1">Effect of mandatory locking on file I/O operations</h4></div></div></div><p>If mandatory locking is enabled for a file, what happens when a system
+                        call that performs data transfer (e.g., <span class="emphasis"><em>read()</em></span> or
+                            <span class="emphasis"><em>write()</em></span>) encounters a lock conflict (i.e., an
+                        attempt is made to write to a region that is currently read or write locked,
+                        or to read from a region that is currently write locked)? The answer depends
+                        on whether the file has been opened in blocking or nonblocking mode. If the
+                        file was opened in blocking mode, the system call blocks. If the file was
+                        opened with the <code class="literal">O_NONBLOCK</code> flag, the
+                        system call immediately fails with the error <code class="literal">EAGAIN</code>. Similar rules apply for
+                            <span class="emphasis"><em>truncate()</em></span> and <span class="emphasis"><em>ftruncate()</em></span>, if
+                        the bytes they are attempting to add or remove from the file overlap a
+                        region currently locked (for reading or writing) by another
+                            process.<a id="IDX-CHP-55-7256" class="indexterm"/><a id="IDX-CHP-55-7257" class="indexterm"/><a id="IDX-CHP-55-7258" class="indexterm"/><a id="IDX-CHP-55-7259" class="indexterm"/><a id="IDX-CHP-55-7260" class="indexterm"/><a id="IDX-CHP-55-7261" class="indexterm"/></p><p>If we have opened a file in blocking mode (i.e., <code class="literal">O_NONBLOCK</code> is not specified in the
+                            <span class="emphasis"><em>open()</em></span> call), then I/O system calls can be involved
+                        in deadlock situations. Consider the example shown in <a class="xref" href="ch55.html#deadlock_when_mandatory_locking_is_in_fo" title="Figure 55-7. Deadlock when mandatory locking is in force">Figure 55-7</a>, involving two
+                        processes that open the same file for blocking I/O, obtain write locks on
+                        different parts of the file, and then each attempt to write to the region
+                        locked by the other process. The kernel resolves this situation in the same
+                        way that deadlock between two <span class="emphasis"><em>fcntl()</em></span> calls is resolved
+                            (<a class="xref" href="ch55.html#the_flock_structure-id1" title="The flock structure">The <span class="emphasis"><em>flock</em></span> structure</a>): it selects one of the processes
+                        involved in the deadlock and causes its <span class="emphasis"><em>write()</em></span> system
+                        call to fail with the error <code class="literal">EDEADLK</code>.<a id="IDX-CHP-55-7262" class="indexterm"/></p><div class="figure"><a id="deadlock_when_mandatory_locking_is_in_fo"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject55_d1e143788"/><img src="figs/web/55-7_FILELOCK-deadlock-mand.png.jpg" alt="Deadlock when mandatory locking is in force"/></div></div><div class="figure-title">Figure 55-7. Deadlock when mandatory locking is in force</div></div><p>Attempts to <span class="emphasis"><em>open()</em></span> a file with the <code class="literal">O_TRUNC</code> flag always fail immediately (with the
+                        error <code class="literal">EAGAIN</code>) if any other process holds
+                        a read or write lock on any part of the file.</p><p>It is not possible to create a shared memory mapping (i.e.,
+                            <span class="emphasis"><em>mmap()</em></span> with the <code class="literal">MAP_SHARED</code> flag) on a file if any other process holds a
+                        mandatory read or write lock on <span class="emphasis"><em>any</em></span> part of the file.
+                        Conversely, it is not possible to place a mandatory lock on
+                            <span class="emphasis"><em>any</em></span> part of a file that is currently involved in a
+                        shared memory mapping. In both cases, the relevant system call fails
+                        immediately with the error <code class="literal">EAGAIN</code>. The
+                        reason for these restrictions becomes clear when we consider the
+                        implementation of memory mappings. In <a class="xref" href="ch49.html#shared_file_mappings" title="Shared File Mappings">Shared File Mappings</a>, we saw that a shared file mapping both reads from and writes to a file
+                        (and the latter operation, in particular, conflicts with any type of lock on
+                        the file). Furthermore, this file I/O is performed by the memory-management
+                        subsystem, which has no knowledge of the location of any file locks in the
+                        system. Thus, to prevent a mapping from updating a file on which a mandatory
+                        lock is held, the kernel performs a simple check--testing at the time of the
+                            <span class="emphasis"><em>mmap()</em></span> call whether there are locks anywhere in the
+                        file to be mapped (and vice versa for
+                            <span class="emphasis"><em>fcntl()</em></span>).<a id="IDX-CHP-55-7263" class="indexterm"/></p></div><div class="sect3" title="Mandatory locking caveats"><div class="titlepage"><div><div><h4 class="title" id="mandatory_locking_caveats">Mandatory locking caveats</h4></div></div></div><p>Mandatory locks do less for us than we might at first expect, and have
+                        some potential shortcomings and problems:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Holding a mandatory lock on a file doesn’t prevent another process
+                                from deleting it, since all that is required to unlink a file is
+                                suitable permissions on the parent directory.</p></li><li class="listitem"><p>Careful consideration should be applied before enabling mandatory
+                                locks on a publicly accessible file, since not even privileged
+                                processes can override a mandatory lock. A malicious user could
+                                continuously hold a lock on the file in order to create a
+                                denial-of-service attack. (While in most cases, we could make the
+                                file accessible once more by turning off the set-group-ID bit, this
+                                may not be possible if, for example, the mandatory file lock is
+                                causing the system to hang.)<a id="IDX-CHP-55-7264" class="indexterm"/></p></li><li class="listitem"><p>There is a performance cost associated with the use of mandatory
+                                locking. For each I/O system call made on a file with mandatory
+                                locking enabled, the kernel must check for lock conflicts on the
+                                file. If the file has a large number of locks, this check can slow
+                                I/O system calls significantly.</p></li><li class="listitem"><p>Mandatory locking also incurs a cost in application design. We
+                                need to handle the possibility that each I/O system call can return
+                                EAGAIN (for nonblocking I/O) or <code class="literal">EDEADLK</code> (for blocking I/O).</p></li><li class="listitem"><p>As a consequence of some kernel race conditions in the current
+                                Linux implementation, there are circumstances in which system calls
+                                that perform I/O operations can succeed despite the presence of
+                                mandatory locks that should deny those operations.</p></li></ul></div><p>In summary, the use of mandatory locks is best avoided.</p></div></div></div><div class="sect1" title="The /proc/locks File"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_solidus_proc_solidus_locks_file">The <code class="literal">/proc/locks</code> File</h2></div></div></div><p>We can view the set of locks currently held in the system by examining the
+                contents of the Linux-specific <code class="literal">/proc/locks</code> file.
+                Here is an example of the information we can see in this file (in this case, for
+                four locks):<a id="IDX-CHP-55-7265" class="indexterm"/></p><a id="I_programlisting55_d1e143879"/><pre class="programlisting">$ <strong class="userinput"><code>cat /proc/locks</code></strong>
+1: POSIX  ADVISORY  WRITE 458 03:07:133880 0 EOF
+2: FLOCK  ADVISORY  WRITE 404 03:07:133875 0 EOF
+3: POSIX  ADVISORY  WRITE 312 03:07:133853 0 EOF
+4: FLOCK  ADVISORY  WRITE 274 03:07:81908 0 EOF</pre><p>The <code class="literal">/proc/locks</code> file displays information about
+                locks created by both <span class="emphasis"><em>flock()</em></span> and <span class="emphasis"><em>fcntl()</em></span>.
+                The eight fields shown for each lock are as follows (from left to right):</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>The ordinal number of the lock within the set of all locks held for this
+                        file. (Refer to <a class="xref" href="ch55.html#example_colon_a_library_of_locking_funct" title="Example: A Library of Locking Functions">Example: A Library of Locking Functions</a>.)</p></li><li class="listitem"><p>The type of lock. Here, <code class="literal">FLOCK</code> indicates
+                        a lock created by <span class="emphasis"><em>flock()</em></span>, and <code class="literal">POSIX</code> indicates a lock created by
+                            <span class="emphasis"><em>fcntl()</em></span>.</p></li><li class="listitem"><p>The mode of the lock, either <code class="literal">ADVISORY</code>
+                        or <code class="literal">MANDATORY</code>.</p></li><li class="listitem"><p>The type of lock, either <code class="literal">READ</code> or
+                            <code class="literal">WRITE</code> (corresponding to shared and
+                        exclusive locks for <span class="emphasis"><em>fcntl()</em></span>).</p></li><li class="listitem"><p>The process ID of the process holding the lock.</p></li><li class="listitem"><p>Three colon-separated numbers that identify the file on which the lock is
+                        held. These numbers are the major and minor device numbers of the file
+                        system on which the file resides, followed by the i-node number of the
+                        file.</p></li><li class="listitem"><p>The starting byte of the lock. This is always 0 for
+                            <span class="emphasis"><em>flock()</em></span> locks.</p></li><li class="listitem"><p>The ending byte of the lock. Here, <code class="literal">EOF</code>
+                        indicates that the lock runs to the end of the file (i.e.,
+                            <span class="emphasis"><em>l_len</em></span> was specified as 0 for a lock created by
+                            <span class="emphasis"><em>fcntl()</em></span>). For <span class="emphasis"><em>flock()</em></span> locks,
+                        this column is always <code class="literal">EOF</code>.</p></li></ol></div><div class="note" title="Note"><h3 class="title">Note</h3><p>In Linux 2.4 and earlier, each line of <code class="literal">/proc/locks</code> includes five additional hexadecimal values. These
+                    are pointer addresses used by the kernel to record locks in various lists. These
+                    values are not useful in application programs.</p></div><p>Using the information in <code class="literal">/proc/locks</code>, we can
+                find out which process is holding a lock, and on what file. The following shell
+                session shows how to do this for lock number 3 in the list above. This lock is held
+                by process ID 312, on the i-node 133853 on the device with major ID 3 and minor ID
+                7. We begin by using <span class="emphasis"><em>ps(1)</em></span> to list information about the
+                process with process ID 312:</p><a id="I_programlisting55_d1e143981"/><pre class="programlisting">$ <strong class="userinput"><code>ps -p 312</code></strong>
+  PID TTY          TIME CMD
+  312 ?        00:00:00 atd</pre><p>The above output shows that the program holding the lock is
+                    <span class="emphasis"><em>atd</em></span>, the daemon that executes scheduled batch jobs.</p><p>In order to find the locked file, we first search the files in the <code class="literal">/dev</code> directory, and thus determine that the device
+                with ID 3:7 is <code class="literal">/dev/sda7</code>:</p><a id="I_programlisting55_d1e143999"/><pre class="programlisting">$ <strong class="userinput"><code>ls -li /dev/sda7 | awk '$6 == "3," &amp;&amp; $7 == 10'</code></strong>
+  1311 brw-rw----    1 root   disk    3,  7 May 12  2006 /dev/<strong class="userinput"><code>sda</code></strong>7</pre><p>We then determine the mount point for the device <code class="literal">/dev/sda7</code> and search that part of the file system for the file whose
+                i-node number is 133853:</p><a id="I_programlisting55_d1e144013"/><pre class="programlisting">$ <strong class="userinput"><code>mount | grep sda7</code></strong>
+/dev/sda7 on / type reiserfs (rw)             <em class="lineannotation"><span class="lineannotation">Device is mounted on</span></em> /
+$ <strong class="userinput"><code>su</code></strong>                                          <em class="lineannotation"><span class="lineannotation">So we can search all directories</span></em>
+Password:
+# <strong class="userinput"><code>find / -mount -inum 133853</code></strong>                  <em class="lineannotation"><span class="lineannotation">Search for i-node 133853</span></em>
+/var/run/atd.pid</pre><p>The <span class="emphasis"><em>find -mount</em></span> option prevents <span class="emphasis"><em>find</em></span>
+                from descending into subdirectories under <code class="literal">/</code> that
+                are mount points for other file systems.</p><p>Finally, we display the contents of the locked file:</p><a id="I_programlisting55_d1e144047"/><pre class="programlisting"># <strong class="userinput"><code>cat /var/run/atd.pid</code></strong>
+312</pre><p>Thus, we see that the <span class="emphasis"><em>atd</em></span> daemon is holding a lock on the
+                file <code class="literal">/var/run/atd.pid</code>, and that the content of
+                this file is the process ID of the process running <span class="emphasis"><em>atd</em></span>. This
+                daemon is employing a technique to ensure that only one instance of the daemon is
+                running at a time. We describe this technique in Section 55.6.</p><p>We can also use <code class="literal">/proc/locks</code> to obtain
+                information about blocked lock requests, as demonstrated in the following
+                output:</p><a id="I_programlisting55_d1e144068"/><pre class="programlisting">$ <strong class="userinput"><code>cat /proc/locks</code></strong>
+1: POSIX  ADVISORY  WRITE 11073 03:07:436283 100 109
+1: -&gt; POSIX  ADVISORY  WRITE 11152 03:07:436283 100 109
+2: POSIX  MANDATORY WRITE 11014 03:07:436283 0 9
+2: -&gt; POSIX  MANDATORY WRITE 11024 03:07:436283 0 9
+2: -&gt; POSIX  MANDATORY READ  11122 03:07:436283 0 19
+3: FLOCK  ADVISORY  WRITE 10802 03:07:134447 0 EOF
+3: -&gt; FLOCK  ADVISORY  WRITE 10840 03:07:134447 0 EOF</pre><p>Lines shown with the characters <code class="literal">-&gt;</code>
+                immediately after a lock number represent lock requests blocked by the corresponding
+                lock number. Thus, we see one request blocked on lock 1 (an advisory lock created
+                with <span class="emphasis"><em>fcntl()</em></span>), two requests blocked on lock 2 (a mandatory lock
+                created with <span class="emphasis"><em>fcntl()</em></span>), and one request blocked on lock 3 (a
+                lock created with <span class="emphasis"><em>flock()</em></span>).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <code class="literal">/proc/locks</code> file also displays
+                    information about any file leases that are held by processes on the system. File
+                    leases are a Linux-specific mechanism available in Linux 2.4 and later. If a
+                    process takes out a lease on a file, then it is notified (by delivery of a
+                    signal) if another process tries to <span class="emphasis"><em>open()</em></span> or
+                        <span class="emphasis"><em>truncate()</em></span> that file. (The inclusion of
+                        <span class="emphasis"><em>truncate()</em></span> is necessary because it is the only system
+                    call that can be used to change the contents of a file without first opening
+                    it.) File leases are provided in order to allow Samba to support the
+                        <span class="emphasis"><em>opportunistic locks</em></span> (<span class="emphasis"><em>oplocks</em></span>)
+                    functionality of the Microsoft SMB protocol and to allow NFS version 4 to
+                    support <span class="emphasis"><em>delegations</em></span> (which are similar to SMB oplocks).
+                    Further details about file leases can be found under the description of the
+                        <code class="literal">F_SETLEASE</code> operation in the
+                        <span class="emphasis"><em>fcntl(2)</em></span> manual page.<a id="IDX-CHP-55-7266" class="indexterm"/><a id="IDX-CHP-55-7267" class="indexterm"/><a id="IDX-CHP-55-7268" class="indexterm"/></p></div></div><div class="sect1" title="Running Just One Instance of a Program"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="running_just_one_instance_of_a_program">Running Just One Instance of a Program</h2></div></div></div><p>Some programs—in particular, many daemons—need to ensure that only one instance of
+                the program is running on the system at a time. A common method of doing this is to
+                have the daemon create a file in a standard directory and place a write lock on it.
+                The daemon holds the file lock for the duration of its execution and deletes the
+                file just before terminating. If another instance of the daemon is started, it will
+                fail to obtain a write lock on the file. Consequently, it will realize that another
+                instance of the daemon must already be running, and terminate.<a id="IDX-CHP-55-7269" class="indexterm"/><a id="IDX-CHP-55-7270" class="indexterm"/><a id="IDX-CHP-55-7271" class="indexterm"/><a id="IDX-CHP-55-7272" class="indexterm"/><a id="IDX-CHP-55-7273" class="indexterm"/><a id="IDX-CHP-55-7274" class="indexterm"/><a id="IDX-CHP-55-7275" class="indexterm"/><a id="IDX-CHP-55-7276" class="indexterm"/><a id="IDX-CHP-55-7277" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Many network servers use an alternative convention of assuming that a server
+                    instance is already running if the well-known socket port to which the server
+                    binds is already in use (<a class="xref" href="ch61.html#the_so_underscore_reuseaddr_socket_optio" title="The SO_REUSEADDR Socket Option">The <span class="emphasis"><em>SO_REUSEADDR</em></span> Socket Option</a>).</p></div><p>The <code class="literal">/var/run</code> directory is the usual location
+                for such lock files. Alternatively, the location of the file may be specified by a
+                line in the daemon’s configuration file.<a id="IDX-CHP-55-7278" class="indexterm"/></p><p>Conventionally, a daemon writes its own process ID into the lock file, and hence
+                the file is often named with an extension <code class="literal">.pid</code>
+                (for example, <span class="emphasis"><em>syslogd</em></span> creates the file <code class="literal">/var/run/syslogd.pid</code>). This is useful if some application needs to
+                find the process ID of the daemon. It also allows an extra sanity check—we can
+                verify whether that process ID exists using <span class="emphasis"><em>kill(pid, 0)</em></span>, as
+                described in Section 20.5. (In older UNIX implementations that did not provide file
+                locking, this was used as an imperfect, but usually practicable, way of assessing
+                whether an instance of the daemon really was still running, or whether an earlier
+                instance had simply failed to delete the file before terminating.)</p><p>There are many minor variations in the code used to create and lock a process ID
+                lock file. <a class="xref" href="ch55.html#creating_a_pid_lock_file_to_ensure_just" title="Example 55-4. Creating a PID lock file to ensure just one instance of a program is started">Example 55-4</a> is based on
+                ideas presented in [Stevens, 1999] and provides a function,
+                    <span class="emphasis"><em>createPidFile()</em></span>, that encapsulates the steps described
+                above. We would typically call this function with a line such as the
+                    following:<a id="IDX-CHP-55-7279" class="indexterm"/></p><a id="I_programlisting55_d1e144210"/><pre class="programlisting">if (createPidFile("mydaemon", "/var/run/mydaemon.pid", 0) == -1)
+    errExit("createPidFile");</pre><p>One subtlety in the <span class="emphasis"><em>createPidFile()</em></span> function is the use of
+                    <span class="emphasis"><em>ftruncate()</em></span> to erase any previous string in the lock file.
+                This is done because the last instance of the daemon may have failed to delete the
+                file, perhaps because of a system crash. In this case, if the process ID of the new
+                daemon instance is small, we might otherwise not completely overwrite the previous
+                contents of the file. For example, if our process ID is 789, then we would write
+                just <code class="literal">789\n</code> to the file, but a previous daemon
+                instance might have written <code class="literal">12345\n</code>. If we did
+                not truncate the file, then the resulting content would be <code class="literal">789\n5\n</code>. Erasing any existing string may not be strictly necessary,
+                but it is tidier and removes any potential for confusion.</p><p>The <span class="emphasis"><em>flags</em></span> argument can specify the constant <code class="literal">CPF_CLOEXEC</code>, which causes
+                    <span class="emphasis"><em>createPidFile()</em></span> to set the close-on-exec flag (<a class="xref" href="ch27.html#file_descriptors_and_exec_open_parenthes" title="File Descriptors and exec()">File Descriptors and <span class="emphasis"><em>exec()</em></span></a>) for the file descriptor.
+                This is useful for servers that restart themselves by calling
+                    <span class="emphasis"><em>exec()</em></span>. If the file descriptor was not closed during the
+                    <span class="emphasis"><em>exec()</em></span>, then the restarted server would think that a
+                duplicate instance of the server is already running.</p><div class="example"><a id="creating_a_pid_lock_file_to_ensure_just"/><div class="example-title">Example 55-4. Creating a PID lock file to ensure just one instance of a program is
+                    started</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>filelock/create_pid_file.c</code></strong>
+#include &lt;sys/stat.h&gt;
+#include &lt;fcntl.h&gt;
+#include "region_locking.h"             /* For lockRegion() */
+#include "create_pid_file.h"            /* Declares createPidFile() and
+                                           defines CPF_CLOEXEC */
+#include "tlpi_hdr.h"
+
+#define BUF_SIZE 100            /* Large enough to hold maximum PID as string */
+
+/* Open/create the file named in 'pidFile', lock it, optionally set the
+   close-on-exec flag for the file descriptor, write our PID into the file,
+   and (in case the caller is interested) return the file descriptor
+   referring to the locked file. The caller is responsible for deleting
+   'pidFile' file (just) before process termination. 'progName' should be the
+   name of the calling program (i.e., argv[0] or similar), and is used only for
+   diagnostic messages. If we can't open 'pidFile', or we encounter some other
+   error, then we print an appropriate diagnostic and terminate. */
+
+int
+createPidFile(const char *progName, const char *pidFile, int flags)
+{
+    int fd;
+    char buf[BUF_SIZE];
+
+    fd = open(pidFile, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+    if (fd == -1)
+        errExit("Could not open PID file %s", pidFile);
+
+    if (flags &amp; CPF_CLOEXEC) {
+
+        /* Set the close-on-exec file descriptor flag */
+
+        flags = fcntl(fd, F_GETFD);                     /* Fetch flags */
+        if (flags == -1)
+            errExit("Could not get flags for PID file %s", pidFile);
+
+        flags |= FD_CLOEXEC;                            /* Turn on FD_CLOEXEC */
+
+        if (fcntl(fd, F_SETFD, flags) == -1)            /* Update flags */
+            errExit("Could not set flags for PID file %s", pidFile);
+    }
+
+    if (lockRegion(fd, F_WRLCK, SEEK_SET, 0, 0) == -1) {
+        if (errno  == EAGAIN || errno == EACCES)
+            fatal("PID file '%s' is locked; probably "
+                     "'%s' is already running", pidFile, progName);
+        else
+            errExit("Unable to lock PID file '%s'", pidFile);
+    }
+
+    if (ftruncate(fd, 0) == -1)
+        errExit("Could not truncate PID file '%s'", pidFile);
+
+    snprintf(buf, BUF_SIZE, "%ld\n", (long) getpid());
+    if (write(fd, buf, strlen(buf)) != strlen(buf))
+        fatal("Writing to PID file '%s'", pidFile);
+
+    return fd;
+}
+    <strong class="userinput"><code>filelock/create_pid_file.c</code></strong></pre></div></div></div><div class="sect1" title="Older Locking Techniques"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="older_locking_techniques">Older Locking Techniques</h2></div></div></div><p>In older UNIX implementations that lacked file locking, a number of <span class="emphasis"><em>ad
+                    hoc</em></span> locking techniques were employed. Although all of these have been
+                superseded by <span class="emphasis"><em>fcntl()</em></span> record locking, we describe them here
+                since they still appear in some older programs. All of these techniques are advisory
+                in nature.<a id="IDX-CHP-55-7280" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="open_open_parenthesis_file_comma"/></div></div></div><div class="sect3" title="open(file, O_CREAT | O_EXCL,...) plus unlink(file)"><div class="titlepage"><div><div><h4 class="title" id="open_open_parenthesis_file_comma-id1">
+                        <code class="literal">open(file, O_CREAT | O_EXCL,...)</code>
+                        <span class="strong"><strong>plus</strong></span>
+                        <code class="literal">unlink(file)</code>
+                    </h4></div></div></div><p>SUSv3 requires that an <span class="emphasis"><em>open()</em></span> call with the flags
+                            <code class="literal">O_CREAT</code> and <code class="literal">O_EXCL</code> perform the steps of checking for the existence of a
+                        file and creating it atomically (<a class="xref" href="ch05.html#atomicity_and_race_conditions" title="Atomicity and Race Conditions">Atomicity and Race Conditions</a>). This means that if two
+                        processes attempt to create a file specifying these flags, it is guaranteed
+                        that only one of them will succeed. (The other process will receive the
+                        error <code class="literal">EEXIST</code> from
+                            <span class="emphasis"><em>open()</em></span>.) Used in conjunction with the
+                            <span class="emphasis"><em>unlink()</em></span> system call, this provides the basis for a
+                        locking mechanism. Acquiring the lock is performed by successfully opening
+                        the file with the <code class="literal">O_CREAT</code> and <code class="literal">O_EXCL</code> flags, followed by an immediate
+                            <span class="emphasis"><em>close()</em></span>. Releasing the lock is performed using
+                            <span class="emphasis"><em>unlink()</em></span>. Although workable, this technique has
+                        several limitations:<a id="IDX-CHP-55-7281" class="indexterm"/><a id="IDX-CHP-55-7282" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If the <span class="emphasis"><em>open()</em></span> fails, indicating that some
+                                other process has the lock, then we must retry the
+                                    <span class="emphasis"><em>open()</em></span> in some kind of loop, either polling
+                                continuously (which wastes CPU time) or with a delay between each
+                                attempt (which means that there may be some delay between the time
+                                the lock becomes available and when we actually acquire it). With
+                                    <span class="emphasis"><em>fcntl()</em></span>, we can use <code class="literal">F_SETLKW</code> to block until the lock
+                                becomes free.</p></li><li class="listitem"><p>Acquiring and releasing locks using <span class="emphasis"><em>open()</em></span>
+                                and <span class="emphasis"><em>unlink()</em></span> involves file-system operations
+                                that are rather slower than the use of record locks. (On one of the
+                                author’s x86-32 systems running Linux 2.6.31, acquiring and
+                                releasing 1 million locks on an <span class="emphasis"><em>ext3</em></span> file using
+                                the technique described here required 44 seconds. Acquiring and
+                                releasing 1 million record locks on the same byte of a file required
+                                2.5 seconds.)</p></li><li class="listitem"><p>If a process accidentally exits without deleting the lock file,
+                                the lock is not released. There are <span class="emphasis"><em>ad hoc</em></span>
+                                techniques for handling this problem, including checking the last
+                                modification time of the file and having the lock holder write its
+                                process ID to the file so that we can check if the process still
+                                exists, but none of these techniques is foolproof. By comparison,
+                                record locks are released automatically when a process
+                                terminates.</p></li><li class="listitem"><p>If we are placing multiple locks (i.e., using multiple lock
+                                files), deadlocks are not detected. If a deadlock arises, the
+                                processes involved in the deadlock will remain blocked indefinitely.
+                                (Each process will be spinning, checking to see if it can obtain the
+                                lock it requires.) By contrast, the kernel provides deadlock
+                                detection for <span class="emphasis"><em>fcntl()</em></span> record locks.</p></li><li class="listitem"><p>NFS version 2 doesn’t support <code class="literal">O_EXCL</code> semantics. Linux 2.4 NFS clients also fail to
+                                implement <code class="literal">O_EXCL</code> correctly, even
+                                for NFS version 3 and later.</p></li></ul></div></div><div class="sect3" title="link(file, lockfile) plus unlink(lockfile)"><div class="titlepage"><div><div><h4 class="title" id="link_open_parenthesis_file_comma_lockfil">
+                        <code class="literal">link(file, lockfile)</code>
+                        <span class="strong"><strong>plus</strong></span>
+                        <code class="literal">unlink(lockfile)</code>
+                    </h4></div></div></div><p>The fact that the <span class="emphasis"><em>link()</em></span> system call fails if the new
+                        link already exists has also been used as a locking mechanism, again
+                        employing <span class="emphasis"><em>unlink()</em></span> to perform the unlock function. The
+                        usual approach is to have each process that needs to acquire the lock create
+                        a unique temporary filename, typically one including the process ID (and
+                        possibly the hostname, if the lock file is created on a network file
+                        system). To acquire the lock, this temporary file is linked to some
+                        agreed-upon standard pathname. (The semantics of hard links require that the
+                        two pathnames reside in the same file system.) If the
+                            <span class="emphasis"><em>link()</em></span> call succeeds, we have obtained the lock. If
+                        it fails (<code class="literal">EEXIST</code>), then another process
+                        has the lock and we must try again later. This technique suffers the same
+                        limitations as the <span class="emphasis"><em>open(file</em></span>,
+                            <span class="emphasis"><em>O_CREAT</em></span> | <span class="emphasis"><em>O_EXCL</em></span>,...)
+                        technique described above.<a id="IDX-CHP-55-7283" class="indexterm"/><a id="IDX-CHP-55-7284" class="indexterm"/><a id="IDX-CHP-55-7285" class="indexterm"/></p></div><div class="sect3" title="open(file, O_CREAT | O_TRUNC | O_WRONLY, 0) plus unlink(file)"><div class="titlepage"><div><div><h4 class="title" id="open_open_parenthesis_file_comma_o_u"><code class="literal">open(file, O_CREAT | O_TRUNC | O_WRONLY,
+                            0)</code> plus <code class="literal">unlink(file)</code></h4></div></div></div><p>The fact that calling <span class="emphasis"><em>open()</em></span> on an existing file
+                        fails if <code class="literal">O_TRUNC</code> is specified and write
+                        permission is denied on the file can be used as the basis of a locking
+                        technique. To obtain a lock, we use the following code (which omits error
+                        checking) to create a new file:<a id="IDX-CHP-55-7286" class="indexterm"/><a id="IDX-CHP-55-7287" class="indexterm"/><a id="IDX-CHP-55-7288" class="indexterm"/><a id="IDX-CHP-55-7289" class="indexterm"/><a id="IDX-CHP-55-7290" class="indexterm"/><a id="IDX-CHP-55-7291" class="indexterm"/><a id="IDX-CHP-55-7292" class="indexterm"/></p><a id="I_programlisting55_d1e144474"/><pre class="programlisting">fd = open(file, O_CREAT | O_TRUNC | O_WRONLY, (mode_t) 0);
+close(fd);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>For an explanation of why we use the <span class="emphasis"><em>(mode_t)</em></span>
+                            cast in the <span class="emphasis"><em>open()</em></span> call above, see <a class="xref" href="apc.html" title="Appendix C. Casting the NULL Pointer">Appendix C</a>.</p></div><p>If the <span class="emphasis"><em>open()</em></span> call succeeds (i.e., the file didn’t
+                        previously exist), we have the lock. If it fails with <code class="literal">EACCES</code> (i.e., the file exists and has no
+                        permissions for anyone), then another process has the lock, and we must try
+                        again later. This technique suffers the same limitations as the previous
+                        techniques, with the added caveat that we can’t employ it in a program with
+                        superuser privileges, since the <span class="emphasis"><em>open()</em></span> call will always
+                        succeed, regardless of the permissions that are set on the file.</p></div></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id54">Summary</h2></div></div></div><p>File locks allow processes to synchronize access to a file. Linux provides two
+                file locking system calls: the BSD-derived <span class="emphasis"><em>flock()</em></span> and the
+                System V-derived <span class="emphasis"><em>fcntl()</em></span>. Although both system calls are
+                available on most UNIX implementations, only <span class="emphasis"><em>fcntl()</em></span> locking is
+                standardized in SUSv3.</p><p>The <span class="emphasis"><em>flock()</em></span> system call locks an entire file. Two types of
+                locks may be placed: shared locks, which are compatible with shared locks held by
+                other processes, and exclusive locks, which prevent other processes from placing any
+                type of lock.</p><p>The <span class="emphasis"><em>fcntl()</em></span> system call places locks (“record locks”) on any
+                region of a file, ranging from a single byte to the entire file. Two types of locks
+                may be placed: read locks and write locks, which have similar compatibility
+                semantics to the shared and exclusive locks placed via <span class="emphasis"><em>flock()</em></span>.
+                If a blocking (<code class="literal">F_SETLKW</code>) lock request would bring
+                about a deadlock situation, then the kernel causes <span class="emphasis"><em>fcntl()</em></span> to
+                fail (with the error <code class="literal">EDEADLK</code>) in one of the
+                affected processes.</p><p>Locks placed using <span class="emphasis"><em>flock()</em></span> and <span class="emphasis"><em>fcntl()</em></span>
+                are invisible to one another (except on systems that implement
+                    <span class="emphasis"><em>flock()</em></span> using <span class="emphasis"><em>fcntl()</em></span>). The locks
+                placed via <span class="emphasis"><em>flock()</em></span> and <span class="emphasis"><em>fcntl()</em></span> have
+                different semantics with respect to inheritance across <span class="emphasis"><em>fork()</em></span>
+                and release when file descriptors are closed.</p><p>The Linux-specific <code class="literal">/proc/locks</code> file displays
+                the file locks currently held by all processes on the system.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id73"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id74">Further information</h4></div></div></div><p>An extensive discussion of <span class="emphasis"><em>fcntl()</em></span> record locking can
+                        be found in [Stevens &amp; Rago, 2005] and [Stevens, 1999]. Some details
+                        of the implementation of <span class="emphasis"><em>flock()</em></span> and
+                            <span class="emphasis"><em>fcntl()</em></span> locking on Linux are provided in [Bovet
+                        &amp; Cesati, 2005]. [Tanenbaum, 2007] and [Deitel et al., 2004]
+                        describe deadlocking concepts in general, including coverage of deadlock
+                        detection, avoidance, and prevention.</p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id38">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Experiment by running multiple instances of the program in <a class="xref" href="ch55.html#using_flock_open_parenthesis_close_paren" title="Example 55-1. Using flock()">Example 55-1</a> (<code class="literal">t_flock.c</code>) to determine the following points
+                        about the operation of <span class="emphasis"><em>flock()</em></span>:<a id="IDX-CHP-55-7293" class="indexterm"/><a id="IDX-CHP-55-7294" class="indexterm"/><a id="IDX-CHP-55-7295" class="indexterm"/><a id="IDX-CHP-55-7296" class="indexterm"/><a id="IDX-CHP-55-7297" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="a"><li class="listitem"><p>Can a series of processes acquiring shared locks on a file starve
+                                a process attempting to place an exclusive lock on the file?</p></li><li class="listitem"><p>Suppose that a file is locked exclusively, and other processes are
+                                waiting to place both shared and exclusive locks on the file. When
+                                the first lock is released, are there any rules determining which
+                                process is next granted a lock? For example, do shared locks have
+                                priority over exclusive locks or vice versa? Are locks granted in
+                                FIFO order?</p></li><li class="listitem"><p>If you have access to some other UNIX implementation that provides
+                                    <span class="emphasis"><em>flock()</em></span>, try to determine the rules on that
+                                implementation.</p></li></ol></div></li><li class="listitem"><p>Write a program to determine whether <span class="emphasis"><em>flock()</em></span> detects
+                        deadlock situations when being used to lock two different files in two
+                        processes.</p></li><li class="listitem"><p>Write a program to verify the statements made in <a class="xref" href="ch55.html#semantics_of_lock_inheritance_and_releas" title="Semantics of Lock Inheritance and Release">Semantics of Lock Inheritance and Release</a> regarding the
+                        semantics of inheritance and release of <span class="emphasis"><em>flock()</em></span>
+                        locks.</p></li><li class="listitem"><p>Experiment by running the programs in <a class="xref" href="ch55.html#using_flock_open_parenthesis_close_paren" title="Example 55-1. Using flock()">Example 55-1</a> (<code class="literal">t_flock.c</code>) and <a class="xref" href="ch55.html#experimenting_with_record_locking" title="Example 55-2. Experimenting with record locking">Example 55-2</a> (<code class="literal">i_fcntl_locking.c</code>) to see whether locks granted by
+                            <span class="emphasis"><em>flock()</em></span> and <span class="emphasis"><em>fcntl()</em></span> have any
+                        effect on one another. If you have access to other UNIX implementations, try
+                        the same experiment on those implementations.</p></li><li class="listitem"><p>In <a class="xref" href="ch55.html#example_colon_a_library_of_locking_funct" title="Example: A Library of Locking Functions">Example: A Library of Locking Functions</a>, we noted
+                        that, on Linux, the time required to add or check for the existence of a
+                        lock is a function of the position of the lock in the list of all locks on
+                        the file. Write two programs to verify this:</p><div class="orderedlist"><ol class="orderedlist" type="a"><li class="listitem"><p>The first program should acquire (say) 40,001 write locks on a
+                                file. These locks are placed on alternating bytes of the file; that
+                                is, locks are placed on bytes 0, 2, 4, 6, and so on through to (say)
+                                byte 80,000. Having acquired these locks, the process then goes to
+                                sleep.</p></li><li class="listitem"><p>While the first program is sleeping, the second program loops
+                                (say) 10,000 times, using <code class="literal">F_SETLK</code>
+                                to try to lock one of the bytes locked by the previous program
+                                (these lock attempts always fail). In any particular execution, the
+                                program always tries to lock byte <span class="emphasis"><em>N * 2</em></span> of the
+                                file.</p></li></ol></div><p>Using the shell built-in <span class="emphasis"><em>time</em></span> command, measure the
+                        time required by the second program for <span class="emphasis"><em>N</em></span> equals 0,
+                        10,000, 20,000, 30,000, and 40,000. Do the results match the expected linear
+                        behavior?</p></li><li class="listitem"><p>Experiment with the program in <a class="xref" href="ch55.html#experimenting_with_record_locking" title="Example 55-2. Experimenting with record locking">Example 55-2</a> (<code class="literal">i_fcntl_locking.c</code>) to verify the statements made in <a class="xref" href="ch55.html#semantics_of_lock_inheritance_and_re" title="Semantics of Lock Inheritance and Release">Semantics of Lock Inheritance and Release</a> regarding lock
+                        starvation and priority for <span class="emphasis"><em>fcntl()</em></span> record
+                        locks.</p></li><li class="listitem"><p>If you have access to other UNIX implementations, use the program in <a class="xref" href="ch55.html#experimenting_with_record_locking" title="Example 55-2. Experimenting with record locking">Example 55-2</a> (<code class="literal">i_fcntl_locking.c</code>) to see if you can establish any rules for
+                            <span class="emphasis"><em>fcntl()</em></span> record locking regarding starvation of
+                        writers and regarding the order in which multiple queued lock requests are
+                        granted.</p></li><li class="listitem"><p>Use the program in <a class="xref" href="ch55.html#experimenting_with_record_locking" title="Example 55-2. Experimenting with record locking">Example 55-2</a>
+                            (<code class="literal">i_fcntl_locking.c</code>) to demonstrate
+                        that the kernel detects circular deadlocks involving three (or more)
+                        processes locking the same file.</p></li><li class="listitem"><p>Write a pair of programs (or a single program that uses a child process)
+                        to bring about the deadlock situation with mandatory locks described in
+                        Section 55.4.</p></li><li class="listitem"><p>Read the manual page of the <span class="emphasis"><em>lockfile(1)</em></span> utility that
+                        is supplied with <span class="emphasis"><em>procmail</em></span>. Write a simple version of
+                        this program.</p></li></ol></div></div></section></body></html>

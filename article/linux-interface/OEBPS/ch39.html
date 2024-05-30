@@ -1,0 +1,1135 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 39. Capabilities</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch38.html" title="Chapter 38. Writing Secure Privileged Programs"/><link rel="next" href="ch40.html" title="Chapter 40. Login Accounting"/></head><body><section class="chapter" title="Chapter 39. Capabilities" epub:type="chapter" id="capabilities-id1"><div class="titlepage"><div><div><h2 class="title">Chapter 39. Capabilities</h2></div></div></div><p>This chapter describes the Linux capabilities scheme, which divides the traditional
+            all-or-nothing UNIX privilege scheme into individual capabilities that can be
+            independently enabled or disabled. Using capabilities allows a program to perform some
+            privileged operations, while preventing it from performing others.</p><div class="sect1" title="Rationale for Capabilities"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="rationale_for_capabilities">Rationale for Capabilities</h2></div></div></div><p>The traditional UNIX privilege scheme divides processes into two categories: those
+                whose effective user ID is 0 (superuser), which bypass all privilege checks, and all
+                other processes, which are subject to privilege checking according to their user and
+                group IDs.</p><p>The coarse granularity of this scheme is a problem. If we want to allow a process
+                to perform some operation that is permitted only to the superuser—for example,
+                changing the system time—then we must run that process with an effective user ID of
+                0. (If an unprivileged user needs to perform such operations, this is typically
+                implemented using a set-user-ID-<span class="emphasis"><em>root</em></span> program.) However, this
+                grants the process privileges to perform a host of other actions as well—for
+                example, bypassing all permission checks when accessing files—thus opening the door
+                for a range of security breaches if the program behaves in unexpected ways (which
+                may be the consequence of unforeseen circumstances, or because of deliberate
+                manipulation by a malicious user). The traditional way of dealing with this problem
+                was outlined in <a class="xref" href="ch38.html" title="Chapter 38. Writing Secure Privileged Programs">Chapter 38</a>: we drop
+                effective privileges (i.e., change from an effective user ID of 0, while maintaining
+                0 in the saved set-user-ID) and temporarily reacquire them only when needed.</p><p>The Linux capability scheme refines the handling of this problem. Rather than
+                using a single privilege (i.e., effective user ID of 0) when performing security
+                checks in the kernel, the superuser privilege is divided into distinct units, called
+                    <span class="emphasis"><em>capabilities</em></span>. Each privileged operation is associated with
+                a particular capability, and a process can perform that operation only if it has the
+                corresponding capability (regardless of its effective user ID). Put another way,
+                everywhere in this book that we talk about a privileged process on Linux, what we
+                really mean is a process that has the relevant capability for performing a
+                particular operation.</p><p>Most of the time, the Linux capability scheme is invisible to us. The reason for
+                this is that when an application that is unaware of capabilities assumes an
+                effective user ID of 0, the kernel grants that process the complete range of
+                capabilities.</p><p>The Linux capabilities implementation is based on the POSIX 1003.1e draft standard
+                    (<a class="ulink" href="http://wt.tuxomania.net/publications/posix.1e/" target="_top">http://wt.tuxomania.net/publications/posix.1e/</a>). This
+                standardization effort foundered in the late 1990s before it was completed, but
+                various capabilities implementations are nevertheless based on the draft standard.
+                (Some of the capabilities listed in <a class="xref" href="ch39.html#operations_permitted_by_each_linux_capab" title="Table 39-1. Operations permitted by each Linux capability">Table 39-1</a> are defined in the POSIX.1e
+                draft, but many are Linux extensions.)<a id="IDX-CHP-39-5567" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Capability schemes are provided in a few other UNIX implementations, such as
+                    in Sun’s Solaris 10 and earlier Trusted Solaris releases, SGI’s Trusted Irix,
+                    and as part of the TrustedBSD project for FreeBSD ([Watson, 2000]). Similar
+                    schemes exist in some other operating systems; for example, the privilege
+                    mechanism in Digital’s VMS system.</p></div></div><div class="sect1" title="The Linux Capabilities"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_linux_capabilities">The Linux Capabilities</h2></div></div></div><p><a class="xref" href="ch39.html#operations_permitted_by_each_linux_capab" title="Table 39-1. Operations permitted by each Linux capability">Table 39-1</a> lists the Linux
+                capabilities and provides an abbreviated (and incomplete) guide to the operations to
+                which they apply.<a id="IDX-CHP-39-5568" class="indexterm"/><a id="IDX-CHP-39-5569" class="indexterm"/></p></div><div class="sect1" title="Process and File Capabilities"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="process_and_file_capabilities">Process and File Capabilities</h2></div></div></div><p>Each process has three associated capability sets—termed
+                    <span class="emphasis"><em>permitted</em></span>, <span class="emphasis"><em>effective</em></span>, and
+                    <span class="emphasis"><em>inheritable</em></span>—that can contain zero or more of the
+                capabilities listed in <a class="xref" href="ch39.html#operations_permitted_by_each_linux_capab" title="Table 39-1. Operations permitted by each Linux capability">Table 39-1</a>.
+                Each file can likewise have three associated capability sets, with the same names.
+                (For reasons that will become evident, the file effective capability set is really
+                just a single bit that is either enabled or disabled.) We go into the details of
+                each of these capability sets in the following sections.<a id="IDX-CHP-39-5570" class="indexterm"/></p><div class="sect2" title="Process Capabilities"><div class="titlepage"><div><div><h3 class="title" id="process_capabilities">Process Capabilities</h3></div></div></div><p>For each process, the kernel maintains three capability sets (implemented as
+                    bit masks) in which zero or more of the capabilities specified in <a class="xref" href="ch39.html#operations_permitted_by_each_linux_capab" title="Table 39-1. Operations permitted by each Linux capability">Table 39-1</a> are enabled. The three
+                    sets are as follows:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>Permitted</em></span>: These are the capabilities that a
+                            process <span class="emphasis"><em>may</em></span> employ. The permitted set is a limiting
+                            superset for the capabilities that can be added to the effective and
+                            inheritable sets. If a process drops a capability from its permitted
+                            set, it can never reacquire that capability (unless it execs a program
+                            that once more confers the capability).</p></li><li class="listitem"><p><span class="emphasis"><em>Effective</em></span>: These are the capabilities used by the
+                            kernel to perform privilege checking for the process. As long as it
+                            maintains a capability in its permitted set, a process can temporarily
+                            disable the capability by dropping it from the effective set, and then
+                            later restoring it to that set.<a id="IDX-CHP-39-5571" class="indexterm"/><a id="IDX-CHP-39-5572" class="indexterm"/><a id="IDX-CHP-39-5573" class="indexterm"/></p></li><li class="listitem"><p><span class="emphasis"><em>Inheritable</em></span>: These are capabilities that may be
+                            carried over to the permitted set when a program is execed by this
+                            process.</p></li></ul></div><p>We can view hexadecimal representations of the three capability sets for any
+                    process in the three fields <code class="literal">CapInh</code>, <code class="literal">CapPrm</code>, and <code class="literal">CapEff</code> in the Linux-specific <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/status</code> file.<a id="IDX-CHP-39-5574" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>getpcap</em></span> program (part of the
+                            <span class="emphasis"><em>libcap</em></span> package described in <a class="xref" href="ch39.html#changing_process_capabilities_programmat" title="Changing Process Capabilities Programmatically">Changing Process Capabilities Programmatically</a>) can be used to
+                        display the capabilities of a process in an easier-to-read format.</p></div><p>A child process produced via <span class="emphasis"><em>fork()</em></span> inherits copies of
+                    its parent’s capability sets. We describe the treatment of capability sets
+                    during an <span class="emphasis"><em>exec()</em></span> in Section 39.5.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>In reality, capabilities are a per-thread attribute that can be adjusted
+                        independently for each of the threads in a process. The capabilities of a
+                        specific thread within a multithreaded process are shown in the <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/task/</code><span class="emphasis"><em>TID</em></span><code class="literal">/status</code> file. The <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/status</code> file shows the capabilities of the main
+                            thread.<a id="IDX-CHP-39-5575" class="indexterm"/></p><p>Before kernel 2.6.25, Linux represented capability sets using 32 bits. The
+                        addition of further capabilities in kernel 2.6.25 required a move to 64-bit
+                        sets.</p></div></div><div class="sect2" title="File Capabilities"><div class="titlepage"><div><div><h3 class="title" id="file_capabilities">File Capabilities</h3></div></div></div><p>If a file has associated capability sets, then these sets are used to
+                    determine the capabilities that are given to a process if it execs that file.
+                    There are three file capability sets:<a id="IDX-CHP-39-5576" class="indexterm"/><a id="IDX-CHP-39-5577" class="indexterm"/><a id="IDX-CHP-39-5578" class="indexterm"/><a id="IDX-CHP-39-5579" class="indexterm"/><a id="IDX-CHP-39-5580" class="indexterm"/><a id="IDX-CHP-39-5581" class="indexterm"/><a id="IDX-CHP-39-5582" class="indexterm"/><a id="IDX-CHP-39-5583" class="indexterm"/><a id="IDX-CHP-39-5584" class="indexterm"/><a id="IDX-CHP-39-5585" class="indexterm"/><a id="IDX-CHP-39-5586" class="indexterm"/><a id="IDX-CHP-39-5587" class="indexterm"/><a id="IDX-CHP-39-5588" class="indexterm"/><a id="IDX-CHP-39-5589" class="indexterm"/><a id="IDX-CHP-39-5590" class="indexterm"/><a id="IDX-CHP-39-5591" class="indexterm"/><a id="IDX-CHP-39-5592" class="indexterm"/><a id="IDX-CHP-39-5593" class="indexterm"/><a id="IDX-CHP-39-5594" class="indexterm"/><a id="IDX-CHP-39-5595" class="indexterm"/><a id="IDX-CHP-39-5596" class="indexterm"/><a id="IDX-CHP-39-5597" class="indexterm"/><a id="IDX-CHP-39-5598" class="indexterm"/><a id="IDX-CHP-39-5599" class="indexterm"/><a id="IDX-CHP-39-5600" class="indexterm"/><a id="IDX-CHP-39-5601" class="indexterm"/><a id="IDX-CHP-39-5602" class="indexterm"/><a id="IDX-CHP-39-5603" class="indexterm"/><a id="IDX-CHP-39-5604" class="indexterm"/><a id="IDX-CHP-39-5605" class="indexterm"/><a id="IDX-CHP-39-5606" class="indexterm"/><a id="IDX-CHP-39-5607" class="indexterm"/><a id="IDX-CHP-39-5608" class="indexterm"/><a id="IDX-CHP-39-5609" class="indexterm"/><a id="IDX-CHP-39-5610" class="indexterm"/><a id="IDX-CHP-39-5611" class="indexterm"/><a id="IDX-CHP-39-5612" class="indexterm"/><a id="IDX-CHP-39-5613" class="indexterm"/><a id="IDX-CHP-39-5614" class="indexterm"/><a id="IDX-CHP-39-5615" class="indexterm"/><a id="IDX-CHP-39-5616" class="indexterm"/><a id="IDX-CHP-39-5617" class="indexterm"/><a id="IDX-CHP-39-5618" class="indexterm"/><a id="IDX-CHP-39-5619" class="indexterm"/><a id="IDX-CHP-39-5620" class="indexterm"/><a id="IDX-CHP-39-5621" class="indexterm"/><a id="IDX-CHP-39-5622" class="indexterm"/><a id="IDX-CHP-39-5623" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>Permitted</em></span>: This is a set of capabilities that may
+                            be added to the process’s permitted set during an
+                                <span class="emphasis"><em>exec()</em></span>, regardless of the process’s existing
+                            capabilities.</p></li><li class="listitem"><p><span class="emphasis"><em>Effective</em></span>: This is just a single bit. If it is
+                            enabled, then, during an <span class="emphasis"><em>exec()</em></span>, the capabilities
+                            that are enabled in the process’s new permitted set are also enabled in
+                            the process’s new effective set. If the file effective bit is disabled,
+                            then, after an <span class="emphasis"><em>exec()</em></span>, the process’s new effective
+                            set is initially empty.</p></li><li class="listitem"><p><span class="emphasis"><em>Inheritable</em></span>: This set is masked against the
+                            process’s inheritable set to determine a set of capabilities that are to
+                            be enabled in the process’s permitted set after an
+                                <span class="emphasis"><em>exec()</em></span>.<a id="IDX-CHP-39-5624" class="indexterm"/><a id="IDX-CHP-39-5625" class="indexterm"/></p></li></ul></div><p><a class="xref" href="ch39.html#transformation_of_process_capabilities_d" title="Transformation of Process Capabilities During exec()">Transformation of Process Capabilities During <span class="emphasis"><em>exec()</em></span></a> provides details of
+                    how file capabilities are used during an <span class="emphasis"><em>exec()</em></span>.<a id="IDX-CHP-39-5626" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The permitted and inheritable file capabilities were formerly known as
+                            <span class="emphasis"><em>forced</em></span> and <span class="emphasis"><em>allowed</em></span>. Those
+                        terms are now obsolete, but they are still informative. The permitted file
+                        capabilities are the ones that are <span class="emphasis"><em>forced</em></span> into the
+                        process’s permitted set during an <span class="emphasis"><em>exec()</em></span>, regardless of
+                        the process’s existing capabilities. The inheritable file capabilities are
+                        the ones that the file <span class="emphasis"><em>allows</em></span> into the process’s
+                        permitted set during an <span class="emphasis"><em>exec()</em></span>, if those capabilities
+                        are also enabled in the process’s inheritable capability set.</p><p>The capabilities associated with a file are stored in a
+                            <span class="emphasis"><em>security</em></span> extended attribute (<a class="xref" href="ch16.html#overview-id1" title="Overview">Overview</a>) named
+                        <span class="emphasis"><em>security.capability</em></span>. The <code class="literal">CAP_SETFCAP</code> capability is required to update this extended
+                            attribute.<a id="IDX-CHP-39-5627" class="indexterm"/></p></div><div class="table"><a id="operations_permitted_by_each_linux_capab"/><div class="table-title">Table 39-1. Operations permitted by each Linux capability</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>Capability</p>
+                                </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                    <p>Permits process to</p>
+                                </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_AUDIT_CONTROL</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>(Since Linux 2.6.11) Enable and disable kernel audit
+                                        logging; change filtering rules for auditing; retrieve
+                                        auditing status and filtering rules</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_AUDIT_WRITE</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>(Since Linux 2.6.11) Write records to the kernel auditing
+                                        log</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_CHOWN</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Change file’s user ID (owner) or change file’s group ID to
+                                        a group of which process is not a member
+                                            (<span class="emphasis"><em>chown()</em></span>)<a id="IDX-CHP-39-5628" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_DAC_OVERRIDE</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Bypass file read, write, and execute permission checks
+                                        (DAC is an abbreviation for discretionary access control);
+                                        read contents of <code class="literal">cwd</code>,
+                                            <code class="literal">exe</code>, and <code class="literal">root</code> symbolic links in
+                                            <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_DAC_READ_SEARCH</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Bypass file read permission checks and directory read and
+                                        execute (search) permission checks</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_FOWNER</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Generally ignore permission checks on operations that
+                                        normally require the process’s file-system user ID to match
+                                        the file’s user ID <span class="emphasis"><em>(chmod()</em></span>,
+                                            <span class="emphasis"><em>utime());</em></span> set i-node flags on
+                                        arbitrary files; set and modify ACLs on arbitrary files;
+                                        ignore effect of directory sticky bit when deleting files
+                                            <span class="emphasis"><em>(unlink()</em></span>,
+                                            <span class="emphasis"><em>rmdir()</em></span>,
+                                            <span class="emphasis"><em>rename());</em></span> specify <code class="literal">O_NOATIME</code> flag for arbitrary
+                                        files in <span class="emphasis"><em>open()</em></span> and
+                                            <span class="emphasis"><em>fcntl(F_SETFL)</em></span><a id="IDX-CHP-39-5629" class="indexterm"/><a id="IDX-CHP-39-5630" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_FSETID</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Modify a file without having the kernel turn off
+                                        set-user-ID and set-group-ID bits
+                                            (<span class="emphasis"><em>write()</em></span>,
+                                            <span class="emphasis"><em>truncate()</em></span>); enable set-group-ID
+                                        bit for a file whose group ID doesn’t match the process’s
+                                        file-system group ID or supplementary group IDs
+                                            (<span class="emphasis"><em>chmod()</em></span>)<a id="IDX-CHP-39-5631" class="indexterm"/><a id="IDX-CHP-39-5632" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_IPC_LOCK</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Override memory-locking restrictions
+                                            (<span class="emphasis"><em>mlock()</em></span>,
+                                            <span class="emphasis"><em>mlockall()</em></span>,
+                                            <span class="emphasis"><em>shmctl(SHM_LOCK)</em></span>,
+                                            <span class="emphasis"><em>shmctl(SHM_UNLOCK)</em></span>); employ
+                                            <span class="emphasis"><em>shmget()</em></span>
+                                        <code class="literal">SHM_HUGETLB</code> flag and
+                                            <span class="emphasis"><em>mmap()</em></span>
+                                        <code class="literal">MAP_HUGETLB</code>
+                                            flag.<a id="IDX-CHP-39-5633" class="indexterm"/><a id="IDX-CHP-39-5634" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_IPC_OWNER</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Bypass permission checks for operations on System V IPC
+                                        objects</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_KILL</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Bypass permission checks for sending signals
+                                            (<span class="emphasis"><em>kill()</em></span>,
+                                            <span class="emphasis"><em>sigqueue()</em></span>)<a id="IDX-CHP-39-5635" class="indexterm"/><a id="IDX-CHP-39-5636" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_LEASE</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>(Since Linux 2.4) Establish leases on arbitrary files
+                                            (<span class="emphasis"><em>fcntl(F_SETLEASE)</em></span>)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_LINUX_IMMUTABLE</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Set append and immutable i-node flags</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_MAC_ADMIN</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>(Since Linux 2.6.25) Configure or make state changes for
+                                        mandatory access control (MAC) (implemented by some Linux
+                                        security modules)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_MAC_OVERRIDE</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>(Since Linux 2.6.25) Override MAC (implemented by some
+                                        Linux security modules)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_MKNOD</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>(Since Linux 2.4) Use <span class="emphasis"><em>mknod()</em></span> to
+                                        create devices<a id="IDX-CHP-39-5637" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_NET_ADMIN</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Perform various network-related operations (e.g., setting
+                                        privileged socket options, enabling multicasting,
+                                        configuring network interfaces, and modifying routing
+                                            tables)<a id="IDX-CHP-39-5638" class="indexterm"/><a id="IDX-CHP-39-5639" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_NET_BIND_SERVICE</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Bind to privileged socket ports</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_NET_BROADCAST</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>(Unused) Perform socket broadcasts and listen to
+                                        multicasts</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_NET_RAW</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Use raw and packet sockets<a id="IDX-CHP-39-5640" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SETGID</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Make arbitrary changes to process group IDs
+                                            (<span class="emphasis"><em>setgid()</em></span>,
+                                            <span class="emphasis"><em>setegid()</em></span>,
+                                            <span class="emphasis"><em>setregid()</em></span>,
+                                            <span class="emphasis"><em>setresgid()</em></span>,
+                                            <span class="emphasis"><em>setfsgid()</em></span>,
+                                            <span class="emphasis"><em>setgroups()</em></span>,
+                                            <span class="emphasis"><em>initgroups()</em></span>); forge group ID when
+                                        passing credentials via UNIX domain socket (<code class="literal">SCM_CREDENTIALS</code>)<a id="IDX-CHP-39-5641" class="indexterm"/><a id="IDX-CHP-39-5642" class="indexterm"/><a id="IDX-CHP-39-5643" class="indexterm"/><a id="IDX-CHP-39-5644" class="indexterm"/><a id="IDX-CHP-39-5645" class="indexterm"/><a id="IDX-CHP-39-5646" class="indexterm"/><a id="IDX-CHP-39-5647" class="indexterm"/><a id="IDX-CHP-39-5648" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SETFCAP</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>(Since Linux 2.6.24) Set file capabilities</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SETPCAP</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>If file capabilities are not supported, grant and remove
+                                        capabilities in the process’s permitted set to or from any
+                                        other process (including self); if file capabilities are
+                                        supported, add any capability in the process’s capability
+                                        bounding set to its inheritable set, drop capabilities from
+                                        the bounding set, and change <span class="emphasis"><em>securebits</em></span>
+                                            flags<a id="IDX-CHP-39-5649" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SETUID</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Make arbitrary changes to process user IDs
+                                            (<span class="emphasis"><em>setuid()</em></span>,
+                                            <span class="emphasis"><em>seteuid()</em></span>,
+                                            <span class="emphasis"><em>setreuid()</em></span>,
+                                            <span class="emphasis"><em>setresuid()</em></span>,
+                                            <span class="emphasis"><em>setfsuid()</em></span>); forge user ID when
+                                        passing credentials via UNIX domain socket (<code class="literal">SCM_CREDENTIALS</code>)<a id="IDX-CHP-39-5650" class="indexterm"/><a id="IDX-CHP-39-5651" class="indexterm"/><a id="IDX-CHP-39-5652" class="indexterm"/><a id="IDX-CHP-39-5653" class="indexterm"/><a id="IDX-CHP-39-5654" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SYS_ADMIN</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Exceed <code class="literal">/proc/sys/fs/file-max</code> limit in system calls
+                                        that open files (e.g., <span class="emphasis"><em>open()</em></span>,
+                                            <span class="emphasis"><em>shm_open()</em></span>,
+                                            <span class="emphasis"><em>pipe()</em></span>,
+                                            <span class="emphasis"><em>socket()</em></span>,
+                                            <span class="emphasis"><em>accept()</em></span>,
+                                            <span class="emphasis"><em>exec()</em></span>,
+                                        <span class="emphasis"><em>acct()</em></span>,
+                                            <span class="emphasis"><em>epoll_create())</em></span>; perform various
+                                        system administration operations, including
+                                            <span class="emphasis"><em>quotactl()</em></span> (control disk quotas),
+                                            <span class="emphasis"><em>mount()</em></span> and
+                                            <span class="emphasis"><em>umount()</em></span>,
+                                            <span class="emphasis"><em>swapon()</em></span> and
+                                            <span class="emphasis"><em>swapoff()</em></span>,
+                                            <span class="emphasis"><em>pivot_root()</em></span>,
+                                            <span class="emphasis"><em>sethostname()</em></span> and
+                                            <span class="emphasis"><em>setdomainname()</em></span>; perform various
+                                            <span class="emphasis"><em>syslog(2)</em></span> operations; override
+                                            <code class="literal">RLIMIT_NPROC</code> resource
+                                        limit (<span class="emphasis"><em>fork()</em></span>); call
+                                            <span class="emphasis"><em>lookup_dcookie()</em></span>; set
+                                            <span class="emphasis"><em>trusted</em></span> and
+                                            <span class="emphasis"><em>security</em></span> extended attributes;
+                                        perform <code class="literal">IPC_SET</code> and
+                                            <code class="literal">IPC_RMID</code> operations
+                                        on arbitrary System V IPC objects; forge process ID when
+                                        passing credentials via UNIX domain socket (<code class="literal">SCM_CREDENTIALS</code>); use
+                                            <span class="emphasis"><em>ioprio_set()</em></span> to assign <code class="literal">IOPRIO_CLASS_RT</code> scheduling
+                                        class; employ <span class="emphasis"><em>TIOCCONS ioctl();</em></span> employ
+                                            <code class="literal">CLONE_NEWNS</code> flag with
+                                            <span class="emphasis"><em>clone()</em></span> and
+                                            <span class="emphasis"><em>unshare()</em></span>; perform <code class="literal">KEYCTL_CHOWN</code> and <code class="literal">KEYCTL_SETPERM</code>
+                                        <span class="emphasis"><em>keyctl()</em></span> operations; administer
+                                            <span class="emphasis"><em>random(4)</em></span> device; various
+                                        device-specific operations<a id="IDX-CHP-39-5663" class="indexterm"/><a id="IDX-CHP-39-5664" class="indexterm"/><a id="IDX-CHP-39-5665" class="indexterm"/><a id="IDX-CHP-39-5666" class="indexterm"/><a id="IDX-CHP-39-5667" class="indexterm"/><a id="IDX-CHP-39-5668" class="indexterm"/><a id="IDX-CHP-39-5669" class="indexterm"/><a id="IDX-CHP-39-5670" class="indexterm"/><a id="IDX-CHP-39-5671" class="indexterm"/><a id="IDX-CHP-39-5672" class="indexterm"/><a id="IDX-CHP-39-5673" class="indexterm"/><a id="IDX-CHP-39-5674" class="indexterm"/><a id="IDX-CHP-39-5675" class="indexterm"/><a id="IDX-CHP-39-5676" class="indexterm"/><a id="IDX-CHP-39-5677" class="indexterm"/><a id="IDX-CHP-39-5678" class="indexterm"/><a id="IDX-CHP-39-5655" class="indexterm"/><a id="IDX-CHP-39-5656" class="indexterm"/><a id="IDX-CHP-39-5657" class="indexterm"/><a id="IDX-CHP-39-5658" class="indexterm"/><a id="IDX-CHP-39-5659" class="indexterm"/><a id="IDX-CHP-39-5660" class="indexterm"/><a id="IDX-CHP-39-5661" class="indexterm"/><a id="IDX-CHP-39-5662" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SYS_BOOT</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Use <span class="emphasis"><em>reboot()</em></span> to reboot the system;
+                                        call <span class="emphasis"><em>kexec_load()</em></span><a id="IDX-CHP-39-5680" class="indexterm"/><a id="IDX-CHP-39-5679" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SYS_CHROOT</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Use <span class="emphasis"><em>chroot()</em></span> to set process root
+                                            directory<a id="IDX-CHP-39-5681" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SYS_MODULE</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Load and unload kernel modules
+                                            (<span class="emphasis"><em>init_module()</em></span>,
+                                            <span class="emphasis"><em>delete_module()</em></span>,
+                                            <span class="emphasis"><em>create_module()</em></span>)<a id="IDX-CHP-39-5682" class="indexterm"/><a id="IDX-CHP-39-5683" class="indexterm"/><a id="IDX-CHP-39-5684" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SYS_NICE</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Raise nice value <span class="emphasis"><em>(nice()</em></span>,
+                                            <span class="emphasis"><em>setpriority());</em></span> change nice value
+                                        for arbitrary processes
+                                        (<span class="emphasis"><em>setpriority()</em></span>); set <code class="literal">SCHED_RR</code> and <code class="literal">SCHED_FIFO</code> realtime scheduling
+                                        policies for calling process; reset <code class="literal">SCHED_RESET_ON_FORK</code> flag; set scheduling
+                                        policies and priorities for arbitrary processes
+                                            (<span class="emphasis"><em>sched_setscheduler()</em></span>,
+                                            <span class="emphasis"><em>sched_setparam()</em></span>); set I/O
+                                        scheduling class and priority for arbitrary processes
+                                            (<span class="emphasis"><em>ioprio_set()</em></span>); set CPU affinity
+                                        for arbitrary processes
+                                            (<span class="emphasis"><em>sched_setaffinity()</em></span>); use
+                                            <span class="emphasis"><em>migrate_pages()</em></span> to migrate
+                                        arbitrary processes and allow processes to be migrated to
+                                        arbitrary nodes; apply <span class="emphasis"><em>move_pages()</em></span> to
+                                        arbitrary processes; use <code class="literal">MPOL_MF_MOVE_ALL</code> flag with
+                                            <span class="emphasis"><em>mbind()</em></span> and
+                                            <span class="emphasis"><em>move_pages()</em></span><a id="IDX-CHP-39-5685" class="indexterm"/><a id="IDX-CHP-39-5686" class="indexterm"/><a id="IDX-CHP-39-5687" class="indexterm"/><a id="IDX-CHP-39-5688" class="indexterm"/><a id="IDX-CHP-39-5689" class="indexterm"/><a id="IDX-CHP-39-5690" class="indexterm"/><a id="IDX-CHP-39-5691" class="indexterm"/><a id="IDX-CHP-39-5692" class="indexterm"/><a id="IDX-CHP-39-5693" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SYS_PACCT</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Use <span class="emphasis"><em>acct()</em></span> to enable or disable
+                                        process accounting<a id="IDX-CHP-39-5694" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SYS_PTRACE</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Trace arbitrary processes using
+                                            <span class="emphasis"><em>ptrace()</em></span>; access <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/environ</code> for arbitrary
+                                        processes; apply <span class="emphasis"><em>get_robust_list()</em></span> to
+                                        arbitrary processes<a id="IDX-CHP-39-5695" class="indexterm"/><a id="IDX-CHP-39-5696" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SYS_RAWIO</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Perform operations on I/O ports using
+                                            <span class="emphasis"><em>iopl()</em></span> and
+                                            <span class="emphasis"><em>ioperm()</em></span>; access <code class="literal">/proc/kcore</code>; open <code class="literal">/dev/mem</code> and <code class="literal">/dev/kmem</code><a id="IDX-CHP-39-5697" class="indexterm"/><a id="IDX-CHP-39-5698" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SYS_RESOURCE</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Use reserved space on file systems; make
+                                            <span class="emphasis"><em>ioctl()</em></span> calls controlling
+                                            <span class="emphasis"><em>ext3</em></span> journaling; override disk
+                                        quota limits; increase hard resource limits
+                                            (<span class="emphasis"><em>setrlimit()</em></span>); override <code class="literal">RLIMIT_NPROC</code> resource limit
+                                            (<span class="emphasis"><em>fork()</em></span>); raise
+                                            <span class="emphasis"><em>msg_qbytes</em></span> limit for a System V
+                                        message queue above limit in <code class="literal">/proc/sys/kernel/msgmnb;</code> bypass various POSIX
+                                        message queue limits defined by files under <code class="literal">/proc/sys/fs/mqueue</code><a id="IDX-CHP-39-5699" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SYS_TIME</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Modify system clock (<span class="emphasis"><em>settimeofday()</em></span>,
+                                            <span class="emphasis"><em>stime()</em></span>,
+                                            <span class="emphasis"><em>adjtime()</em></span>,
+                                            <span class="emphasis"><em>adjtimex()</em></span>); set hardware
+                                            clock<a id="IDX-CHP-39-5700" class="indexterm"/><a id="IDX-CHP-39-5701" class="indexterm"/><a id="IDX-CHP-39-5702" class="indexterm"/><a id="IDX-CHP-39-5703" class="indexterm"/></p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CAP_SYS_TTY_CONFIG</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; ">
+                                    <p>Perform virtual hangup of terminal or pseudoterminal using
+                                            <span class="emphasis"><em>vhangup()</em></span><a id="IDX-CHP-39-5704" class="indexterm"/></p>
+                                </td></tr></tbody></table></div></div></div><div class="sect2" title="Purpose of the Process Permitted and Effective Capability Sets"><div class="titlepage"><div><div><h3 class="title" id="purpose_of_the_process_permitted_and_eff">Purpose of the Process Permitted and Effective Capability Sets</h3></div></div></div><p>The <span class="emphasis"><em>process permitted</em></span> capability set defines the
+                    capabilities that a process <span class="emphasis"><em>may</em></span> employ. The
+                        <span class="emphasis"><em>process effective</em></span> capability set defines the
+                    capabilities that are currently in effect for the process—that is, the set of
+                    capabilities that the kernel uses when checking whether the process has the
+                    necessary privilege to perform a particular operation.<a id="IDX-CHP-39-5705" class="indexterm"/><a id="IDX-CHP-39-5706" class="indexterm"/><a id="IDX-CHP-39-5707" class="indexterm"/><a id="IDX-CHP-39-5708" class="indexterm"/></p><p>The permitted capability set imposes an upper bound on the effective set. A
+                    process can <span class="emphasis"><em>raise</em></span> a capability in its effective set only if
+                    that capability is in the permitted set. (The terms <span class="emphasis"><em>add</em></span> to
+                    and <span class="emphasis"><em>set</em></span> are sometimes used synonymously with
+                        <span class="emphasis"><em>raise</em></span>. The converse operation is
+                        <span class="emphasis"><em>drop</em></span>, or synonymously, <span class="emphasis"><em>remove</em></span> or
+                        <span class="emphasis"><em>clear</em></span>.)</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The relationship between the effective and permitted capability sets is
+                        analogous to that between the effective user ID and the saved set-user-ID
+                        for a set-user-ID-<span class="emphasis"><em>root</em></span> program. Dropping a capability
+                        from the effective set is analogous to temporarily dropping an effective
+                        user ID of 0, while maintaining 0 in the saved set-user-ID. Dropping a
+                        capability from both the effective and permitted capability sets is
+                        analogous to permanently dropping superuser privileges by setting both the
+                        effective user ID and the saved set-user ID to nonzero values.</p></div></div><div class="sect2" title="Purpose of the File Permitted and Effective Capability Sets"><div class="titlepage"><div><div><h3 class="title" id="purpose_of_the_file_permitted_and_effect">Purpose of the File Permitted and Effective Capability Sets</h3></div></div></div><p>The <span class="emphasis"><em>file permitted</em></span> capability set provides a mechanism by
+                    which an executable file can give capabilities to a process. It specifies a
+                    group of capabilities that are to be assigned to the process’s permitted
+                    capability set during an <span class="emphasis"><em>exec()</em></span>.</p><p>The <span class="emphasis"><em>file effective</em></span> capability set is a single flag (bit)
+                    that is either enabled or disabled. To understand why this set consists of just
+                    a single bit, we need to consider the two cases that occur when a program is
+                    execed:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The program may be <span class="emphasis"><em>capability-dumb</em></span>, meaning that
+                            it doesn’t know about capabilities (i.e., it is designed as a
+                            traditional set-user-ID-<span class="emphasis"><em>root</em></span> program). Such a
+                            program won’t know that it needs to raise capabilities in its effective
+                            set in order to be able to perform privileged operations. For such
+                            programs, an <span class="emphasis"><em>exec()</em></span> should have the effect that all
+                            of the process’s new permitted capabilities are automatically also
+                            assigned to its effective set. This result is achieved by enabling the
+                            file effective bit.</p></li><li class="listitem"><p>The program may be <span class="emphasis"><em>capability-aware</em></span>, meaning that
+                            it has been designed with the capabilities framework in mind, and it
+                            will make the appropriate system calls (discussed later) to raise and
+                            drop capabilities in its effective set. For such programs,
+                            least-privilege considerations mean that, after an
+                                <span class="emphasis"><em>exec()</em></span>, all capabilities should initially be
+                            disabled in the process’s effective capability set. This result is
+                            achieved by disabling the file effective capability bit.</p></li></ul></div></div><div class="sect2" title="Purpose of the Process and File Inheritable Sets"><div class="titlepage"><div><div><h3 class="title" id="purpose_of_the_process_and_file_inherita">Purpose of the Process and File Inheritable Sets</h3></div></div></div><p>At first glance, the use of permitted and effective sets for processes and
+                    files might seem a sufficient framework for a capabilities system. However,
+                    there are some situations where they do not suffice. For example, what if a
+                    process performing an <span class="emphasis"><em>exec()</em></span> wants to preserve some of its
+                    current capabilities across the <span class="emphasis"><em>exec()</em></span>? It might appear
+                    that the capabilities implementation could provide this feature simply by
+                    preserving the process’s permitted capabilities across an
+                        <span class="emphasis"><em>exec()</em></span>. However, this approach would not handle the
+                    following cases:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Performing the <span class="emphasis"><em>exec()</em></span> might require certain
+                            privileges (e.g., <code class="literal">CAP_DAC_OVERRIDE</code>)
+                            that we don’t want to preserve across the
+                            <span class="emphasis"><em>exec()</em></span>.</p></li><li class="listitem"><p>Suppose that we explicitly dropped some permitted capabilities that we
+                            didn’t want to preserve across the <span class="emphasis"><em>exec()</em></span>, but then
+                            the <span class="emphasis"><em>exec()</em></span> failed. In this case, the program might
+                            need some of the permitted capabilities that it has already
+                            (irrevocably) dropped.</p></li></ul></div><p>For these reasons, a process’s permitted capabilities are not preserved across
+                    an <span class="emphasis"><em>exec()</em></span>. Instead, another capability set is introduced:
+                    the <span class="emphasis"><em>inheritable set</em></span>. The inheritable set provides a
+                    mechanism by which a process can preserve some of its capabilities across an
+                        <span class="emphasis"><em>exec()</em></span>.<a id="IDX-CHP-39-5709" class="indexterm"/><a id="IDX-CHP-39-5710" class="indexterm"/></p><p>The <span class="emphasis"><em>process inheritable</em></span> capability set specifies a group
+                    of capabilities that may be assigned to the process’s permitted capability set
+                    during an <span class="emphasis"><em>exec()</em></span>. The corresponding <span class="emphasis"><em>file
+                        inheritable</em></span> set is masked (ANDed) against the process inherited
+                    capability set to determine the capabilities that are actually added to the
+                    process’s permitted capability set during an <span class="emphasis"><em>exec()</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>There is a further, philosophical reason for not simply preserving the
+                        process permitted capability set across an <span class="emphasis"><em>exec()</em></span>. The
+                        idea of the capabilities system is that all privileges given to a process
+                        are granted or controlled by the file that the process execs. Although the
+                        process inheritable set specifies capabilities that are passed across an
+                            <span class="emphasis"><em>exec()</em></span>, these capabilities are masked by the file
+                        inheritable set.</p></div></div><div class="sect2" title="Assigning and Viewing File Capabilities from the Shell"><div class="titlepage"><div><div><h3 class="title" id="assigning_and_viewing_file_capabilities">Assigning and Viewing File Capabilities from the Shell</h3></div></div></div><p>The <span class="emphasis"><em>setcap(8)</em></span> and <span class="emphasis"><em>getcap(8)</em></span>
+                    commands, contained in the <span class="emphasis"><em>libcap</em></span> package described in
+                        <a class="xref" href="ch39.html#changing_process_capabilities_programmat" title="Changing Process Capabilities Programmatically">Changing Process Capabilities Programmatically</a>, can be used to
+                    manipulate file capabilities sets. We demonstrate the use of these commands with
+                    a short example using the standard <span class="emphasis"><em>date(1)</em></span> program. (This
+                    program is an example of a capability-dumb application according to the
+                    definition in <a class="xref" href="ch39.html#purpose_of_the_file_permitted_and_effect" title="Purpose of the File Permitted and Effective Capability Sets">Purpose of the File Permitted and Effective Capability Sets</a>.) When
+                    run with privilege, <span class="emphasis"><em>date(1)</em></span> can be used to change the
+                    system time. The <span class="emphasis"><em>date</em></span> program is not
+                        set-user-ID-<span class="emphasis"><em>root</em></span>, so normally the only way to run it
+                    with privilege is to become the superuser.<a id="IDX-CHP-39-5711" class="indexterm"/></p><p>We begin by displaying the current system time, and then try to change the
+                    time as an unprivileged user:</p><a id="I_programlisting39_d1e106817"/><pre class="programlisting">$ <strong class="userinput"><code>date</code></strong>
+Tue Dec 28 15:54:08 CET 2010
+$ <strong class="userinput"><code>date -s '2018-02-01 21:39'</code></strong>
+date: cannot set date: Operation not permitted
+Thu Feb  1 21:39:00 CET 2018</pre><p>Above, we see that the <span class="emphasis"><em>date</em></span> command failed to change the
+                    system time, but nevertheless displayed its argument in the standard
+                    format.</p><p>Next, we become the superuser, which allows us to successfully change the
+                    system time:</p><a id="I_programlisting39_d1e106832"/><pre class="programlisting">$ <strong class="userinput"><code>sudo date -s '2018-02-01 21:39'</code></strong>
+root's password:
+Thu Feb  1 21:39:00 CET 2018
+$ <strong class="userinput"><code>date</code></strong>
+Thu Feb  1 21:39:02 CET 2018</pre><p>We now make a copy of the <span class="emphasis"><em>date</em></span> program and assign it the
+                    capability that it needs:</p><a id="I_programlisting39_d1e106845"/><pre class="programlisting">$ <strong class="userinput"><code>whereis -b date</code></strong>                           <em class="lineannotation"><span class="lineannotation">Find location of</span></em> <span class="emphasis"><em>date</em></span> <em class="lineannotation"><span class="lineannotation">binary</span></em>
+date: /bin/date
+$ <strong class="userinput"><code>cp /bin/date .</code></strong>
+$ <strong class="userinput"><code>sudo setcap "cap_sys_time=pe" date</code></strong>
+root's password:
+$ <strong class="userinput"><code>getcap date</code></strong>
+date = cap_sys_time+ep</pre><p>The <span class="emphasis"><em>setcap</em></span> command shown above assigns the
+                        <span class="emphasis"><em>CAP_SYS_TIME</em></span> capability to the permitted
+                        (<span class="emphasis"><em>p</em></span>) and effective (<span class="emphasis"><em>e</em></span>) capability
+                    sets of the executable file. We then used the <span class="emphasis"><em>getcap</em></span>
+                    command to verify the capabilities assigned to the file. (The syntax used by
+                        <span class="emphasis"><em>setcap</em></span> and <span class="emphasis"><em>getcap</em></span> for representing
+                    capability sets is described in the <span class="emphasis"><em>cap_from_text(3)</em></span> manual
+                    page provided in the <span class="emphasis"><em>libcap</em></span> package.)</p><p>The file capabilities of our copy of the <span class="emphasis"><em>date</em></span> program
+                    allow the program to be used by unprivileged users to set the system
+                    time:</p><a id="I_programlisting39_d1e106905"/><pre class="programlisting">$ <strong class="userinput"><code>./date -s '2010-12-28 15:55'</code></strong>
+Tue Dec 28 15:55:00 CET 2010
+$ <strong class="userinput"><code>date</code></strong>
+Tue Dec 28 15:55:02 CET 2010</pre></div></div><div class="sect1" title="The Modern Capabilities Implementation"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_modern_capabilities_implementation">The Modern Capabilities Implementation</h2></div></div></div><p>A complete implementation of capabilities requires the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>For each privileged operation, the kernel should check whether the process
+                        has the relevant capability, rather than checking for an effective (or file
+                        system) user ID of 0.</p></li><li class="listitem"><p>The kernel must provide system calls allowing a process’s capabilities to
+                        be retrieved and modified.</p></li><li class="listitem"><p>The kernel must support the notion of attaching capabilities to an
+                        executable file, so that the process gains the associated capabilities when
+                        that file is execed. This is analogous to the set-user-ID bit, but allows
+                        the independent specification of all capabilities on the executable file. In
+                        addition, the system must provide a set of programming interfaces and
+                        commands for setting and viewing the capabilities attached to an executable
+                        file.</p></li></ul></div><p>Up to and including kernel 2.6.23, Linux met only the first two of these
+                requirements. Since kernel 2.6.24, it is possible to attach capabilities to a file.
+                Various other features were added in kernels 2.6.25 and 2.6.26 in order to complete
+                the capabilities implementation.</p><p>For most of our discussion of capabilities, we’ll focus on the modern
+                implementation. In <a class="xref" href="ch39.html#older_kernels_and_systems_without_file_c" title="Older Kernels and Systems Without File Capabilities">Older Kernels and Systems Without File Capabilities</a>, we
+                consider how the implementation differed before file capabilities were introduced.
+                Furthermore, file capabilities are an optional kernel component in modern kernels,
+                but for the main part of our discussion, we’ll assume that this component is
+                enabled. Later, we’ll describe the differences that occur if file capabilities are
+                not enabled. (In several respects, the behavior is similar to that of Linux in
+                kernels before 2.6.24, where file capabilities were not implemented.)</p><p>In the following sections, we go into more detail on the Linux capabilities
+                implementation.</p></div><div class="sect1" title="Transformation of Process Capabilities During exec()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="transformation_of_process_capabilities_d">Transformation of Process Capabilities During <span class="emphasis"><em>exec()</em></span></h2></div></div></div><p>During an <span class="emphasis"><em>exec()</em></span>, the kernel sets new capabilities for the
+                process based on the process’s current capabilities and the capability sets of the
+                file being executed. The kernel calculates the new capabilities of the process using
+                the following rules:<a id="IDX-CHP-39-5712" class="indexterm"/><a id="IDX-CHP-39-5713" class="indexterm"/><a id="IDX-CHP-39-5714" class="indexterm"/></p><a id="I_programlisting39_d1e106964"/><pre class="programlisting">P'(permitted) = (P(inheritable) &amp; F(inheritable)) | (F(permitted) &amp; cap_bset)
+
+P'(effective) = F(effective) ? P'(permitted) : 0
+
+P'(inheritable) = P(inheritable)</pre><p>In the above rules, <span class="emphasis"><em>P</em></span> denotes the value of a capability set
+                prior to the <span class="emphasis"><em>exec()</em></span>, <span class="emphasis"><em>P’</em></span> denotes the value
+                of a capability set after the <span class="emphasis"><em>exec()</em></span>, and
+                    <span class="emphasis"><em>F</em></span> denotes a file capability set. The identifier
+                    <span class="emphasis"><em>cap_bset</em></span> denotes the value of the capability bounding set.
+                Note that <span class="emphasis"><em>exec()</em></span> leaves the process inheritable capability set
+                    unchanged.<a id="IDX-CHP-39-5715" class="indexterm"/></p><div class="sect2" title="Capability Bounding Set"><div class="titlepage"><div><div><h3 class="title" id="capability_bounding_set">Capability Bounding Set</h3></div></div></div><p>The capability bounding set is a security mechanism that is used to limit the
+                    capabilities that a process can gain during an <span class="emphasis"><em>exec()</em></span>. This
+                    set is used as follows:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>During an <span class="emphasis"><em>exec()</em></span>, the capability bounding set is
+                            ANDed with the file permitted capabilities to determine the permitted
+                            capabilities that are to be granted to the new program. In other words,
+                            an executable file’s permitted capability set can’t grant a permitted
+                            capability to a process if the capability is not in the bounding
+                            set.</p></li><li class="listitem"><p>The capability bounding set is a limiting superset for the
+                            capabilities that can be added to the process’s inheritable set. This
+                            means that, unless the capability is in the bounding set, a process
+                            can’t add one of its permitted capabilities to its inheritable set and
+                            then—via the first of the capability transformation rules described
+                            above—have that capability preserved in its permitted set when it execs
+                            a file that has the capability in its inheritable set.</p></li></ul></div><p>The capability bounding set is a per-process attribute that is inherited by a
+                    child created via <span class="emphasis"><em>fork()</em></span>, and preserved across an
+                        <span class="emphasis"><em>exec()</em></span>. On a kernel that supports file capabilities,
+                        <span class="emphasis"><em>init</em></span> (the ancestor of all processes) starts with a
+                    capability bounding set that contains all capabilities.</p><p>If a process has the <code class="literal">CAP_SETPCAP</code>
+                    capability, then it can (irreversibly) remove capabilities from its bounding set
+                    using the <span class="emphasis"><em>prctl()</em></span>
+                    <code class="literal">PR_CAPBSET_DROP</code> operation. (Dropping a
+                    capability from the bounding set doesn’t affect the process permitted,
+                    effective, and inheritable capability sets.) A process can determine if a
+                    capability is in its bounding set using the <span class="emphasis"><em>prctl()</em></span>
+                    <code class="literal">PR_CAPBSET_READ</code> operation.<a id="IDX-CHP-39-5716" class="indexterm"/><a id="IDX-CHP-39-5717" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>More precisely, the capability bounding set is a per-thread attribute.
+                        Starting with Linux 2.6.26, this attribute is displayed as the <code class="literal">CapBnd</code> field in the Linux-specific <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/task/</code><span class="emphasis"><em>TID</em></span><code class="literal">/status</code> file. The <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/status</code> file shows the bounding set of a process’s main
+                            thread.<a id="IDX-CHP-39-5718" class="indexterm"/><a id="IDX-CHP-39-5719" class="indexterm"/></p></div></div><div class="sect2" title="Preserving root Semantics"><div class="titlepage"><div><div><h3 class="title" id="preserving_root_semantics">Preserving <span class="emphasis"><em>root</em></span> Semantics</h3></div></div></div><p>In order to preserve the traditional semantics for the
+                        <span class="emphasis"><em>root</em></span> user (i.e., <span class="emphasis"><em>root</em></span> has all
+                    privileges) when executing a file, any capability sets associated with the file
+                    are ignored. Instead, for the purposes of the algorithm shown in <a class="xref" href="ch39.html#transformation_of_process_capabilities_d" title="Transformation of Process Capabilities During exec()">Transformation of Process Capabilities During <span class="emphasis"><em>exec()</em></span></a>, the file capability
+                    sets are notionally defined as follows during an
+                        <span class="emphasis"><em>exec()</em></span>:<a id="IDX-CHP-39-5720" class="indexterm"/><a id="IDX-CHP-39-5721" class="indexterm"/><a id="IDX-CHP-39-5722" class="indexterm"/><a id="IDX-CHP-39-5723" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If a set-user-ID-<span class="emphasis"><em>root</em></span> program is being execed, or
+                            the real or effective user ID of the process calling
+                                <span class="emphasis"><em>exec()</em></span> is 0, then the file inheritable and
+                            permitted sets are defined to be all ones.</p></li><li class="listitem"><p>If a set-user-ID-<span class="emphasis"><em>root</em></span> program is being execed, or
+                            the effective user ID of the process calling <span class="emphasis"><em>exec()</em></span>
+                            is 0, then the file effective bit is defined to be set.</p></li></ul></div><p>Assuming that we are execing a set-user-ID-<span class="emphasis"><em>root</em></span> program,
+                    these notional definitions of the file capability sets mean that the calculation
+                    of the process’s new permitted and effective capability sets in <a class="xref" href="ch39.html#transformation_of_process_capabilities_d" title="Transformation of Process Capabilities During exec()">Transformation of Process Capabilities During <span class="emphasis"><em>exec()</em></span></a> simplifies to the
+                    following:</p><a id="I_programlisting39_d1e107162"/><pre class="programlisting">P'(permitted) = P(inheritable) | cap_bset
+P'(effective) = P'(permitted)</pre></div></div><div class="sect1" title="Effect on Process Capabilities of Changing User IDs"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="effect_on_process_capabilities_of_changi">Effect on Process Capabilities of Changing User IDs</h2></div></div></div><p>To preserve compatibility with the traditional meanings for transitions between 0
+                and nonzero user IDs, the kernel does the following when changing process user IDs
+                (using <span class="emphasis"><em>setuid()</em></span>, and so on):</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>If the real user ID, effective user ID, or saved set-user-ID previously
+                        had the value 0 and, as a result of the changes to the user IDs, all three
+                        of these IDs have a nonzero value, then the permitted and effective
+                        capability sets are cleared (i.e., all capabilities are permanently
+                        dropped).</p></li><li class="listitem"><p>If the effective user ID is changed from 0 to a nonzero value, then the
+                        effective capability set is cleared (i.e., the effective capabilities are
+                        dropped, but those in the permitted set can be raised again).</p></li><li class="listitem"><p>If the effective user ID is changed from a nonzero value to 0, then the
+                        permitted capability set is copied into the effective capability set (i.e.,
+                        all permitted capabilities become effective).</p></li><li class="listitem"><p>If the file-system user ID is changed from 0 to a nonzero value, then the
+                        following file-related capabilities are cleared from the effective
+                        capability set: <code class="literal">CAP_CHOWN</code>, <code class="literal">CAP_DAC_OVERRIDE</code>, <code class="literal">CAP_DAC_READ_SEARCH</code>, <code class="literal">CAP_FOWNER</code>, <code class="literal">CAP_FSETID</code>,
+                            <code class="literal">CAP_LINUX_IMMUTABLE</code> (since Linux
+                        2.6.30), <code class="literal">CAP_MAC_OVERRIDE</code>, and <code class="literal">CAP_MKNOD</code> (since Linux 2.6.30). Conversely, if
+                        the file-system user ID is changed from a nonzero value to 0, then any of
+                        these capabilities that are enabled in the permitted set are enabled in the
+                        effective set. These manipulations are done to maintain the traditional
+                        semantics for manipulations of the Linux-specific file-system user
+                            ID.<a id="IDX-CHP-39-5724" class="indexterm"/><a id="IDX-CHP-39-5725" class="indexterm"/></p></li></ol></div></div><div class="sect1" title="Changing Process Capabilities Programmatically"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="changing_process_capabilities_programmat">Changing Process Capabilities Programmatically</h2></div></div></div><p>A process can raise or drop capabilities from its capability sets using either the
+                    <span class="emphasis"><em>capset()</em></span> system call or, preferably, the
+                    <span class="emphasis"><em>libcap</em></span> API, which we describe below. Changes to process
+                capabilities are subject to the following rules:<a id="IDX-CHP-39-5726" class="indexterm"/><a id="IDX-CHP-39-5727" class="indexterm"/><a id="IDX-CHP-39-5728" class="indexterm"/><a id="IDX-CHP-39-5729" class="indexterm"/><a id="IDX-CHP-39-5730" class="indexterm"/><a id="IDX-CHP-39-5731" class="indexterm"/><a id="IDX-CHP-39-5732" class="indexterm"/><a id="IDX-CHP-39-5733" class="indexterm"/><a id="IDX-CHP-39-5734" class="indexterm"/><a id="IDX-CHP-39-5735" class="indexterm"/><a id="IDX-CHP-39-5736" class="indexterm"/><a id="IDX-CHP-39-5737" class="indexterm"/><a id="IDX-CHP-39-5738" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>If the process doesn’t have the <code class="literal">CAP_SETPCAP</code> capability in its effective set, then the new
+                            <span class="emphasis"><em>inheritable</em></span> set must be a subset of the combination
+                        of the existing inheritable and permitted sets.<a id="IDX-CHP-39-5739" class="indexterm"/><a id="IDX-CHP-39-5740" class="indexterm"/></p></li><li class="listitem"><p>The new <span class="emphasis"><em>inheritable</em></span> set must be a subset of the
+                        combination of the existing inheritable set and the capability bounding
+                        set.</p></li><li class="listitem"><p>The new <span class="emphasis"><em>permitted</em></span> set must be a subset of the
+                        existing permitted set. In other words, a process can’t grant itself
+                        permitted capabilities that it doesn’t have. Put another way, a capability
+                        dropped from the permitted set can’t be reacquired.</p></li><li class="listitem"><p>The new <span class="emphasis"><em>effective</em></span> set is allowed to contain only
+                        capabilities that are also in the new permitted set.</p></li></ol></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="the_libcap_api"/></div></div></div><div class="sect3" title="The libcap API"><div class="titlepage"><div><div><h4 class="title" id="the_libcap_api-id1">The <span class="emphasis"><em>libcap</em></span> API</h4></div></div></div><p>Up to this point, we have deliberately not shown the prototype of the
+                            <span class="emphasis"><em>capset()</em></span> system call, or its counterpart
+                            <span class="emphasis"><em>capget()</em></span>, which retrieves a process’s capabilities.
+                        This is because the use of these system calls should be avoided. Instead,
+                        the functions in the <span class="emphasis"><em>libcap</em></span> library should be employed.
+                        These functions provide an interface that conforms with the withdrawn draft
+                        POSIX 1003.1e standard, along with some Linux extensions.<a id="IDX-CHP-39-5741" class="indexterm"/></p><p>For reasons of space, we don’t describe the <span class="emphasis"><em>libcap</em></span>
+                        API in detail. As an overview, we note that programs employing these
+                        functions typically carry out the following steps:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Use the <span class="emphasis"><em>cap_get_proc()</em></span> function to retrieve a
+                                copy of the process’s current capability sets from the kernel and
+                                place it in a structure that the function allocates in user space.
+                                (Alternatively, we may use the <span class="emphasis"><em>cap_init()</em></span>
+                                function to create a new, empty capability set structure.) In the
+                                    <span class="emphasis"><em>libcap</em></span> API, the <span class="emphasis"><em>cap_t</em></span>
+                                data type is a pointer used to refer to such structures.<a id="IDX-CHP-39-5742" class="indexterm"/><a id="IDX-CHP-39-5743" class="indexterm"/></p></li><li class="listitem"><p>Use the <span class="emphasis"><em>cap_set_flag()</em></span> function to update the
+                                user-space structure to raise (<code class="literal">CAP_SET</code>) and drop (<code class="literal">CAP_CLEAR</code>) capabilities from the permitted,
+                                effective, and inheritable sets stored in the user-space structure
+                                retrieved in the previous step.<a id="IDX-CHP-39-5744" class="indexterm"/></p></li><li class="listitem"><p>Use the <span class="emphasis"><em>cap_set_proc()</em></span> function to pass the
+                                user-space structure back to the kernel in order to change the
+                                process’s capabilities.<a id="IDX-CHP-39-5745" class="indexterm"/></p></li><li class="listitem"><p>Use the <span class="emphasis"><em>cap_free()</em></span> function to free the
+                                structure that was allocated by the <span class="emphasis"><em>libcap</em></span> API
+                                in the first step.<a id="IDX-CHP-39-5746" class="indexterm"/></p></li></ol></div><div class="note" title="Note"><h3 class="title">Note</h3><p>At the time of writing, work is in progress on
+                                <span class="emphasis"><em>libcap-ng</em></span>, a new, improved capabilities library
+                            API. Details can be found at <a class="ulink" href="http://freshmeat.net/projects/libcap-ng" target="_top">http://freshmeat.net/projects/libcap-ng</a>.</p></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id51">Example program</h4></div></div></div><p>In <a class="xref" href="ch08.html#authenticating_a_user_against_the_shadow" title="Example 8-2. Authenticating a user against the shadow password file">Example 8-2</a>, in <a class="xref" href="ch08.html#summary-id7" title="Summary">Summary</a>, we presented a program that authenticates a
+                        username plus password against the standard password database. We noted that
+                        the program requires privilege in order to read the shadow password file,
+                        which is protected to prevent reading by users other than
+                            <span class="emphasis"><em>root</em></span> or members of the <span class="emphasis"><em>shadow</em></span>
+                        group. The traditional way of providing this program with the privileges
+                        that it requires would be to run it under a <span class="emphasis"><em>root</em></span> login
+                        or to make it a set-user-ID-<span class="emphasis"><em>root</em></span> program. We now
+                        present a modified version of this program that employs capabilities and the
+                            <span class="emphasis"><em>libcap</em></span> API.<a id="IDX-CHP-39-5747" class="indexterm"/><a id="IDX-CHP-39-5748" class="indexterm"/><a id="IDX-CHP-39-5749" class="indexterm"/><a id="IDX-CHP-39-5750" class="indexterm"/><a id="IDX-CHP-39-5751" class="indexterm"/><a id="IDX-CHP-39-5752" class="indexterm"/><a id="IDX-CHP-39-5753" class="indexterm"/><a id="IDX-CHP-39-5754" class="indexterm"/></p><p>In order to read the shadow password file as a normal user, we need to
+                        bypass the standard file permission checks. Scanning the capabilities listed
+                        in <a class="xref" href="ch39.html#operations_permitted_by_each_linux_capab" title="Table 39-1. Operations permitted by each Linux capability">Table 39-1</a>, we see that
+                        the appropriate capability is <code class="literal">CAP_DAC_READ_SEARCH</code>. Our modified version of the password
+                        authentication program is shown in <a class="xref" href="ch39.html#a_capability-aware_program_that_authenti" title="Example 39-1. A capability-aware program that authenticates a user">Example 39-1</a>. This program uses
+                        the <span class="emphasis"><em>libcap</em></span> API to raise <code class="literal">CAP_DAC_READ_SEARCH</code> in its effective capability set just
+                        before accessing the shadow password file, and then drops the capability
+                        again immediately after this access. In order for an unprivileged user to
+                        employ the program, we must set this capability in the file permitted
+                        capability set, as shown in the following shell session:</p><a id="I_programlisting39_d1e107528"/><pre class="programlisting">$ <strong class="userinput"><code>sudo setcap "cap_dac_read_search=p" check_password_caps</code></strong>
+root's password:
+$ <strong class="userinput"><code>getcap check_password_caps</code></strong>
+check_password_caps = cap_dac_read_search+p
+$ <strong class="userinput"><code>./check_password_caps</code></strong>
+Username: <strong class="userinput"><code>mtk</code></strong>
+Password:
+Successfully authenticated: UID=1000</pre><div class="example"><a id="a_capability-aware_program_that_authenti"/><div class="example-title">Example 39-1. A capability-aware program that authenticates a user</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>cap/check_password_caps.c</code></strong>
+#define _BSD_SOURCE         /* Get getpass() declaration from &lt;unistd.h&gt; */
+#define _XOPEN_SOURCE       /* Get crypt() declaration from &lt;unistd.h&gt; */
+#include &lt;sys/capability.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;limits.h&gt;
+#include &lt;pwd.h&gt;
+#include &lt;shadow.h&gt;
+#include "tlpi_hdr.h"
+
+/* Change setting of capability in caller's effective capabilities */
+
+static int
+modifyCap(int capability, int setting)
+{
+    cap_t caps;
+    cap_value_t capList[1];
+
+    /* Retrieve caller's current capabilities */
+
+    caps = cap_get_proc();
+    if (caps == NULL)
+        return -1;
+
+    /* Change setting of 'capability' in the effective set of 'caps'. The
+       third argument, 1, is the number of items in the array 'capList'. */
+
+    capList[0] = capability;
+    if (cap_set_flag(caps, CAP_EFFECTIVE, 1, capList, setting) == -1) {
+        cap_free(caps);
+        return -1;
+    }
+
+    /* Push modified capability sets back to kernel, to change
+       caller's capabilities */
+
+    if (cap_set_proc(caps) == -1) {
+        cap_free(caps);
+        return -1;
+    }
+
+    /* Free the structure that was allocated by libcap */
+
+    if (cap_free(caps) == -1)
+        return -1;
+
+    return 0;
+}
+
+static int              /* Raise capability in caller's effective set */
+raiseCap(int capability)
+{
+    return modifyCap(capability, CAP_SET);
+}
+
+/* An analogous dropCap() (unneeded in this program), could be
+   defined as: modifyCap(capability, CAP_CLEAR); */
+
+static int              /* Drop all capabilities from all sets */
+dropAllCaps(void)
+{
+    cap_t empty;
+    int s;
+
+    empty = cap_init();
+    if (empty == NULL)
+        return -1;
+
+    s = cap_set_proc(empty);
+    if (cap_free(empty) == -1)
+        return -1;
+
+    return s;
+}
+
+int
+main(int argc, char *argv[])
+{
+    char *username, *password, *encrypted, *p;
+    struct passwd *pwd;
+    struct spwd *spwd;
+    Boolean authOk;
+    size_t len;
+    long lnmax;
+
+    lnmax = sysconf(_SC_LOGIN_NAME_MAX);
+    if (lnmax == -1)                        /* If limit is indeterminate */
+        lnmax = 256;                        /* make a guess */
+
+    username = malloc(lnmax);
+    if (username == NULL)
+        errExit("malloc");
+
+    printf("Username: ");
+    fflush(stdout);
+    if (fgets(username, lnmax, stdin) == NULL)
+        exit(EXIT_FAILURE);                 /* Exit on EOF */
+
+    len = strlen(username);
+    if (username[len - 1] == '\n')
+        username[len - 1] = '\0';           /* Remove trailing '\n' */
+
+    pwd = getpwnam(username);
+    if (pwd == NULL)
+        fatal("couldn't get password record");
+
+    /* Only raise CAP_DAC_READ_SEARCH for as long as we need it */
+
+    if (raiseCap(CAP_DAC_READ_SEARCH) == -1)
+        fatal("raiseCap() failed");
+
+    spwd = getspnam(username);
+    if (spwd == NULL &amp;&amp; errno == EACCES)
+        fatal("no permission to read shadow password file");
+
+    /* At this point, we won't need any more capabilities,
+       so drop all capabilities from all sets */
+
+    if (dropAllCaps() == -1)
+        fatal("dropAllCaps() failed");
+
+    if (spwd != NULL)               /* If there is a shadow password record */
+        pwd-&gt;pw_passwd = spwd-&gt;sp_pwdp;     /* Use the shadow password */
+
+    password = getpass("Password: ");
+
+    /* Encrypt password and erase cleartext version immediately */
+
+    encrypted = crypt(password, pwd-&gt;pw_passwd);
+    for (p = password; *p != '\0'; )
+        *p++ = '\0';
+
+    if (encrypted == NULL)
+        errExit("crypt");
+
+    authOk = strcmp(encrypted, pwd-&gt;pw_passwd) == 0;
+    if (!authOk) {
+        printf("Incorrect password\n");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Successfully authenticated: UID=%ld\n", (long) pwd-&gt;pw_uid);
+
+    /* Now do authenticated work... */
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>cap/check_password_caps.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Creating Capabilities-Only Environments"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="creating_capabilities-only_environments">Creating Capabilities-Only Environments</h2></div></div></div><p>In the preceding pages, we have described various ways in which a process with the
+                user ID 0 (<span class="emphasis"><em>root</em></span>) is treated specially with respect to
+                capabilities:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>When a process with one or more user IDs that equal 0 sets all of its user
+                        IDs to nonzero values, its permitted and effective capability sets are
+                        cleared. (See Section 39.6.)</p></li><li class="listitem"><p>When a process with an effective user ID of 0 changes that user ID to a
+                        nonzero value, it loses its effective capabilities. When the reverse change
+                        is made, the permitted capability set is copied to the effective set. A
+                        similar procedure is followed for a subset of capabilities when the
+                        process’s file-system user ID is switched between 0 and nonzero values. (See
+                        Section 39.6.)</p></li><li class="listitem"><p>If a process with real or effective user ID of <span class="emphasis"><em>root</em></span>
+                        execs a program, or any process execs a
+                            set-user-ID-<span class="emphasis"><em>root</em></span> program, then the file inheritable
+                        and permitted sets are notionally defined to be all ones. If the process’s
+                        effective user ID is 0, or it is execing a
+                            set-user-ID-<span class="emphasis"><em>root</em></span> program, then the file effective
+                        bit is notionally defined to be 1. (See <a class="xref" href="ch39.html#preserving_root_semantics" title="Preserving root Semantics">Preserving <span class="emphasis"><em>root</em></span> Semantics</a>.) In the usual cases (i.e., both
+                        the real and effective user ID are <span class="emphasis"><em>root</em></span>, or a
+                            set-user-ID-<span class="emphasis"><em>root</em></span> program is being execed), this
+                        means the process gets all capabilities in its permitted and effective
+                        sets.</p></li></ul></div><p>In a fully capability-based system, the kernel would not need to perform any of
+                these special treatments of <span class="emphasis"><em>root</em></span>. There would be no
+                    set-user-ID-<span class="emphasis"><em>root</em></span> programs, and file capabilities would be
+                used to grant just the minimum capabilities that a program requires.</p><p>Since existing applications aren’t engineered to make use of the file-capabilities
+                infrastructure, the kernel must maintain the traditional handling of processes with
+                the user ID 0. Nevertheless, we may want an application to run in a purely
+                capability-based environment in which <span class="emphasis"><em>root</em></span> gets none of the
+                special treatments described above. Starting with kernel 2.6.26, and if file
+                capabilities are enabled in the kernel, Linux provides the
+                    <span class="emphasis"><em>securebits</em></span> mechanism, which controls a set of per-process
+                flags that enable or disable each of the three special treatments for
+                    <span class="emphasis"><em>root</em></span>. (To be precise, the <span class="emphasis"><em>securebits</em></span>
+                flags are actually a per-thread attribute.)</p><p>The <span class="emphasis"><em>securebits</em></span> mechanism controls the flags shown in <a class="xref" href="ch39.html#the_securebits_flags" title="Table 39-2. The securebits flags">Table 39-2</a>. The flags exist as related pairs of a
+                    <span class="emphasis"><em>base</em></span> flag and a corresponding <span class="emphasis"><em>locked</em></span>
+                flag. Each of the base flags controls one of the special treatments of
+                    <span class="emphasis"><em>root</em></span> described above. Setting the corresponding locked flag
+                is a one-time operation that prevents further changes to the associated base
+                flag—once set, the locked flag can’t be unset.</p><div class="table"><a id="the_securebits_flags"/><div class="table-title">Table 39-2. The <span class="emphasis"><em>securebits</em></span> flags</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Flag</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>Meaning if set</p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SECBIT_KEEP_CAPS</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Don’t drop permitted capabilities when a process with one or
+                                    more 0 user IDs sets all of its user IDs to nonzero values. This
+                                    flag has an effect only if <code class="literal">SECBIT_NO_SETUID_FIXUP</code> is not also set. This flag
+                                    is cleared on an <span class="emphasis"><em>exec()</em></span>.</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SECBIT_NO_SETUID_FIXUP</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Don’t change capabilities when effective or file-system user
+                                    IDs are switched between 0 and nonzero values.</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SECBIT_NOROOT</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>If a process with a real or effective user ID of 0 does an
+                                        <span class="emphasis"><em>exec()</em></span>, or it execs a
+                                        set-user-ID-<span class="emphasis"><em>root</em></span> program, don’t grant
+                                    it capabilities (unless the executable has file
+                                    capabilities).</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SECBIT_KEEP_CAPS_LOCKED</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Lock <code class="literal">SECBIT_KEEP_CAPS</code>.</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SECBIT_NO_SETUID_FIXUP_LOCKED</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Lock <code class="literal">SECBIT_NO_SETUID_FIXUP</code>.</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SECBIT_NOROOT_LOCKED</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>Lock <code class="literal">SECBIT_NOROOT</code>.</p>
+                            </td></tr></tbody></table></div></div><p>The <span class="emphasis"><em>securebits</em></span> flag settings are inherited in a child created
+                by <span class="emphasis"><em>fork()</em></span>. All of the flag settings are preserved during
+                    <span class="emphasis"><em>exec()</em></span>, except <code class="literal">SECBIT_KEEP_CAPS</code>, which is cleared for historical compatibility with
+                the <code class="literal">PR_SET_KEEPCAPS</code> setting, described
+                below.</p><p>A process can retrieve the <span class="emphasis"><em>securebits</em></span> flags using the
+                    <span class="emphasis"><em>prctl()</em></span>
+                <code class="literal">PR_GET_SECUREBITS</code> operation. If a process has the
+                    <code class="literal">CAP_SETPCAP</code> capability, it can modify the
+                    <span class="emphasis"><em>securebits</em></span> flags using the <span class="emphasis"><em>prctl()</em></span>
+                <code class="literal">PR_SET_SECUREBITS</code> operations. A purely
+                capability-based application can irreversibly disable special treatment of
+                    <span class="emphasis"><em>root</em></span> for the calling process and all of its descendants
+                using the following call:<a id="IDX-CHP-39-5755" class="indexterm"/></p><a id="I_programlisting39_d1e107761"/><pre class="programlisting">if (prctl(PR_SET_SECUREBITS,
+          /* SECBIT_KEEP_CAPS off */
+          SECBIT_NO_SETUID_FIXUP | SECBIT_NO_SETUID_FIXUP_LOCKED |
+          SECBIT_NOROOT | SECBIT_NOROOT_LOCKED)
+        == -1)
+    errExit("prctl");</pre><p>After this call, the only way in which this process and its descendants can obtain
+                capabilities is by executing programs that have file capabilities.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="secbit_underscore_keep_underscore"/></div></div></div><div class="sect3" title="SECBIT_KEEP_CAPS and the prctl() PR_SET_KEEPCAPS operation"><div class="titlepage"><div><div><h4 class="title" id="secbit_underscore_keep_underscore-id1"><code class="literal">SECBIT_KEEP_CAPS</code> and the
+                            <span class="emphasis"><em>prctl()</em></span>
+                        <code class="literal">PR_SET_KEEPCAPS</code> operation</h4></div></div></div><p>The <code class="literal">SECBIT_KEEP_CAPS</code> flag prevents
+                        capabilities from being dropped when a process with one or more user IDs
+                        with the value 0 sets all of its user IDs to nonzero values. Roughly
+                        speaking, <code class="literal">SECBIT_KEEP_CAPS</code> provides half
+                        of the functionality provided by <code class="literal">SECBIT_NO_SETUID_FIXUP</code>. (As noted in <a class="xref" href="ch39.html#the_securebits_flags" title="Table 39-2. The securebits flags">Table 39-2</a>, <code class="literal">SECBIT_KEEP_CAPS</code> has an effect only if <code class="literal">SECBIT_NO_SETUID_FIXUP</code> is not set.) This flag
+                        exists to provide a <span class="emphasis"><em>securebits</em></span> flag that mirrors the
+                        older <span class="emphasis"><em>prctl()</em></span>
+                        <code class="literal">PR_SET_KEEPCAPS</code> operation, which controls
+                        the same attribute. (The one difference between the two mechanisms is that a
+                        process doesn’t need the <code class="literal">CAP_SETPCAP</code>
+                        capability to employ the <span class="emphasis"><em>prctl()</em></span>
+                        <code class="literal">PR_SET_KEEPCAPS</code> operation.)<a id="IDX-CHP-39-5756" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Earlier, we noted that all of the <span class="emphasis"><em>securebits</em></span>
+                            flags are preserved during an <span class="emphasis"><em>exec()</em></span>, except
+                                <code class="literal">SECBIT_KEEP_CAPS</code>. The setting of
+                            the <code class="literal">SECBIT_KEEP_CAPS</code> bit was made the
+                            converse of the other <span class="emphasis"><em>securebits</em></span> settings in order
+                            to maintain consistency with the treatment of the attribute set by the
+                                <span class="emphasis"><em>prctl()</em></span>
+                            <code class="literal">PR_SET_KEEPCAPS</code> operation.</p></div><p>The <span class="emphasis"><em>prctl()</em></span>
+                        <code class="literal">PR_SET_KEEPCAPS</code> operation is designed for
+                        use by set-user-ID-<span class="emphasis"><em>root</em></span> programs running on older
+                        kernels that don’t support file capabilities. Such programs can still
+                        improve their security by programmatically dropping and raising capabilities
+                        as required (refer to <a class="xref" href="ch39.html#older_kernels_and_systems_without_file_c" title="Older Kernels and Systems Without File Capabilities">Older Kernels and Systems Without File Capabilities</a>).</p><p>However, even if such a set-user-ID-<span class="emphasis"><em>root</em></span> program
+                        drops all capabilities except those that it requires, it still maintains two
+                        important privileges: the ability to access files owned by
+                            <span class="emphasis"><em>root</em></span> and the ability to regain capabilities by
+                        execing a program (<a class="xref" href="ch39.html#preserving_root_semantics" title="Preserving root Semantics">Preserving <span class="emphasis"><em>root</em></span> Semantics</a>). The only
+                        way of permanently dropping these privileges is to set all of the process’s
+                        user IDs to nonzero values. But doing that normally results in the clearing
+                        of the permitted and effective capability sets (see the four points in <a class="xref" href="ch39.html#effect_on_process_capabilities_of_changi" title="Effect on Process Capabilities of Changing User IDs">Effect on Process Capabilities of Changing User IDs</a> concerning the
+                        effect of user ID changes on capabilities). This defeats the purpose, which
+                        is to permanently drop user ID 0, while maintaining some capabilities. To
+                        allow this possibility, the <span class="emphasis"><em>prctl()</em></span>
+                        <code class="literal">PR_SET_KEEPCAPS</code> operation can be used to
+                        set the process attribute that prevents the permitted capability set from
+                        being cleared when all user IDs are changed to a nonzero value. (The
+                        process’s effective capability set is always cleared in this case,
+                        regardless of the setting of the “keep capabilities” attribute.)</p></div></div></div><div class="sect1" title="Discovering the Capabilities Required by a Program"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="discovering_the_capabilities_required_by">Discovering the Capabilities Required by a Program</h2></div></div></div><p>Suppose we have a program that is unaware of capabilities and that is provided
+                only in binary form, or we have a program whose source code is too large for us to
+                easily read to determine which capabilities might be required to run it. If the
+                program requires privileges, but shouldn’t be a
+                    set-user-ID-<span class="emphasis"><em>root</em></span> program, then how can we determine the
+                permitted capabilities to assign to the executable file with
+                    <span class="emphasis"><em>setcap(8)</em></span>? There are two ways to answer this
+                    question:<a id="IDX-CHP-39-5757" class="indexterm"/><a id="IDX-CHP-39-5758" class="indexterm"/><a id="IDX-CHP-39-5759" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Use <span class="emphasis"><em>strace(1)</em></span> (<a class="xref" href="apa.html" title="Appendix A. Tracing System Calls">Appendix A</a>) to see which system call fails with the error <code class="literal">EPERM</code>, the error used to indicate the lack of a required
+                        capability. By consulting the system call’s manual page or the kernel source
+                        code, we can then deduce what capability is required. This approach isn’t
+                        perfect, because an <code class="literal">EPERM</code> error can
+                        occasionally be generated for other reasons, some of which may have nothing
+                        to do with the capability requirements for the program. Furthermore,
+                        programs may legitimately make a system call that requires privilege, and
+                        then change their behavior after determining that they don’t have privilege
+                        for a particular operation. It can sometimes be difficult to distinguish
+                        such “false positives” when trying to determine the capabilities that an
+                        executable really does need.</p></li><li class="listitem"><p>Use a kernel probe to produce monitoring output when the kernel is asked
+                        to perform capability checks. An example of how to do this is provided in
+                        [Hallyn, 2007], an article written by one of the developers of file
+                        capabilities. For each request to check a capability, the probe shown in the
+                        article logs the kernel function that was called, the capability that was
+                        requested, and the name of the requesting program. Although this approach
+                        requires more work than the use of <span class="emphasis"><em>strace(1)</em></span>, it can
+                        also help us more accurately determine the capabilities that a program
+                        requires.</p></li></ul></div></div><div class="sect1" title="Older Kernels and Systems Without File Capabilities"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="older_kernels_and_systems_without_file_c">Older Kernels and Systems Without File Capabilities</h2></div></div></div><p>In this section, we describe various differences in the implementation of
+                capabilities in older kernels. We also describe the differences that occur on
+                kernels where file capabilities are not supported. There are two scenarios where
+                Linux doesn’t support file capabilities:<a id="IDX-CHP-39-5760" class="indexterm"/><a id="IDX-CHP-39-5761" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Before Linux 2.6.24, file capabilities were not implemented.</p></li><li class="listitem"><p>Since Linux 2.6.24, file capabilities can be disabled if the kernel is
+                        built without the <code class="literal">CONFIG_SECURITY_FILE_CAPABILITIES</code> option.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>Although Linux introduced capabilities and allowed them to be attached to
+                    processes starting with kernel 2.2, the implementation of file capabilities
+                    appeared only several years later. The reasons that file capabilities remained
+                    unimplemented for so long were matters of policy, rather than technical
+                    difficulties. (Extended attributes, described in <a class="xref" href="ch16.html" title="Chapter 16. Extended Attributes">Chapter 16</a>, which are used to implement file
+                    capabilities, had been available since kernel 2.6.) The weight of opinion among
+                    kernel developers was that requiring system administrators to set and monitor
+                    different sets of capabilities—some of whose consequences are subtle but
+                    far-reaching—for each privileged program would create an unmanageably complex
+                    administration task. By contrast, system administrators are familiar with the
+                    existing UNIX privilege model, know to treat set-user-ID programs with due
+                    caution, and can locate the set-user-ID and set-group-ID programs on a system
+                    using simple <span class="emphasis"><em>find</em></span> commands. Nevertheless, the developers of
+                    file capabilities made the case that file capabilities could be made
+                    administratively workable, and eventually provided a convincing enough argument
+                    that file capabilities were integrated into the kernel.</p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="the_cap_underscore_setpcap_capab"/></div></div></div><div class="sect3" title="The CAP_SETPCAP capability"><div class="titlepage"><div><div><h4 class="title" id="the_cap_underscore_setpcap_capab-id1">The <code class="literal">CAP_SETPCAP</code> capability</h4></div></div></div><p>On kernels that don’t support file capabilities (i.e., any kernel before
+                        2.6.24, and kernels since 2.6.24 with file capabilities disabled), the
+                        semantics of the <code class="literal">CAP_SETPCAP</code> capability
+                        are different. Subject to rules that are analogous to those described in
+                            <a class="xref" href="ch39.html#changing_process_capabilities_programmat" title="Changing Process Capabilities Programmatically">Changing Process Capabilities Programmatically</a>, a process
+                        that has the <code class="literal">CAP_SETPCAP</code> capability in
+                        its effective set can theoretically change the capabilities of processes
+                        other than itself. Changes can be made to the capabilities of another
+                        process, all of the members of a specified process group, or all processes
+                        on the system except <span class="emphasis"><em>init</em></span> and the caller itself. The
+                        final case excludes <span class="emphasis"><em>init</em></span> because it is fundamental to
+                        the operation of the system. It also excludes the caller because the caller
+                        may be attempting to remove capabilities from every other process on the
+                        system, and we don’t want to remove the capabilities from the calling
+                        process itself.<a id="IDX-CHP-39-5762" class="indexterm"/></p><p>However, changing the capabilities of other processes is only a
+                        theoretical possibility. On older kernels, and on modern kernels where
+                        support for file capabilities is disabled, the capability bounding set
+                        (discussed next) always masks out the <code class="literal">CAP_SETPCAP</code> capability.<a id="IDX-CHP-39-5763" class="indexterm"/><a id="IDX-CHP-39-5764" class="indexterm"/></p></div><div class="sect3" title="The capability bounding set"><div class="titlepage"><div><div><h4 class="title" id="the_capability_bounding_set">The capability bounding set</h4></div></div></div><p>Since Linux 2.6.25, the capability bounding set is a per-process
+                        attribute. However, on older kernels, the capability bounding set is a
+                        system-wide attribute that affects all processes on the system. The
+                        system-wide capability bounding set is initialized so that it always masks
+                        out <code class="literal">CAP_SETPCAP</code> (described
+                            above).<a id="IDX-CHP-39-5765" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>On kernels after 2.6.25, removing capabilities from the per-process
+                            bounding set is supported only if file capabilities are enabled in the
+                            kernel. In that case, <span class="emphasis"><em>init</em></span>, the ancestor of all
+                            processes, starts with a bounding set containing all capabilities, and a
+                            copy of that bounding set is inherited by other processes created on the
+                            system. If file capabilities are disabled, then, because of the
+                            differences in the semantics of <code class="literal">CAP_SETPCAP</code> described above, <span class="emphasis"><em>init</em></span>
+                            starts with a bounding set that contains all capabilities except
+                                <code class="literal">CAP_SETPCAP</code>.</p></div><p>There is one further change in the semantics of the capability bounding
+                        set in Linux 2.6.25. As noted earlier (<a class="xref" href="ch39.html#capability_bounding_set" title="Capability Bounding Set">Capability Bounding Set</a>), on Linux 2.6.25 and later, the
+                        per-process capability bounding set acts as a limiting superset for the
+                        capabilities that can be added to the process’s inheritable set. In Linux
+                        2.6.24 and earlier, the system-wide capability bounding set doesn’t have
+                        this masking effect. (It is not needed, because these kernels don’t support
+                        file capabilities.)</p><p>The system-wide capability bounding set is accessible via the
+                        Linux-specific <code class="literal">/proc/sys/kernel/cap-bound</code>
+                        file. A process must have the <code class="literal">CAP_SYS_MODULE</code> capability to be able to change the contents
+                        of <code class="literal">cap-bound</code>. However, only the
+                            <span class="emphasis"><em>init</em></span> process can turn bits on in this mask; other
+                        privileged processes can only turn bits off. The upshot of these limitations
+                        is that on a system where file capabilities are not supported, we can never
+                        give the <code class="literal">CAP_SETPCAP</code> capability to a
+                        process. This is reasonable, since that capability can be used to subvert
+                        the entire kernel privilege-checking system. (In the unlikely case that we
+                        want to change this limitation, we must either load a kernel module that
+                        changes the value in the set, modify the source code of the
+                            <span class="emphasis"><em>init</em></span> program, or change the initialization of the
+                        capability bounding set in the kernel source code and perform a kernel
+                            rebuild.)<a id="IDX-CHP-39-5766" class="indexterm"/><a id="IDX-CHP-39-5767" class="indexterm"/><a id="IDX-CHP-39-5768" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Confusingly, although it is a bit mask, the value in the system-wide
+                            cap-bound file is displayed as a signed decimal number. For example, the
+                            initial value of this file is -257. This is the two’s complement
+                            interpretation of the bit mask with all bits except <span class="emphasis"><em>(1
+                                &lt;&lt; 8)</em></span> turned on (i.e., in binary, 11111111
+                            11111111 11111110 11111111); <code class="literal">CAP_SETPCAP</code> has the value 8.</p></div></div><div class="sect3" title="Using capabilities within a program on a system without file capabilities"><div class="titlepage"><div><div><h4 class="title" id="using_capabilities_within_a_program_on_a">Using capabilities within a program on a system without file
+                        capabilities</h4></div></div></div><p>Even on a system that doesn’t support file capabilities, we can
+                        nevertheless employ capabilities to improve the security of a program. We do
+                        this as follows:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Run the program in a process with an effective user ID of 0
+                                (typically a set-user-ID-<span class="emphasis"><em>root</em></span> program). Such a
+                                process is granted all capabilities (except <code class="literal">CAP_SETPCAP</code>, as noted earlier) in its permitted and
+                                effective sets.</p></li><li class="listitem"><p>On program startup, use the <span class="emphasis"><em>libcap</em></span> API to
+                                drop all capabilities from the effective set, and drop all
+                                capabilities except those that we may later need from the permitted
+                                set.</p></li><li class="listitem"><p>Set the <code class="literal">SECBIT_KEEP_CAPS</code> flag
+                                (or use the <span class="emphasis"><em>prctl()</em></span>
+                                <code class="literal">PR_SET_KEEPCAPS</code> operation to
+                                achieve the same result), so that the next step does not drop
+                                capabilities.</p></li><li class="listitem"><p>Set all user IDs to nonzero values, to prevent the process from
+                                accessing files owned by <span class="emphasis"><em>root</em></span> or gaining
+                                capabilities by doing an <span class="emphasis"><em>exec()</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>We could replace the two preceding steps by a single step that
+                                    sets the <code class="literal">SECBIT_NOROOT</code> flag,
+                                    if we want to prevent the process from regaining privileges on
+                                    an <span class="emphasis"><em>exec()</em></span>, but must allow it to access
+                                    files owned by <span class="emphasis"><em>root</em></span>. (Of course, allowing
+                                    access to files owned by <span class="emphasis"><em>root</em></span> leaves open
+                                    the risk of some security vulnerability.)</p></div></li><li class="listitem"><p>During the rest of the program’s lifetime, use the
+                                    <span class="emphasis"><em>libcap</em></span> API to raise and drop the remaining
+                                permitted capabilities from the effective set as needed in order to
+                                perform privileged tasks.</p><p>Some applications built for Linux kernels before version 2.6.24
+                                employed this approach.</p></li></ol></div><div class="note" title="Note"><h3 class="title">Note</h3><p>Among the kernel developers who argued against the implementation of
+                            capabilities for executable files, one of the perceived virtues of the
+                            approach described in the main text was that the developer of an
+                            application knows which capabilities an executable requires. By
+                            contrast, a system administrator may not be able to easily determine
+                            this information.</p></div></div></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id38">Summary</h2></div></div></div><p>The Linux capabilities scheme divides privileged operations into distinct
+                categories, and allows a process to be granted some capabilities, while being denied
+                others. This scheme represents an improvement over the traditional all-or-nothing
+                privilege mechanism, whereby a process has either privileges to perform all
+                operations (user ID 0) or no privileges (nonzero user ID). Since kernel 2.6.24,
+                Linux supports attaching capabilities to files, so that a process can gain selected
+                capabilities by execing a program.<a id="IDX-CHP-39-5769" class="indexterm"/><a id="IDX-CHP-39-5770" class="indexterm"/><a id="IDX-CHP-39-5771" class="indexterm"/><a id="IDX-CHP-39-5772" class="indexterm"/></p></div><div class="sect1" title="Exercise"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercise-id11">Exercise</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Modify the program in <a class="xref" href="ch35.html#modifying_process_scheduling_policies_an" title="Example 35-2. Modifying process scheduling policies and priorities">Example 35-2</a> (<code class="literal">sched_set.c</code>, in <a class="xref" href="ch35.html#privileges_and_resource_limits_affecting" title="Privileges and resource limits affecting changes to scheduling parameters">Privileges and resource limits affecting changes to scheduling
+                        parameters</a>) to use file
+                        capabilities, so that it can be used by an unprivileged user.</p></li></ol></div></div></section></body></html>

@@ -1,0 +1,1310 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 22. Signals: Advanced Features</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch21.html" title="Chapter 21. Signals: Signal Handlers"/><link rel="next" href="ch23.html" title="Chapter 23. Timers and Sleeping"/></head><body><section class="chapter" title="Chapter 22. Signals: Advanced Features" epub:type="chapter" id="signals_colon_advanced_features"><div class="titlepage"><div><div><h2 class="title">Chapter 22. Signals: Advanced Features</h2></div></div></div><p>This chapter completes the discussion of signals that we began in <a class="xref" href="ch20.html" title="Chapter 20. Signals: Fundamental Concepts">Chapter 20</a>, covering a number of more advanced
+            topics, including the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>core dump files;</p></li><li class="listitem"><p>special cases regarding signal delivery, disposition, and handling;</p></li><li class="listitem"><p>synchronous and asynchronous generation of signals;</p></li><li class="listitem"><p>when and in what order signals are delivered;</p></li><li class="listitem"><p>interruption of system calls by signal handlers, and how to automatically
+                    restart interrupted system calls;</p></li><li class="listitem"><p>realtime signals;</p></li><li class="listitem"><p>the use of <span class="emphasis"><em>sigsuspend()</em></span> to set the process signal mask
+                    and wait for a signal to arrive;</p></li><li class="listitem"><p>the use of <span class="emphasis"><em>sigwaitinfo()</em></span> (and
+                        <span class="emphasis"><em>sigtimedwait()</em></span>) to synchronously wait for a signal to
+                    arrive;</p></li><li class="listitem"><p>the use of <span class="emphasis"><em>signalfd()</em></span> to receive a signal via file
+                    descriptor; and</p></li><li class="listitem"><p>the older BSD and System V signal APIs.</p></li></ul></div><div class="sect1" title="Core Dump Files"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="core_dump_files">Core Dump Files</h2></div></div></div><p>Certain signals cause a process to create a core dump and terminate (<a class="xref" href="ch20.html#linux_signals" title="Table 20-1. Linux signals">Table 20-1</a>, page 396). A core dump is a file containing a memory
+                image of the process at the time it terminated. (The term <span class="emphasis"><em>core</em></span>
+                derives from an old memory technology.) This memory image can be loaded into a
+                debugger in order to examine the state of a program’s code and data at the moment
+                when the signal arrived.</p><p>One way of causing a program to produce a core dump is to type the
+                    <span class="emphasis"><em>quit</em></span> character (usually <span class="emphasis"><em>Control-\</em></span>),
+                which causes the <code class="literal">SIGQUIT</code> signal to be
+                generated:</p><a id="I_programlisting22_d1e61792"/><pre class="programlisting">$ <strong class="userinput"><code>ulimit -c unlimited</code></strong>                       <em class="lineannotation"><span class="lineannotation">Explained in main text</span></em>
+$ <strong class="userinput"><code>sleep 30</code></strong>
+<em class="lineannotation"><span class="lineannotation">Type Control-\</span></em>
+Quit (core dumped)
+$ <strong class="userinput"><code>ls -l core</code></strong>                                <em class="lineannotation"><span class="lineannotation">Shows core dump file for</span></em> <span class="emphasis"><em>sleep(1)</em></span>
+-rw-------   1 mtk    users     57344 Nov 30 13:39 core</pre><p>In this example, the message <span class="emphasis"><em>Quit (core dumped)</em></span> is printed by
+                the shell, which detects that its child (the process running
+                    <span class="emphasis"><em>sleep</em></span>) was killed by <code class="literal">SIGQUIT</code> and did a core dump.<a id="IDX-CHP-22-3356" class="indexterm"/></p><p>The core dump file was created in the working directory of the process, with the
+                name <code class="literal">core</code>. This is the default location and name
+                for a core dump file; shortly, we explain how these defaults can be changed.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Many implementations provide a tool (e.g., <span class="emphasis"><em>gcore</em></span> on
+                    FreeBSD and Solaris) to obtain a core dump of a running process. Similar
+                    functionality is available on Linux by attaching to a running process using
+                        <span class="emphasis"><em>gdb</em></span> and then using the <span class="emphasis"><em>gcore</em></span>
+                    command.</p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="circumstances_in_which_core_dump"/></div></div></div><div class="sect3" title="Circumstances in which core dump files are not produced"><div class="titlepage"><div><div><h4 class="title" id="circumstances_in_which_core_dump-id1">Circumstances in which core dump files are not produced</h4></div></div></div><p>A core dump is not produced in the following circumstances:<a id="IDX-CHP-22-3357" class="indexterm"/><a id="IDX-CHP-22-3358" class="indexterm"/><a id="IDX-CHP-22-3359" class="indexterm"/><a id="IDX-CHP-22-3360" class="indexterm"/><a id="IDX-CHP-22-3361" class="indexterm"/><a id="IDX-CHP-22-3362" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The process doesn’t have permission to write the core dump file.
+                                This could happen because the process doesn’t have write permission
+                                for the directory in which the core dump file is to be created, or
+                                because a file with the same name already exists and either is not
+                                writable or is not a regular file (e.g., it is a directory or a
+                                symbolic link).</p></li><li class="listitem"><p>A regular file with the same name already exists, and is writable,
+                                but there is more than one (hard) link to the file.</p></li><li class="listitem"><p>The directory in which the core dump file is to be created doesn’t
+                                exist.</p></li><li class="listitem"><p>The process resource limit on the size of a core dump file is set
+                                to 0. This limit, <code class="literal">RLIMIT_CORE</code>, is
+                                discussed in more detail in Section 36.3. In the example above, we
+                                used the <span class="emphasis"><em>ulimit</em></span> command
+                                    (<span class="emphasis"><em>limit</em></span> in the C shell) to ensure that there
+                                is no limit on the size of <code class="literal">core</code>
+                                    files.<a id="IDX-CHP-22-3363" class="indexterm"/></p></li><li class="listitem"><p>The process resource limit on the size of a file that may be
+                                produced by the process is set to 0. We describe this limit,
+                                    <code class="literal">RLIMIT_FSIZE</code>, in Section
+                                36.3.</p></li><li class="listitem"><p>The binary executable file that the process is executing doesn’t
+                                have read permission enabled. This prevents users from using a core
+                                dump to obtain a copy of the code of a program that they would
+                                otherwise be unable to read.</p></li><li class="listitem"><p>The file system on which the current working directory resides is
+                                mounted read-only, is full, or has run out of i-nodes.
+                                Alternatively, the user has reached their quota limit on the file
+                                system.</p></li><li class="listitem"><p>Set-user-ID (set-group-ID) programs executed by a user other than
+                                the file owner (group owner) don’t generate core dumps. This
+                                prevents malicious users from dumping the memory of a secure program
+                                and examining it for sensitive information such as passwords.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>Using the <code class="literal">PR_SET_DUMPABLE</code> operation
+                            of the Linux-specific <span class="emphasis"><em>prctl()</em></span> system call, we can
+                            set the <span class="emphasis"><em>dumpable</em></span> flag for a process, so that when a
+                            set-user-ID (set-group-ID) program is run by a user other than the owner
+                            (group owner), a core dump can be produced. The <code class="literal">PR_SET_DUMPABLE</code> operation is available from Linux 2.4
+                            onward. See the <span class="emphasis"><em>prctl(2)</em></span> manual page for further
+                            details. In addition, since kernel 2.6.13, the <code class="literal">/proc/sys/fs/suid_dumpable</code> file provides system-wide
+                            control over whether or not set-user-ID and set-group-ID processes
+                            produce core dumps. For details, see the <span class="emphasis"><em>proc(5)</em></span>
+                            manual page.<a id="IDX-CHP-22-3364" class="indexterm"/><a id="IDX-CHP-22-3365" class="indexterm"/></p></div><p>Since kernel 2.6.23, the Linux-specific <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/coredump_filter</code> can be used on a per-process basis to
+                        determine which types of memory mappings are written to a core dump file.
+                        (We explain memory mappings in <a class="xref" href="ch49.html" title="Chapter 49. Memory Mappings">Chapter 49</a>.) The
+                        value in this file is a mask of four bits corresponding to the four types of
+                        memory mappings: private anonymous mappings, private file mappings, shared
+                        anonymous mappings, and shared file mappings. The default value of the file
+                        provides traditional Linux behavior: only private anonymous and shared
+                        anonymous mappings are dumped. See the <span class="emphasis"><em>core(5)</em></span> manual
+                        page for further details.</p></div><div class="sect3" title="Naming the core dump file: /proc/sys/kernel/core_pattern"><div class="titlepage"><div><div><h4 class="title" id="naming_the_core_dump_file_colon__solidus">Naming the core dump file: <code class="literal">/proc/sys/kernel/core_pattern</code></h4></div></div></div><p>Starting with Linux 2.6, the format string contained in the Linux-specific
+                            <code class="literal">/proc/sys/kernel/core_pattern</code> file
+                        controls the naming of all core dump files produced on the system. By
+                        default, this file contains the string <span class="emphasis"><em>core</em></span>. A
+                        privileged user can define this file to include any of the format specifiers
+                        shown in <a class="xref" href="ch22.html#format_specifiers_for_solidus_proc_solid" title="Table 22-1. Format specifiers for /proc/sys/kernel/core_pattern">Table 22-1</a>. These
+                        format specifiers are replaced by the value indicated in the right column of
+                        the table. Additionally, the string may include slashes (<code class="literal">/</code>). In other words, we can control not just
+                        the name of the core file, but also the (absolute or relative) directory in
+                        which it is created. After all format specifiers have been replaced, the
+                        resulting pathname string is truncated to a maximum of 128 characters (64
+                        characters before Linux 2.6.19).<a id="IDX-CHP-22-3366" class="indexterm"/><a id="IDX-CHP-22-3367" class="indexterm"/><a id="IDX-CHP-22-3368" class="indexterm"/><a id="IDX-CHP-22-3369" class="indexterm"/><a id="IDX-CHP-22-3370" class="indexterm"/><a id="IDX-CHP-22-3371" class="indexterm"/></p><p>Since kernel 2.6.19, Linux supports an additional syntax in the <code class="literal">core_pattern</code> file. If this file contains a
+                        string starting with the pipe symbol (<code class="literal">|</code>),
+                        then the remaining characters in the file are interpreted as a program—with
+                        optional arguments that may include the <code class="literal">%</code>
+                        specifiers shown in <a class="xref" href="ch22.html#format_specifiers_for_solidus_proc_solid" title="Table 22-1. Format specifiers for /proc/sys/kernel/core_pattern">Table 22-1</a>—that is to be executed when a process dumps core. The core dump is
+                        written to the standard input of that program instead of to a file. See the
+                            <span class="emphasis"><em>core(5)</em></span> manual page for further details.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Some other UNIX implementations provide facilities similar to <code class="literal">core_pattern</code>. For example, in BSD
+                            derivatives, the program name is appended to the filename, thus <code class="literal">core.</code><span class="emphasis"><em>progname</em></span>.
+                            Solaris provides a tool (<span class="emphasis"><em>coreadm</em></span>) that allows the
+                            user to choose the filename and directory where core dump files are
+                            placed.</p></div><div class="table"><a id="format_specifiers_for_solidus_proc_solid"/><div class="table-title">Table 22-1. Format specifiers for <code class="literal">/proc/sys/kernel/core_pattern</code></div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Specifier</p>
+                                    </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                        <p>Replaced by</p>
+                                    </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">%c</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Core file size soft resource limit (bytes; since Linux
+                                            2.6.24)</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">%e</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Executable filename (without path prefix)</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">%g</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Real group ID of dumped process</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">%h</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Name of host system</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">%p</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Process ID of dumped process</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">%s</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Number of signal that terminated process</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">%t</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Time of dump, in seconds since the Epoch</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">%u</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Real user ID of dumped process</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">%%</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; ">
+                                        <p>A single <code class="literal">%</code>
+                                            character</p>
+                                    </td></tr></tbody></table></div></div></div></div></div><div class="sect1" title="Special Cases for Delivery, Disposition, and Handling"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="special_cases_for_delivery_comma_disposi">Special Cases for Delivery, Disposition, and Handling</h2></div></div></div><p>For certain signals, special rules apply regarding delivery, disposition, and
+                handling, as described in this section.<a id="IDX-CHP-22-3372" class="indexterm"/><a id="IDX-CHP-22-3373" class="indexterm"/><a id="IDX-CHP-22-3374" class="indexterm"/><a id="IDX-CHP-22-3375" class="indexterm"/><a id="IDX-CHP-22-3376" class="indexterm"/><a id="IDX-CHP-22-3377" class="indexterm"/><a id="IDX-CHP-22-3378" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="sigkill_and_sigstop"/></div></div></div><div class="sect3" title="SIGKILL and SIGSTOP"><div class="titlepage"><div><div><h4 class="title" id="sigkill_and_sigstop-id1"><code class="literal">SIGKILL</code> and <code class="literal">SIGSTOP</code></h4></div></div></div><p>It is not possible to change the default action for <code class="literal">SIGKILL</code>, which always terminates a process,
+                        and <code class="literal">SIGSTOP</code>, which always stops a
+                        process. Both <span class="emphasis"><em>signal()</em></span> and
+                            <span class="emphasis"><em>sigaction()</em></span> return an error on attempts to change
+                        the disposition of these signals. These two signals also can’t be blocked.
+                        This is a deliberate design decision. Disallowing changes to the default
+                        actions of these signals means that they can always be used to kill or stop
+                        a runaway process.</p></div><div class="sect3" title="SIGCONT and stop signals"><div class="titlepage"><div><div><h4 class="title" id="sigcont_and_stop_signals"><code class="literal">SIGCONT</code> and stop signals</h4></div></div></div><p>As noted earlier, the <code class="literal">SIGCONT</code> signal is
+                        used to continue a process previously stopped by one of the stop signals
+                            (<code class="literal">SIGSTOP</code>, <code class="literal">SIGTSTP</code>, <code class="literal">SIGTTIN</code>, and
+                            <code class="literal">SIGTTOU</code>). Because of their unique
+                        purpose, in certain situations the kernel deals with these signals
+                        differently from other signals.<a id="IDX-CHP-22-3379" class="indexterm"/></p><p>If a process is currently stopped, the arrival of a <code class="literal">SIGCONT</code> signal always causes the process to
+                        resume, even if the process is currently blocking or ignoring <code class="literal">SIGCONT</code>. This feature is necessary because it
+                        would otherwise be impossible to resume such stopped processes. (If the
+                        stopped process was blocking <code class="literal">SIGCONT</code>, and
+                        had established a handler for <code class="literal">SIGCONT</code>,
+                        then, after the process is resumed, the handler is invoked only when
+                            <code class="literal">SIGCONT</code> is later unblocked.)</p><div class="note" title="Note"><h3 class="title">Note</h3><p>If any other signal is sent to a stopped process, the signal is not
+                            actually delivered to the process until it is resumed via receipt of a
+                                <code class="literal">SIGCONT</code> signal. The one exception
+                            is <code class="literal">SIGKILL</code>, which always kills a
+                            process—even one that is currently stopped.</p></div><p>Whenever <code class="literal">SIGCONT</code> is delivered to a
+                        process, any pending stop signals for the process are discarded (i.e., the
+                        process never sees them). Conversely, if any of the stop signals is
+                        delivered to a process, then any pending <code class="literal">SIGCONT</code> signal is automatically discarded. These steps are
+                        taken in order to prevent the action of a <code class="literal">SIGCONT</code> signal from being subsequently undone by a stop
+                        signal that was actually sent beforehand, and vice versa.<a id="IDX-CHP-22-3380" class="indexterm"/></p></div><div class="sect3" title="Don’t change the disposition of ignored terminal-generated signals"><div class="titlepage"><div><div><h4 class="title" id="don_number_symble_t_change_the_dispositi">Don’t change the disposition of ignored terminal-generated
+                        signals</h4></div></div></div><p>If, at the time it was execed, a program finds that the disposition of a
+                        terminal-generated signals has been set to <code class="literal">SIG_IGN</code> (ignore), then generally the program should not
+                        attempt to change the disposition of the signal. This is not a rule enforced
+                        by the system, but rather a convention that should be followed when writing
+                        applications. We explain the reasons for this in <a class="xref" href="ch34.html#handling_job-control_signals" title="Handling Job-Control Signals">Handling Job-Control Signals</a>. The signals for which this
+                        convention is relevant are <code class="literal">SIGHUP</code>,
+                            <code class="literal">SIGINT</code>, <code class="literal">SIGQUIT</code>, <code class="literal">SIGTTIN</code>, <code class="literal">SIGTTOU</code>, and <code class="literal">SIGTSTP</code>.<a id="IDX-CHP-22-3381" class="indexterm"/><a id="IDX-CHP-22-3382" class="indexterm"/><a id="IDX-CHP-22-3383" class="indexterm"/><a id="IDX-CHP-22-3384" class="indexterm"/><a id="IDX-CHP-22-3385" class="indexterm"/><a id="IDX-CHP-22-3386" class="indexterm"/><a id="IDX-CHP-22-3387" class="indexterm"/><a id="IDX-CHP-22-3388" class="indexterm"/><a id="IDX-CHP-22-3389" class="indexterm"/><a id="IDX-CHP-22-3390" class="indexterm"/><a id="IDX-CHP-22-3391" class="indexterm"/><a id="IDX-CHP-22-3392" class="indexterm"/></p></div></div></div><div class="sect1" title="Interruptible and Uninterruptible Process Sleep States"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="interruptible_and_uninterruptible_proces">Interruptible and Uninterruptible Process Sleep States</h2></div></div></div><p>We need to add a proviso to our earlier statement that <code class="literal">SIGKILL</code> and <code class="literal">SIGSTOP</code> always act
+                immediately on a process. At various times, the kernel may put a process to sleep,
+                and two sleep states are distinguished:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><code class="literal">TASK_INTERRUPTIBLE</code>: The process is
+                        waiting for some event. For example, it is waiting for terminal input, for
+                        data to be written to a currently empty pipe, or for the value of a System V
+                        semaphore to be increased. A process may spend an arbitrary length of time
+                        in this state. If a signal is generated for a process in this state, then
+                        the operation is interrupted and the process is woken up by the delivery of
+                        a signal. When listed by <span class="emphasis"><em>ps(1)</em></span>, processes in the
+                            <code class="literal">TASK_INTERRUPTIBLE</code> state are marked
+                        by the letter <span class="emphasis"><em>S</em></span> in the STAT (process state)
+                        field.</p></li><li class="listitem"><p><code class="literal">TASK_UNINTERRUPTIBLE</code>: The process is
+                        waiting on certain special classes of event, such as the completion of a
+                        disk I/O. If a signal is generated for a process in this state, then the
+                        signal is not delivered until the process emerges from this state. Processes
+                        in the <code class="literal">TASK_UNINTERRUPTIBLE</code> state are
+                        listed by <span class="emphasis"><em>ps(1)</em></span> with a <span class="emphasis"><em>D</em></span> in the
+                        STAT field.</p></li></ul></div><p>Because a process normally spends only very brief periods in the <code class="literal">TASK_UNINTERRUPTIBLE</code> state, the fact that a signal is
+                delivered only when the process leaves this state is invisible. However, in rare
+                circumstances, a process may remain hung in this state, perhaps as the result of a
+                hardware failure, an NFS problem, or a kernel bug. In such cases, <code class="literal">SIGKILL</code> won’t terminate the hung process. If the
+                underlying problem can’t otherwise be resolved, then we must restart the system in
+                order to eliminate the process.</p><p>The <code class="literal">TASK_INTERRUPTIBLE</code> and <code class="literal">TASK_UNINTERRUPTIBLE</code> states are present on most UNIX
+                implementations. Starting with kernel 2.6.25, Linux adds a third state to address
+                the hanging process problem just described:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><code class="literal">TASK_KILLABLE</code>: This state is like
+                            <code class="literal">TASK_UNINTERRUPTIBLE</code>, but wakes the
+                        process if a fatal signal (i.e., one that would kill the process) is
+                        received. By converting relevant parts of the kernel code to use this state,
+                        various scenarios where a hung process requires a system restart can be
+                        avoided. Instead, the process can be killed by sending it a fatal signal.
+                        The first piece of kernel code to be converted to use <code class="literal">TASK_KILLABLE</code> was NFS.</p></li></ul></div></div><div class="sect1" title="Hardware-Generated Signals"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="hardware-generated_signals">Hardware-Generated Signals</h2></div></div></div><p><code class="literal">SIGBUS</code>, <code class="literal">SIGFPE</code>, <code class="literal">SIGILL</code>, and <code class="literal">SIGSEGV</code> can be generated as a consequence of a
+                hardware exception or, less usually, by being sent by <span class="emphasis"><em>kill()</em></span>.
+                In the case of a hardware exception, SUSv3 specifies that the behavior of a process
+                is undefined if it returns from a handler for the signal, or if it ignores or blocks
+                the signal. The reasons for this are as follows:<a id="IDX-CHP-22-3393" class="indexterm"/><a id="IDX-CHP-22-3394" class="indexterm"/><a id="IDX-CHP-22-3395" class="indexterm"/><a id="IDX-CHP-22-3396" class="indexterm"/><a id="IDX-CHP-22-3397" class="indexterm"/><a id="IDX-CHP-22-3398" class="indexterm"/><a id="IDX-CHP-22-3399" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>Returning from the signal handler</em></span>: Suppose that a
+                        machine-language instruction generates one of these signals, and a signal
+                        handler is consequently invoked. On normal return from the handler, the
+                        program attempts to resume execution at the point where it was interrupted.
+                        But this is the very instruction that generated the signal in the first
+                        place, so the signal is generated once more. The consequence is usually that
+                        the program goes into an infinite loop, repeatedly calling the signal
+                        handler.</p></li><li class="listitem"><p><span class="emphasis"><em>Ignoring the signal</em></span>: It makes little sense to ignore
+                        a hardware-generated signal, as it is unclear how a program should continue
+                        execution after, say, an arithmetic exception. When one of these signals is
+                        generated as a consequence of a hardware exception, Linux forces its
+                        delivery, even if the program has requested that the signal be
+                            ignored.<a id="IDX-CHP-22-3400" class="indexterm"/></p></li><li class="listitem"><p><span class="emphasis"><em>Blocking the signal</em></span>: As with the previous case, it
+                        makes little sense to block a hardware-generated signal, as it is unclear
+                        how a program should then continue execution. On Linux 2.4 and earlier, the
+                        kernel simply ignores attempts to block a hardware-generated signal; the
+                        signal is delivered to the process anyway, and then either terminates the
+                        process or is caught by a signal handler, if one has been established.
+                        Starting with Linux 2.6, if the signal is blocked, then the process is
+                        always immediately killed by that signal, even if the process has installed
+                        a handler for the signal. (The rationale for the Linux 2.6 change in the
+                        treatment of blocked hardware-generated signals was that the Linux 2.4
+                        behavior hid bugs and could cause deadlocks in threaded programs.)</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>The <code class="literal">signals/demo_SIGFPE.c</code> program in the
+                    source code distribution for this book can be used to demonstrate the results of
+                    ignoring or blocking <code class="literal">SIGFPE</code> or catching the
+                    signal with a handler that performs a normal return.</p></div><p>The correct way to deal with hardware-generated signals is either to accept their
+                default action (process termination) or to write handlers that don’t perform a
+                normal return. Other than returning normally, a handler can complete execution by
+                calling <span class="emphasis"><em>_exit()</em></span> to terminate the process or by calling
+                    <span class="emphasis"><em>siglongjmp()</em></span> (<a class="xref" href="ch21.html#performing_a_nonlocal_goto_from_a_signal" title="Performing a Nonlocal Goto from a Signal Handler">Performing a Nonlocal Goto from a Signal Handler</a>) to ensure that control
+                passes to some point in the program other than the instruction that generated the
+                signal.</p></div><div class="sect1" title="Synchronous and Asynchronous Signal Generation"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="synchronous_and_asynchronous_signal_gene">Synchronous and Asynchronous Signal Generation</h2></div></div></div><p>We have already seen that a process generally can’t predict when it will receive a
+                signal. We now need to qualify this observation by distinguishing between
+                    <span class="emphasis"><em>synchronous</em></span> and <span class="emphasis"><em>asynchronous</em></span> signal
+                generation.</p><p>The model we have implicitly considered so far is
+                    <span class="emphasis"><em>asynchronous</em></span> signal generation, in which the signal is sent
+                either by another process or generated by the kernel for an event that occurs
+                independently of the execution of the process (e.g., the user types the
+                    <span class="emphasis"><em>interrupt</em></span> character or a child of this process terminates).
+                For asynchronously generated signals, the earlier statement that a process can’t
+                predict when the signal will be delivered holds true.</p><p>However, in some cases, a signal is generated while the process itself is
+                executing. We have already seen two examples of this:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The hardware-generated signals (<code class="literal">SIGBUS</code>,
+                            <code class="literal">SIGFPE</code>, <code class="literal">SIGILL</code>, <code class="literal">SIGSEGV</code>, and
+                            <code class="literal">SIGEMT</code>) described in <a class="xref" href="ch22.html#hardware-generated_signals" title="Hardware-Generated Signals">Hardware-Generated Signals</a> are generated as a consequence of
+                        executing a specific machine-language instruction that results in a hardware
+                        exception.</p></li><li class="listitem"><p>A process can use <span class="emphasis"><em>raise()</em></span>,
+                            <span class="emphasis"><em>kill()</em></span>, or <span class="emphasis"><em>killpg()</em></span> to send a
+                        signal to itself.</p></li></ul></div><p>In these cases, the generation of the signal is
+                <span class="emphasis"><em>synchronous</em></span>—the signal is delivered immediately (unless it is
+                blocked, but see <a class="xref" href="ch22.html#hardware-generated_signals" title="Hardware-Generated Signals">Hardware-Generated Signals</a> for a discussion of
+                what happens when blocking hardware-generated signals). In other words, the earlier
+                statement about the unpredictability of the delivery of a signal doesn’t apply. For
+                synchronously generated signals, delivery is predictable and reproducible.</p><p>Note that synchronicity is an attribute of how a signal is generated, rather than
+                of the signal itself. All signals may be generated synchronously (e.g., when a
+                process sends itself a signal using <span class="emphasis"><em>kill()</em></span>) or asynchronously
+                (e.g., when the signal is sent by another process using
+                <span class="emphasis"><em>kill()</em></span>).</p></div><div class="sect1" title="Timing and Order of Signal Delivery"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="timing_and_order_of_signal_delivery">Timing and Order of Signal Delivery</h2></div></div></div><p>As the first topic of this section, we consider exactly when a pending signal is
+                delivered. We then consider what happens if multiple pending blocked signals are
+                simultaneously unblocked.<a id="IDX-CHP-22-3401" class="indexterm"/><a id="IDX-CHP-22-3402" class="indexterm"/><a id="IDX-CHP-22-3403" class="indexterm"/><a id="IDX-CHP-22-3404" class="indexterm"/><a id="IDX-CHP-22-3405" class="indexterm"/><a id="IDX-CHP-22-3406" class="indexterm"/><a id="IDX-CHP-22-3407" class="indexterm"/><a id="IDX-CHP-22-3408" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="when_is_a_signal_delivered_question"/></div></div></div><div class="sect3" title="When is a signal delivered?"><div class="titlepage"><div><div><h4 class="title" id="when_is_a_signal_delivered_question-id1">When is a signal delivered?</h4></div></div></div><p>As noted in <a class="xref" href="ch22.html#synchronous_and_asynchronous_signal_gene" title="Synchronous and Asynchronous Signal Generation">Synchronous and Asynchronous Signal Generation</a>,
+                        synchronously generated signals are delivered immediately. For example, a
+                        hardware exception triggers an immediate signal, and when a process sends
+                        itself a signal using <span class="emphasis"><em>raise()</em></span>, the signal is delivered
+                        before the <span class="emphasis"><em>raise()</em></span> call returns.</p><p>When a signal is generated asynchronously, there may be a (small) delay
+                        while the signal is pending between the time when it was generated and the
+                        time it is actually delivered, even if we have not blocked the signal. The
+                        reason for this is that the kernel delivers a pending signal to a process
+                        only at the next switch from kernel mode to user mode while executing that
+                        process. In practice, this means the signal is delivered at one of the
+                        following times:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>when the process is rescheduled after it earlier timed out (i.e.,
+                                at the start of a time slice); or</p></li><li class="listitem"><p>at completion of a system call (delivery of the signal may cause a
+                                blocking system call to complete prematurely).</p></li></ul></div></div><div class="sect3" title="Order of delivery of multiple unblocked signals"><div class="titlepage"><div><div><h4 class="title" id="order_of_delivery_of_multiple_unblocked">Order of delivery of multiple unblocked signals</h4></div></div></div><p>If a process has multiple pending signals that are unblocked using
+                            <span class="emphasis"><em>sigprocmask()</em></span>, then all of these signals are
+                        immediately delivered to the process.<a id="IDX-CHP-22-3409" class="indexterm"/><a id="IDX-CHP-22-3410" class="indexterm"/><a id="IDX-CHP-22-3411" class="indexterm"/><a id="IDX-CHP-22-3412" class="indexterm"/><a id="IDX-CHP-22-3413" class="indexterm"/></p><p>As currently implemented, the Linux kernel delivers the signals in
+                        ascending order. For example, if pending <code class="literal">SIGINT</code> (signal 2) and <code class="literal">SIGQUIT</code> (signal 3) signals were both simultaneously
+                        unblocked, then the <code class="literal">SIGINT</code> signal would
+                        be delivered before <code class="literal">SIGQUIT</code>, regardless
+                        of the order in which the two signals were generated.</p><p>We can’t, however, rely on (standard) signals being delivered in any
+                        particular order, since SUSv3 says that the delivery order of multiple
+                        signals is implementation-defined. (This statement applies only to standard
+                        signals. As we’ll see in <a class="xref" href="ch22.html#realtime_signals" title="Realtime Signals">Realtime Signals</a>, the standards
+                        governing realtime signals do provide guarantees about the order in which
+                        multiple unblocked realtime signals are delivered.)</p><p>When multiple unblocked signals are awaiting delivery, if a switch between
+                        kernel mode and user mode occurs during the execution of a signal handler,
+                        then the execution of that handler will be interrupted by the invocation of
+                        a second signal handler (and so on), as shown in <a class="xref" href="ch22.html#delivery_of_multiple_unblocked_signals" title="Figure 22-1. Delivery of multiple unblocked signals">Figure 22-1</a>.</p><div class="figure"><a id="delivery_of_multiple_unblocked_signals"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject22_d1e62749"/><img src="figs/web/22-1_SIG-C-multisignals-scale90.png.jpg" alt="Delivery of multiple unblocked signals"/></div></div><div class="figure-title">Figure 22-1. Delivery of multiple unblocked signals</div></div></div></div></div><div class="sect1" title="Implementation and Portability of signal()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="implementation_and_portability_of_signal">Implementation and Portability of <span class="emphasis"><em>signal()</em></span></h2></div></div></div><p>In this section, we show how to implement <span class="emphasis"><em>signal()</em></span> using
+                    <span class="emphasis"><em>sigaction()</em></span>. The implementation is straightforward, but
+                needs to account for the fact that, historically and across different UNIX
+                implementations, <span class="emphasis"><em>signal()</em></span> has had different semantics. In
+                particular, early implementations of signals were unreliable, meaning
+                    that:<a id="IDX-CHP-22-3414" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>On entry to a signal handler, the disposition of the signal was reset to
+                        its default. (This corresponds to the <code class="literal">SA_RESETHAND</code> flag described in <a class="xref" href="ch20.html#changing_signal_dispositions_colon_sigac" title="Changing Signal Dispositions: sigaction()">Changing Signal Dispositions: <span class="emphasis"><em>sigaction()</em></span></a>.) In order to have
+                        the signal handler invoked again for a subsequent delivery of the same
+                        signal, the programmer needed to make a call to
+                            <span class="emphasis"><em>signal()</em></span> from within the handler to explicitly
+                        reestablish the handler. The problem in this scenario is that there is a
+                        small window of time between entering the signal handler and reestablishment
+                        of the handler, during which, if the signal arrives a second time, it would
+                        be processed according to its default disposition.</p></li><li class="listitem"><p>Delivery of further occurrences of a signal was not blocked during
+                        execution of a signal handler. (This corresponds to the <code class="literal">SA_NODEFER</code> flag described in <a class="xref" href="ch20.html#changing_signal_dispositions_colon_sigac" title="Changing Signal Dispositions: sigaction()">Changing Signal Dispositions: <span class="emphasis"><em>sigaction()</em></span></a>.) This meant that
+                        if the signal was delivered again while the handler was still executing,
+                        then the handler would be recursively invoked. Given a sufficiently rapid
+                        stream of signals, the resulting recursive invocations of the handler could
+                        overflow the stack.</p></li></ul></div><p>As well as being unreliable, early UNIX implementations did not provide automatic
+                restarting of system calls (i.e., the behavior described for the <code class="literal">SA_RESTART</code> flag in <a class="xref" href="ch21.html#interruption_and_restarting_of_system_ca" title="Interruption and Restarting of System Calls">Interruption and Restarting of System Calls</a>).</p><p>The 4.2BSD reliable signals implementation rectified these limitations, and
+                several other UNIX implementations followed suit. However, the older semantics live
+                on today in the System V implementation of <span class="emphasis"><em>signal()</em></span>, and even
+                contemporary standards such as SUSv3 and C99 leave these aspects of
+                    <span class="emphasis"><em>signal()</em></span> deliberately unspecified.<a id="IDX-CHP-22-3415" class="indexterm"/></p><p>Tying the above information together, we implement <span class="emphasis"><em>signal()</em></span>
+                as shown in <a class="xref" href="ch22.html#an_implementation_of_signal_open_parenth" title="Example 22-1. An implementation of signal()">Example 22-1</a>. By default,
+                this implementation provides the modern signal semantics. If compiled with
+                    <span class="emphasis"><em>-DOLD_SIGNAL</em></span>, then it provides the earlier unreliable
+                signal semantics and doesn’t enable automatic restarting of system calls.</p><div class="example"><a id="an_implementation_of_signal_open_parenth"/><div class="example-title">Example 22-1. An implementation of <span class="emphasis"><em>signal()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/signal.c</code></strong>
+#include &lt;signal.h&gt;
+
+typedef void (*sighandler_t)(int);
+
+sighandler_t
+signal(int sig, sighandler_t handler)
+{
+    struct sigaction newDisp, prevDisp;
+
+    newDisp.sa_handler = handler;
+    sigemptyset(&amp;newDisp.sa_mask);
+#ifdef OLD_SIGNAL
+    newDisp.sa_flags = SA_RESETHAND | SA_NODEFER;
+#else
+    newDisp.sa_flags = SA_RESTART;
+#endif
+
+    if (sigaction(sig, &amp;newDisp, &amp;prevDisp) == -1)
+        return SIG_ERR;
+    else
+        return prevDisp.sa_handler;
+}
+      <strong class="userinput"><code>signals/signal.c</code></strong></pre></div></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="some_glibc_details"/></div></div></div><div class="sect3" title="Some glibc details"><div class="titlepage"><div><div><h4 class="title" id="some_glibc_details-id1">Some <span class="emphasis"><em>glibc</em></span> details</h4></div></div></div><p>The <span class="emphasis"><em>glibc</em></span> implementation of the
+                            <span class="emphasis"><em>signal()</em></span> library function has changed over time. In
+                        newer versions of the library (<span class="emphasis"><em>glibc 2</em></span> and later), the
+                        modern semantics are provided by default. In older versions of the library,
+                        the earlier unreliable (System V-compatible) semantics are
+                            provided.<a id="IDX-CHP-22-3416" class="indexterm"/><a id="IDX-CHP-22-3417" class="indexterm"/><a id="IDX-CHP-22-3418" class="indexterm"/><a id="IDX-CHP-22-3419" class="indexterm"/><a id="IDX-CHP-22-3420" class="indexterm"/><a id="IDX-CHP-22-3421" class="indexterm"/><a id="IDX-CHP-22-3422" class="indexterm"/><a id="IDX-CHP-22-3423" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The Linux kernel contains an implementation of
+                                <span class="emphasis"><em>signal()</em></span> as a system call. This implementation
+                            provides the older, unreliable semantics. However,
+                                <span class="emphasis"><em>glibc</em></span> bypasses this system call by providing a
+                                <span class="emphasis"><em>signal()</em></span> library function that calls
+                                <span class="emphasis"><em>sigaction()</em></span>.</p></div><p>If we want to obtain unreliable signal semantics with modern versions of
+                            <span class="emphasis"><em>glibc</em></span>, we can explicitly replace our calls to
+                            <span class="emphasis"><em>signal()</em></span> with calls to the (nonstandard)
+                            <span class="emphasis"><em>sysv_signal()</em></span> function.<a id="IDX-CHP-22-3424" class="indexterm"/></p><a id="I_programlisting22_d1e62941"/><pre class="programlisting">#define _GNU_SOURCE
+#include &lt;signal.h&gt;
+
+void ( *<strong class="userinput"><code>sysv_signal</code></strong>(int <em class="lineannotation"><span class="lineannotation">sig</span></em>, void (*<em class="lineannotation"><span class="lineannotation">handler</span></em>)(int)) ) (int);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns previous signal disposition on success, or <code class="literal">SIG_ERR</code> on error</p></div><p>The <span class="emphasis"><em>sysv_signal()</em></span> function takes the same arguments
+                        as <span class="emphasis"><em>signal()</em></span>.</p><p>If the <code class="literal">_BSD_SOURCE</code> feature test macro
+                        is not defined when compiling a program, <span class="emphasis"><em>glibc</em></span>
+                        implicitly redefines all calls to <span class="emphasis"><em>signal()</em></span> to be calls
+                        to <span class="emphasis"><em>sysv_signal()</em></span>, meaning that
+                            <span class="emphasis"><em>signal()</em></span> has unreliable semantics. By default,
+                            <code class="literal">_BSD_SOURCE</code>
+                        <span class="emphasis"><em>is</em></span> defined, but it is disabled (unless also explicitly
+                        defined) if other feature test macros such as <code class="literal">_SVID_SOURCE</code> or <code class="literal">_XOPEN_SOURCE</code> are defined when compiling a program.</p></div><div class="sect3" title="sigaction() is the preferred API for establishing a signal handler"><div class="titlepage"><div><div><h4 class="title" id="sigaction_open_parenthesis_close_parenth"><span class="emphasis"><em>sigaction()</em></span> is the preferred API for establishing a
+                        signal handler</h4></div></div></div><p>Because of the System V versus BSD (and old versus recent
+                            <span class="emphasis"><em>glibc</em></span>) portability issues described above, it is
+                        good practice always to use <span class="emphasis"><em>sigaction()</em></span>, rather than
+                            <span class="emphasis"><em>signal()</em></span>, to establish signal handlers. We follow
+                        this practice throughout the remainder of this book. (An alternative is to
+                        write our own version of <span class="emphasis"><em>signal()</em></span>, probably similar to
+                            <a class="xref" href="ch22.html#an_implementation_of_signal_open_parenth" title="Example 22-1. An implementation of signal()">Example 22-1</a>, specifying
+                        exactly the flags that we require, and employ that version with our
+                        applications.) Note, however, that it is portable (and shorter) to use
+                            <span class="emphasis"><em>signal()</em></span> to set the disposition of a signal to
+                            <code class="literal">SIG_IGN</code> or <code class="literal">SIG_DFL</code>, and we’ll often use <span class="emphasis"><em>signal()</em></span>
+                        for that purpose.<a id="IDX-CHP-22-3425" class="indexterm"/><a id="IDX-CHP-22-3426" class="indexterm"/><a id="IDX-CHP-22-3427" class="indexterm"/><a id="IDX-CHP-22-3428" class="indexterm"/></p></div></div></div><div class="sect1" title="Realtime Signals"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="realtime_signals">Realtime Signals</h2></div></div></div><p>Realtime signals were defined in POSIX.1b to remedy a number of limitations of
+                standard signals. They have the following advantages over standard
+                    signals:<a id="IDX-CHP-22-3429" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Realtime signals provide an increased range of signals that can be used
+                        for application-defined purposes. Only two standard signals are freely
+                        available for application-defined purposes: <code class="literal">SIGUSR1</code> and <code class="literal">SIGUSR2</code>.</p></li><li class="listitem"><p>Realtime signals are queued. If multiple instances of a realtime signal
+                        are sent to a process, then the signal is delivered multiple times. By
+                        contrast, if we send further instances of a standard signal that is already
+                        pending for a process, that signal is delivered only once.<a id="IDX-CHP-22-3430" class="indexterm"/></p></li><li class="listitem"><p>When sending a realtime signal, it is possible to specify data (an integer
+                        or pointer value) that accompanies the signal. The signal handler in the
+                        receiving process can retrieve this data.</p></li><li class="listitem"><p>The order of delivery of different realtime signals is guaranteed. If
+                        multiple different realtime signals are pending, then the lowest-numbered
+                        signal is delivered first. In other words, signals are prioritized, with
+                        lower-numbered signals having higher priority. When multiple signals of the
+                        same type are queued, they are delivered—along with their accompanying
+                        data—in the order in which they were sent.</p></li></ul></div><p>SUSv3 requires that an implementation provide a minimum of <code class="literal">_POSIX_RTSIG_MAX</code> (defined as 8) different realtime
+                signals. The Linux kernel defines 32 different realtime signals, numbered from 32 to
+                63. The <code class="literal">&lt;signal.h&gt;</code> header file
+                defines the constant <code class="literal">RTSIG_MAX</code> to indicate the
+                number of available realtime signals, and the constants <code class="literal">SIGRTMIN</code> and <code class="literal">SIGRTMAX</code> to indicate
+                the lowest and highest available realtime signal numbers.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On systems employing the LinuxThreads threading implementation, <code class="literal">SIGRTMIN</code> is defined as 35 (rather than 32) to
+                    allow for the fact that LinuxThreads makes internal use of the first three
+                    realtime signals. On systems employing the NPTL threading implementation,
+                        <code class="literal">SIGRTMIN</code> is defined as 34 to allow for
+                    the fact that NPTL makes internal use of the first two realtime
+                        signals.<a id="IDX-CHP-22-3431" class="indexterm"/></p></div><p>Realtime signals are not individually identified by different constants in the
+                manner of standard signals. However, an application should not hard-code integer
+                values for them, since the range used for realtime signals varies across UNIX
+                implementations. Instead, a realtime signal number can be referred to by adding a
+                value to <code class="literal">SIGRTMIN</code>; for example, the expression
+                    (<span class="emphasis"><em>SIGRTMIN + 1</em></span>) refers to the second realtime signal.</p><p>Be aware that SUSv3 doesn’t require <code class="literal">SIGRTMAX</code>
+                and <code class="literal">SIGRTMIN</code> to be simple integer values. They
+                may be defined as functions (as they are on Linux). This means that we can’t write
+                code for the preprocessor such as the following:</p><a id="I_programlisting22_d1e63131"/><pre class="programlisting">#if SIGRTMIN+100 &gt; SIGRTMAX             /* WRONG! */
+#error "Not enough realtime signals"
+#endif</pre><p>Instead, we must perform equivalent checks at run time.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="limits_on_the_number_of_queued_real"/></div></div></div><div class="sect3" title="Limits on the number of queued realtime signals"><div class="titlepage"><div><div><h4 class="title" id="limits_on_the_number_of_queued_real-id1">Limits on the number of queued realtime signals</h4></div></div></div><p>Queuing realtime signals (with associated data) requires that the kernel
+                        maintain data structures listing the signals queued to each process. Since
+                        these data structures consume kernel memory, the kernel places limits on the
+                        number of realtime signals that may be queued.<a id="IDX-CHP-22-3432" class="indexterm"/><a id="IDX-CHP-22-3433" class="indexterm"/><a id="IDX-CHP-22-3434" class="indexterm"/><a id="IDX-CHP-22-3435" class="indexterm"/><a id="IDX-CHP-22-3436" class="indexterm"/><a id="IDX-CHP-22-3437" class="indexterm"/><a id="IDX-CHP-22-3438" class="indexterm"/><a id="IDX-CHP-22-3439" class="indexterm"/><a id="IDX-CHP-22-3440" class="indexterm"/><a id="IDX-CHP-22-3441" class="indexterm"/></p><p>SUSv3 allows an implementation to place an upper limit on the number of
+                        realtime signals (of all types) that may be queued to a process, and
+                        requires that this limit be at least <code class="literal">_POSIX_SIGQUEUE_MAX</code> (defined as 32). An implementation can
+                        define the constant <code class="literal">SIGQUEUE_MAX</code> to
+                        indicate the number of realtime signals it allows to be queued. It can also
+                        make this information available through the following call:</p><a id="I_programlisting22_d1e63198"/><pre class="programlisting">lim = sysconf(_SC_SIGQUEUE_MAX);</pre><p>On Linux, this call returns -1. The reason for this is that Linux employs
+                        a different model for limiting the number of realtime signals that may be
+                        queued to a process. In Linux versions up to and including 2.6.7, the kernel
+                        enforces a system-wide limit on the total number of realtime signals that
+                        may be queued to all processes. This limit can be viewed and (with
+                        privilege) changed via the Linux-specific <code class="literal">/proc/sys/kernel/rtsig-max</code> file. The default value in this
+                        file is 1024. The number of currently queued realtime signals can be found
+                        in the Linux-specific <code class="literal">/proc/sys/kernel/rtsig-nr</code> file.<a id="IDX-CHP-22-3442" class="indexterm"/><a id="IDX-CHP-22-3443" class="indexterm"/></p><p>Starting with Linux 2.6.8, this model was changed, and the aforementioned
+                            <code class="literal">/proc</code> interfaces were removed. Under
+                        the new model, the <code class="literal">RLIMIT_SIGPENDING</code> soft
+                        resource limit defines a limit on the number of signals that can be queued
+                        to all processes owned by a particular real user ID. We describe this limit
+                        further in Section 36.3.</p></div><div class="sect3" title="Using realtime signals"><div class="titlepage"><div><div><h4 class="title" id="using_realtime_signals">Using realtime signals</h4></div></div></div><p>In order for a pair of processes to send and receive realtime signals,
+                        SUSv3 requires the following:<a id="IDX-CHP-22-3444" class="indexterm"/><a id="IDX-CHP-22-3445" class="indexterm"/><a id="IDX-CHP-22-3446" class="indexterm"/><a id="IDX-CHP-22-3447" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The sending process sends the signal plus its accompanying data
+                                using the <span class="emphasis"><em>sigqueue()</em></span> system call.<a id="IDX-CHP-22-3448" class="indexterm"/><a id="IDX-CHP-22-3449" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>A realtime signal can also be sent using
+                                        <span class="emphasis"><em>kill()</em></span>, <span class="emphasis"><em>killpg()</em></span>,
+                                    and <span class="emphasis"><em>raise()</em></span>. However, SUSv3 leaves it as
+                                    implementation-dependent whether realtime signals sent using
+                                    these interfaces are queued. On Linux, these interfaces do queue
+                                    realtime signals, but on many other UNIX implementations, they
+                                    do not.<a id="IDX-CHP-22-3450" class="indexterm"/><a id="IDX-CHP-22-3451" class="indexterm"/><a id="IDX-CHP-22-3452" class="indexterm"/></p></div></li><li class="listitem"><p>The receiving process establishes a handler for the signal using a
+                                call to <span class="emphasis"><em>sigaction()</em></span> that specifies the <code class="literal">SA_SIGINFO</code> flag. This causes the
+                                signal handler to be invoked with additional arguments, one of which
+                                includes the data accompanying the realtime signal.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On Linux, it is possible to queue realtime signals even if the
+                                    receiving process doesn’t specify the <code class="literal">SA_SIGINFO</code> flag when establishing the signal
+                                    handler (although it is not then possible to obtain the data
+                                    associated with the signal in this case). However, SUSv3 doesn’t
+                                    require implementations to guarantee this behavior, so we can’t
+                                    portably rely on it.</p></div></li></ul></div></div></div><div class="sect2" title="Sending Realtime Signals"><div class="titlepage"><div><div><h3 class="title" id="sending_realtime_signals">Sending Realtime Signals</h3></div></div></div><p>The <span class="emphasis"><em>sigqueue()</em></span> system call sends the realtime signal
+                    specified by <span class="emphasis"><em>sig</em></span> to the process specified by
+                        <span class="emphasis"><em>pid</em></span>.<a id="IDX-CHP-22-3453" class="indexterm"/><a id="IDX-CHP-22-3454" class="indexterm"/><a id="IDX-CHP-22-3455" class="indexterm"/></p><a id="I_programlisting22_d1e63338"/><pre class="programlisting">#define _POSIX_C_SOURCE 199309
+#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigqueue</code></strong>(pid_t <span class="emphasis"><em>pid</em></span>, int <span class="emphasis"><em>sig</em></span>, const union sigval <span class="emphasis"><em>value</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The same permissions are required to send a signal using
+                        <span class="emphasis"><em>sigqueue()</em></span> as are required with
+                        <span class="emphasis"><em>kill()</em></span> (see <a class="xref" href="ch20.html#sending_signals_colon_kill_open_parenthe" title="Sending Signals: kill()">Sending Signals: <span class="emphasis"><em>kill()</em></span></a>). A null signal (i.e.,
+                    signal 0) can be sent, with the same meaning as for <span class="emphasis"><em>kill()</em></span>.
+                    (Unlike <span class="emphasis"><em>kill()</em></span>, we can’t use
+                        <span class="emphasis"><em>sigqueue()</em></span> to send a signal to an entire process group
+                    by specifying a negative value in <span class="emphasis"><em>pid</em></span>.)<a id="IDX-CHP-22-3456" class="indexterm"/></p><div class="example"><a id="using_sigqueue_open_parenthesis_close_pa"/><div class="example-title">Example 22-2. Using <span class="emphasis"><em>sigqueue()</em></span> to send realtime signals</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/t_sigqueue.c</code></strong>
+#define _POSIX_C_SOURCE 199309
+#include &lt;signal.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int sig, numSigs, j, sigData;
+    union sigval sv;
+
+    if (argc &lt; 4 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s pid sig-num data [num-sigs]\n", argv[0]);
+
+    /* Display our PID and UID, so that they can be compared with the
+       corresponding fields of the siginfo_t argument supplied to the
+       handler in the receiving process */
+
+    printf("%s: PID is %ld, UID is %ld\n", argv[0],
+            (long) getpid(), (long) getuid());
+
+    sig = getInt(argv[2], 0, "sig-num");
+    sigData = getInt(argv[3], GN_ANY_BASE, "data");
+    numSigs = (argc &gt; 4) ? getInt(argv[4], GN_GT_0, "num-sigs") : 1;
+
+    for (j = 0; j &lt; numSigs; j++) {
+        sv.sival_int = sigData + j;
+        if (sigqueue(getLong(argv[1], 0, "pid"), sig, sv) == -1)
+            errExit("sigqueue %d", j);
+    }
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>signals/t_sigqueue.c</code></strong></pre></div></div><p>The <span class="emphasis"><em>value</em></span> argument specifies the data to accompany the
+                    signal. This argument has the following form:</p><a id="I_programlisting22_d1e63398"/><pre class="programlisting">union sigval {
+    int   sival_int;      /* Integer value for accompanying data */
+    void *sival_ptr;      /* Pointer value for accompanying data */
+};</pre><p>The interpretation of this argument is application-dependent, as is the choice
+                    of whether to set the <span class="emphasis"><em>sival_int</em></span> or the
+                        <span class="emphasis"><em>sival_ptr</em></span> field of the union. The
+                        <span class="emphasis"><em>sival_ptr</em></span> field is seldom useful with
+                        <span class="emphasis"><em>sigqueue()</em></span>, since a pointer value that is useful in one
+                    process is rarely meaningful in another process. However, this field is useful
+                    in other functions that employ <span class="emphasis"><em>sigval</em></span> unions, as we’ll see
+                    when we consider POSIX timers in <a class="xref" href="ch23.html#posix_interval_timers" title="POSIX Interval Timers">POSIX Interval Timers</a> and
+                    POSIX message queue notification in Section 52.6.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Several UNIX implementations, including Linux, define a
+                            <span class="emphasis"><em>sigval_t</em></span> data type as a synonym for <span class="emphasis"><em>union
+                            sigval</em></span>. However, this type is not specified in SUSv3 and is
+                        not available on some implementations. Portable applications should avoid
+                        using it.<a id="IDX-CHP-22-3457" class="indexterm"/></p></div><p>A call to <span class="emphasis"><em>sigqueue()</em></span> may fail if the limit on the number
+                    of queued signals has been reached. In this case, <span class="emphasis"><em>errno</em></span> is
+                    set to <code class="literal">EAGAIN</code>, indicating that we need to
+                    send the signal again (at some later time when some of the currently queued
+                    signals have been delivered).</p><p>An example of the use of <span class="emphasis"><em>sigqueue()</em></span> is provided in <a class="xref" href="ch22.html#using_sigqueue_open_parenthesis_close_pa" title="Example 22-2. Using sigqueue() to send realtime signals">Example 22-2</a> (page 459). This
+                    program takes up to four arguments, of which the first three are mandatory: a
+                    signal number, a target process ID, and an integer value to accompany the
+                    realtime signal. If more than one instance of the specified signal is to be
+                    sent, the optional fourth argument specifies the number of instances; in this
+                    case, the accompanying integer data value is incremented by one for each
+                    successive signal. We demonstrate the use of this program in <a class="xref" href="ch22.html#sending_realtime_signals" title="Sending Realtime Signals">Sending Realtime Signals</a>.</p></div><div class="sect2" title="Handling Realtime Signals"><div class="titlepage"><div><div><h3 class="title" id="handling_realtime_signals">Handling Realtime Signals</h3></div></div></div><p>We can handle realtime signals just like standard signals, using a normal
+                    (single-argument) signal handler. Alternatively, we can handle a realtime signal
+                    using a three-argument signal handler established using the <code class="literal">SA_SIGINFO</code> flag (<a class="xref" href="ch21.html#the_sa_underscore_siginfo_flag" title="The SA_SIGINFO Flag">The <code class="literal">SA_SIGINFO</code> Flag</a>). Here is an example of using
+                        <code class="literal">SA_SIGINFO</code> to establish a handler for the
+                    sixth realtime signal:<a id="IDX-CHP-22-3458" class="indexterm"/><a id="IDX-CHP-22-3459" class="indexterm"/><a id="IDX-CHP-22-3460" class="indexterm"/><a id="IDX-CHP-22-3461" class="indexterm"/><a id="IDX-CHP-22-3462" class="indexterm"/><a id="IDX-CHP-22-3463" class="indexterm"/><a id="IDX-CHP-22-3464" class="indexterm"/><a id="IDX-CHP-22-3465" class="indexterm"/><a id="IDX-CHP-22-3466" class="indexterm"/><a id="IDX-CHP-22-3467" class="indexterm"/><a id="IDX-CHP-22-3468" class="indexterm"/></p><a id="I_programlisting22_d1e63545"/><pre class="programlisting">struct sigaction act;
+
+sigemptyset(&amp;act.sa_mask);
+act.sa_sigaction = handler;
+act.sa_flags = SA_RESTART | SA_SIGINFO;
+
+if (sigaction(SIGRTMIN + 5, &amp;act, NULL) == -1)
+    errExit("sigaction");</pre><p>When we employ the <code class="literal">SA_SIGINFO</code> flag, the
+                    second argument passed to the signal handler is a <span class="emphasis"><em>siginfo_t</em></span>
+                    structure that contains additional information about the realtime signal. We
+                    described this structure in detail in Section 21.4. For a realtime signal, the
+                    following fields are set in the <span class="emphasis"><em>siginfo_t</em></span>
+                        structure:<a id="IDX-CHP-22-3469" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>si_signo</em></span> field is the same value as is passed
+                            in the first argument of the signal handler.</p></li><li class="listitem"><p>The <span class="emphasis"><em>si_code</em></span> field indicates the source of the
+                            signal, and contains one of the values shown in <a class="xref" href="ch21.html#values_returned_in_the_si_underscore_cod" title="Table 21-2. Values returned in the si_code field of the siginfo_t structure">Table 21-2</a> (page 441). For
+                            a realtime signal sent via <span class="emphasis"><em>sigqueue()</em></span>, this field
+                            always has the value <code class="literal">SI_QUEUE</code>.</p></li><li class="listitem"><p>The <span class="emphasis"><em>si_value</em></span> field contains the data specified in
+                            the <span class="emphasis"><em>value</em></span> argument (the <span class="emphasis"><em>sigval</em></span>
+                            union) by the process that sent the signal using
+                                <span class="emphasis"><em>sigqueue()</em></span>. As noted already, the
+                            interpretation of this data is application-defined. (The
+                                <span class="emphasis"><em>si_value</em></span> field doesn’t contain valid
+                            information if the signal was sent using
+                            <span class="emphasis"><em>kill()</em></span>.)</p></li><li class="listitem"><p>The <span class="emphasis"><em>si_pid</em></span> and <span class="emphasis"><em>si_uid</em></span> fields
+                            contain, respectively, the process ID and real user ID of the process
+                            sending the signal.</p></li></ul></div><p><a class="xref" href="ch22.html#handling_realtime_signals-id1" title="Example 22-3. Handling realtime signals">Example 22-3</a> provides an example of
+                    handling realtime signals. This program catches signals and displays various
+                    fields from the <span class="emphasis"><em>siginfo_t</em></span> structure passed to the signal
+                    handler. The program takes two optional integer command-line arguments. If the
+                    first argument is supplied, the main program blocks all signals, and then sleeps
+                    for the number of seconds specified by this argument. During this time, we can
+                    queue multiple realtime signals to the process and observe what happens when the
+                    signals are unblocked. The second argument specifies the number of seconds that
+                    the signal handler should sleep before returning. Specifying a nonzero value
+                    (the default is 1 second) is useful for slowing down the program so that we can
+                    more easily see what is happening when multiple signals are handled.<a id="IDX-CHP-22-3470" class="indexterm"/></p><p>We can use the program in <a class="xref" href="ch22.html#handling_realtime_signals-id1" title="Example 22-3. Handling realtime signals">Example 22-3</a>,
+                    along with the program in <a class="xref" href="ch22.html#using_sigqueue_open_parenthesis_close_pa" title="Example 22-2. Using sigqueue() to send realtime signals">Example 22-2</a> (<code class="literal">t_sigqueue.c</code>) to explore the behavior of realtime
+                    signals, as shown in the following shell session log:<a id="IDX-CHP-22-3471" class="indexterm"/></p><a id="I_programlisting22_d1e63639"/><pre class="programlisting">$ <strong class="userinput"><code>./catch_rtsigs 60 &amp;</code></strong>
+[1] 12842
+$ ./catch_rtsigs: PID is 12842        <em class="lineannotation"><span class="lineannotation">Shell prompt mixed with program output</span></em>
+./catch_rtsigs: signals blocked - sleeping 60 seconds
+<em class="lineannotation"><span class="lineannotation">Press Enter to see next shell prompt</span></em>
+$ <strong class="userinput"><code>./t_sigqueue 12842 54 100 3</code></strong>         <em class="lineannotation"><span class="lineannotation">Send signal three times</span></em>
+./t_sigqueue: PID is 12843, UID is 1000
+$ <strong class="userinput"><code>./t_sigqueue 12842 43 200</code></strong>
+./t_sigqueue: PID is 12844, UID is 1000
+$ <strong class="userinput"><code>./t_sigqueue 12842 40 300</code></strong>
+./t_sigqueue: PID is 12845, UID is 1000</pre><p>Eventually, the <span class="emphasis"><em>catch_rtsigs</em></span> program completes sleeping,
+                    and displays messages as the signal handler catches various signals. (We see a
+                    shell prompt mixed with the next line of the program’s output because the
+                        <span class="emphasis"><em>catch_rtsigs</em></span> program is writing output from the
+                    background.) We first observe that realtime signals are delivered
+                    lowest-numbered signal first, and that the <span class="emphasis"><em>siginfo_t</em></span>
+                    structure passed to the handler includes the process ID and user ID of the
+                    process that sent the signal:</p><a id="I_programlisting22_d1e63674"/><pre class="programlisting">$ ./catch_rtsigs: sleep complete
+caught signal 40
+    si_signo=40, si_code=-1 (SI_QUEUE), si_value=300
+    si_pid=12845, si_uid=1000
+caught signal 43
+    si_signo=43, si_code=-1 (SI_QUEUE), si_value=200
+    si_pid=12844, si_uid=1000</pre><p>The remaining output is produced by the three instances of the same realtime
+                    signal. Looking at the <span class="emphasis"><em>si_value</em></span> values, we can see that
+                    these signals were delivered in the order they were sent:</p><a id="I_programlisting22_d1e63682"/><pre class="programlisting">caught signal 54
+    si_signo=54, si_code=-1 (SI_QUEUE), si_value=100
+    si_pid=12843, si_uid=1000
+caught signal 54
+    si_signo=54, si_code=-1 (SI_QUEUE), si_value=101
+    si_pid=12843, si_uid=1000
+caught signal 54
+    si_signo=54, si_code=-1 (SI_QUEUE), si_value=102
+    si_pid=12843, si_uid=1000</pre><p>We continue by using the shell <span class="emphasis"><em>kill</em></span> command to send a
+                    signal to the <span class="emphasis"><em>catch_rtsigs</em></span> program. As before, we see that
+                    the <span class="emphasis"><em>siginfo_t</em></span> structure received by the handler includes
+                    the process ID and user ID of the sending process, but in this case, the
+                        <span class="emphasis"><em>si_code</em></span> value is <code class="literal">SI_USER</code>:</p><a id="I_programlisting22_d1e63701"/><pre class="programlisting"><em class="lineannotation"><span class="lineannotation">Press Enter to see next shell prompt</span></em>
+$ <strong class="userinput"><code>echo $$</code></strong>                             <em class="lineannotation"><span class="lineannotation">Display PID of shell</span></em>
+12780
+$ <strong class="userinput"><code>kill -40 12842</code></strong>                      <em class="lineannotation"><span class="lineannotation">Uses</span></em> kill(2) <em class="lineannotation"><span class="lineannotation">to send a signal</span></em>
+$ caught signal 40
+    si_signo=40, si_code=0 (SI_USER), si_value=0
+    si_pid=12780, si_uid=1000         <em class="lineannotation"><span class="lineannotation">PID is that of the shell</span></em>
+<em class="lineannotation"><span class="lineannotation">Press Enter to see next shell prompt</span></em>
+$ <strong class="userinput"><code>kill 12842</code></strong>                          <em class="lineannotation"><span class="lineannotation">Kill</span></em> catch_rtsigs <em class="lineannotation"><span class="lineannotation">by sending</span></em> SIGTERM
+Caught 6 signals
+<em class="lineannotation"><span class="lineannotation">Press Enter to see notification from shell about terminated background job</span></em>
+[1]+  Done                    ./catch_rtsigs 60</pre><div class="example"><a id="handling_realtime_signals-id1"/><div class="example-title">Example 22-3. Handling realtime signals</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/catch_rtsigs.c</code></strong>
+#define _GNU_SOURCE
+#include &lt;string.h&gt;
+#include &lt;signal.h&gt;
+#include "tlpi_hdr.h"
+
+static volatile int handlerSleepTime;
+static volatile int sigCnt = 0;         /* Number of signals received */
+static volatile int allDone = 0;
+
+static void             /* Handler for signals established using SA_SIGINFO */
+siginfoHandler(int sig, siginfo_t *si, void *ucontext)
+{
+    /* UNSAFE: This handler uses non-async-signal-safe functions
+       (printf()); see Section 21.1.2) */
+
+    /* SIGINT or SIGTERM can be used to terminate program */
+
+    if (sig == SIGINT || sig == SIGTERM) {
+        allDone = 1;
+        return;
+    }
+
+    sigCnt++;
+    printf("caught signal %d\n", sig);
+
+    printf("    si_signo=%d, si_code=%d (%s), ", si-&gt;si_signo, si-&gt;si_code,
+            (si-&gt;si_code == SI_USER) ? "SI_USER" :
+            (si-&gt;si_code == SI_QUEUE) ? "SI_QUEUE" : "other");
+    printf("si_value=%d\n", si-&gt;si_value.sival_int);
+    printf("    si_pid=%ld, si_uid=%ld\n", (long) si-&gt;si_pid, (long) si-&gt;si_uid);
+
+    sleep(handlerSleepTime);
+}
+
+int
+main(int argc, char *argv[])
+{
+    struct sigaction sa;
+    int sig;
+    sigset_t prevMask, blockMask;
+
+    if (argc &gt; 1 &amp;&amp; strcmp(argv[1], "--help") == 0)
+        usageErr("%s [block-time [handler-sleep-time]]\n", argv[0]);
+
+    printf("%s: PID is %ld\n", argv[0], (long) getpid());
+
+    handlerSleepTime = (argc &gt; 2) ?
+                getInt(argv[2], GN_NONNEG, "handler-sleep-time") : 1;
+
+    /* Establish handler for most signals. During execution of the handler,
+       mask all other signals to prevent handlers recursively interrupting
+       each other (which would make the output hard to read). */
+
+    sa.sa_sigaction = siginfoHandler;
+    sa.sa_flags = SA_SIGINFO;
+    sigfillset(&amp;sa.sa_mask);
+
+    for (sig = 1; sig &lt; NSIG; sig++)
+        if (sig != SIGTSTP &amp;&amp; sig != SIGQUIT)
+            sigaction(sig, &amp;sa, NULL);
+
+    /* Optionally block signals and sleep, allowing signals to be
+       sent to us before they are unblocked and handled */
+
+    if (argc &gt; 1) {
+        sigfillset(&amp;blockMask);
+        sigdelset(&amp;blockMask, SIGINT);
+        sigdelset(&amp;blockMask, SIGTERM);
+
+        if (sigprocmask(SIG_SETMASK, &amp;blockMask, &amp;prevMask) == -1)
+            errExit("sigprocmask");
+
+        printf("%s: signals blocked - sleeping %s seconds\n", argv[0], argv[1]);
+        sleep(getInt(argv[1], GN_GT_0, "block-time"));
+        printf("%s: sleep complete\n", argv[0]);
+
+        if (sigprocmask(SIG_SETMASK, &amp;prevMask, NULL) == -1)
+            errExit("sigprocmask");
+    }
+
+    while (!allDone)                    /* Wait for incoming signals */
+        pause();
+}
+     <strong class="userinput"><code>signals/catch_rtsigs.c</code></strong></pre></div></div></div></div><div class="sect1" title="Waiting for a Signal Using a Mask: sigsuspend()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="waiting_for_a_signal_using_a_mask_colon">Waiting for a Signal Using a Mask: <span class="emphasis"><em>sigsuspend()</em></span></h2></div></div></div><p>Before we explain what <span class="emphasis"><em>sigsuspend()</em></span> does, we first describe a
+                situation where we need to use it. Consider the following scenario that is sometimes
+                encountered when programming with signals:<a id="IDX-CHP-22-3472" class="indexterm"/><a id="IDX-CHP-22-3473" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>We temporarily block a signal so that the handler for the signal doesn’t
+                        interrupt the execution of some critical section of code.</p></li><li class="listitem"><p>We unblock the signal, and then suspend execution until the signal is
+                        delivered.</p></li></ol></div><p>In order to do this, we might try using code such as that shown in <a class="xref" href="ch22.html#incorrectly_unblocking_and_waiting_for_a" title="Example 22-4. Incorrectly unblocking and waiting for a signal">Example 22-4</a>.</p><div class="example"><a id="incorrectly_unblocking_and_waiting_for_a"/><div class="example-title">Example 22-4. Incorrectly unblocking and waiting for a signal</div><div class="example-contents"><pre class="programlisting">sigset_t prevMask, intMask;
+    struct sigaction sa;
+
+    sigemptyset(&amp;intMask);
+    sigaddset(&amp;intMask, SIGINT);
+
+    sigemptyset(&amp;sa.sa_mask);
+    sa.sa_flags = 0;
+    sa.sa_handler = handler;
+
+    if (sigaction(SIGINT, &amp;sa, NULL) == -1)
+        errExit("sigaction");
+
+    /* Block SIGINT prior to executing critical section. (At this
+       point we assume that SIGINT is not already blocked.) */
+
+    if (sigprocmask(SIG_BLOCK, &amp;intMask, &amp;prevMask) == -1)
+        errExit("sigprocmask - SIG_BLOCK");
+
+    /* Critical section: do some work here that must not be
+       interrupted by the SIGINT handler */
+
+    /* End of critical section - restore old mask to unblock SIGINT */
+
+    if (sigprocmask(SIG_SETMASK, &amp;prevMask, NULL) == -1)
+        errExit("sigprocmask - SIG_SETMASK");
+
+    /* BUG: what if SIGINT arrives now... */
+
+    pause();                            /* Wait for SIGINT */</pre></div></div><p>There is a problem with the code in <a class="xref" href="ch22.html#incorrectly_unblocking_and_waiting_for_a" title="Example 22-4. Incorrectly unblocking and waiting for a signal">Example 22-4</a>. Suppose that the <code class="literal">SIGINT</code> signal is delivered after execution of the
+                second <span class="emphasis"><em>sigprocmask()</em></span>, but before the
+                    <span class="emphasis"><em>pause()</em></span> call. (The signal might actually have been
+                generated at any time during the execution of the critical section, and then be
+                delivered only when it is unblocked.) Delivery of the <code class="literal">SIGINT</code> signal will cause the handler to be invoked, and after the
+                handler returns and the main program resumes, the <span class="emphasis"><em>pause()</em></span> call
+                will block until a <span class="emphasis"><em>second</em></span> instance of <code class="literal">SIGINT</code> is delivered. This defeats the purpose of the code, which was
+                to unblock <code class="literal">SIGINT</code> and then wait for its
+                    <span class="emphasis"><em>first</em></span> occurrence.<a id="IDX-CHP-22-3474" class="indexterm"/></p><p>Even if the likelihood of <code class="literal">SIGINT</code> being
+                generated between the start of the critical section (i.e., the first
+                    <span class="emphasis"><em>sigprocmask()</em></span> call) and the <span class="emphasis"><em>pause()</em></span>
+                call is small, this nevertheless constitutes a bug in the above code. This
+                time-dependent bug is an example of a race condition (<a class="xref" href="ch05.html#atomicity_and_race_conditions" title="Atomicity and Race Conditions">Atomicity and Race Conditions</a>). Normally, race conditions occur
+                where two processes or threads share common resources. However, in this case, the
+                main program is racing against its own signal handler.<a id="IDX-CHP-22-3475" class="indexterm"/></p><p>To avoid this problem, we require a means of <span class="emphasis"><em>atomically</em></span>
+                unblocking a signal and suspending the process. That is the purpose of the
+                    <span class="emphasis"><em>sigsuspend()</em></span> system call.<a id="IDX-CHP-22-3476" class="indexterm"/></p><a id="I_programlisting22_d1e63853"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigsuspend</code></strong>(const sigset_t *<span class="emphasis"><em>mask</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>(Normally) returns -1 with <span class="emphasis"><em>errno</em></span> set to <code class="literal">EINTR</code></p></div><p>The <span class="emphasis"><em>sigsuspend()</em></span> system call replaces the process signal mask
+                by the signal set pointed to by <span class="emphasis"><em>mask</em></span>, and then suspends
+                execution of the process until a signal is caught and its handler returns. Once the
+                handler returns, <span class="emphasis"><em>sigsuspend()</em></span> restores the process signal mask
+                to the value it had prior to the call.</p><p>Calling <span class="emphasis"><em>sigsuspend()</em></span> is equivalent to atomically performing
+                these operations:</p><a id="I_programlisting22_d1e63886"/><pre class="programlisting">sigprocmask(SIG_SETMASK, &amp;mask, &amp;prevMask);     /* Assign new mask */
+pause();
+sigprocmask(SIG_SETMASK, &amp;prevMask, NULL);      /* Restore old mask */</pre><p>Although restoring the old signal mask (i.e., the last step in the above sequence)
+                may at first appear inconvenient, it is essential to avoid race conditions in
+                situations where we need to repeatedly wait for signals. In such situations, the
+                signals must remain blocked except during the <span class="emphasis"><em>sigsuspend()</em></span>
+                calls. If we later need to unblock the signals that were blocked prior to the
+                    <span class="emphasis"><em>sigsuspend()</em></span> call, we can employ a further call to
+                    <span class="emphasis"><em>sigprocmask()</em></span>.</p><p>When <span class="emphasis"><em>sigsuspend()</em></span> is interrupted by delivery of a signal, it
+                returns -1, with <span class="emphasis"><em>errno</em></span> set to <code class="literal">EINTR</code>. If <span class="emphasis"><em>mask</em></span> doesn’t point to a valid address,
+                    <span class="emphasis"><em>sigsuspend()</em></span> fails with the error <code class="literal">EFAULT</code>.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="example_program-id25"/></div></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id26">Example program</h4></div></div></div><p><a class="xref" href="ch22.html#using_sigsuspend_open_parenthesis_close" title="Example 22-5. Using sigsuspend()">Example 22-5</a> demonstrates the
+                        use of <span class="emphasis"><em>sigsuspend()</em></span>. This program performs the
+                        following steps:<a id="IDX-CHP-22-3477" class="indexterm"/><a id="IDX-CHP-22-3478" class="indexterm"/><a id="IDX-CHP-22-3479" class="indexterm"/><a id="IDX-CHP-22-3480" class="indexterm"/><a id="IDX-CHP-22-3481" class="indexterm"/><a id="IDX-CHP-22-3482" class="indexterm"/><a id="IDX-CHP-22-3483" class="indexterm"/><a id="IDX-CHP-22-3484" class="indexterm"/><a id="IDX-CHP-22-3485" class="indexterm"/><a id="IDX-CHP-22-3486" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Display the initial value of the process signal mask using the
+                                    <span class="emphasis"><em>printSigMask()</em></span> function (<a class="xref" href="ch20.html#functions_for_displaying_signal_sets" title="Example 20-4. Functions for displaying signal sets">Example 20-4</a>, in <a class="xref" href="ch20.html#example_program-id22" title="Example program">Example program</a>) <span class="inlinemediaobject"><a id="I_inlinemediaobject22_d1e64003"/><img src="figs/web/U001.png" alt=""/></span>.</p></li><li class="listitem"><p>Block <code class="literal">SIGINT</code> and <code class="literal">SIGQUIT</code>, and save the original process
+                                signal mask <span class="inlinemediaobject"><a id="I_inlinemediaobject22_d1e64018"/><img src="figs/web/U002.png" alt=""/></span>.</p></li><li class="listitem"><p>Establish the same handler for both <code class="literal">SIGINT</code> and <code class="literal">SIGQUIT</code>
+                                <span class="inlinemediaobject"><a id="I_inlinemediaobject22_d1e64033"/><img src="figs/web/U003.png" alt=""/></span>. This handler displays a message, and, if it
+                                was invoked via delivery of <code class="literal">SIGQUIT</code>, sets the global variable
+                                    <span class="emphasis"><em>gotSigquit</em></span>.</p></li><li class="listitem"><p>Loop until <span class="emphasis"><em>gotSigquit</em></span> is set
+                                    <span class="inlinemediaobject"><a id="I_inlinemediaobject22_d1e64051"/><img src="figs/web/U004.png" alt=""/></span>. Each loop iteration performs the following
+                                steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Display the current value of the signal mask using our
+                                            <span class="emphasis"><em>printSigMask()</em></span> function.</p></li><li class="listitem"><p>Simulate a critical section by executing a CPU busy loop
+                                        for a few seconds.</p></li><li class="listitem"><p>Display the mask of pending signals using our
+                                            <span class="emphasis"><em>printPendingSigs()</em></span> function (<a class="xref" href="ch20.html#functions_for_displaying_signal_sets" title="Example 20-4. Functions for displaying signal sets">Example 20-4</a>).</p></li><li class="listitem"><p>Uses <span class="emphasis"><em>sigsuspend()</em></span> to unblock <code class="literal">SIGINT</code> and <code class="literal">SIGQUIT</code> and wait for a signal
+                                        (if one is not already pending).</p></li></ul></div></li><li class="listitem"><p>Use <span class="emphasis"><em>sigprocmask()</em></span> to restore the process
+                                signal mask to its original state <span class="inlinemediaobject"><a id="I_inlinemediaobject22_d1e64093"/><img src="figs/web/U005.png" alt=""/></span>, and then display the signal mask using
+                                    <span class="emphasis"><em>printSigMask()</em></span><span class="inlinemediaobject"><a id="I_inlinemediaobject22_d1e64101"/><img src="figs/web/U006.png" alt=""/></span>.</p></li></ul></div><div class="example"><a id="using_sigsuspend_open_parenthesis_close"/><div class="example-title">Example 22-5. Using <span class="emphasis"><em>sigsuspend()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/t_sigsuspend.c</code></strong>
+    #define _GNU_SOURCE     /* Get strsignal() declaration from &lt;string.h&gt; */
+    #include &lt;string.h&gt;
+    #include &lt;signal.h&gt;
+    #include &lt;time.h&gt;
+    #include "signal_functions.h"           /* Declarations of printSigMask()
+                                               and printPendingSigs() */
+    #include "tlpi_hdr.h"
+
+    static volatile sig_atomic_t gotSigquit = 0;
+
+    static void
+    handler(int sig)
+    {
+        printf("Caught signal %d (%s)\n", sig, strsignal(sig));
+                                            /* UNSAFE (see Section 21.1.2) */
+        if (sig == SIGQUIT)
+            gotSigquit = 1;
+    }
+
+    int
+    main(int argc, char *argv[])
+    {
+        int loopNum;
+        time_t startTime;
+        sigset_t origMask, blockMask;
+        struct sigaction sa;
+
+<img src="figs/web/U001.png" alt=""/>    printSigMask(stdout, "Initial signal mask is:\n");
+
+        sigemptyset(&amp;blockMask);
+        sigaddset(&amp;blockMask, SIGINT);
+        sigaddset(&amp;blockMask, SIGQUIT);
+<img src="figs/web/U002.png" alt=""/>    if (sigprocmask(SIG_BLOCK, &amp;blockMask, &amp;origMask) == -1)
+            errExit("sigprocmask - SIG_BLOCK");
+
+        sigemptyset(&amp;sa.sa_mask);
+        sa.sa_flags = 0;
+        sa.sa_handler = handler;
+    <img src="figs/web/U003.png" alt=""/>     if (sigaction(SIGINT, &amp;sa, NULL) == -1)
+            errExit("sigaction");
+        if (sigaction(SIGQUIT, &amp;sa, NULL) == -1)
+            errExit("sigaction");
+
+<img src="figs/web/U004.png" alt=""/>     for (loopNum = 1; !gotSigquit; loopNum++) {
+            printf("=== LOOP %d\n", loopNum);
+
+            /* Simulate a critical section by delaying a few seconds */
+
+            printSigMask(stdout, "Starting critical section, signal mask is:\n");
+            for (startTime = time(NULL); time(NULL) &lt; startTime + 4; )
+                continue;                   /* Run for a few seconds elapsed time */
+
+            printPendingSigs(stdout,
+                    "Before sigsuspend() - pending signals:\n");
+            if (sigsuspend(&amp;origMask) == -1 &amp;&amp; errno != EINTR)
+                errExit("sigsuspend");
+        }
+
+<img src="figs/web/U001.png" alt=""/>     if (sigprocmask(SIG_SETMASK, &amp;origMask, NULL) == -1)
+            errExit("sigprocmask - SIG_SETMASK");
+
+<img src="figs/web/U006.png" alt=""/>     printSigMask(stdout, "=== Exited loop\nRestored signal mask to:\n");
+
+        /* Do other processing... */
+
+        exit(EXIT_SUCCESS);
+    }
+         <strong class="userinput"><code>signals/t_sigsuspend.c</code></strong></pre></div></div><p>The following shell session log shows an example of what we see when
+                        running the program in <a class="xref" href="ch22.html#using_sigsuspend_open_parenthesis_close" title="Example 22-5. Using sigsuspend()">Example 22-5</a>:</p><a id="I_programlisting22_d1e64159"/><pre class="programlisting">$ <strong class="userinput"><code>./t_sigsuspend</code></strong>
+Initial signal mask is:
+                &lt;empty signal set&gt;
+=== LOOP 1
+Starting critical section, signal mask is:
+                2 (Interrupt)
+                3 (Quit)
+<em class="lineannotation"><span class="lineannotation">Type Control-C;</span></em> SIGINT <em class="lineannotation"><span class="lineannotation">is generated, but remains pending because it is blocked</span></em>
+Before sigsuspend() - pending signals:
+                2 (Interrupt)
+Caught signal 2 (Interrupt)         <em class="lineannotation"><span class="lineannotation">sigsuspend() is called, signals are unblocked</span></em></pre><p>The last line of output appeared when the program called
+                            <span class="emphasis"><em>sigsuspend()</em></span>, which caused <code class="literal">SIGINT</code> to be unblocked. At that point, the signal handler was
+                        called and displayed that line of output.</p><p>The main program continues its loop:</p><a id="I_programlisting22_d1e64182"/><pre class="programlisting">=== LOOP 2
+Starting critical section, signal mask is:
+                2 (Interrupt)
+                3 (Quit)
+<em class="lineannotation"><span class="lineannotation">Type Control-\ to generate</span></em> SIGQUIT
+Before sigsuspend() - pending signals:
+                3 (Quit)
+Caught signal 3 (Quit)              <em class="lineannotation"><span class="lineannotation">sigsuspend() is called, signals are unblocked</span></em>
+=== Exited loop                     <em class="lineannotation"><span class="lineannotation">Signal handler set gotSigquit</span></em>
+Restored signal mask to:
+                &lt;empty signal set&gt;</pre><p>This time, we typed <span class="emphasis"><em>Control-\</em></span>, which caused the
+                        signal handler to set the <span class="emphasis"><em>gotSigquit</em></span> flag, which in
+                        turn caused the main program to terminate its loop.</p></div></div></div><div class="sect1" title="Synchronously Waiting for a Signal"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="synchronously_waiting_for_a_signal">Synchronously Waiting for a Signal</h2></div></div></div><p>In <a class="xref" href="ch22.html#waiting_for_a_signal_using_a_mask_colon" title="Waiting for a Signal Using a Mask: sigsuspend()">Waiting for a Signal Using a Mask: <span class="emphasis"><em>sigsuspend()</em></span></a>, we saw how to use a
+                signal handler plus <span class="emphasis"><em>sigsuspend()</em></span> to suspend execution of a
+                process until a signal is delivered. However, the need to write a signal handler and
+                to handle the complexities of asynchronous delivery makes this approach cumbersome
+                for some applications. Instead, we can use the <span class="emphasis"><em>sigwaitinfo()</em></span>
+                system call to synchronously <span class="emphasis"><em>accept</em></span> a signal.<a id="IDX-CHP-22-3487" class="indexterm"/><a id="IDX-CHP-22-3488" class="indexterm"/><a id="IDX-CHP-22-3489" class="indexterm"/><a id="IDX-CHP-22-3490" class="indexterm"/><a id="IDX-CHP-22-3491" class="indexterm"/><a id="IDX-CHP-22-3492" class="indexterm"/><a id="IDX-CHP-22-3493" class="indexterm"/></p><a id="I_programlisting22_d1e64258"/><pre class="programlisting">#define _POSIX_C_SOURCE 199309
+#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigwaitinfo</code></strong>(const sigset_t *<span class="emphasis"><em>set</em></span>, siginfo_t *<span class="emphasis"><em>info</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns signal number on success, or -1 on error</p></div><p>The <span class="emphasis"><em>sigwaitinfo()</em></span> system call suspends execution of the
+                process until one of the signals in the signal set pointed to by
+                    <span class="emphasis"><em>set</em></span> is delivered. If one of the signals in
+                    <span class="emphasis"><em>set</em></span> is already pending at the time of the call,
+                    <span class="emphasis"><em>sigwaitinfo()</em></span> returns immediately. The delivered signal is
+                removed from the process’s list of pending signals, and the signal number is
+                returned as the function result. If the <span class="emphasis"><em>info</em></span> argument is not
+                    <code class="literal">NULL</code>, then it points to a
+                    <span class="emphasis"><em>siginfo_t</em></span> structure that is initialized to contain the same
+                information provided to a signal handler taking a <span class="emphasis"><em>siginfo_t</em></span>
+                argument (<a class="xref" href="ch21.html#the_sa_underscore_siginfo_flag" title="The SA_SIGINFO Flag">The <code class="literal">SA_SIGINFO</code> Flag</a>).<a id="IDX-CHP-22-3494" class="indexterm"/></p><p>The delivery order and queuing characteristics of signals accepted by
+                    <span class="emphasis"><em>sigwaitinfo()</em></span> are the same as for signals caught by a
+                signal handler; that is, standard signals are not queued, and realtime signals are
+                queued and delivered lowest signal number first.</p><p>As well as saving us the extra baggage of writing a signal handler, waiting for
+                signals using <span class="emphasis"><em>sigwaitinfo()</em></span> is somewhat faster than the
+                combination of a signal handler plus <span class="emphasis"><em>sigsuspend()</em></span> (see Exercise
+                22-3).</p><p>It usually makes sense to use <span class="emphasis"><em>sigwaitinfo()</em></span> only in
+                conjunction with blocking the set of signals for which we were interested in
+                waiting. (We can fetch a pending signal with <span class="emphasis"><em>sigwaitinfo()</em></span> even
+                while that signal is blocked.) If we fail to do this and a signal arrives before the
+                first, or between successive calls to <span class="emphasis"><em>sigwaitinfo()</em></span>, then the
+                signal will be handled according to its current disposition.</p><p>An example of the use of <span class="emphasis"><em>sigwaitinfo()</em></span> is shown in <a class="xref" href="ch22.html#synchronously_waiting_for_a_signal_with" title="Example 22-6. Synchronously waiting for a signal with sigwaitinfo()">Example 22-6</a>. This program first blocks
+                all signals, then delays for the number of seconds specified in its optional
+                command-line argument. This allows signals to be sent to the program before
+                    <span class="emphasis"><em>sigwaitinfo()</em></span>. The program then loops continuously using
+                    <span class="emphasis"><em>sigwaitinfo()</em></span> to accept incoming signals, until <code class="literal">SIGINT</code> or <code class="literal">SIGTERM</code>
+                is received.</p><p>The following shell session log demonstrates the use of the program in <a class="xref" href="ch22.html#synchronously_waiting_for_a_signal_with" title="Example 22-6. Synchronously waiting for a signal with sigwaitinfo()">Example 22-6</a>. We run the program in the
+                background, specifying that it should delay 60 seconds before calling
+                    <span class="emphasis"><em>sigwaitinfo()</em></span>, and then send it two signals:</p><a id="I_programlisting22_d1e64357"/><pre class="programlisting">$ <strong class="userinput"><code>./t_sigwaitinfo 60 &amp;</code></strong>
+./t_sigwaitinfo: PID is 3837
+./t_sigwaitinfo: signals blocked
+./t_sigwaitinfo: about to delay 60 seconds
+[1] 3837
+$ <strong class="userinput"><code>./t_sigqueue 3837 43 100</code></strong>                  <em class="lineannotation"><span class="lineannotation">Send signal 43</span></em>
+./t_sigqueue: PID is 3839, UID is 1000
+$ <strong class="userinput"><code>./t_sigqueue 3837 42 200</code></strong>                  <em class="lineannotation"><span class="lineannotation">Send signal 42</span></em>
+./t_sigqueue: PID is 3840, UID is 1000</pre><p>Eventually, the program completes its sleep interval, and the
+                    <span class="emphasis"><em>sigwaitinfo()</em></span> loop accepts the queued signals. (We see a
+                shell prompt mixed with the next line of the program’s output because the
+                    <span class="emphasis"><em>t_sigwaitinfo</em></span> program is writing output from the
+                background.) As with realtime signals caught with a handler, we see that signals are
+                delivered lowest number first, and that the <span class="emphasis"><em>siginfo_t</em></span> structure
+                passed to the signal handler allows us to obtain the process ID and user ID of the
+                sending process:</p><a id="I_programlisting22_d1e64386"/><pre class="programlisting">$ ./t_sigwaitinfo: finished delay
+got signal: 42
+    si_signo=42, si_code=-1 (SI_QUEUE), si_value=200
+    si_pid=3840, si_uid=1000
+got signal: 43
+    si_signo=43, si_code=-1 (SI_QUEUE), si_value=100
+    si_pid=3839, si_uid=1000</pre><p>We continue, using the shell <span class="emphasis"><em>kill</em></span> command to send a signal to
+                the process. This time, we see that the <span class="emphasis"><em>si_code</em></span> field is set to
+                    <code class="literal">SI_USER</code> (instead of <code class="literal">SI_QUEUE</code>):</p><a id="I_programlisting22_d1e64402"/><pre class="programlisting"><em class="lineannotation"><span class="lineannotation">Press Enter to see next shell prompt</span></em>
+$ <strong class="userinput"><code>echo $$</code></strong>                                   <em class="lineannotation"><span class="lineannotation">Display PID of shell</span></em>
+3744
+$ <strong class="userinput"><code>kill -USR1 3837</code></strong>                           <em class="lineannotation"><span class="lineannotation">Shell sends</span></em> SIGUSR1 <em class="lineannotation"><span class="lineannotation">using</span></em> kill()
+$ got signal: 10                            <em class="lineannotation"><span class="lineannotation">Delivery of SIGUSR1</span></em>
+    si_signo=10, si_code=0 (SI_USER), si_value=100
+    si_pid=3744, si_uid=1000                <em class="lineannotation"><span class="lineannotation">3744 is PID of shell</span></em>
+<em class="lineannotation"><span class="lineannotation">Press Enter to see next shell prompt</span></em>
+$ <strong class="userinput"><code>kill %1</code></strong>                                   <em class="lineannotation"><span class="lineannotation">Terminate program with</span></em> SIGTERM
+$
+<em class="lineannotation"><span class="lineannotation">Press Enter to see notification of background job termination</span></em>
+[1]+  Done                    ./t_sigwaitinfo 60</pre><p>In the output for the accepted <code class="literal">SIGUSR1</code> signal,
+                we see that the <span class="emphasis"><em>si_value</em></span> field has the value 100. This is the
+                value to which the field was initialized by the preceding signal that was sent using
+                    <span class="emphasis"><em>sigqueue()</em></span>. We noted earlier that the
+                    <span class="emphasis"><em>si_value</em></span> field contains valid information only for signals
+                sent using <span class="emphasis"><em>sigqueue()</em></span>.</p><div class="example"><a id="synchronously_waiting_for_a_signal_with"/><div class="example-title">Example 22-6. Synchronously waiting for a signal with
+                    <span class="emphasis"><em>sigwaitinfo()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/t_sigwaitinfo.c</code></strong>
+#define _GNU_SOURCE
+#include &lt;string.h&gt;
+#include &lt;signal.h&gt;
+#include &lt;time.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int sig;
+    siginfo_t si;
+    sigset_t allSigs;
+
+    if (argc &gt; 1 &amp;&amp; strcmp(argv[1], "--help") == 0)
+        usageErr("%s [delay-secs]\n", argv[0]);
+
+    printf("%s: PID is %ld\n", argv[0], (long) getpid());
+
+    /* Block all signals (except SIGKILL and SIGSTOP) */
+
+    sigfillset(&amp;allSigs);
+    if (sigprocmask(SIG_SETMASK, &amp;allSigs, NULL) == -1)
+        errExit("sigprocmask");
+    printf("%s: signals blocked\n", argv[0]);
+
+    if (argc &gt; 1) {             /* Delay so that signals can be sent to us */
+        printf("%s: about to delay %s seconds\n", argv[0], argv[1]);
+        sleep(getInt(argv[1], GN_GT_0, "delay-secs"));
+        printf("%s: finished delay\n", argv[0]);
+    }
+
+    for (;;) {                  /* Fetch signals until SIGINT (^C) or SIGTERM */
+        sig = sigwaitinfo(&amp;allSigs, &amp;si);
+        if (sig == -1)
+            errExit("sigwaitinfo");
+
+        if (sig == SIGINT || sig == SIGTERM)
+            exit(EXIT_SUCCESS);
+
+        printf("got signal: %d (%s)\n", sig, strsignal(sig));
+        printf("    si_signo=%d, si_code=%d (%s), si_value=%d\n",
+                si.si_signo, si.si_code,
+                (si.si_code == SI_USER) ? "SI_USER" :
+                    (si.si_code == SI_QUEUE) ? "SI_QUEUE" : "other",
+                si.si_value.sival_int);
+        printf("    si_pid=%ld, si_uid=%ld\n",
+                (long) si.si_pid, (long) si.si_uid);
+    }
+}
+      <strong class="userinput"><code>signals/t_sigwaitinfo.c</code></strong></pre></div></div><p>The <span class="emphasis"><em>sigtimedwait()</em></span> system call is a variation on
+                    <span class="emphasis"><em>sigwaitinfo()</em></span>. The only difference is that
+                    <span class="emphasis"><em>sigtimedwait()</em></span> allows us to specify a time limit for
+                    waiting.<a id="IDX-CHP-22-3495" class="indexterm"/></p><a id="I_programlisting22_d1e64483"/><pre class="programlisting">#define _POSIX_C_SOURCE 199309
+#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigtimedwait</code></strong>(const sigset_t *<span class="emphasis"><em>set</em></span>, siginfo_t *<span class="emphasis"><em>info</em></span>,
+                 const struct timespec *<span class="emphasis"><em>timeout</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns signal number on success, or -1 on error or timeout (<code class="literal">EAGAIN</code>)</p></div><p>The <span class="emphasis"><em>timeout</em></span> argument specifies the maximum time that
+                    <span class="emphasis"><em>sigtimedwait()</em></span> should wait for a signal. It is a pointer to
+                a structure of the following type:</p><a id="I_programlisting22_d1e64511"/><pre class="programlisting">struct timespec {
+    time_t tv_sec;      /* Seconds ('time_t' is an integer type) */
+    long   tv_nsec;     /* Nanoseconds */
+};</pre><p>The fields of the <span class="emphasis"><em>timespec</em></span> structure are filled in to specify
+                the maximum number of seconds and nanoseconds that
+                    <span class="emphasis"><em>sigtimedwait()</em></span> should wait. Specifying both fields of the
+                structure as 0 causes an immediate timeout—that is, a poll to check if any of the
+                specified set of signals is pending. If the call times out without a signal being
+                delivered, <span class="emphasis"><em>sigtimedwait()</em></span> fails with the error <code class="literal">EAGAIN</code>.<a id="IDX-CHP-22-3496" class="indexterm"/></p><p>If the <span class="emphasis"><em>timeout</em></span> argument is specified as <code class="literal">NULL</code>, then <span class="emphasis"><em>sigtimedwait()</em></span> is
+                exactly equivalent to <span class="emphasis"><em>sigwaitinfo()</em></span>. SUSv3 leaves the meaning
+                of a <code class="literal">NULL</code>
+                <span class="emphasis"><em>timeout</em></span> unspecified, and some UNIX implementations instead
+                interpret this as a poll request that returns immediately.</p></div><div class="sect1" title="Fetching Signals via a File Descriptor"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="fetching_signals_via_a_file_descriptor">Fetching Signals via a File Descriptor</h2></div></div></div><p>Starting with kernel 2.6.22, Linux provides the (nonstandard)
+                    <span class="emphasis"><em>signalfd()</em></span> system call, which creates a special file
+                descriptor from which signals directed to the caller can be read. The
+                    <span class="emphasis"><em>signalfd</em></span> mechanism provides an alternative to the use of
+                    <span class="emphasis"><em>sigwaitinfo()</em></span> for synchronously accepting
+                    signals.<a id="IDX-CHP-22-3497" class="indexterm"/><a id="IDX-CHP-22-3498" class="indexterm"/><a id="IDX-CHP-22-3499" class="indexterm"/><a id="IDX-CHP-22-3500" class="indexterm"/><a id="IDX-CHP-22-3501" class="indexterm"/><a id="IDX-CHP-22-3502" class="indexterm"/><a id="IDX-CHP-22-3503" class="indexterm"/><a id="IDX-CHP-22-3504" class="indexterm"/><a id="IDX-CHP-22-3505" class="indexterm"/><a id="IDX-CHP-22-3506" class="indexterm"/><a id="IDX-CHP-22-3507" class="indexterm"/><a id="IDX-CHP-22-3508" class="indexterm"/><a id="IDX-CHP-22-3509" class="indexterm"/><a id="IDX-CHP-22-3510" class="indexterm"/><a id="IDX-CHP-22-3511" class="indexterm"/><a id="IDX-CHP-22-3512" class="indexterm"/><a id="IDX-CHP-22-3513" class="indexterm"/><a id="IDX-CHP-22-3514" class="indexterm"/><a id="IDX-CHP-22-3515" class="indexterm"/><a id="IDX-CHP-22-3516" class="indexterm"/><a id="IDX-CHP-22-3517" class="indexterm"/></p><a id="I_programlisting22_d1e64690"/><pre class="programlisting">#include &lt;sys/signalfd.h&gt;
+
+int <strong class="userinput"><code>signalfd</code></strong>(int <span class="emphasis"><em>fd</em></span>, const sigset_t *<span class="emphasis"><em>maskl</em></span>, int <span class="emphasis"><em>flags</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns file descriptor on success, or -1 on error</p></div><p>The <span class="emphasis"><em>mask</em></span> argument is a signal set that specifies the signals
+                that we want to be able to read via the <span class="emphasis"><em>signalfd</em></span> file
+                descriptor. As with <span class="emphasis"><em>sigwaitinfo()</em></span>, we should normally also
+                block all of the signals in <span class="emphasis"><em>mask</em></span> using
+                    <span class="emphasis"><em>sigprocmask()</em></span>, so that the signals don’t get handled
+                according to their default dispositions before we have a chance to read them.</p><p>If <span class="emphasis"><em>fd</em></span> is specified as -1, then
+                    <span class="emphasis"><em>signalfd()</em></span> creates a new file descriptor that can be used
+                to read the signals in <span class="emphasis"><em>mask</em></span>; otherwise, it modifies the mask
+                associated with <span class="emphasis"><em>fd</em></span>, which must be a file descriptor created by
+                a previous call to <span class="emphasis"><em>signalfd()</em></span>.</p><p>In the initial implementation, the <span class="emphasis"><em>flags</em></span> argument was
+                reserved for future use and had to be specified as 0. However, since Linux 2.6.27,
+                two flags are supported:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">SFD_CLOEXEC</code>
+                    </span></dt><dd><p>Set the close-on-exec flag (<code class="literal">FD_CLOEXEC</code>) for the new file descriptor. This flag is
+                            useful for the same reasons as the <span class="emphasis"><em>open()</em></span>
+                            <code class="literal">O_CLOEXEC</code> flag described in <a class="xref" href="ch04.html#file_descriptor_number_returned_by-id1" title="File descriptor number returned by open()">File descriptor number returned by <span class="emphasis"><em>open()</em></span></a>.</p></dd><dt><span class="term">
+                        <code class="literal">SFD_NONBLOCK</code>
+                    </span></dt><dd><p>Set the <code class="literal">O_NONBLOCK</code> flag on the
+                            underlying open file description, so that future reads will be
+                            nonblocking. This saves additional calls to <span class="emphasis"><em>fcntl()</em></span>
+                            to achieve the same result.</p></dd></dl></div><p>Having created the file descriptor, we can then read signals from it using
+                    <span class="emphasis"><em>read()</em></span>. The buffer given to <span class="emphasis"><em>read()</em></span>
+                must be large enough to hold at least one <span class="emphasis"><em>signalfd_siginfo</em></span>
+                structure, defined as follows in <code class="literal">&lt;sys/signalfd.h&gt;</code>:<a id="IDX-CHP-22-3518" class="indexterm"/></p><a id="I_programlisting22_d1e64797"/><pre class="programlisting">struct signalfd_siginfo {
+    uint32_t  ssi_signo;    /* Signal number */
+    int32_t   ssi_errno;    /* Error number (generally unused) */
+    int32_t   ssi_code;     /* Signal code */
+    uint32_t  ssi_pid;      /* Process ID of sending process */
+    uint32_t  ssi_uid;      /* Real user ID of sender */
+    int32_t   ssi_fd;       /* File descriptor (SIGPOLL/SIGIO) */
+    uint32_t  ssi_tid;      /* Kernel timer ID (POSIX timers) */
+    uint32_t  ssi_band;     /* Band event (SIGPOLL/SIGIO) */
+    uint32_t  ssi_tid;      /* (Kernel-internal) timer ID (POSIX timers) */
+    uint32_t  ssi_overrun;  /* Overrun count (POSIX timers) */
+    uint32_t  ssi_trapno;   /* Trap number */
+    int32_t   ssi_status;   /* Exit status or signal (SIGCHLD) */
+    int32_t   ssi_int;      /* Integer sent by sigqueue() */
+    uint64_t  ssi_ptr;      /* Pointer sent by sigqueue() */
+    uint64_t  ssi_utime;    /* User CPU time (SIGCHLD) */
+    uint64_t  ssi_stime;    /* System CPU time (SIGCHLD) */
+    uint64_t  ssi_addr;     /* Address that generated signal
+                               (hardware-generated signals only) */
+};</pre><p>The fields in this structure return the same information as the similarly named
+                fields in the traditional <span class="emphasis"><em>siginfo_t</em></span> structure (<a class="xref" href="ch21.html#the_sa_underscore_siginfo_flag" title="The SA_SIGINFO Flag">The <code class="literal">SA_SIGINFO</code> Flag</a>).<a id="IDX-CHP-22-3519" class="indexterm"/></p><p>Each call to <span class="emphasis"><em>read()</em></span> returns as many
+                    <span class="emphasis"><em>signalfd_siginfo</em></span> structures as there are signals pending
+                and will fit in the supplied buffer. If no signals are pending at the time of the
+                call, then <span class="emphasis"><em>read()</em></span> blocks until a signal arrives. We can also
+                use the <span class="emphasis"><em>fcntl()</em></span>
+                <code class="literal">F_SETFL</code> operation (<a class="xref" href="ch05.html#open_file_status_flags" title="Open File Status Flags">Open File Status Flags</a>) to set the <code class="literal">O_NONBLOCK</code> flag for the file descriptor, so that reads are
+                nonblocking and will fail with the error <code class="literal">EAGAIN</code>
+                if no signals are pending.</p><p>When a signal is read from a <span class="emphasis"><em>signalfd</em></span> file descriptor, it is
+                consumed and ceases to be pending for the process.</p><div class="example"><a id="using_signalfd_open_parenthesis_close_pa"/><div class="example-title">Example 22-7. Using <span class="emphasis"><em>signalfd()</em></span> to read signals</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/signalfd_sigval.c</code></strong>
+#include &lt;sys/signalfd.h&gt;
+#include &lt;signal.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    sigset_t mask;
+    int sfd, j;
+    struct signalfd_siginfo fdsi;
+    ssize_t s;
+
+    if (argc &lt; 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s sig-num...\n", argv[0]);
+
+    printf("%s: PID = %ld\n", argv[0], (long) getpid());
+
+    sigemptyset(&amp;mask);
+    for (j = 1; j &lt; argc; j++)
+        sigaddset(&amp;mask, atoi(argv[j]));
+
+    if (sigprocmask(SIG_BLOCK, &amp;mask, NULL) == -1)
+        errExit("sigprocmask");
+
+    sfd = signalfd(-1, &amp;mask, 0);
+    if (sfd == -1)
+        errExit("signalfd");
+
+    for (;;) {
+        s = read(sfd, &amp;fdsi, sizeof(struct signalfd_siginfo));
+        if (s != sizeof(struct signalfd_siginfo))
+            errExit("read");
+
+        printf("%s: got signal %d", argv[0], fdsi.ssi_signo);
+        if (fdsi.ssi_code == SI_QUEUE) {
+            printf("; ssi_pid = %d; ", fdsi.ssi_pid);
+            printf("ssi_int = %d", fdsi.ssi_int);
+        }
+        printf("\n");
+    }
+}
+      <strong class="userinput"><code>signals/signalfd_sigval.c</code></strong></pre></div></div><p>A <span class="emphasis"><em>signalfd</em></span> file descriptor can be monitored along with other
+                descriptors using <span class="emphasis"><em>select()</em></span>, <span class="emphasis"><em>poll()</em></span>, and
+                    <span class="emphasis"><em>epoll</em></span> (described in <a class="xref" href="ch63.html" title="Chapter 63. Alternative I/O Models">Chapter 63</a>). Among other uses, this feature
+                provides an alternative to the self-pipe trick described in <a class="xref" href="ch63.html#the_self-pipe_trick" title="The Self-Pipe Trick">The Self-Pipe Trick</a>. If signals are pending, then these techniques
+                indicate the file descriptor as being readable.</p><p>When we no longer require a <span class="emphasis"><em>signalfd</em></span> file descriptor, we
+                should close it, in order to release the associated kernel resources.</p><p><a class="xref" href="ch22.html#using_signalfd_open_parenthesis_close_pa" title="Example 22-7. Using signalfd() to read signals">Example 22-7</a> (in <a class="xref" href="ch22.html#interprocess_communication_with_signals" title="Interprocess Communication with Signals">Interprocess Communication with Signals</a>) demonstrates the use of
+                    <span class="emphasis"><em>signalfd()</em></span>. This program creates a mask of the signal
+                numbers specified in its command-line arguments, blocks those signals, and then
+                creates a <span class="emphasis"><em>signalfd</em></span> file descriptor to read those signals. It
+                then loops, reading signals from the file descriptor and displaying some of the
+                information from the returned <span class="emphasis"><em>signalfd_siginfo</em></span> structure. In
+                the following shell session, we run the program in <a class="xref" href="ch22.html#using_signalfd_open_parenthesis_close_pa" title="Example 22-7. Using signalfd() to read signals">Example 22-7</a> in the background and send
+                it a realtime signal with accompanying data using the program in <a class="xref" href="ch22.html#using_sigqueue_open_parenthesis_close_pa" title="Example 22-2. Using sigqueue() to send realtime signals">Example 22-2</a> (<code class="literal">t_sigqueue.c</code>):</p><a id="I_programlisting22_d1e64901"/><pre class="programlisting">$ <strong class="userinput"><code>./signalfd_sigval 44 &amp;</code></strong>
+./signalfd_sigval: PID = 6267
+[1] 6267
+$ <strong class="userinput"><code>./t_sigqueue 6267 44 123</code></strong>          <em class="lineannotation"><span class="lineannotation">Send signal 44 with data 123 to PID 6267</span></em>
+./t_sigqueue: PID is 6269, UID is 1000
+./signalfd_sigval: got signal 44; ssi_pid=6269; ssi_int=123
+$ <strong class="userinput"><code>kill %1</code></strong>                           <em class="lineannotation"><span class="lineannotation">Kill program running in background</span></em></pre></div><div class="sect1" title="Interprocess Communication with Signals"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="interprocess_communication_with_signals">Interprocess Communication with Signals</h2></div></div></div><p>From one viewpoint, we can consider signals as a form of interprocess
+                communication (IPC). However, signals suffer a number of limitations as an IPC
+                mechanism. First, by comparison with other methods of IPC that we examine in later
+                chapters, programming with signals is cumbersome and difficult. The reasons for this
+                are as follows:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The asynchronous nature of signals means that we face various problems,
+                        including reentrancy requirements, race conditions, and the correct handling
+                        of global variables from signal handlers. (Most of these problems do not
+                        occur if we are using <span class="emphasis"><em>sigwaitinfo()</em></span> or
+                            <span class="emphasis"><em>signalfd()</em></span> to synchronously fetch signals.)</p></li><li class="listitem"><p>Standard signals are not queued. Even for realtime signals, there are
+                        upper limits on the number of signals that may be queued. This means that in
+                        order to avoid loss of information, the process receiving the signals must
+                        have a method of informing the sender that it is ready to receive another
+                        signal. The most obvious method of doing this is for the receiver to send a
+                        signal to the sender.</p></li></ul></div><p>A further problem is that signals carry only a limited amount of information: the
+                signal number, and in the case of realtime signals, a word (an integer or a pointer)
+                of additional data. This low bandwidth makes signals slow by comparison with other
+                methods of IPC such as pipes.</p><p>As a consequence of the above limitations, signals are rarely used for
+                    IPC.<a id="IDX-CHP-22-3520" class="indexterm"/></p></div><div class="sect1" title="Earlier Signal APIs (System V and BSD)"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="earlier_signal_apis_open_parenthesis_sys">Earlier Signal APIs (System V and BSD)</h2></div></div></div><p>Our discussion of signals has focused on the POSIX signal API. We now briefly look
+                at the historical APIs provided by System V and BSD. Although all new applications
+                should use the POSIX API, we may encounter these obsolete APIs when porting (usually
+                older) applications from other UNIX implementations. Because Linux (like many other
+                UNIX implementations) provides System V and BSD compatibility APIs, often all that
+                is required to port programs using these older APIs is to recompile them on
+                    Linux.<a id="IDX-CHP-22-3522" class="indexterm"/><a id="IDX-CHP-22-3523" class="indexterm"/><a id="IDX-CHP-22-3524" class="indexterm"/><a id="IDX-CHP-22-3525" class="indexterm"/><a id="IDX-CHP-22-3526" class="indexterm"/><a id="IDX-CHP-22-3527" class="indexterm"/><a id="IDX-CHP-22-3528" class="indexterm"/><a id="IDX-CHP-22-3529" class="indexterm"/><a id="IDX-CHP-22-3521" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="the_system_v_signal_api"/></div></div></div><div class="sect3" title="The System V signal API"><div class="titlepage"><div><div><h4 class="title" id="the_system_v_signal_api-id1">The System V signal API</h4></div></div></div><p>As noted earlier, one important difference in the System V signal API is
+                        that when a handler is established with <span class="emphasis"><em>signal()</em></span>, we
+                        get the older, unreliable signal semantics. This means that the signal is
+                        not added to the process signal mask, the disposition of the signal is reset
+                        to the default when the handler is called, and system calls are not
+                        automatically restarted.</p><p>Below, we briefly describe the functions in the System V signal API. The
+                        manual pages provide full details. SUSv3 specifies all of these functions,
+                        but notes that the modern POSIX equivalents are preferred. SUSv4 marks these
+                        functions obsolete.</p><a id="I_programlisting22_d1e65017"/><pre class="programlisting">#define _XOPEN_SOURCE 500
+#include &lt;signal.h&gt;
+
+void (*<strong class="userinput"><code>sigset</code></strong>(int <em class="lineannotation"><span class="lineannotation">sig</span></em>, void (*<em class="lineannotation"><span class="lineannotation">handler</span></em>)(int)))(int);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>On success: returns the previous disposition of
+                                <span class="emphasis"><em>sig</em></span>, or <code class="literal">SIG_HOLD</code> if <span class="emphasis"><em>sig</em></span> was previously
+                            blocked; on error -1 is returned</p></div><p>To establish a signal handler with reliable semantics, System V provided
+                        the <span class="emphasis"><em>sigset()</em></span> call (with a prototype similar to that of
+                            <span class="emphasis"><em>signal()</em></span>). As with <span class="emphasis"><em>signal()</em></span>,
+                        the <span class="emphasis"><em>handler</em></span> argument for <span class="emphasis"><em>sigset()</em></span>
+                        can be specified as <code class="literal">SIG_IGN, SIG_DFL</code>, or
+                        the address of a signal handler. Alternatively, it can be specified as
+                            <code class="literal">SIG_HOLD</code>, to add the signal to the
+                        process signal mask while leaving the disposition of the signal
+                            unchanged.<a id="IDX-CHP-22-3530" class="indexterm"/></p><p>If <span class="emphasis"><em>handler</em></span> is specified as anything other than
+                            <code class="literal">SIG_HOLD</code>, <span class="emphasis"><em>sig</em></span> is
+                        removed from the process signal mask (i.e., if <span class="emphasis"><em>sig</em></span> was
+                        blocked, it is unblocked).</p><a id="I_programlisting22_d1e65082"/><pre class="programlisting">#define _XOPEN_SOURCE 500
+#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sighold</code></strong>(int <span class="emphasis"><em>sig</em></span>);
+int <strong class="userinput"><code>sigrelse</code></strong>(int <span class="emphasis"><em>sig</em></span>);
+int <strong class="userinput"><code>sigignore</code></strong>(int <span class="emphasis"><em>sig</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>All return 0 on success, or -1 on error</p></div><a id="I_programlisting22_d1e65106"/><pre class="programlisting">int <strong class="userinput"><code>sigpause</code></strong>(int <em class="lineannotation"><span class="lineannotation">sig</span></em>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Always returns -1 with <span class="emphasis"><em>errno</em></span> set to <code class="literal">EINTR</code></p></div><p>The <span class="emphasis"><em>sighold()</em></span> function adds a signal to the process
+                        signal mask. The <span class="emphasis"><em>sigrelse()</em></span> function removes a signal
+                        from the signal mask. The <span class="emphasis"><em>sigignore()</em></span> function sets a
+                        signal’s disposition to <span class="emphasis"><em>ignore</em></span>. The
+                            <span class="emphasis"><em>sigpause()</em></span> function is similar to
+                            <span class="emphasis"><em>sigsuspend()</em></span>, but removes just one signal from the
+                        process signal mask before suspending the process until the arrival of a
+                            signal.<a id="IDX-CHP-22-3531" class="indexterm"/><a id="IDX-CHP-22-3532" class="indexterm"/><a id="IDX-CHP-22-3533" class="indexterm"/></p></div><div class="sect3" title="The BSD signal API"><div class="titlepage"><div><div><h4 class="title" id="the_bsd_signal_api">The BSD signal API</h4></div></div></div><p>The POSIX signal API drew heavily on the 4.2BSD API, so the BSD functions
+                        are mainly direct analogs of those in POSIX.<a id="IDX-CHP-22-3534" class="indexterm"/><a id="IDX-CHP-22-3535" class="indexterm"/><a id="IDX-CHP-22-3536" class="indexterm"/><a id="IDX-CHP-22-3537" class="indexterm"/><a id="IDX-CHP-22-3538" class="indexterm"/><a id="IDX-CHP-22-3539" class="indexterm"/><a id="IDX-CHP-22-3540" class="indexterm"/><a id="IDX-CHP-22-3541" class="indexterm"/><a id="IDX-CHP-22-3542" class="indexterm"/><a id="IDX-CHP-22-3543" class="indexterm"/><a id="IDX-CHP-22-3544" class="indexterm"/><a id="IDX-CHP-22-3545" class="indexterm"/></p><p>As with the functions in the System V signal API described above, we
+                        present the prototypes of the functions in the BSD signal API, and briefly
+                        explain the operation of each function. Once again, the manual pages provide
+                        full details.</p><a id="I_programlisting22_d1e65233"/><pre class="programlisting">#define _BSD_SOURCE
+#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigvec</code></strong>(int <span class="emphasis"><em>sig</em></span>, struct sigvec *<span class="emphasis"><em>vec</em></span>, struct sigvec *<span class="emphasis"><em>ovec</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>sigvec()</em></span> function is analogous to
+                            <span class="emphasis"><em>sigaction()</em></span>. The <span class="emphasis"><em>vec</em></span> and
+                            <span class="emphasis"><em>ovec</em></span> arguments are pointers to structures of the
+                        following type:<a id="IDX-CHP-22-3546" class="indexterm"/></p><a id="I_programlisting22_d1e65268"/><pre class="programlisting">struct sigvec {
+    void (*sv_handler)();
+    int  sv_mask;
+    int  sv_flags;
+};</pre><p>The fields of the <span class="emphasis"><em>sigvec</em></span> structure correspond closely
+                        with those of the <span class="emphasis"><em>sigaction</em></span> structure. The first
+                        notable difference is that the <span class="emphasis"><em>sv_mask</em></span> field (the
+                        analog of <span class="emphasis"><em>sa_mask</em></span>) was an integer rather than a
+                            <span class="emphasis"><em>sigset_t</em></span>, which meant that, on 32-bit
+                        architectures, there was a maximum of 31 different signals. The other
+                        difference is the use of the <code class="literal">SV_INTERRUPT</code>
+                        flag in the <span class="emphasis"><em>sv_flags</em></span> field (the analog of
+                            <span class="emphasis"><em>sa_flags</em></span>). Since system call restarting was the
+                        default on 4.2BSD, this flag was used to specify that slow system calls
+                        should be interrupted by signal handlers. (This contrasts with the POSIX
+                        API, where we must explicitly specify <code class="literal">SA_RESTART</code> in order to enable restarting of system calls when
+                        establishing a signal handler with
+                            <span class="emphasis"><em>sigaction()</em></span>.)<a id="IDX-CHP-22-3547" class="indexterm"/></p><a id="I_programlisting22_d1e65308"/><pre class="programlisting">#define _BSD_SOURCE
+#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigblock</code></strong>(int <span class="emphasis"><em>mask</em></span>);
+int <strong class="userinput"><code>sigsetmask</code></strong>(int <span class="emphasis"><em>mask</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Both return previous signal mask</p></div><a id="I_programlisting22_d1e65325"/><pre class="programlisting">int <strong class="userinput"><code>sigpause</code></strong>(int <span class="emphasis"><em>sigmask</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Always returns -1 with <span class="emphasis"><em>errno</em></span> set to <code class="literal">EINTR</code></p></div><a id="I_programlisting22_d1e65342"/><pre class="programlisting">int <strong class="userinput"><code>sigmask</code></strong>(<span class="emphasis"><em>sig</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns signal mask value with bit <span class="emphasis"><em>sig</em></span> set</p></div><p>The <span class="emphasis"><em>sigblock()</em></span> function adds a set of signals to the
+                        process signal mask. It is analogous to the
+                            <span class="emphasis"><em>sigprocmask()</em></span>
+                        <code class="literal">SIG_BLOCK</code> operation. The
+                            <span class="emphasis"><em>sigsetmask()</em></span> call specifies an absolute value for
+                        the signal mask. It is analogous to the <span class="emphasis"><em>sigprocmask()</em></span>
+                        <code class="literal">SIG_SETMASK</code> operation.</p><p>The <span class="emphasis"><em>sigpause()</em></span> function is analogous to
+                            <span class="emphasis"><em>sigsuspend()</em></span>. Note that this function is defined
+                        with different calling signatures in the System V and BSD APIs. The GNU C
+                        library provides the System V version by default, unless we specify the
+                            <code class="literal">_BSD_SOURCE</code> feature test macro when
+                        compiling a program.</p><p>The <span class="emphasis"><em>sigmask()</em></span> macro turns a signal number into the
+                        corresponding 32-bit mask value. Such bit masks can then be ORed together to
+                        create a set of signals, as in the following:</p><a id="I_programlisting22_d1e65393"/><pre class="programlisting">sigblock(sigmask(SIGINT) | sigmask(SIGQUIT));</pre></div></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id21">Summary</h2></div></div></div><p>Certain signals cause a process to create a core dump and terminate. Core dumps
+                contain information that can be used by a debugger to inspect the state of a process
+                at the time that it terminated. By default, a core dump file is named <code class="literal">core</code>, but Linux provides the <code class="literal">/proc/sys/kernel/core_pattern</code> file to control the naming of core dump
+                files.</p><p>A signal may be generated asynchronously or synchronously. Asynchronous generation
+                occurs when a signal is sent a process by the kernel or by another process. A
+                process can’t predict precisely when an asynchronously generated signal will be
+                delivered. (We noted that asynchronous signals are normally delivered the next time
+                the receiving process switches from kernel mode to user mode.) Synchronous
+                generation occurs when the process itself executes code that directly generates the
+                signal—for example, by executing an instruction that causes a hardware exception or
+                by calling <span class="emphasis"><em>raise()</em></span>. The delivery of a synchronously generated
+                signal is precisely predictable (it occurs immediately).</p><p>Realtime signals are a POSIX addition to the original signal model, and differ
+                from standard signals in that they are queued, have a specified delivery order, and
+                can be sent with an accompanying piece of data. Realtime signals are designed to be
+                used for application-defined purposes. A realtime signal is sent using the
+                    <span class="emphasis"><em>sigqueue()</em></span> system call, and an additional argument (the
+                    <span class="emphasis"><em>siginfo_t</em></span> structure) is supplied to the signal handler so
+                that it can obtain the data accompanying the signal, as well as the process ID and
+                real user ID of the sending process.</p><p>The <span class="emphasis"><em>sigsuspend()</em></span> system call allows a program to atomically
+                modify the process signal mask and suspend execution until a signal arrives, The
+                atomicity of <span class="emphasis"><em>sigsuspend()</em></span> is essential to avoid race conditions
+                when unblocking a signal and then suspending execution until that signal
+                arrives.</p><p>We can use <span class="emphasis"><em>sigwaitinfo()</em></span> and
+                    <span class="emphasis"><em>sigtimedwait()</em></span> to synchronously wait for a signal. This
+                saves us the work of designing and writing a signal handler, which may be
+                unnecessary if our only aim is to wait for the delivery of a signal.</p><p>Like <span class="emphasis"><em>sigwaitinfo()</em></span> and <span class="emphasis"><em>sigtimedwait()</em></span>,
+                the Linux-specific <span class="emphasis"><em>signalfd()</em></span> system call can be used to
+                synchronously wait for a signal. The distinctive feature of this interface is that
+                signals can be read via a file descriptor. This file descriptor can also be
+                monitored using <span class="emphasis"><em>select()</em></span>, <span class="emphasis"><em>poll()</em></span>, and
+                    <span class="emphasis"><em>epoll</em></span>.</p><p>Although signals can be viewed as a method of IPC, many factors make them
+                generally unsuitable for this purpose, including their asynchronous nature, the fact
+                that they are not queued, and their low bandwidth. More usually, signals are used as
+                a method of process synchronization and for a variety of other purposes (e.g., event
+                notification, job control, and timer expiration).</p><p>Although the fundamental signal concepts are straightforward, our discussion has
+                stretched over three chapters, since there were many details to cover. Signals play
+                an important role in various parts of the system call API, and we’ll revisit their
+                use in several later chapters. In addition, various signal-related functions are
+                specific to threads (e.g., <span class="emphasis"><em>pthread_kill()</em></span> and
+                    <span class="emphasis"><em>pthread_sigmask()</em></span>), and we defer discussion of these
+                functions until Section 33.2.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id21"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id22">Further information</h4></div></div></div><p>See the sources listed in <a class="xref" href="ch20.html#summary-id19" title="Summary">Summary</a>.<a id="IDX-CHP-22-3548" class="indexterm"/><a id="IDX-CHP-22-3549" class="indexterm"/></p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id13">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p><a class="xref" href="ch22.html#special_cases_for_delivery_comma_disposi" title="Special Cases for Delivery, Disposition, and Handling">Special Cases for Delivery, Disposition, and Handling</a> noted that if a
+                        stopped process that has established a handler for and blocked <code class="literal">SIGCONT</code> is later resumed as a consequence of
+                        receiving a <code class="literal">SIGCONT</code>, then the handler is
+                        invoked only when <code class="literal">SIGCONT</code> is unblocked.
+                        Write a program to verify this. Recall that a process can be stopped by
+                        typing the terminal <span class="emphasis"><em>suspend</em></span> character (usually
+                            <span class="emphasis"><em>Control-Z</em></span>) and can be sent a <code class="literal">SIGCONT</code> signal using the command
+                            <span class="emphasis"><em>kill -CONT</em></span> (or implicitly, using the shell
+                            <span class="emphasis"><em>fg</em></span> command).</p></li><li class="listitem"><p>If both a realtime and a standard signal are pending for a process, SUSv3
+                        leaves it unspecified which is delivered first. Write a program that shows
+                        what Linux does in this case. (Have the program set up a handler for all
+                        signals, block signals for a period time so that you can send various
+                        signals to it, and then unblock all signals.)</p></li><li class="listitem"><p><a class="xref" href="ch22.html#synchronously_waiting_for_a_signal" title="Synchronously Waiting for a Signal">Synchronously Waiting for a Signal</a> stated that accepting
+                        signals using <span class="emphasis"><em>sigwaitinfo()</em></span> is faster than the use of a
+                        signal handler plus <span class="emphasis"><em>sigsuspend()</em></span>. The program <code class="literal">signals/sig_speed_sigsuspend.c</code>, supplied in
+                        the source code distribution for this book, uses
+                            <span class="emphasis"><em>sigsuspend()</em></span> to alternately send signals back and
+                        forward between a parent and a child process. Time the operation of this
+                        program to exchange one million signals between the two processes. (The
+                        number of signals to exchange is provided as a command-line argument to the
+                        program.) Create a modified version of the program that instead uses
+                            <span class="emphasis"><em>sigwaitinfo()</em></span>, and time that version. What is the
+                        speed difference between the two programs?</p></li><li class="listitem"><p>Implement the System V functions <span class="emphasis"><em>sigset()</em></span>,
+                            <span class="emphasis"><em>sighold()</em></span>, <span class="emphasis"><em>sigrelse()</em></span>,
+                            <span class="emphasis"><em>sigignore()</em></span>, and <span class="emphasis"><em>sigpause()</em></span>
+                        using the POSIX signal API.</p></li></ol></div></div></section></body></html>

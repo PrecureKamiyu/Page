@@ -1,0 +1,1446 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 23. Timers and Sleeping</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch22.html" title="Chapter 22. Signals: Advanced Features"/><link rel="next" href="ch24.html" title="Chapter 24. Process Creation"/></head><body><section class="chapter" title="Chapter 23. Timers and Sleeping" epub:type="chapter" id="timers_and_sleeping"><div class="titlepage"><div><div><h2 class="title">Chapter 23. Timers and Sleeping</h2></div></div></div><p>A timer allows a process to schedule a notification for itself to occur at some time
+            in the future. Sleeping allows a process (or thread) to suspend execution for a period
+            of time. This chapter describes the interfaces used for setting timers and for sleeping.
+            It covers the following topics:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>the classical UNIX APIs for setting interval timers
+                        (<span class="emphasis"><em>setitimer()</em></span> and <span class="emphasis"><em>alarm()</em></span>) to
+                    notify a process when a certain amount of time has passed;<a id="IDX-CHP-23-3550" class="indexterm"/></p></li><li class="listitem"><p>the APIs that allow a process to sleep for a specified interval;</p></li><li class="listitem"><p>the POSIX.1b clocks and timers APIs; and</p></li><li class="listitem"><p>the Linux-specific <span class="emphasis"><em>timerfd</em></span> facility, which allows the
+                    creation of timers whose expirations can be read from a file descriptor.</p></li></ul></div><div class="sect1" title="Interval Timers"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="interval_timers">Interval Timers</h2></div></div></div><p>The <span class="emphasis"><em>setitimer()</em></span> system call establishes an <span class="emphasis"><em>interval
+                    timer</em></span>, which is a timer that expires at a future point in time and
+                (optionally) at regular intervals after that.<a id="IDX-CHP-23-3551" class="indexterm"/><a id="IDX-CHP-23-3552" class="indexterm"/><a id="IDX-CHP-23-3553" class="indexterm"/><a id="IDX-CHP-23-3554" class="indexterm"/><a id="IDX-CHP-23-3555" class="indexterm"/><a id="IDX-CHP-23-3556" class="indexterm"/><a id="IDX-CHP-23-3557" class="indexterm"/><a id="IDX-CHP-23-3558" class="indexterm"/><a id="IDX-CHP-23-3559" class="indexterm"/><a id="IDX-CHP-23-3560" class="indexterm"/></p><a id="I_programlisting23_d1e65658"/><pre class="programlisting">#include &lt;sys/time.h&gt;
+
+int <strong class="userinput"><code>setitimer</code></strong>(int <span class="emphasis"><em>which</em></span>, const struct itimerval *<span class="emphasis"><em>new_value</em></span>,
+              struct itimerval *<span class="emphasis"><em>old_value</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>Using <span class="emphasis"><em>setitimer()</em></span>, a process can establish three different
+                types of timers, by specifying <span class="emphasis"><em>which</em></span> as one of the
+                following:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">ITIMER_REAL</code>
+                    </span></dt><dd><p>Create a timer that counts down in real (i.e., wall clock) time. When
+                            the timer expires, a <code class="literal">SIGALRM</code> signal
+                            is generated for the process.<a id="IDX-CHP-23-3561" class="indexterm"/><a id="IDX-CHP-23-3562" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">ITIMER_VIRTUAL</code>
+                    </span></dt><dd><p>Create a timer that counts down in process virtual time (i.e.,
+                            user-mode CPU time). When the timer expires, a <code class="literal">SIGVTALRM</code> signal is generated for the process.<a id="IDX-CHP-23-3563" class="indexterm"/><a id="IDX-CHP-23-3564" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">ITIMER_PROF</code>
+                    </span></dt><dd><p>Create a <span class="emphasis"><em>profiling</em></span> timer. A profiling timer
+                            counts in process time (i.e., the sum of both user-mode and kernel-mode
+                            CPU time). When the timer expires, a <code class="literal">SIGPROF</code> signal is generated for the process.<a id="IDX-CHP-23-3565" class="indexterm"/><a id="IDX-CHP-23-3566" class="indexterm"/></p></dd></dl></div><p>The default disposition of all of the timer signals is to terminate the process.
+                Unless this is the desired result, we must establish a handler for the signal
+                delivered by the timer.</p><p>The <span class="emphasis"><em>new_value</em></span> and <span class="emphasis"><em>old_value</em></span> arguments
+                are pointers to <span class="emphasis"><em>itimerval</em></span> structures, defined as
+                follows:</p><a id="I_programlisting23_d1e65760"/><pre class="programlisting">struct itimerval {
+    struct timeval it_interval;     /* Interval for periodic timer */
+    struct timeval it_value;        /* Current value (time until
+                                       next expiration) */
+};</pre><p>Each of the fields in the <span class="emphasis"><em>itimerval</em></span> structure is in turn a
+                structure of type <span class="emphasis"><em>timeval</em></span>, containing seconds and microseconds
+                    fields:<a id="IDX-CHP-23-3567" class="indexterm"/></p><a id="I_programlisting23_d1e65775"/><pre class="programlisting">struct timeval {
+    time_t      tv_sec;             /* Seconds */
+    suseconds_t tv_usec;            /* Microseconds (long int) */
+};</pre><p>The <span class="emphasis"><em>it_value</em></span> substructure of the
+                    <span class="emphasis"><em>new_value</em></span> argument specifies the delay until the timer is
+                to expire. The <span class="emphasis"><em>it_interval</em></span> substructure specifies whether this
+                is to be a periodic timer. If both fields of <span class="emphasis"><em>it_interval</em></span> are
+                set to 0, then the timer expires just once, at the time given by
+                    <span class="emphasis"><em>it_value</em></span>. If one or both of the
+                    <span class="emphasis"><em>it_interval</em></span> fields are nonzero, then, after each expiration
+                of the timer, the timer will be reset to expire again at the specified
+                interval.</p><p>A process has only one of each of the three types of timers. If we call
+                    <span class="emphasis"><em>setitimer()</em></span> a second time, it will change the
+                characteristics of any existing timer corresponding to <span class="emphasis"><em>which</em></span>.
+                If we call <span class="emphasis"><em>setitimer()</em></span> with both fields of
+                    <span class="emphasis"><em>new_value.it_value</em></span> set to 0, then any existing timer is
+                disabled.</p><p>If <span class="emphasis"><em>old_value</em></span> is not <code class="literal">NULL</code>,
+                then it points to an <span class="emphasis"><em>itimerval</em></span> structure that is used to return
+                the previous value of the timer. If both fields of
+                    <span class="emphasis"><em>old_value.it_value</em></span> are 0, then the timer was previously
+                disabled. If both fields of <span class="emphasis"><em>old_value.it_interval</em></span> are 0, then
+                the previous timer was set to expire just once, at the time given by
+                    <span class="emphasis"><em>old_value.it_value</em></span>. Retrieving the previous settings of the
+                timer can be useful if we want to restore the settings after the new timer has
+                expired. If we are not interested in the previous value of the timer, we can specify
+                    <span class="emphasis"><em>old_value</em></span> as <code class="literal">NULL</code>.<a id="IDX-CHP-23-3568" class="indexterm"/></p><p>As a timer progresses, it counts down from the initial value
+                    (<span class="emphasis"><em>it_value</em></span>) toward 0. When the timer reaches 0, the
+                corresponding signal is sent to the process, and then, if the interval
+                    (<span class="emphasis"><em>it_interval</em></span>) is nonzero, the timer value
+                    (<span class="emphasis"><em>it_value</em></span>) is reloaded, and counting down toward 0
+                recommences.</p><p>At any time, we can use <span class="emphasis"><em>getitimer()</em></span> to retrieve the current
+                state of the timer in order to see how much time is left before it next
+                    expires.<a id="IDX-CHP-23-3569" class="indexterm"/></p><a id="I_programlisting23_d1e65865"/><pre class="programlisting">#include &lt;sys/time.h&gt;
+
+int <strong class="userinput"><code>getitimer</code></strong>(int <span class="emphasis"><em>which</em></span>, struct itimerval *<span class="emphasis"><em>curr_value</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>getitimer()</em></span> system call returns the current state of the
+                timer specified by <span class="emphasis"><em>which</em></span>, in the buffer pointed to by
+                    <span class="emphasis"><em>curr_value</em></span>. This is exactly the same information as is
+                returned via the <span class="emphasis"><em>old_value</em></span> argument of
+                    <span class="emphasis"><em>setitimer()</em></span>, with the difference that we don’t need to
+                change the timer settings in order to retrieve the information. The
+                    <span class="emphasis"><em>curr_value.it_value</em></span> substructure returns the amount of time
+                remaining until the timer next expires. This value changes as the timer counts down,
+                and is reset on timer expiration if a nonzero <span class="emphasis"><em>it_interval</em></span> value
+                was specified when the timer was set. The
+                    <span class="emphasis"><em>curr_value.it_interval</em></span> substructure returns the interval
+                for this timer; this value remains unchanged until a subsequent call to
+                    <span class="emphasis"><em>setitimer()</em></span>.</p><p>Timers established using <span class="emphasis"><em>setitimer()</em></span> (and
+                    <span class="emphasis"><em>alarm()</em></span>, which we discuss shortly) are preserved across
+                    <span class="emphasis"><em>exec()</em></span>, but are not inherited by a child created by
+                    <span class="emphasis"><em>fork()</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv4 marks <span class="emphasis"><em>getitimer()</em></span> and
+                        <span class="emphasis"><em>setitimer()</em></span> obsolete, noting that the POSIX timers API
+                        (<a class="xref" href="ch23.html#posix_interval_timers" title="POSIX Interval Timers">POSIX Interval Timers</a>) is preferred.</p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="example_program-id27"/></div></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id28">Example program</h4></div></div></div><p><a class="xref" href="ch23.html#using_a_real-time_timer" title="Example 23-1. Using a real-time timer">Example 23-1</a> demonstrates the use of
+                            <span class="emphasis"><em>setitimer()</em></span> and <span class="emphasis"><em>getitimer()</em></span>.
+                        This program performs the following steps:<a id="IDX-CHP-23-3570" class="indexterm"/><a id="IDX-CHP-23-3571" class="indexterm"/><a id="IDX-CHP-23-3572" class="indexterm"/><a id="IDX-CHP-23-3573" class="indexterm"/><a id="IDX-CHP-23-3574" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Establish a handler for the <code class="literal">SIGALRM</code> signal <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e65988"/><img src="figs/web/U003.png" alt=""/></span>.</p></li><li class="listitem"><p>Set the value and interval fields for a real (<code class="literal">ITIMER_REAL</code>) timer using the values
+                                supplied in its command-line arguments <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e66000"/><img src="figs/web/U004.png" alt=""/></span>. If these arguments are absent, the program
+                                sets a timer that expires just once, after 2 seconds.</p></li><li class="listitem"><p>Execute a continuous loop <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e66009"/><img src="figs/web/U005.png" alt=""/></span>, consuming CPU time and periodically calling
+                                the function <span class="emphasis"><em>displayTimes()</em></span>
+                                <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e66018"/><img src="figs/web/U001.png" alt=""/></span>, which displays the elapsed real time since the
+                                program began, as well as the current state of the <code class="literal">ITIMER_REAL</code> timer.</p></li></ul></div><p>Each time the timer expires, the <code class="literal">SIGALRM</code> handler is invoked, and it sets a global flag,
+                            <span class="emphasis"><em>gotAlarm</em></span>
+                        <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e66035"/><img src="figs/web/U002.png" alt=""/></span>. Whenever this flag is set, the loop in the main
+                        program calls <span class="emphasis"><em>displayTimes()</em></span> in order to show when the
+                        handler was called and the state of the timer <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e66044"/><img src="figs/web/U006.png" alt=""/></span>. (We designed the signal handler in this manner to
+                        avoid calling non-async-signal-functions from within the handler, for the
+                        reasons described in <a class="xref" href="ch21.html#reentrant_and_async-signal-safe_function" title="Reentrant and Async-Signal-Safe Functions">Reentrant and Async-Signal-Safe Functions</a>.) If the timer has
+                        a zero interval, then the program exits on delivery of the first signal;
+                        otherwise, it catches up to three signals before terminating
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e66053"/><img src="figs/web/U007.png" alt=""/></span>.</p><p>When we run the program in <a class="xref" href="ch23.html#using_a_real-time_timer" title="Example 23-1. Using a real-time timer">Example 23-1</a>, we
+                        see the following:</p><a id="I_programlisting23_d1e66063"/><pre class="programlisting">$ <strong class="userinput"><code>./real_timer 1 800000 1 0</code></strong>         <em class="lineannotation"><span class="lineannotation">Initial value 1.8 seconds, interval 1 second</span></em>
+       Elapsed   Value  Interval
+START:    0.00
+Main:     0.50    1.30    1.00      <em class="lineannotation"><span class="lineannotation">Timer counts down until expiration</span></em>
+Main:     1.00    0.80    1.00
+Main:     1.50    0.30    1.00
+ALARM:    1.80    1.00    1.00      <em class="lineannotation"><span class="lineannotation">On expiration, timer is reloaded from interval</span></em>
+Main:     2.00    0.80    1.00
+Main:     2.50    0.30    1.00
+ALARM:    2.80    1.00    1.00
+Main:     3.00    0.80    1.00
+Main:     3.50    0.30    1.00
+ALARM:    3.80    1.00    1.00
+That's all folks</pre><div class="example"><a id="using_a_real-time_timer"/><div class="example-title">Example 23-1. Using a real-time timer</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>timers/real_timer.c</code></strong>
+    #include &lt;signal.h&gt;
+    #include &lt;sys/time.h&gt;
+    #include &lt;time.h&gt;
+    #include "tlpi_hdr.h"
+
+    static volatile sig_atomic_t gotAlarm = 0;
+                            /* Set nonzero on receipt of SIGALRM */
+
+    /* Retrieve and display the real time, and (if 'includeTimer' is
+       TRUE) the current value and interval for the ITIMER_REAL timer */
+
+    static void
+<img src="figs/web/U001.png" alt=""/> displayTimes(const char *msg, Boolean includeTimer)
+    {
+        struct itimerval itv;
+        static struct timeval start;
+        struct timeval curr;
+        static int callNum = 0;             /* Number of calls to this function */
+
+        if (callNum == 0)                   /* Initialize elapsed time meter */
+            if (gettimeofday(&amp;start, NULL) == -1)
+                errExit("gettimeofday");
+
+        if (callNum % 20 == 0)              /* Print header every 20 lines */
+            printf("       Elapsed   Value Interval\n");
+
+            if (gettimeofday(&amp;curr, NULL) == -1)
+            errExit("gettimeofday");
+        printf("%-7s %6.2f", msg, curr.tv_sec - start.tv_sec +
+                            (curr.tv_usec - start.tv_usec) / 1000000.0);
+
+        if (includeTimer) {
+            if (getitimer(ITIMER_REAL, &amp;itv) == -1)
+                errExit("getitimer");
+            printf("  %6.2f  %6.2f",
+                    itv.it_value.tv_sec + itv.it_value.tv_usec / 1000000.0,
+                    itv.it_interval.tv_sec + itv.it_interval.tv_usec / 1000000.0);
+        }
+
+        printf("\n");
+        callNum++;
+    }
+
+    static void
+    sigalrmHandler(int sig)
+    {
+<img src="figs/web/U002.png" alt=""/>     gotAlarm = 1;
+    }
+
+    int
+    main(int argc, char *argv[])
+    {
+        struct itimerval itv;
+        clock_t prevClock;
+        int maxSigs;                /* Number of signals to catch before exiting */
+        int sigCnt;                 /* Number of signals so far caught */
+        struct sigaction sa;
+
+        if (argc &gt; 1 &amp;&amp; strcmp(argv[1], "--help") == 0)
+            usageErr("%s [secs [usecs [int-secs [int-usecs]]]]\n", argv[0]);
+
+        sigCnt = 0;
+
+        sigemptyset(&amp;sa.sa_mask);
+        sa.sa_flags = 0;
+        sa.sa_handler = sigalrmHandler;
+<img src="figs/web/U003.png" alt=""/>     if (sigaction(SIGALRM, &amp;sa, NULL) == -1)
+            errExit("sigaction");
+
+         /* Set timer from the command-line arguments */
+
+        itv.it_value.tv_sec = (argc &gt; 1) ? getLong(argv[1], 0, "secs") : 2;
+        itv.it_value.tv_usec = (argc &gt; 2) ? getLong(argv[2], 0, "usecs") : 0;
+        itv.it_interval.tv_sec = (argc &gt; 3) ? getLong(argv[3], 0, "int-secs") : 0;
+        itv.it_interval.tv_usec = (argc &gt; 4) ? getLong(argv[4], 0, "int-usecs") : 0;
+
+       /* Exit after 3 signals, or on first signal if interval is 0 */
+
+        maxSigs = (itv.it_interval.tv_sec == 0 &amp;&amp;
+                    itv.it_interval.tv_usec == 0) ? 1 : 3;
+
+            displayTimes("START:", FALSE);
+<img src="figs/web/U004.png" alt=""/>     if (setitimer(ITIMER_REAL, &amp;itv, 0) == -1)
+            errExit("setitimer");
+
+        prevClock = clock();
+        sigCnt = 0;
+
+<img src="figs/web/U005.png" alt=""/>     for (;;) {
+
+            /* Inner loop consumes at least 0.5 seconds CPU time */
+
+            while (((clock() - prevClock) * 10 / CLOCKS_PER_SEC) &lt; 5) {
+<img src="figs/web/U006.png" alt=""/>             if (gotAlarm) {                     /* Did we get a signal? */
+                    gotAlarm = 0;
+                    displayTimes("ALARM:", TRUE);
+
+                    sigCnt++;
+<img src="figs/web/U007.png" alt=""/>                 if (sigCnt &gt;= maxSigs) {
+                        printf("That's all folks\n");
+                        exit(EXIT_SUCCESS);
+                    }
+                }
+            }
+
+            prevClock = clock();
+            displayTimes("Main: ", TRUE);
+        }
+    }
+         <strong class="userinput"><code>timers/real_timer.c</code></strong></pre></div></div></div><div class="sect3" title="A simpler timer interface: alarm()"><div class="titlepage"><div><div><h4 class="title" id="a_simpler_timer_interface_colon_alarm_op">A simpler timer interface: <span class="emphasis"><em>alarm()</em></span></h4></div></div></div><p>The <span class="emphasis"><em>alarm()</em></span> system call provides a simple interface
+                        for establishing a real-time timer that expires once, with no repeating
+                        interval. (Historically, <span class="emphasis"><em>alarm()</em></span> was the original UNIX
+                        API for setting a timer.)<a id="IDX-CHP-23-3576" class="indexterm"/><a id="IDX-CHP-23-3577" class="indexterm"/><a id="IDX-CHP-23-3578" class="indexterm"/><a id="IDX-CHP-23-3575" class="indexterm"/></p><a id="I_programlisting23_d1e66168"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+unsigned int <strong class="userinput"><code>alarm</code></strong>(unsigned int <span class="emphasis"><em>seconds</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Always succeeds, returning number of seconds remaining on any
+                            previously set timer, or 0 if no timer previously was set</p></div><p>The <span class="emphasis"><em>seconds</em></span> argument specifies the number of seconds
+                        in the future when the timer is to expire. At that time, a <code class="literal">SIGALRM</code> signal is delivered to the calling
+                            process.<a id="IDX-CHP-23-3579" class="indexterm"/></p><p>Setting a timer with <span class="emphasis"><em>alarm()</em></span> overrides any previously
+                        set timer. We can disable an existing timer using the call
+                            <span class="emphasis"><em>alarm(0)</em></span>.</p><p>As its return value, <span class="emphasis"><em>alarm()</em></span> gives us the number of
+                        seconds remaining until the expiration of any previously set timer, or 0 if
+                        no timer was set.</p><p>An example of the use of <span class="emphasis"><em>alarm()</em></span> is shown in Section
+                        23.3.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>In some later example programs in this book, we use
+                                <span class="emphasis"><em>alarm()</em></span> to start a timer without establishing a
+                            corresponding <code class="literal">SIGALRM</code> handler, as a
+                            technique for ensuring that a process is killed if it is not otherwise
+                            terminated.</p></div></div><div class="sect3" title="Interactions between setitimer() and alarm()"><div class="titlepage"><div><div><h4 class="title" id="interactions_between_setitimer_open_pare">Interactions between <span class="emphasis"><em>setitimer()</em></span> and
+                            <span class="emphasis"><em>alarm()</em></span></h4></div></div></div><p>On Linux, <span class="emphasis"><em>alarm()</em></span> and
+                            <span class="emphasis"><em>setitimer()</em></span> share the same per-process real-time
+                        timer, which means that setting a timer with one of these functions changes
+                        any timer previously set by either of the functions. This may not be the
+                        case on other UNIX implementations (i.e., these functions could control
+                        independent timers). SUSv3 explicitly leaves unspecified the interactions
+                        between <span class="emphasis"><em>setitimer()</em></span> and <span class="emphasis"><em>alarm()</em></span>,
+                        as well as the interactions of these functions with the
+                            <span class="emphasis"><em>sleep()</em></span> function described in <a class="xref" href="ch23.html#low-resolution_sleeping_colon_sleep_open" title="Low-Resolution Sleeping: sleep()">Low-Resolution Sleeping: <span class="emphasis"><em>sleep()</em></span></a>. For maximum
+                        portability, we should ensure that our applications use only one of
+                            <span class="emphasis"><em>setitimer()</em></span> and <span class="emphasis"><em>alarm()</em></span> for
+                        setting real-time timers.<a id="IDX-CHP-23-3581" class="indexterm"/><a id="IDX-CHP-23-3582" class="indexterm"/><a id="IDX-CHP-23-3580" class="indexterm"/></p></div></div></div><div class="sect1" title="Scheduling and Accuracy of Timers"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="scheduling_and_accuracy_of_timers">Scheduling and Accuracy of Timers</h2></div></div></div><p>Depending on system load and the scheduling of processes, a process may not be
+                scheduled to run until some short time (i.e., usually some small fraction of a
+                second) after actual expiration of the timer. Notwithstanding this, the expiration
+                of a periodic timer established by <span class="emphasis"><em>setitimer()</em></span>, or the other
+                interfaces described later in this chapter, will remain regular. For example, if a
+                real-time timer is set to expire every 2 seconds, then the delivery of individual
+                timer events may be subject to the delays just described, but the scheduling of
+                subsequent expirations will nevertheless be at exactly the next 2-second interval.
+                In other words, interval timers are not subject to creeping errors.</p><p>Although the <span class="emphasis"><em>timeval</em></span> structure used by
+                    <span class="emphasis"><em>setitimer()</em></span> allows for microsecond precision, the accuracy
+                of a timer has traditionally been limited by the frequency of the software clock
+                    (<a class="xref" href="ch10.html#the_software_clock_open_parenthesis_jiff" title="The Software Clock (Jiffies)">The Software Clock (Jiffies)</a>). If a timer value
+                does not exactly match a multiple of the granularity of the software clock, then the
+                timer value is rounded up. This means that if, for example, we specified an interval
+                timer to go off each 19,100 microseconds (i.e., just over 19 milliseconds), then,
+                assuming a jiffy value of 4 milliseconds, we would actually get a timer that expired
+                every 20 milliseconds.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="high-resolution_timers"/></div></div></div><div class="sect3" title="High-resolution timers"><div class="titlepage"><div><div><h4 class="title" id="high-resolution_timers-id1">High-resolution timers</h4></div></div></div><p>On modern Linux kernels, the preceding statement that timer resolution is
+                        limited by the frequency of the software clock no longer holds true. Since
+                        kernel 2.6.21, Linux optionally supports high-resolution timers. If this
+                        support is enabled (via the <code class="literal">CONFIG_HIGH_RES_TIMERS</code> kernel configuration option), then the
+                        accuracy of the various timer and sleep interfaces that we describe in this
+                        chapter is no longer constrained by the size of the kernel jiffy. Instead,
+                        these calls can be as accurate as the underlying hardware allows. On modern
+                        hardware, accuracy down to a microsecond is typical.<a id="IDX-CHP-23-3583" class="indexterm"/><a id="IDX-CHP-23-3584" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The availability of high-resolution timers can be determined by
+                            examining the clock resolution returned by
+                                <span class="emphasis"><em>clock_getres()</em></span>, described in <a class="xref" href="ch23.html#retrieving_the_value_of_a_clock_colon_cl" title="Retrieving the Value of a Clock: clock_gettime()">Retrieving the Value of a Clock: <span class="emphasis"><em>clock_gettime()</em></span></a>.</p></div></div></div></div><div class="sect1" title="Setting Timeouts on Blocking Operations"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="setting_timeouts_on_blocking_operations">Setting Timeouts on Blocking Operations</h2></div></div></div><p>One use of real-time timers is to place an upper limit on the time for which a
+                blocking system call can remain blocked. For example, we may wish to cancel a
+                    <span class="emphasis"><em>read()</em></span> from a terminal if the user has not entered a line
+                of input within a certain time. We can do this as follows:<a id="IDX-CHP-23-3585" class="indexterm"/><a id="IDX-CHP-23-3586" class="indexterm"/><a id="IDX-CHP-23-3587" class="indexterm"/><a id="IDX-CHP-23-3588" class="indexterm"/><a id="IDX-CHP-23-3589" class="indexterm"/><a id="IDX-CHP-23-3590" class="indexterm"/><a id="IDX-CHP-23-3591" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Call <span class="emphasis"><em>sigaction()</em></span> to establish a handler for <code class="literal">SIGALRM</code>, omitting the <code class="literal">SA_RESTART</code> flag, so that system calls are not restarted
+                        (refer to <a class="xref" href="ch21.html#interruption_and_restarting_of_system_ca" title="Interruption and Restarting of System Calls">Interruption and Restarting of System Calls</a>).</p></li><li class="listitem"><p>Call <span class="emphasis"><em>alarm()</em></span> or <span class="emphasis"><em>setitimer()</em></span> to
+                        establish a timer specifying the upper limit of time for which we wish the
+                        system call to block.<a id="IDX-CHP-23-3592" class="indexterm"/><a id="IDX-CHP-23-3593" class="indexterm"/></p></li><li class="listitem"><p>Make the blocking system call.</p></li><li class="listitem"><p>After the system call returns, call <span class="emphasis"><em>alarm()</em></span> or
+                            <span class="emphasis"><em>setitimer()</em></span> once more to disable the timer (in case
+                        the system call completed before the timer expired).</p></li><li class="listitem"><p>Check to see whether the blocking system call failed with
+                            <span class="emphasis"><em>errno</em></span> set to <code class="literal">EINTR</code> (interrupted system call).</p></li></ol></div><p><a class="xref" href="ch23.html#performing_a_read_open_parenthesis_close" title="Example 23-2. Performing a read() with timeout">Example 23-2</a> demonstrates this
+                technique for <span class="emphasis"><em>read()</em></span>, using <span class="emphasis"><em>alarm()</em></span> to
+                establish the timer.</p><div class="example"><a id="performing_a_read_open_parenthesis_close"/><div class="example-title">Example 23-2. Performing a <span class="emphasis"><em>read()</em></span> with timeout</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>timers/timed_read.c</code></strong>
+#include &lt;signal.h&gt;
+#include "tlpi_hdr.h"
+
+#define BUF_SIZE 200
+
+static void     /* SIGALRM handler: interrupts blocked system call */
+handler(int sig)
+{
+    printf("Caught signal\n");          /* UNSAFE (see Section 21.1.2) */
+}
+
+int
+main(int argc, char *argv[])
+{
+    struct sigaction sa;
+    char buf[BUF_SIZE];
+    ssize_t numRead;
+    int savedErrno;
+
+    if (argc &gt; 1 &amp;&amp; strcmp(argv[1], "--help") == 0)
+        usageErr("%s [num-secs [restart-flag]]\n", argv[0]);
+
+    /* Set up handler for SIGALRM. Allow system calls to be interrupted,
+       unless second command-line argument was supplied. */
+
+    sa.sa_flags = (argc &gt; 2) ? SA_RESTART : 0;
+    sigemptyset(&amp;sa.sa_mask);
+    sa.sa_handler = handler;
+    if (sigaction(SIGALRM, &amp;sa, NULL) == -1)
+        errExit("sigaction");
+
+    alarm((argc &gt; 1) ? getInt(argv[1], GN_NONNEG, "num-secs") : 10);
+
+    numRead = read(STDIN_FILENO, buf, BUF_SIZE - 1);
+
+    savedErrno = errno;                 /* In case alarm() changes it */
+    alarm(0);                           /* Ensure timer is turned off */
+    errno = savedErrno;
+
+    /* Determine result of read() */
+
+    if (numRead == -1) {
+        if (errno == EINTR)
+            printf("Read timed out\n");
+        else
+            errMsg("read");
+    } else {
+        printf("Successful read (%ld bytes): %.*s",
+                (long) numRead, (int) numRead, buf);
+    }
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>timers/timed_read.c</code></strong></pre></div></div><p>Note that there is a theoretical race condition in the program in <a class="xref" href="ch23.html#performing_a_read_open_parenthesis_close" title="Example 23-2. Performing a read() with timeout">Example 23-2</a>. If the timer expires after
+                the call to <span class="emphasis"><em>alarm()</em></span>, but before the <span class="emphasis"><em>read()</em></span>
+                call is started, then the <span class="emphasis"><em>read()</em></span> call won’t be interrupted by
+                the signal handler. Since the timeout value used in scenarios like this is normally
+                relatively large (at least several seconds) this is highly unlikely to occur, so
+                that, in practice, this is a viable technique. [Stevens &amp; Rago, 2005]
+                proposes an alternative technique using <span class="emphasis"><em>longjmp()</em></span>. A further
+                alternative when dealing with I/O system calls is to use the timeout feature of the
+                    <span class="emphasis"><em>select()</em></span> or <span class="emphasis"><em>poll()</em></span> system calls (<a class="xref" href="ch63.html" title="Chapter 63. Alternative I/O Models">Chapter 63</a>), which also have the advantage of
+                allowing us to simultaneously wait for I/O on multiple descriptors.</p></div><div class="sect1" title="Suspending Execution for a Fixed Interval (Sleeping)"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="suspending_execution_for_a_fixed_interva">Suspending Execution for a Fixed Interval (Sleeping)</h2></div></div></div><p>Sometimes, we want to suspend execution of a process for a fixed amount of time.
+                While it is possible to do this using a combination of
+                    <span class="emphasis"><em>sigsuspend()</em></span> and the timer functions already described, it
+                is easier to use one of the sleep functions instead.<a id="IDX-CHP-23-3594" class="indexterm"/><a id="IDX-CHP-23-3595" class="indexterm"/><a id="IDX-CHP-23-3596" class="indexterm"/><a id="IDX-CHP-23-3597" class="indexterm"/><a id="IDX-CHP-23-3598" class="indexterm"/></p><div class="sect2" title="Low-Resolution Sleeping: sleep()"><div class="titlepage"><div><div><h3 class="title" id="low-resolution_sleeping_colon_sleep_open">Low-Resolution Sleeping: <span class="emphasis"><em>sleep()</em></span></h3></div></div></div><p>The <span class="emphasis"><em>sleep()</em></span> function suspends execution of the calling
+                    process for the number of seconds specified in the <span class="emphasis"><em>seconds</em></span>
+                    argument or until a signal is caught (thus interrupting the call).<a id="IDX-CHP-23-3599" class="indexterm"/></p><a id="I_programlisting23_d1e66506"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+unsigned int <strong class="userinput"><code>sleep</code></strong>(unsigned int <span class="emphasis"><em>seconds</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on normal completion, or number of unslept seconds if
+                        prematurely terminated</p></div><p>If the sleep completes, <span class="emphasis"><em>sleep()</em></span> returns 0. If the sleep
+                    is interrupted by a signal, <span class="emphasis"><em>sleep()</em></span> returns the number of
+                    remaining (unslept) seconds. As with timers set by <span class="emphasis"><em>alarm()</em></span>
+                    and <span class="emphasis"><em>setitimer()</em></span>, system load may mean that the process is
+                    rescheduled only at some (normally short) time after the completion of the
+                        <span class="emphasis"><em>sleep()</em></span> call.<a id="IDX-CHP-23-3600" class="indexterm"/><a id="IDX-CHP-23-3601" class="indexterm"/></p><p>SUSv3 leaves possible interactions of <span class="emphasis"><em>sleep()</em></span> with
+                        <span class="emphasis"><em>alarm()</em></span> and <span class="emphasis"><em>setitimer()</em></span>
+                    unspecified. On Linux, <span class="emphasis"><em>sleep()</em></span> is implemented as a call to
+                        <span class="emphasis"><em>nanosleep()</em></span> (<a class="xref" href="ch23.html#high-resolution_sleeping_colon_nanosleep" title="High-Resolution Sleeping: nanosleep()">High-Resolution Sleeping: <span class="emphasis"><em>nanosleep()</em></span></a>), with the consequence
+                    that there is no interaction between <span class="emphasis"><em>sleep()</em></span> and the timer
+                    functions. However, on many implementations, especially older ones,
+                        <span class="emphasis"><em>sleep()</em></span> is implemented using
+                        <span class="emphasis"><em>alarm()</em></span> and a handler for the <code class="literal">SIGALRM</code> signal. For portability, we should avoid mixing the use
+                    of <span class="emphasis"><em>sleep()</em></span> with <span class="emphasis"><em>alarm()</em></span> and
+                        <span class="emphasis"><em>setitimer()</em></span>.<a id="IDX-CHP-23-3602" class="indexterm"/><a id="IDX-CHP-23-3603" class="indexterm"/></p></div><div class="sect2" title="High-Resolution Sleeping: nanosleep()"><div class="titlepage"><div><div><h3 class="title" id="high-resolution_sleeping_colon_nanosleep">High-Resolution Sleeping: <span class="emphasis"><em>nanosleep()</em></span></h3></div></div></div><p>The <span class="emphasis"><em>nanosleep()</em></span> function performs a similar task to
+                        <span class="emphasis"><em>sleep()</em></span>, but provides a number of advantages, including
+                    finer resolution when specifying the sleep interval.<a id="IDX-CHP-23-3604" class="indexterm"/><a id="IDX-CHP-23-3605" class="indexterm"/><a id="IDX-CHP-23-3606" class="indexterm"/><a id="IDX-CHP-23-3607" class="indexterm"/><a id="IDX-CHP-23-3608" class="indexterm"/><a id="IDX-CHP-23-3609" class="indexterm"/><a id="IDX-CHP-23-3610" class="indexterm"/><a id="IDX-CHP-23-3611" class="indexterm"/><a id="IDX-CHP-23-3612" class="indexterm"/><a id="IDX-CHP-23-3613" class="indexterm"/><a id="IDX-CHP-23-3614" class="indexterm"/></p><a id="I_programlisting23_d1e66676"/><pre class="programlisting">#define _POSIX_C_SOURCE 199309
+#include &lt;time.h&gt;
+
+int <strong class="userinput"><code>nanosleep</code></strong>(const struct timespec *<span class="emphasis"><em>request</em></span>, struct timespec *<span class="emphasis"><em>remain</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on successfully completed sleep, or -1 on error or interrupted
+                        sleep</p></div><p>The <span class="emphasis"><em>request</em></span> argument specifies the duration of the sleep
+                    interval and is a pointer to a structure of the following form:</p><a id="I_programlisting23_d1e66695"/><pre class="programlisting">struct timespec {
+    time_t tv_sec;         /* Seconds */
+    long   tv_nsec;        /* Nanoseconds */
+};</pre><p>The <span class="emphasis"><em>tv_nsec</em></span> field specifies a nanoseconds value. It must
+                    be a number in the range 0 to 999,999,999.</p><p>A further advantage of <span class="emphasis"><em>nanosleep()</em></span> is that SUSv3
+                    explicitly specifies that it should not be implemented using signals. This means
+                    that, unlike the situation with <span class="emphasis"><em>sleep()</em></span>, we can portably
+                    mix calls to <span class="emphasis"><em>nanosleep()</em></span> with calls to
+                        <span class="emphasis"><em>alarm()</em></span> or <span class="emphasis"><em>setitimer()</em></span>.</p><p>Although it is not implemented using signals, <span class="emphasis"><em>nanosleep()</em></span>
+                    may still be interrupted by a signal handler. In this case,
+                        <span class="emphasis"><em>nanosleep()</em></span> returns -1, with <span class="emphasis"><em>errno</em></span>
+                    set to the usual <code class="literal">EINTR</code> and, if the argument
+                        <span class="emphasis"><em>remain</em></span> is not <code class="literal">NULL</code>,
+                    the buffer it points to returns the remaining unslept time. If desired, we can
+                    use the returned value to restart the system call and complete the sleep. This
+                    is demonstrated in <a class="xref" href="ch23.html#using_nanosleep_open_parenthesis_close_p" title="Example 23-3. Using nanosleep()">Example 23-3</a>.
+                    As command-line arguments, this program expects seconds and nanosecond values
+                    for <span class="emphasis"><em>nanosleep()</em></span>. The program loops repeatedly, executing
+                        <span class="emphasis"><em>nanosleep()</em></span> until the total sleep interval is passed.
+                    If <span class="emphasis"><em>nanosleep()</em></span> is interrupted by the handler for <code class="literal">SIGINT</code> (generated by typing
+                        <span class="emphasis"><em>Control-C</em></span>), then the call is restarted using the value
+                    returned in <span class="emphasis"><em>remain</em></span>. When we run this program, we see the
+                    following:</p><a id="I_programlisting23_d1e66761"/><pre class="programlisting">$ <strong class="userinput"><code>./t_nanosleep 10 0</code></strong>                      <em class="lineannotation"><span class="lineannotation">Sleep for 10 seconds</span></em>
+<em class="lineannotation"><span class="lineannotation">Type Control-C</span></em>
+Slept for:  1.853428 secs
+Remaining:  8.146617000
+<em class="lineannotation"><span class="lineannotation">Type Control-C</span></em>
+Slept for:  4.370860 secs
+Remaining:  5.629800000
+<em class="lineannotation"><span class="lineannotation">Type Control-C</span></em>
+Slept for:  6.193325 secs
+Remaining:  3.807758000
+Slept for: 10.008150 secs
+Sleep complete</pre><p>Although <span class="emphasis"><em>nanosleep()</em></span> allows nanosecond precision when
+                    specifying the sleep interval, the accuracy of the sleep interval is limited to
+                    the granularity of the software clock (<a class="xref" href="ch10.html#the_software_clock_open_parenthesis_jiff" title="The Software Clock (Jiffies)">The Software Clock (Jiffies)</a>). If we specify an
+                    interval that is not a multiple of the software clock, then the interval is
+                    rounded up.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>As noted earlier, on systems that support high-resolution timers, the
+                        accuracy of the sleep interval can be much finer than the granularity of the
+                        software clock.</p></div><p>This rounding behavior means that if signals are received at a high rate, then
+                    there is a problem with the approach employed in the program in <a class="xref" href="ch23.html#using_nanosleep_open_parenthesis_close_p" title="Example 23-3. Using nanosleep()">Example 23-3</a>. The problem is that
+                    each restart of <span class="emphasis"><em>nanosleep()</em></span> will be subject to rounding
+                    errors, since the returned <span class="emphasis"><em>remain</em></span> time is unlikely to be an
+                    exact multiple of the granularity of the software clock. Consequently, each
+                    restarted <span class="emphasis"><em>nanosleep()</em></span> will sleep longer than the value
+                    returned in <span class="emphasis"><em>remain</em></span> by the previous call. In the case of an
+                    extremely high rate of signal delivery (i.e., as or more frequent than the
+                    software clock granularity), the process may never be able to complete its
+                    sleep. On Linux 2.6, this problem can be avoided by making use of
+                        <span class="emphasis"><em>clock_nanosleep()</em></span> with the <code class="literal">TIMER_ABSTIME</code> option. We describe
+                        <span class="emphasis"><em>clock_nanosleep()</em></span> in <a class="xref" href="ch23.html#improved_high-resolution_sleeping_colon" title="Improved High-Resolution Sleeping: clock_nanosleep()">Improved High-Resolution Sleeping:
+                    <span class="emphasis"><em>clock_nanosleep()</em></span></a>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>In Linux 2.4 and earlier, there is an eccentricity in the implementation
+                        of <span class="emphasis"><em>nanosleep()</em></span>. Suppose that a process performing a
+                            <span class="emphasis"><em>nanosleep()</em></span> call is stopped by a signal. When the
+                        process is later resumed via delivery of <code class="literal">SIGCONT</code>, then the <span class="emphasis"><em>nanosleep()</em></span> call fails
+                        with the error <code class="literal">EINTR</code>, as expected.
+                        However, if the program subsequently restarts the
+                            <span class="emphasis"><em>nanosleep()</em></span> call, then the time that the process
+                        has spent in the stopped state is <span class="emphasis"><em>not</em></span> counted against
+                        the sleep interval, so that the process will sleep longer than expected.
+                        This eccentricity is eliminated in Linux 2.6, where the
+                            <span class="emphasis"><em>nanosleep()</em></span> call automatically resumes on delivery
+                        of the <code class="literal">SIGCONT</code> signal, and the time spent
+                        in the sleep state is counted against the sleep interval.<a id="IDX-CHP-23-3615" class="indexterm"/></p></div><div class="example"><a id="using_nanosleep_open_parenthesis_close_p"/><div class="example-title">Example 23-3. Using <span class="emphasis"><em>nanosleep()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>timers/t_nanosleep.c</code></strong>
+#define _POSIX_C_SOURCE 199309
+#include &lt;sys/time.h&gt;
+#include &lt;time.h&gt;
+#include &lt;signal.h&gt;
+#include "tlpi_hdr.h"
+
+static void
+sigintHandler(int sig)
+{
+    return;                     /* Just interrupt nanosleep() */
+}
+
+int
+main(int argc, char *argv[])
+{
+    struct timeval start, finish;
+    struct timespec request, remain;
+    struct sigaction sa;
+    int s;
+
+    if (argc != 3 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s secs nanosecs\n", argv[0]);
+
+    request.tv_sec = getLong(argv[1], 0, "secs");
+    request.tv_nsec = getLong(argv[2], 0, "nanosecs");
+
+    /* Allow SIGINT handler to interrupt nanosleep() */
+
+    sigemptyset(&amp;sa.sa_mask);
+    sa.sa_flags = 0;
+    sa.sa_handler = sigintHandler;
+    if (sigaction(SIGINT, &amp;sa, NULL) == -1)
+        errExit("sigaction");
+
+    if (gettimeofday(&amp;start, NULL) == -1)
+        errExit("gettimeofday");
+
+    for (;;) {
+        s = nanosleep(&amp;request, &amp;remain);
+        if (s == -1 &amp;&amp; errno != EINTR)
+            errExit("nanosleep");
+
+        if (gettimeofday(&amp;finish, NULL) == -1)
+            errExit("gettimeofday");
+        printf("Slept for: %9.6f secs\n", finish.tv_sec - start.tv_sec +
+                        (finish.tv_usec - start.tv_usec) / 1000000.0);
+
+        if (s == 0)
+            break;                      /* nanosleep() completed */
+
+        printf("Remaining: %2ld.%09ld\n", (long) remain.tv_sec,
+                remain.tv_nsec);
+        request = remain;               /* Next sleep is with remaining time */
+    }
+
+    printf("Sleep complete\n");
+    exit(EXIT_SUCCESS);
+}
+      <strong class="userinput"><code>timers/t_nanosleep.c</code></strong></pre></div></div></div></div><div class="sect1" title="POSIX Clocks"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="posix_clocks">POSIX Clocks</h2></div></div></div><p>POSIX clocks (originally defined in POSIX.1b) provide an API for accessing clocks
+                that measure time with nanosecond precision. Nanosecond time values are represented
+                using the same <span class="emphasis"><em>timespec</em></span> structure as is used by
+                    <span class="emphasis"><em>nanosleep()</em></span> (<a class="xref" href="ch23.html#high-resolution_sleeping_colon_nanosleep" title="High-Resolution Sleeping: nanosleep()">High-Resolution Sleeping: <span class="emphasis"><em>nanosleep()</em></span></a>).<a id="IDX-CHP-23-3616" class="indexterm"/><a id="IDX-CHP-23-3617" class="indexterm"/><a id="IDX-CHP-23-3618" class="indexterm"/><a id="IDX-CHP-23-3619" class="indexterm"/><a id="IDX-CHP-23-3620" class="indexterm"/><a id="IDX-CHP-23-3621" class="indexterm"/><a id="IDX-CHP-23-3622" class="indexterm"/><a id="IDX-CHP-23-3623" class="indexterm"/><a id="IDX-CHP-23-3624" class="indexterm"/><a id="IDX-CHP-23-3625" class="indexterm"/></p><p>On Linux, programs using this API must be compiled with the
+                    <span class="emphasis"><em>-lrt</em></span> option, in order to link against the
+                    <span class="emphasis"><em>librt</em></span> (realtime) library.</p><p>The main system calls in the POSIX clocks API are
+                    <span class="emphasis"><em>clock_gettime()</em></span>, which retrieves the current value of a
+                clock; <span class="emphasis"><em>clock_getres()</em></span>, which returns the resolution of a clock;
+                and <span class="emphasis"><em>clock_settime()</em></span>, which updates a clock.<a id="IDX-CHP-23-3626" class="indexterm"/><a id="IDX-CHP-23-3627" class="indexterm"/></p><div class="sect2" title="Retrieving the Value of a Clock: clock_gettime()"><div class="titlepage"><div><div><h3 class="title" id="retrieving_the_value_of_a_clock_colon_cl">Retrieving the Value of a Clock: <span class="emphasis"><em>clock_gettime()</em></span></h3></div></div></div><p>The <span class="emphasis"><em>clock_gettime()</em></span> system call returns the time
+                    according to the clock specified in <span class="emphasis"><em>clockid</em></span>.</p><a id="I_programlisting23_d1e66968"/><pre class="programlisting">#define _POSIX_C_SOURCE 199309
+#include &lt;time.h&gt;
+
+int <strong class="userinput"><code>clock_gettime</code></strong>(clockid_t <span class="emphasis"><em>clockid</em></span>, struct timespec *<span class="emphasis"><em>tp</em></span>);
+int <strong class="userinput"><code>clock_getres</code></strong>(clockid_t <span class="emphasis"><em>clockid</em></span>, struct timespec *<span class="emphasis"><em>res</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Both return 0 on success, or -1 on error</p></div><p>The time value is returned in the timespec structure pointed to by
+                        <span class="emphasis"><em>tp</em></span>. Although the <span class="emphasis"><em>timespec</em></span>
+                    structure affords nanosecond precision, the granularity of the time value
+                    returned by <span class="emphasis"><em>clock_gettime()</em></span> may be coarser than this. The
+                        <span class="emphasis"><em>clock_getres()</em></span> system call returns a pointer to a
+                        <span class="emphasis"><em>timespec</em></span> structure containing the resolution of the
+                    clock specified in <span class="emphasis"><em>clockid</em></span>.</p><p>The <span class="emphasis"><em>clockid_t</em></span> data type is a type specified by SUSv3 for
+                    representing a clock identifier. The first column of <a class="xref" href="ch23.html#posix.1b_clock_types" title="Table 23-1. POSIX.1b clock types">Table 23-1</a> lists the values that can be specified for
+                        <span class="emphasis"><em>clockid</em></span><a id="IDX-CHP-23-3628" class="indexterm"/></p><div class="table"><a id="posix.1b_clock_types"/><div class="table-title">Table 23-1. POSIX.1b clock types</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>Clock ID</p>
+                                </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                    <p>Description</p>
+                                </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CLOCK_REALTIME</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Settable system-wide real-time clock</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CLOCK_MONOTONIC</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Nonsettable monotonic clock</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CLOCK_PROCESS_CPUTIME_ID</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>Per-process CPU-time clock (since Linux 2.6.12)</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">CLOCK_THREAD_CPUTIME_ID</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; ">
+                                    <p>Per-thread CPU-time clock (since Linux 2.6.12)</p>
+                                </td></tr></tbody></table></div></div><p>The <code class="literal">CLOCK_REALTIME</code> clock is a system-wide
+                    clock that measures wall-clock time. By contrast with the <code class="literal">CLOCK_MONOTONIC</code> clock, the setting of this clock
+                    can be changed.</p><p>SUSv3 specifies that the <code class="literal">CLOCK_MONOTONIC</code>
+                    clock measures time since some “unspecified point in the past” that doesn’t
+                    change after system startup. This clock is useful for applications that must not
+                    be affected by discontinuous changes to the system clock (e.g., a manual change
+                    to the system time). On Linux, this clock measures the time since system
+                    startup.</p><p><code class="literal">The CLOCK_PROCESS_CPUTIME_ID</code> clock measures
+                    the user and system CPU time consumed by the calling process. The <code class="literal">CLOCK_THREAD_CPUTIME_ID</code> clock performs the
+                    analogous task for an individual thread within a process.</p><p>All of the clocks in <a class="xref" href="ch23.html#posix.1b_clock_types" title="Table 23-1. POSIX.1b clock types">Table 23-1</a> are specified in
+                    SUSv3, but only <code class="literal">CLOCK_REALTIME</code> is mandatory
+                    and widely supported on UNIX implementations.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Linux 2.6.28 adds a new clock type, <code class="literal">CLOCK_MONOTONIC_RAW</code>, to those listed in <a class="xref" href="ch23.html#posix.1b_clock_types" title="Table 23-1. POSIX.1b clock types">Table 23-1</a>. This is a nonsettable clock that is
+                        similar to <code class="literal">CLOCK_MONOTONIC</code>, but it gives
+                        access to a pure hardware-based time that is unaffected by NTP adjustments.
+                        This nonstandard clock is intended for use in specialized
+                        clock-synchronization applications.</p><p>Linux 2.6.32 adds two more new clocks to those listed in <a class="xref" href="ch23.html#posix.1b_clock_types" title="Table 23-1. POSIX.1b clock types">Table 23-1</a>: <code class="literal">CLOCK_REALTIME_COARSE</code> and <code class="literal">CLOCK_MONOTIC_COARSE</code>. These clocks are similar to <code class="literal">CLOCK_REALTIME</code> and <code class="literal">CLOCK_MONOTONIC</code>, but intended for applications that want to
+                        obtain lower-resolution timestamps at minimal cost. These nonstandard clocks
+                        don’t cause any access to the hardware clock (which can be expensive for
+                        some hardware clock sources), and the resolution of the returned value is
+                        the jiffy (<a class="xref" href="ch10.html#the_software_clock_open_parenthesis_jiff" title="The Software Clock (Jiffies)">The Software Clock (Jiffies)</a>).</p></div></div><div class="sect2" title="Setting the Value of a Clock: clock_settime()"><div class="titlepage"><div><div><h3 class="title" id="setting_the_value_of_a_clock_colon_clock">Setting the Value of a Clock: <span class="emphasis"><em>clock_settime()</em></span></h3></div></div></div><p>The <span class="emphasis"><em>clock_settime()</em></span> system call sets the clock specified
+                    by <span class="emphasis"><em>clockid</em></span> to the time supplied in the buffer pointed to by
+                        <span class="emphasis"><em>tp</em></span>.<a id="IDX-CHP-23-3630" class="indexterm"/><a id="IDX-CHP-23-3631" class="indexterm"/><a id="IDX-CHP-23-3632" class="indexterm"/><a id="IDX-CHP-23-3633" class="indexterm"/><a id="IDX-CHP-23-3634" class="indexterm"/><a id="IDX-CHP-23-3635" class="indexterm"/><a id="IDX-CHP-23-3636" class="indexterm"/><a id="IDX-CHP-23-3637" class="indexterm"/><a id="IDX-CHP-23-3638" class="indexterm"/><a id="IDX-CHP-23-3639" class="indexterm"/><a id="IDX-CHP-23-3640" class="indexterm"/><a id="IDX-CHP-23-3641" class="indexterm"/><a id="IDX-CHP-23-3629" class="indexterm"/></p><a id="I_programlisting23_d1e67215"/><pre class="programlisting">#define _POSIX_C_SOURCE 199309
+#include &lt;time.h&gt;int <strong class="userinput"><code>clock_settime</code></strong>(clockid_t <em class="lineannotation"><span class="lineannotation">clockid</span></em>,
+ const struct timespec *<em class="lineannotation"><span class="lineannotation">tp</span></em>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>If the time specified by <span class="emphasis"><em>tp</em></span> is not a multiple of the
+                    clock resolution as returned by <span class="emphasis"><em>clock_getres()</em></span>, the time is
+                    rounded downward.</p><p>A privileged (<code class="literal">CAP_SYS_TIME</code>) process may set
+                    the <code class="literal">CLOCK_REALTIME</code> clock. The initial value
+                    of this clock is typically the time since the Epoch. None of the other clocks in
+                        <a class="xref" href="ch23.html#posix.1b_clock_types" title="Table 23-1. POSIX.1b clock types">Table 23-1</a> are modifiable.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>According to SUSv3, an implementation may allow the <code class="literal">CLOCK_PROCESS_CPUTIME_ID</code> and <code class="literal">CLOCK_THREAD_CPUTIME_ID</code> clocks to be settable.
+                        At the time of writing, these clocks are read-only on Linux.</p></div></div><div class="sect2" title="Obtaining the Clock ID of a Specific Process or Thread"><div class="titlepage"><div><div><h3 class="title" id="obtaining_the_clock_id_of_a_specific_pro">Obtaining the Clock ID of a Specific Process or Thread</h3></div></div></div><p>The functions described in this section allow us to obtain the ID of a clock
+                    that measures the CPU time consumed by a particular process or thread. We can
+                    use the returned clock ID in a call to <span class="emphasis"><em>clock_gettime()</em></span> in
+                    order to find out the CPU time consumed by the process or thread.<a id="IDX-CHP-23-3642" class="indexterm"/><a id="IDX-CHP-23-3643" class="indexterm"/><a id="IDX-CHP-23-3644" class="indexterm"/><a id="IDX-CHP-23-3645" class="indexterm"/><a id="IDX-CHP-23-3646" class="indexterm"/><a id="IDX-CHP-23-3647" class="indexterm"/><a id="IDX-CHP-23-3648" class="indexterm"/><a id="IDX-CHP-23-3649" class="indexterm"/><a id="IDX-CHP-23-3650" class="indexterm"/></p><p>The <span class="emphasis"><em>clock_getcpuclockid()</em></span> function returns the identifier
+                    of the CPU-time clock of the process whose ID is <span class="emphasis"><em>pid</em></span>, in
+                    the buffer pointed to by <span class="emphasis"><em>clockid</em></span>.<a id="IDX-CHP-23-3651" class="indexterm"/></p><a id="I_programlisting23_d1e67331"/><pre class="programlisting">#include &lt;time.h&gt;
+
+int <strong class="userinput"><code>clock_getcpuclockid</code></strong>(pid_t <span class="emphasis"><em>pid</em></span>, clockid_t *<span class="emphasis"><em>clockid</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or a positive error number on error</p></div><p>If <span class="emphasis"><em>pid</em></span> is 0, <span class="emphasis"><em>clock_getcpuclockid()</em></span>
+                    returns the ID of the CPU-time clock of the calling process.</p><p>The <span class="emphasis"><em>pthread_getcpuclockid()</em></span> function is the POSIX threads
+                    analog of the <span class="emphasis"><em>clock_getcpuclockid()</em></span> function. It returns
+                    the identifier of the clock measuring the CPU time consumed by a specific thread
+                    of the calling process.<a id="IDX-CHP-23-3652" class="indexterm"/></p><a id="I_programlisting23_d1e67365"/><pre class="programlisting">#include &lt;pthread.h&gt;
+#include &lt;time.h&gt;
+
+int <strong class="userinput"><code>pthread_getcpuclockid</code></strong>(pthread_t <span class="emphasis"><em>thread</em></span>, clockid_t *<span class="emphasis"><em>clockid</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or a positive error number on error</p></div><p>The <span class="emphasis"><em>thread</em></span> argument is a POSIX thread ID that identifies
+                    the thread whose CPU-time clock ID we want to obtain. The clock ID is returned
+                    in the buffer pointed to by <span class="emphasis"><em>clockid</em></span>.</p></div><div class="sect2" title="Improved High-Resolution Sleeping: clock_nanosleep()"><div class="titlepage"><div><div><h3 class="title" id="improved_high-resolution_sleeping_colon">Improved High-Resolution Sleeping:
+                    <span class="emphasis"><em>clock_nanosleep()</em></span></h3></div></div></div><p>Like <span class="emphasis"><em>nanosleep()</em></span>, the Linux-specific
+                        <span class="emphasis"><em>clock_nanosleep()</em></span> system call suspends the calling
+                    process until either a specified interval of time has passed or a signal
+                    arrives. In this section, we describe the features that distinguish
+                        <span class="emphasis"><em>clock_nanosleep()</em></span> from
+                        <span class="emphasis"><em>nanosleep()</em></span>.<a id="IDX-CHP-23-3654" class="indexterm"/><a id="IDX-CHP-23-3655" class="indexterm"/><a id="IDX-CHP-23-3656" class="indexterm"/><a id="IDX-CHP-23-3657" class="indexterm"/><a id="IDX-CHP-23-3658" class="indexterm"/><a id="IDX-CHP-23-3659" class="indexterm"/><a id="IDX-CHP-23-3660" class="indexterm"/><a id="IDX-CHP-23-3653" class="indexterm"/></p><a id="I_programlisting23_d1e67450"/><pre class="programlisting">#include &lt;time.h&gt;
+
+int <strong class="userinput"><code>clock_nanosleep</code></strong>(clockid_t <span class="emphasis"><em>clockid</em></span>, <span class="emphasis"><em>int flags</em></span>,
+       const struct timespec *<span class="emphasis"><em>request</em></span>, struct timespec *<span class="emphasis"><em>remain</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on successfully completed sleep, or a positive error number on
+                        error or interrupted sleep</p></div><p>The <span class="emphasis"><em>request</em></span> and <span class="emphasis"><em>remain</em></span> arguments
+                    serve similar purposes to the analogous arguments for
+                        <span class="emphasis"><em>nanosleep()</em></span>.</p><p>By default (i.e., if <span class="emphasis"><em>flags</em></span> is 0), the sleep interval
+                    specified in <span class="emphasis"><em>request</em></span> is relative (like
+                        <span class="emphasis"><em>nanosleep()</em></span>). However, if we specify <code class="literal">TIMER_ABSTIME</code> in <span class="emphasis"><em>flags</em></span> (see
+                    the example in <a class="xref" href="ch23.html#using_clock_underscore_nanosleep_open_pa" title="Example 23-4. Using clock_nanosleep()">Example 23-4</a>), then
+                        <span class="emphasis"><em>request</em></span> specifies an absolute time as measured by the
+                    clock identified by <span class="emphasis"><em>clockid</em></span>. This feature is essential in
+                    applications that need to sleep accurately until a specific time. If we instead
+                    try retrieving the current time, calculating the difference until the desired
+                    target time, and doing a relative sleep, then there is a possibility that the
+                    process may be preempted in the middle of these steps, and consequently sleep
+                    for longer than desired.</p><p>As described in <a class="xref" href="ch23.html#high-resolution_sleeping_colon_nanosleep" title="High-Resolution Sleeping: nanosleep()">High-Resolution Sleeping: <span class="emphasis"><em>nanosleep()</em></span></a>,
+                    this “oversleeping” problem is particularly marked for a process that uses a
+                    loop to restart a sleep that is interrupted by a signal handler. If signals are
+                    delivered at a high rate, then a relative sleep (of the type performed by
+                        <span class="emphasis"><em>nanosleep()</em></span>) can lead to large inaccuracies in the time
+                    a process spends sleeping. We can avoid the oversleeping problem by making an
+                    initial call to <span class="emphasis"><em>clock_gettime()</em></span> to retrieve the time,
+                    adding the desired amount to that time, and then calling
+                        <span class="emphasis"><em>clock_nanosleep()</em></span> with the <code class="literal">TIMER_ABSTIME</code> flag (and restarting the system call if it is
+                    interrupted by a signal handler).</p><p>When the <code class="literal">TIMER_ABSTIME</code> flag is specified,
+                    the <span class="emphasis"><em>remain</em></span> argument is unused (it is unnecessary). If the
+                        <span class="emphasis"><em>clock_nanosleep()</em></span> call is interrupted by a signal
+                    handler, then the sleep can be restarted by repeating the call with the same
+                        <span class="emphasis"><em>request</em></span> argument.</p><p>Another feature that distinguishes <span class="emphasis"><em>clock_nanosleep()</em></span> from
+                        <span class="emphasis"><em>nanosleep()</em></span> is that we can choose the clock that is
+                    used to measure the sleep interval. We specify the desired clock in
+                        <span class="emphasis"><em>clockid</em></span>: <code class="literal">CLOCK_REALTIME</code>, <code class="literal">CLOCK_MONOTONIC</code>, or <code class="literal">CLOCK_PROCESS_CPUTIME_ID</code>. See <a class="xref" href="ch23.html#posix.1b_clock_types" title="Table 23-1. POSIX.1b clock types">Table 23-1</a> for a description of these clocks.</p><p><a class="xref" href="ch23.html#using_clock_underscore_nanosleep_open_pa" title="Example 23-4. Using clock_nanosleep()">Example 23-4</a> demonstrates the
+                    use of <span class="emphasis"><em>clock_nanosleep()</em></span> to sleep for 20 seconds against
+                    the <code class="literal">CLOCK_REALTIME</code> clock using an absolute
+                    time value.</p><div class="example"><a id="using_clock_underscore_nanosleep_open_pa"/><div class="example-title">Example 23-4. Using <span class="emphasis"><em>clock_nanosleep()</em></span></div><div class="example-contents"><pre class="programlisting">struct timespec request;
+
+    /* Retrieve current value of CLOCK_REALTIME clock */
+
+    if (clock_gettime(CLOCK_REALTIME, &amp;request) == -1)
+        errExit("clock_gettime");
+
+    request.tv_sec += 20;               /* Sleep for 20 seconds from now */
+
+    s = clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &amp;request, NULL);
+    if (s != 0) {
+        if (s == EINTR)
+            printf("Interrupted by signal handler\n");
+        else
+            errExitEN(s, "clock_nanosleep");
+    }</pre></div></div></div></div><div class="sect1" title="POSIX Interval Timers"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="posix_interval_timers">POSIX Interval Timers</h2></div></div></div><p>The classical UNIX interval timers set by <span class="emphasis"><em>setitimer()</em></span> suffer
+                a number of limitations:<a id="IDX-CHP-23-3661" class="indexterm"/><a id="IDX-CHP-23-3662" class="indexterm"/><a id="IDX-CHP-23-3663" class="indexterm"/><a id="IDX-CHP-23-3664" class="indexterm"/><a id="IDX-CHP-23-3665" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>We can set only one timer of each of the three types, <code class="literal">ITIMER_REAL</code>, <code class="literal">ITIMER_VIRTUAL</code>, and <code class="literal">ITIMER_PROF</code>.</p></li><li class="listitem"><p>The only way of being notified of timer expiration is via delivery of a
+                        signal. Furthermore, we can’t change the signal that is generated when the
+                        timer expires.</p></li><li class="listitem"><p>If an interval timer expires multiple times while the corresponding signal
+                        is blocked, then the signal handler is called only once. In other words, we
+                        have no way of knowing whether there was a
+                        <span class="emphasis"><em>timeroverrun</em></span>.</p></li><li class="listitem"><p>Timers are limited to microsecond resolution. However, some systems have
+                        hardware clocks that provide finer resolution than this, and, on such
+                        systems, it is desirable to have software access to this greater
+                        resolution.</p></li></ul></div><p>POSIX.1b defined an API to address these limitations, and this API is implemented
+                in Linux 2.6.<a id="IDX-CHP-23-3666" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>On older Linux systems, an incomplete version of this API was provided via a
+                    threads-based implementation in <span class="emphasis"><em>glibc</em></span>. However, this
+                    user-space implementation doesn’t provide all of the features described
+                    here.</p></div><p>The POSIX timer API divides the life of a timer into the following
+                    steps:<a id="IDX-CHP-23-3667" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>timer_create()</em></span> system call creates a new timer
+                        and defines the method by which it will notify the process when it
+                            expires.<a id="IDX-CHP-23-3668" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>timer_settime()</em></span> system call arms (starts) or
+                        disarms (stops) a timer.<a id="IDX-CHP-23-3669" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>timer_delete()</em></span> system call deletes a timer that
+                        is no longer required.<a id="IDX-CHP-23-3670" class="indexterm"/></p></li></ul></div><p>POSIX timers are not inherited by a child created by <span class="emphasis"><em>fork()</em></span>.
+                They are disarmed and deleted during an <span class="emphasis"><em>exec()</em></span> or on process
+                termination.</p><p>On Linux, programs using the POSIX timer API must be compiled with the
+                    <span class="emphasis"><em>-lrt</em></span> option, in order to link against the
+                    <span class="emphasis"><em>librt</em></span> (realtime) library.</p><div class="sect2" title="Creating a Timer: timer_create()"><div class="titlepage"><div><div><h3 class="title" id="creating_a_timer_colon_timer_underscore">Creating a Timer: <span class="emphasis"><em>timer_create()</em></span></h3></div></div></div><p>The <span class="emphasis"><em>timer_create()</em></span> function creates a new timer that
+                    measures time using the clock specified by
+                        <span class="emphasis"><em>clockid</em></span>.<a id="IDX-CHP-23-3671" class="indexterm"/><a id="IDX-CHP-23-3672" class="indexterm"/><a id="IDX-CHP-23-3673" class="indexterm"/><a id="IDX-CHP-23-3674" class="indexterm"/><a id="IDX-CHP-23-3675" class="indexterm"/><a id="IDX-CHP-23-3676" class="indexterm"/><a id="IDX-CHP-23-3677" class="indexterm"/><a id="IDX-CHP-23-3678" class="indexterm"/><a id="IDX-CHP-23-3679" class="indexterm"/><a id="IDX-CHP-23-3680" class="indexterm"/><a id="IDX-CHP-23-3681" class="indexterm"/><a id="IDX-CHP-23-3682" class="indexterm"/></p><a id="I_programlisting23_d1e67774"/><pre class="programlisting">#define _POSIX_C_SOURCE 199309
+#include &lt;signal.h&gt;
+#include &lt;time.h&gt;
+
+int <strong class="userinput"><code>timer_create</code></strong>(clockid_t <span class="emphasis"><em>clockid</em></span>, struct sigevent *<span class="emphasis"><em>evp</em></span>, timer_t *<span class="emphasis"><em>timerid</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>clockid</em></span> can specify any of the values shown in <a class="xref" href="ch23.html#posix.1b_clock_types" title="Table 23-1. POSIX.1b clock types">Table 23-1</a>, or the <span class="emphasis"><em>clockid</em></span> value
+                    returned by <span class="emphasis"><em>clock_getcpuclockid()</em></span> or
+                        <span class="emphasis"><em>pthread_getcpuclockid()</em></span>. The
+                        <span class="emphasis"><em>timerid</em></span> argument points to a buffer that returns a
+                    handle used to refer to the timer in later system calls. This buffer is typed as
+                        <span class="emphasis"><em>timer_t</em></span>, which is a data type specified by SUSv3 for
+                    representing a timer identifier.<a id="IDX-CHP-23-3683" class="indexterm"/><a id="IDX-CHP-23-3684" class="indexterm"/></p><p>The <span class="emphasis"><em>evp</em></span> argument determines how the program is to be
+                    notified when the timer expires. It points to a structure of type
+                        <span class="emphasis"><em>sigevent</em></span>, defined as follows:</p><a id="I_programlisting23_d1e67830"/><pre class="programlisting">union sigval {
+    int   sival_int;              /* Integer value for accompanying data */
+    void *sival_ptr;              /* Pointer value for accompanying data */
+};
+
+struct sigevent {
+    int          sigev_notify;    /* Notification method */
+    int          sigev_signo;     /* Timer expiration signal */
+    union sigval sigev_value;     /* Value accompanying signal or
+                                     passed to thread function */
+    union {
+        pid_t      _tid;          /* ID of thread to be signaled /
+        struct {
+            void (*_function) (union sigval);
+                                  /* Thread notification function */
+            void  *_attribute;    /* Really 'pthread_attr_t *' */
+        } _sigev_thread;
+    } _sigev_un;
+};
+
+#define sigev_notify_function    _sigev_un._sigev_thread._function
+#define sigev_notify_attributes  _sigev_un._sigev_thread._attribute
+#define sigev_notify_thread_id   _sigev_un._tid</pre><p>The <span class="emphasis"><em>sigev_notify</em></span> field of this structure is set to one of
+                    the values shown in <a class="xref" href="ch23.html#values_for_the_sigev_underscore_notify_f" title="Table 23-2. Values for the sigev_notify field of the sigevent structure">Table 23-2</a>.</p><div class="table"><a id="values_for_the_sigev_underscore_notify_f"/><div class="table-title">Table 23-2. Values for the <span class="emphasis"><em>sigev_notify</em></span> field of the
+                            <span class="emphasis"><em>sigevent</em></span> structure</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p><span class="emphasis"><em>sigev_notify</em></span> value<a id="IDX-CHP-23-3685" class="indexterm"/></p>
+                                </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>Notification method</p>
+                                </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                    <p>SUSv3</p>
+                                </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">SIGEV_NONE</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>No notification; monitor timer using
+                                            <span class="emphasis"><em>timer_gettime()</em></span></p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>•</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">SIGEV_SIGNAL</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>Send signal <span class="emphasis"><em>sigev_signo</em></span> to
+                                        process</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>•</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">SIGEV_THREAD</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                    <p>Call <span class="emphasis"><em>sigev_notify_function</em></span> as start
+                                        function of new thread</p>
+                                </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                    <p>•</p>
+                                </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                    <p>
+                                        <code class="literal">SIGEV_THREAD_ID</code>
+                                    </p>
+                                </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                    <p>Send signal <span class="emphasis"><em>sigev_signo</em></span> to thread
+                                            <span class="emphasis"><em>sigev_notify_thread_id</em></span></p>
+                                </td><td> </td></tr></tbody></table></div></div><p>Further details on the <span class="emphasis"><em>sigev_notify</em></span> field constants, and
+                    the fields in the <span class="emphasis"><em>sigval</em></span> structure that are associated with
+                    each constant value, are as follows:</p><div class="variablelist"><dl><dt><span class="term">
+                            <code class="literal">SIGEV_NONE</code>
+                        </span></dt><dd><p>Don’t provide notification of timer expiration. The process can
+                                still monitor the progress of the timer using
+                                    <span class="emphasis"><em>timer_gettime()</em></span>.</p></dd><dt><span class="term">
+                            <code class="literal">SIGEV_SIGNAL</code>
+                        </span></dt><dd><p>When the timer expires, generate the signal specified in the
+                                    <span class="emphasis"><em>sigev_signo</em></span> field for the process. The
+                                    <span class="emphasis"><em>sigev_value</em></span> field specifies data (an
+                                integer or a pointer) to accompany the signal (<a class="xref" href="ch22.html#limits_on_the_number_of_queued_real-id1" title="Limits on the number of queued realtime signals">Limits on the number of queued realtime signals</a>). This data can
+                                be retrieved via the <span class="emphasis"><em>si_value</em></span> field of the
+                                    <span class="emphasis"><em>siginfo_t</em></span> structure that is passed to the
+                                handler for this signal or returned by a call to
+                                    <span class="emphasis"><em>sigwaitinfo()</em></span> or
+                                    <span class="emphasis"><em>sigtimedwait()</em></span>.</p></dd><dt><span class="term">
+                            <code class="literal">SIGEV_THREAD</code>
+                        </span></dt><dd><p>When the timer expires, call the function specified in the
+                                    <span class="emphasis"><em>sigev_notify_function</em></span> field. This function
+                                is invoked <span class="emphasis"><em>as if</em></span> it were the start function in
+                                a new thread. The “as if ” wording is from SUSv3, and allows an
+                                implementation to generate the notifications for a periodic timer
+                                either by having each notification delivered to a new unique thread
+                                or by having the notifications delivered in series to a single new
+                                thread. The <span class="emphasis"><em>sigev_notify_attributes</em></span> field can
+                                be specified as <code class="literal">NULL</code> or as a
+                                pointer to a <span class="emphasis"><em>pthread_attr_t</em></span> structure that
+                                defines attributes for the thread (<a class="xref" href="ch29.html#thread_attributes" title="Thread Attributes">Thread Attributes</a>). The union <span class="emphasis"><em>sigval</em></span> value specified in
+                                    <span class="emphasis"><em>sigev_value</em></span> is passed as the sole argument
+                                of the function.</p></dd><dt><span class="term">
+                            <code class="literal">SIGEV_THREAD_ID</code>
+                        </span></dt><dd><p>This is similar to <code class="literal">SIGEV_SIGNAL</code>, but the signal is sent to the thread whose
+                                thread ID matches <span class="emphasis"><em>sigev_notify_thread_id</em></span>. This
+                                thread must be in the same process as the calling thread. (With
+                                    <code class="literal">SIGEV_SIGNAL</code> notification, a
+                                signal is queued to the process as a whole, and, if there are
+                                multiple threads in the process, the signal will be delivered to an
+                                arbitrarily selected thread in the process.) The
+                                    <span class="emphasis"><em>sigev_notify_thread_id</em></span> field can be set to
+                                the value returned by <span class="emphasis"><em>clone()</em></span> or the value
+                                returned by <span class="emphasis"><em>gettid()</em></span>. The <code class="literal">SIGEV_THREAD_ID</code> flag is intended for
+                                use by threading libraries. (It requires a threading implementation
+                                that employs the <code class="literal">CLONE_THREAD</code>
+                                option, described in <a class="xref" href="ch28.html#example_program-id39" title="Example program">Example program</a>. The
+                                modern NPTL threading implementation employs <code class="literal">CLONE_THREAD</code>, but the older
+                                LinuxThreads threading implementation does not.)<a id="IDX-CHP-23-3686" class="indexterm"/></p></dd></dl></div><p>All of the above constants are specified in SUSv3, except for <code class="literal">SIGEV_THREAD_ID</code>, which is Linux-specific.</p><p>The <span class="emphasis"><em>evp</em></span> argument may be specified as <code class="literal">NULL</code>, which is equivalent to specifying
+                        <span class="emphasis"><em>sigev_notify</em></span> as <code class="literal">SIGEV_SIGNAL</code>, <span class="emphasis"><em>sigev_signo</em></span> as <code class="literal">SIGALRM</code> (this may be different on other systems,
+                    since SUSv3 merely says “a default signal number”), and
+                        <span class="emphasis"><em>sigev_value.sival_int</em></span> as the timer ID.</p><p>As currently implemented, the kernel preallocates one queued realtime signal
+                    structure for each POSIX timer that is created using
+                        <span class="emphasis"><em>timer_create()</em></span>. The intent of this preallocation is to
+                    ensure that at least one such structure is available for queuing a signal when
+                    the timer expires. This means that the number of POSIX timers that may be
+                    created is subject to the limitations on the number of realtime signals that can
+                    be queued (refer to <a class="xref" href="ch22.html#realtime_signals" title="Realtime Signals">Realtime Signals</a>).</p></div><div class="sect2" title="Arming and Disarming a Timer: timer_settime()"><div class="titlepage"><div><div><h3 class="title" id="arming_and_disarming_a_timer_colon_timer">Arming and Disarming a Timer: <span class="emphasis"><em>timer_settime()</em></span></h3></div></div></div><p>Once we have created a timer, we can arm (start) or disarm (stop) it using
+                        <span class="emphasis"><em>timer_settime()</em></span>.<a id="IDX-CHP-23-3688" class="indexterm"/><a id="IDX-CHP-23-3689" class="indexterm"/><a id="IDX-CHP-23-3690" class="indexterm"/><a id="IDX-CHP-23-3691" class="indexterm"/><a id="IDX-CHP-23-3692" class="indexterm"/><a id="IDX-CHP-23-3693" class="indexterm"/><a id="IDX-CHP-23-3694" class="indexterm"/><a id="IDX-CHP-23-3695" class="indexterm"/><a id="IDX-CHP-23-3696" class="indexterm"/><a id="IDX-CHP-23-3687" class="indexterm"/></p><a id="I_programlisting23_d1e68150"/><pre class="programlisting">#define _POSIX_C_SOURCE 199309
+#include &lt;time.h&gt;
+
+int <strong class="userinput"><code>timer_settime</code></strong>(timer_t <span class="emphasis"><em>timerid</em></span>, int <span class="emphasis"><em>flags</em></span>, const struct itimerspec *<span class="emphasis"><em>value</em></span>,
+                  struct itimerspec *<span class="emphasis"><em>old_value</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>timerid</em></span> argument of
+                        <span class="emphasis"><em>timer_settime()</em></span> is a timer handle returned by a
+                    previous call to <span class="emphasis"><em>timer_create()</em></span>.</p><p>The <span class="emphasis"><em>value</em></span> and <span class="emphasis"><em>old_value</em></span> arguments
+                    are analogous to the <span class="emphasis"><em>setitimer()</em></span> arguments of the same
+                    name: <span class="emphasis"><em>value</em></span> specifies the new settings for the timer, and
+                        <span class="emphasis"><em>old_value</em></span> is used to return the previous timer settings
+                    (see the description of <span class="emphasis"><em>timer_gettime()</em></span> below). If we are
+                    not interested in the previous settings, we can specify
+                        <span class="emphasis"><em>old_value</em></span> as <code class="literal">NULL</code>.
+                    The <span class="emphasis"><em>value</em></span> and <span class="emphasis"><em>old_value</em></span> arguments are
+                    pointers to <span class="emphasis"><em>itimerspec</em></span> structures, defined as
+                    follows:</p><a id="I_programlisting23_d1e68217"/><pre class="programlisting">struct itimerspec {
+    struct timespec it_interval;    /* Interval for periodic timer */
+    struct timespec it_value;       /* First expiration */
+};</pre><p>Each of the fields of the <span class="emphasis"><em>itimerspec</em></span> structure is in turn
+                    a structure of type <span class="emphasis"><em>timespec</em></span>, which specifies time values
+                    as a number of seconds and nanoseconds:<a id="IDX-CHP-23-3697" class="indexterm"/></p><a id="I_programlisting23_d1e68232"/><pre class="programlisting">struct timespec {
+    time_t tv_sec;                  /* Seconds */
+    long   tv_nsec;                 /* Nanoseconds */
+};</pre><p>The <span class="emphasis"><em>it_value</em></span> field specifies when the timer will first
+                    expire. If either subfield of <span class="emphasis"><em>it_interval</em></span> is nonzero, then
+                    this is a periodic timer that, after the initial expiry specified by
+                        <span class="emphasis"><em>it_value</em></span>, will expire with the frequency specified in
+                    these subfields. If both subfields of <span class="emphasis"><em>it_interval</em></span> are 0,
+                    this timer expires just once.</p><p>If <span class="emphasis"><em>flags</em></span> is specified as 0, then
+                        <span class="emphasis"><em>value.it_value</em></span> is interpreted relative to the clock
+                    value at the time of the call to <span class="emphasis"><em>timer_settime()</em></span> (i.e.,
+                    like <span class="emphasis"><em>setitimer()</em></span>). If <span class="emphasis"><em>flags</em></span> is
+                    specified as <code class="literal">TIMER_ABSTIME</code>, then
+                        <span class="emphasis"><em>value.it_value</em></span> is interpreted as an absolute time
+                    (i.e., measured from the clock’s zero point). If that time has already passed on
+                    the clock, the timer expires immediately.</p><p>To arm a timer, we make a call to <span class="emphasis"><em>timer_settime()</em></span> in
+                    which either or both of the subfields of <span class="emphasis"><em>value.it_value</em></span> are
+                    nonzero. If the timer was previously armed, <span class="emphasis"><em>timer_settime()</em></span>
+                    replaces the previous settings.</p><p>If the timer value and interval are not multiples of the resolution of the
+                    corresponding clock (as returned by <span class="emphasis"><em>clock_getres()</em></span>), these
+                    values are rounded up to the next multiple of the resolution.</p><p>On each expiration of the timer, the process is notified using the method
+                    defined in the <span class="emphasis"><em>timer_create()</em></span> call that created this timer.
+                    If the <span class="emphasis"><em>it_interval</em></span> structure contains nonzero values, these
+                    values are used to reload the <span class="emphasis"><em>it_value</em></span> structure.</p><p>To disarm a timer, we make a call to <span class="emphasis"><em>timer_settime()</em></span>
+                    specifying both fields of <span class="emphasis"><em>value.it_value</em></span> as 0.</p></div><div class="sect2" title="Retrieving the Current Value of a Timer: timer_gettime()"><div class="titlepage"><div><div><h3 class="title" id="retrieving_the_current_value_of_a_timer">Retrieving the Current Value of a Timer:
+                    <span class="emphasis"><em>timer_gettime()</em></span></h3></div></div></div><p>The <span class="emphasis"><em>timer_gettime()</em></span> system call returns the interval and
+                    remaining time for the POSIX timer identified by
+                        <span class="emphasis"><em>timerid</em></span>.<a id="IDX-CHP-23-3699" class="indexterm"/><a id="IDX-CHP-23-3700" class="indexterm"/><a id="IDX-CHP-23-3701" class="indexterm"/><a id="IDX-CHP-23-3702" class="indexterm"/><a id="IDX-CHP-23-3703" class="indexterm"/><a id="IDX-CHP-23-3704" class="indexterm"/><a id="IDX-CHP-23-3705" class="indexterm"/><a id="IDX-CHP-23-3698" class="indexterm"/></p><a id="I_programlisting23_d1e68366"/><pre class="programlisting">#define _POSIX_C_SOURCE 199309
+#include &lt;time.h&gt;
+
+int <strong class="userinput"><code>timer_gettime</code></strong>(timer_t <span class="emphasis"><em>timerid</em></span>, struct itimerspec *<span class="emphasis"><em>curr_value</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The interval and the time until the next expiration of the timer are returned
+                    in the <span class="emphasis"><em>itimerspec</em></span> structure pointed to by
+                        <span class="emphasis"><em>curr_value</em></span>. The
+                        <span class="emphasis"><em>curr_value.it_value</em></span> field returns the time until next
+                    timer expiration, even if this timer was established as an absolute timer using
+                        <code class="literal">TIMER_ABSTIME</code>.<a id="IDX-CHP-23-3706" class="indexterm"/></p><p>If both fields of the returned <span class="emphasis"><em>curr_value.it_value</em></span>
+                    structure are 0, then the timer is currently disarmed. If both fields of the
+                    returned <span class="emphasis"><em>curr_value.it_interval</em></span> structure are 0, then the
+                    timer expires just once, at the time given in
+                        <span class="emphasis"><em>curr_value.it_value</em></span>.</p></div><div class="sect2" title="Deleting a Timer: timer_delete()"><div class="titlepage"><div><div><h3 class="title" id="deleting_a_timer_colon_timer_underscore">Deleting a Timer: <span class="emphasis"><em>timer_delete()</em></span></h3></div></div></div><p>Each POSIX timer consumes a small amount of system resources. Therefore, when
+                    we have finished using a timer, we should free these resources by using
+                        <span class="emphasis"><em>timer_delete()</em></span> to remove the timer.<a id="IDX-CHP-23-3707" class="indexterm"/></p><a id="I_programlisting23_d1e68424"/><pre class="programlisting">#define _POSIX_C_SOURCE 199309
+#include &lt;time.h&gt;
+
+int <strong class="userinput"><code>timer_delete</code></strong>(timer_t <span class="emphasis"><em>timerid</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>timerid</em></span> argument is a handle returned by a previous
+                    call to <span class="emphasis"><em>timer_create()</em></span>. If the timer was armed, then it is
+                    automatically disarmed before removal. If there is already a pending signal from
+                    an expiration of this timer, that signal remains pending. (SUSv3 leaves this
+                    point unspecified, so other UNIX implementations may behave differently.) Timers
+                    are deleted automatically when a process terminates.</p></div><div class="sect2" title="Notification via a Signal"><div class="titlepage"><div><div><h3 class="title" id="notification_via_a_signal">Notification via a Signal</h3></div></div></div><p>If we elect to receive timer notifications via a signal, then we can accept
+                    the signal via a signal handler, or by calling
+                        <span class="emphasis"><em>sigwaitinfo()</em></span> or <span class="emphasis"><em>sigtimedwait()</em></span>.
+                    Both mechanisms allow the receiving process to obtain a
+                        <span class="emphasis"><em>siginfo_t</em></span> structure (<a class="xref" href="ch21.html#the_sa_underscore_siginfo_flag" title="The SA_SIGINFO Flag">The <code class="literal">SA_SIGINFO</code> Flag</a>) that provides further
+                    information about the signal. (To take advantage of this feature in a signal
+                    handler, we specify the <code class="literal">SA_SIGINFO</code> flag when
+                    establishing the handler.) The following fields are set in the
+                        <span class="emphasis"><em>siginfo_t</em></span> structure:<a id="IDX-CHP-23-3708" class="indexterm"/><a id="IDX-CHP-23-3709" class="indexterm"/><a id="IDX-CHP-23-3710" class="indexterm"/><a id="IDX-CHP-23-3711" class="indexterm"/><a id="IDX-CHP-23-3712" class="indexterm"/><a id="IDX-CHP-23-3713" class="indexterm"/><a id="IDX-CHP-23-3714" class="indexterm"/><a id="IDX-CHP-23-3715" class="indexterm"/><a id="IDX-CHP-23-3716" class="indexterm"/><a id="IDX-CHP-23-3717" class="indexterm"/><a id="IDX-CHP-23-3718" class="indexterm"/><a id="IDX-CHP-23-3719" class="indexterm"/><a id="IDX-CHP-23-3720" class="indexterm"/><a id="IDX-CHP-23-3721" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>si_signo</em></span>: This field contains the signal
+                            generated by this timer.</p></li><li class="listitem"><p><span class="emphasis"><em>si_code</em></span>: This field is set to <code class="literal">SI_TIMER</code>, indicating that this signal was
+                            generated because of the expiration of a POSIX timer.</p></li><li class="listitem"><p><span class="emphasis"><em>si_value</em></span>: This field is set to the value that was
+                            supplied in <span class="emphasis"><em>evp.sigev_value</em></span> when the timer was
+                            created using <span class="emphasis"><em>timer_create()</em></span>. Specifying different
+                                <span class="emphasis"><em>evp.sigev_value</em></span> values provides a means of
+                            distinguishing expirations of multiple timers that deliver the same
+                            signal.</p></li></ul></div><p>When calling <span class="emphasis"><em>timer_create()</em></span>,
+                        <span class="emphasis"><em>evp.sigev_value.sival_ptr</em></span> is typically assigned the
+                    address of the <span class="emphasis"><em>timerid</em></span> argument given in the same call (see
+                        <a class="xref" href="ch23.html#posix_timer_notification_using_a_signal" title="Example 23-5. POSIX timer notification using a signal">Example 23-5</a>). This allows the
+                    signal handler (or the <span class="emphasis"><em>sigwaitinfo()</em></span> call) to obtain the ID
+                    of the timer that generated the signal. (Alternatively,
+                        <span class="emphasis"><em>evp.sigev_value.sival_ptr</em></span> may be assigned the address
+                    of a structure that contains the <span class="emphasis"><em>timerid</em></span> given to
+                        <span class="emphasis"><em>timer_create()</em></span>.)</p><p>Linux also supplies the following nonstandard field in the
+                        <span class="emphasis"><em>siginfo_t</em></span> structure:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>si_overrun</em></span>: This field contains the overrun count
+                            for this timer (described in <a class="xref" href="ch23.html#timer_overruns" title="Timer Overruns">Timer Overruns</a>).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Linux also supplies another nonstandard field:
+                                    <span class="emphasis"><em>si_timerid</em></span>. This field contains an
+                                identifier that is used internally by the system to identify the
+                                timer (it is not the same as the ID returned by
+                                    <span class="emphasis"><em>timer_create()</em></span>). It is not useful to
+                                applications.</p></div></li></ul></div><p><a class="xref" href="ch23.html#posix_timer_notification_using_a_signal" title="Example 23-5. POSIX timer notification using a signal">Example 23-5</a> demonstrates the use
+                    of signals as the notification mechanism for a POSIX timer.</p><div class="example"><a id="posix_timer_notification_using_a_signal"/><div class="example-title">Example 23-5. POSIX timer notification using a signal</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>timers/ptmr_sigev_signal.c</code></strong>
+    #define _POSIX_C_SOURCE 199309
+    #include &lt;signal.h&gt;
+    #include &lt;time.h&gt;
+    #include "curr_time.h"                  /* Declares currTime() */
+    #include "itimerspec_from_str.h"        /* Declares itimerspecFromStr() */
+    #include "tlpi_hdr.h"
+
+    #define TIMER_SIG SIGRTMAX              /* Our timer notification signal */
+
+    static void
+<img src="figs/web/U001.png" alt=""/> handler(int sig, siginfo_t *si, void *uc)
+    {
+        timer_t *tidptr;
+
+        tidptr = si-&gt;si_value.sival_ptr;
+
+        /* UNSAFE: This handler uses non-async-signal-safe functions
+           (printf(); see Section 21.1.2) */
+
+            printf("[%s] Got signal %d\n", currTime("%T"), sig);
+        printf("    *sival_ptr         = %ld\n", (long) *tidptr);
+        printf("    timer_getoverrun() = %d\n", timer_getoverrun(*tidptr));
+    }
+
+    int
+    main(int argc, char *argv[])
+    {
+        struct itimerspec ts;
+        struct sigaction  sa;
+        struct sigevent   sev;
+        timer_t *tidlist;
+        int j;
+
+        if (argc &lt; 2)
+            usageErr("%s secs[/nsecs][:int-secs[/int-nsecs]]...\n", argv[0]);
+
+        tidlist = calloc(argc - 1, sizeof(timer_t));
+        if (tidlist == NULL)
+            errExit("malloc");
+
+        /* Establish handler for notification signal */
+
+        sa.sa_flags = SA_SIGINFO;
+        sa.sa_sigaction = handler;
+        sigemptyset(&amp;sa.sa_mask);
+<img src="figs/web/U002.png" alt=""/>    if (sigaction(TIMER_SIG, &amp;sa, NULL) == -1)
+            errExit("sigaction");
+
+        /* Create and start one timer for each command-line argument */
+
+        sev.sigev_notify = SIGEV_SIGNAL;    /* Notify via signal */
+        sev.sigev_signo = TIMER_SIG;        /* Notify using this signal */
+
+        for (j = 0; j &lt; argc - 1; j++) {
+<img src="figs/web/U003.png" alt=""/>        itimerspecFromStr(argv[j + 1], &amp;ts);
+
+            sev.sigev_value.sival_ptr = &amp;tidlist[j];
+                    /* Allows handler to get ID of this timer */
+<img src="figs/web/U004.png" alt=""/>        if (timer_create(CLOCK_REALTIME, &amp;sev, &amp;tidlist[j]) == -1)
+                errExit("timer_create");
+            printf("Timer ID: %ld (%s)\n", (long) tidlist[j], argv[j + 1]);
+<img src="figs/web/U005.png" alt=""/>        if (timer_settime(tidlist[j], 0, &amp;ts, NULL) == -1)
+                errExit("timer_settime");
+        }
+<img src="figs/web/U006.png" alt=""/>    for (;;)                            /* Wait for incoming timer signals */
+            pause();
+    }
+          <strong class="userinput"><code>timers/ptmr_sigev_signal.c</code></strong></pre></div></div><p>Each of the command-line arguments of the program in <a class="xref" href="ch23.html#posix_timer_notification_using_a_signal" title="Example 23-5. POSIX timer notification using a signal">Example 23-5</a> specifies the initial
+                    value and interval for a timer. The syntax of these arguments is described in
+                    the program’s “usage” message and demonstrated in the shell session below. This
+                    program performs the following steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Establish a handler for the signal that is used for timer
+                            notifications <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e68691"/><img src="figs/web/U002.png" alt=""/></span>.</p></li><li class="listitem"><p>For each command-line argument, create <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e68700"/><img src="figs/web/U004.png" alt=""/></span> and arm <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e68706"/><img src="figs/web/U005.png" alt=""/></span> a POSIX timer that uses the <code class="literal">SIGEV_SIGNAL</code> notification mechanism. The
+                                <span class="emphasis"><em>itimerspecFromStr()</em></span> function that we use to
+                            convert <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e68718"/><img src="figs/web/U003.png" alt=""/></span>the command-line arguments to
+                                <span class="emphasis"><em>itimerspec</em></span> structures is shown in <a class="xref" href="ch23.html#converting_time-plus-interval_string_to" title="Example 23-6. Converting time-plus-interval string to an itimerspec value">Example 23-6</a>.<a id="IDX-CHP-23-3722" class="indexterm"/></p></li><li class="listitem"><p>On each timer expiration, the signal specified in
+                                <span class="emphasis"><em>sev.sigev_signo</em></span> will be delivered to the
+                            process. The handler for this signal displays the value that was
+                            supplied in <span class="emphasis"><em>sev.sigev_value.sival_ptr</em></span> (i.e., the
+                            timer ID, <span class="emphasis"><em>tidlist[j]</em></span>) and the overrun value for the
+                            timer <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e68746"/><img src="figs/web/U001.png" alt=""/></span>.</p></li><li class="listitem"><p>Having created and armed the timers, wait for timer expirations by
+                            executing a loop that repeatedly calls
+                                <span class="emphasis"><em>pause()</em></span><span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e68757"/><img src="figs/web/U006.png" alt=""/></span>.</p></li></ul></div><p><a class="xref" href="ch23.html#converting_time-plus-interval_string_to" title="Example 23-6. Converting time-plus-interval string to an itimerspec value">Example 23-6</a> shows the function
+                    that converts each of the command-line arguments for the program in <a class="xref" href="ch23.html#posix_timer_notification_using_a_signal" title="Example 23-5. POSIX timer notification using a signal">Example 23-5</a> into a corresponding
+                        <span class="emphasis"><em>itimerspec</em></span> structure. The format of the string
+                    arguments interpreted by this function is shown in a comment at the top of the
+                    listing (and demonstrated in the shell session below).</p><div class="example"><a id="converting_time-plus-interval_string_to"/><div class="example-title">Example 23-6. Converting time-plus-interval string to an
+                            <span class="emphasis"><em>itimerspec</em></span> value</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>timers/itimerspec_from_str.c</code></strong>
+#define_POSIX_C_SOURCE 199309
+#include &lt;string.h&gt;
+#include &lt;stdlib.h&gt;
+#include "itimerspec_from_str.h"        /* Declares function defined here */
+
+/* Convert a string of the following form to an itimerspec structure:
+   "value.sec[/value.nanosec][:interval.sec[/interval.nanosec]]".
+   Optional components that are omitted cause 0 to be assigned to the
+   corresponding structure fields. */
+
+void
+itimerspecFromStr(char *str, struct itimerspec *tsp)
+{
+    char *cptr, *sptr;
+
+    cptr = strchr(str, ':');
+    if (cptr != NULL)
+        *cptr = '\0';
+
+    sptr = strchr(str, '/');
+    if (sptr != NULL)
+        *sptr = '\0';
+
+    tsp-&gt;it_value.tv_sec = atoi(str);
+    tsp-&gt;it_value.tv_nsec = (sptr != NULL) ? atoi(sptr + 1) : 0;
+
+    if (cptr == NULL) {
+        tsp-&gt;it_interval.tv_sec = 0;
+        tsp-&gt;it_interval.tv_nsec = 0;
+    } else {
+        sptr = strchr(cptr + 1, '/');
+        if (sptr != NULL)
+            *sptr = '\0';
+        tsp-&gt;it_interval.tv_sec = atoi(cptr + 1);
+        tsp-&gt;it_interval.tv_nsec = (sptr != NULL) ? atoi(sptr + 1) : 0;
+    }
+}
+     <strong class="userinput"><code>timers/itimerspec_from_str.c</code></strong></pre></div></div><p>We demonstrate the use of the program in <a class="xref" href="ch23.html#posix_timer_notification_using_a_signal" title="Example 23-5. POSIX timer notification using a signal">Example 23-5</a> in the following shell
+                    session, creating a single timer with an initial timer expiry of 2 seconds and
+                    an interval of 5 seconds.</p><a id="I_programlisting23_d1e68788"/><pre class="programlisting">$ <strong class="userinput"><code>./ptmr_sigev_signal 2:5</code></strong>
+Timer ID: 134524952 (2:5)
+[15:54:56] Got signal 64                  SIGRTMAX <em class="lineannotation"><span class="lineannotation">is signal 64 on this system</span></em>
+    *sival_ptr         = 134524952        <span class="emphasis"><em>sival_ptr</em></span> <em class="lineannotation"><span class="lineannotation">points to the variable</span></em> <span class="emphasis"><em>tid</em></span>
+    timer_getoverrun() = 0
+[15:55:01] Got signal 64
+    *sival_ptr         = 134524952
+    timer_getoverrun() = 0
+<em class="lineannotation"><span class="lineannotation">Type Control-Z to suspend the process</span></em>
+[1]+  Stopped       ./ptmr_sigev_signal 2:5</pre><p>After suspending the program, we pause for a few seconds, allowing several
+                    timer expirations to occur before we resume the program:</p><a id="I_programlisting23_d1e68811"/><pre class="programlisting">$ <strong class="userinput"><code>fg</code></strong>
+./ptmr_sigev_signal 2:5
+[15:55:34] Got signal 64
+    *sival_ptr         = 134524952
+    timer_getoverrun() = 5
+<em class="lineannotation"><span class="lineannotation">Type Control-C to kill the program</span></em></pre><p>The last line of program output shows that five timer overruns occurred,
+                    meaning that six timer expirations occurred since the previous signal
+                    delivery.</p></div><div class="sect2" title="Timer Overruns"><div class="titlepage"><div><div><h3 class="title" id="timer_overruns">Timer Overruns</h3></div></div></div><p>Suppose that we have chosen to receive notification of timer expiration via
+                    delivery of a signal (i.e., <span class="emphasis"><em>sigev_notify</em></span> is <code class="literal">SIGEV_SIGNAL</code>). Suppose further that the timer
+                    expires multiple times before the associated signal is caught or accepted. This
+                    could occur as the result of a delay before the process is next scheduled.
+                    Alternatively, it could occur because delivery of the associated signal was
+                    blocked, either explicitly via <span class="emphasis"><em>sigprocmask()</em></span>, or implicitly
+                    during the execution of the handler for the signal. How do we know that such
+                        <span class="emphasis"><em>timer overruns</em></span> have happened?<a id="IDX-CHP-23-3723" class="indexterm"/><a id="IDX-CHP-23-3724" class="indexterm"/></p><p>We might suppose that using a realtime signal would help solve this problem,
+                    since multiple instances of a realtime signal are queued. However, this approach
+                    turns out to be unworkable, because there are limits on the number of realtime
+                    signals that can be queued. Therefore, the POSIX.1b committee decided on a
+                    different approach: if we choose to receive timer notification via a signal,
+                    then multiple instances of the signal are never queued, even if we use a
+                    realtime signal. Instead, after receiving the signal (either via a signal
+                    handler or by using <span class="emphasis"><em>sigwaitinfo()</em></span>), we can fetch the
+                        <span class="emphasis"><em>timer overrun count</em></span>, which is the number of extra timer
+                    expirations that occurred between the time the signal was generated and the time
+                    it was received. For example, if the timer has expired three times since the
+                    last signal was received, then the overrun count is 2.</p><p>After receiving a timer signal, we can obtain the timer overrun count in two
+                    ways:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Call <span class="emphasis"><em>timer_getoverrun()</em></span>, which we describe below.
+                            This is the SUSv3-specified way of obtaining the overrun count.</p></li><li class="listitem"><p>Use the value in the <span class="emphasis"><em>si_overrun</em></span> field of the
+                                <span class="emphasis"><em>siginfo_t</em></span> structure returned with the signal.
+                            This approach saves the overhead of the
+                                <span class="emphasis"><em>timer_getoverrun()</em></span> system call, but is a
+                            nonportable Linux extension.</p></li></ul></div><p>The timer overrun count is reset each time we receive the timer signal. If the
+                    timer expired just once since the timer signal was handled or accepted, then the
+                    overrun count will be 0 (i.e., there were no overruns).</p><a id="I_programlisting23_d1e68876"/><pre class="programlisting">#define _POSIX_C_SOURCE 199309
+#include &lt;time.h&gt;
+
+int <strong class="userinput"><code>timer_getoverrun</code></strong>(timer_t <span class="emphasis"><em>timerid</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns timer overrun count on success, or -1 on error</p></div><p>The <span class="emphasis"><em>timer_getoverrun()</em></span> function returns the overrun count
+                    for the timer specified by its <span class="emphasis"><em>timerid</em></span> argument.</p><p>The <span class="emphasis"><em>timer_getoverrun()</em></span> function is one of those specified
+                    as being async-signal-safe in SUSv3 (<a class="xref" href="ch21.html#functions_required_to_be_async-signal-sa" title="Table 21-1. Functions required to be async-signal-safe by POSIX.1-1990, SUSv2, and SUSv3">Table 21-1</a>, in <a class="xref" href="ch21.html#use_of_errno_inside_signal_handlers" title="Use of errno inside signal handlers">Use of <span class="emphasis"><em>errno</em></span> inside signal handlers</a>), so it is safe to call it
+                    from within a signal handler.</p></div><div class="sect2" title="Notification via a Thread"><div class="titlepage"><div><div><h3 class="title" id="notification_via_a_thread">Notification via a Thread</h3></div></div></div><p>The <code class="literal">SIGEV_THREAD</code> flag allows a program to
+                    obtain notification of timer expiration via the invocation of a function in a
+                    separate thread. Understanding this flag requires knowledge of POSIX threads
+                    that we present later, in <a class="xref" href="ch29.html" title="Chapter 29. Threads: Introduction">Chapter 29</a> and <a class="xref" href="ch30.html" title="Chapter 30. Threads: Thread Synchronization">Chapter 30</a>. Readers unfamiliar with
+                    POSIX threads may want to read those chapters before examining the example
+                    program that we present in this section.<a id="IDX-CHP-23-3725" class="indexterm"/><a id="IDX-CHP-23-3726" class="indexterm"/><a id="IDX-CHP-23-3727" class="indexterm"/><a id="IDX-CHP-23-3728" class="indexterm"/><a id="IDX-CHP-23-3729" class="indexterm"/><a id="IDX-CHP-23-3730" class="indexterm"/><a id="IDX-CHP-23-3731" class="indexterm"/><a id="IDX-CHP-23-3732" class="indexterm"/><a id="IDX-CHP-23-3733" class="indexterm"/></p><p><a class="xref" href="ch23.html#posix_timer_notification_using_a_thread" title="Example 23-7. POSIX timer notification using a thread function">Example 23-7</a> demonstrates the use
+                    of <code class="literal">SIGEV_THREAD</code>. This program takes the same
+                    command-line arguments as the program in <a class="xref" href="ch23.html#posix_timer_notification_using_a_signal" title="Example 23-5. POSIX timer notification using a signal">Example 23-5</a>. The program performs
+                    the following steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>For each command-line argument, the program creates <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e68978"/><img src="figs/web/U006.png" alt=""/></span> and arms <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e68984"/><img src="figs/web/U007.png" alt=""/></span> a POSIX timer that uses the <code class="literal">SIGEV_THREAD</code> notification mechanism
+                                <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e68993"/><img src="figs/web/U003.png" alt=""/></span>.</p></li><li class="listitem"><p>Each time this timer expires, the function specified by
+                                <span class="emphasis"><em>sev.sigev_notify_function</em></span>
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e69005"/><img src="figs/web/U004.png" alt=""/></span> will be invoked in a separate thread. When this
+                            function is invoked, it receives the value specified in
+                                <span class="emphasis"><em>sev.sigev_value.sival_ptr</em></span> as an argument. We
+                            assign the address of the timer ID (<span class="emphasis"><em>tidlist[j]</em></span>) to
+                            this field <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e69017"/><img src="figs/web/U005.png" alt=""/></span> so that the notification function can obtain the ID
+                            of the timer that caused its invocation.</p></li><li class="listitem"><p>Having created and armed all of the timers, the main program enters a
+                            loop that waits for timer expirations <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e69026"/><img src="figs/web/U008.png" alt=""/></span>. Each time through the loop, the program uses
+                                <span class="emphasis"><em>pthread_cond_wait()</em></span> to wait for a condition
+                            variable (<span class="emphasis"><em>cond</em></span>) to be signaled by the thread that
+                            is handling a timer notification.</p></li><li class="listitem"><p>The <span class="emphasis"><em>threadFunc()</em></span> function is invoked on each
+                            timer expiration <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e69044"/><img src="figs/web/U001.png" alt=""/></span>. After printing a message, it increments the value
+                            of the global variable <span class="emphasis"><em>expireCnt</em></span>. To allow for the
+                            possibility of timer overruns, the value returned by
+                                <span class="emphasis"><em>timer_getoverrun()</em></span> is also added to
+                                <span class="emphasis"><em>expireCnt</em></span>. (We explained timer overruns in
+                                <a class="xref" href="ch23.html#timer_overruns" title="Timer Overruns">Timer Overruns</a> in relation to the <code class="literal">SIGEV_SIGNAL</code> notification mechanism. Timer
+                            overruns can also come into play with the <code class="literal">SIGEV_THREAD</code> mechanism, because a timer might expire
+                            multiple times before the notification function is invoked.) The
+                            notification function also signals the condition variable
+                                <span class="emphasis"><em>cond</em></span> so that the main program knows to check
+                            that a timer has expired <span class="inlinemediaobject"><a id="I_inlinemediaobject23_d1e69071"/><img src="figs/web/U002.png" alt=""/></span>.</p></li></ul></div><p>The following shell session log demonstrates the use of the program in <a class="xref" href="ch23.html#posix_timer_notification_using_a_thread" title="Example 23-7. POSIX timer notification using a thread function">Example 23-7</a>. In this example, the
+                    program creates two timers: one with an initial expiry of 5 seconds and an
+                    interval of 5 seconds, and the other with an initial expiration of 10 seconds
+                    and an interval of 10 seconds.</p><a id="I_programlisting23_d1e69081"/><pre class="programlisting">$ <strong class="userinput"><code>./ptmr_sigev_thread 5:5 10:10</code></strong>
+Timer ID: 134525024 (5:5)
+Timer ID: 134525080 (10:10)
+[13:06:22] Thread notify
+    timer ID=134525024
+    timer_getoverrun()=0
+main(): count = 1
+[13:06:27] Thread notify
+    timer ID=134525080
+    timer_getoverrun()=0
+main(): count = 2
+[13:06:27] Thread notify
+    timer ID=134525024
+    timer_getoverrun()=0
+main(): count = 3
+<em class="lineannotation"><span class="lineannotation">Type Control-Z to suspend the program</span></em>
+[1]+  Stopped       ./ptmr_sigev_thread 5:5 10:10
+$ <strong class="userinput"><code>fg</code></strong>                                      <em class="lineannotation"><span class="lineannotation">Resume execution</span></em>
+./ptmr_sigev_thread 5:5 10:10
+[13:06:45] Thread notify
+    timer ID=134525024
+    timer_getoverrun()=2                  <em class="lineannotation"><span class="lineannotation">There were timer overruns</span></em>
+main(): count = 6
+[13:06:45] Thread notify
+    timer ID=134525080
+    timer_getoverrun()=0
+main(): count = 7
+<em class="lineannotation"><span class="lineannotation">Type Control-C to kill the program</span></em></pre><div class="example"><a id="posix_timer_notification_using_a_thread"/><div class="example-title">Example 23-7. POSIX timer notification using a thread function</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>timers/ptmr_sigev_thread.c</code></strong>
+    #include &lt;signal.h&gt;
+    #include &lt;time.h&gt;
+    #include &lt;pthread.h&gt;
+    #include "curr_time.h"              /* Declaration of currTime() */
+    #include "tlpi_hdr.h"
+    #include "itimerspec_from_str.h"    /* Declares itimerspecFromStr() */
+
+    static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+    static pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+
+    static int expireCnt = 0;           /* Number of expirations of all timers */
+
+    static void                         /* Thread notification function */
+<img src="figs/web/U001.png" alt=""/> threadFunc(union sigval sv)
+    {
+        timer_t *tidptr;
+        int s;
+
+        tidptr = sv.sival_ptr;
+
+        printf("[%s] Thread notify\n", currTime("%T"));
+        printf("    timer ID=%ld\n", (long) *tidptr);
+        printf("    timer_getoverrun()=%d\n", timer_getoverrun(*tidptr));
+
+        /* Increment counter variable shared with main thread and signal
+           condition variable to notify main thread of the change. */
+
+        s = pthread_mutex_lock(&amp;mtx);
+        if (s != 0)
+            errExitEN(s, "pthread_mutex_lock");
+
+        expireCnt += 1 + timer_getoverrun(*tidptr);
+
+        s = pthread_mutex_unlock(&amp;mtx);
+        if (s != 0)
+            errExitEN(s, "pthread_mutex_unlock");
+<img src="figs/web/U002.png" alt=""/>    s = pthread_cond_signal(&amp;cond);
+        if (s != 0)
+            errExitEN(s, "pthread_cond_signal");
+    }
+
+    int
+    main(int argc, char *argv[])
+    {
+        struct sigevent sev;
+        struct itimerspec ts;
+        timer_t *tidlist;
+        int s, j;
+
+            if (argc &lt; 2)
+            usageErr("%s secs[/nsecs][:int-secs[/int-nsecs]]...\n", argv[0]);
+
+        tidlist = calloc(argc - 1, sizeof(timer_t));
+        if (tidlist == NULL)
+            errExit("malloc");
+<img src="figs/web/U003.png" alt=""/>    sev.sigev_notify = SIGEV_THREAD;            /* Notify via thread */
+<img src="figs/web/U004.png" alt=""/>    sev.sigev_notify_function = threadFunc;     /* Thread start function */
+        sev.sigev_notify_attributes = NULL;
+                /* Could be pointer to pthread_attr_t structure */
+
+        /* Create and start one timer for each command-line argument */
+
+        for (j = 0; j &lt; argc - 1; j++) {
+            itimerspecFromStr(argv[j + 1], &amp;ts);
+<img src="figs/web/U005.png" alt=""/>        sev.sigev_value.sival_ptr = &amp;tidlist[j];
+                    /* Passed as argument to threadFunc() */
+<img src="figs/web/U006.png" alt=""/>        if (timer_create(CLOCK_REALTIME, &amp;sev, &amp;tidlist[j]) == -1)
+                errExit("timer_create");
+            printf("Timer ID: %ld (%s)\n", (long) tidlist[j], argv[j + 1]);
+<img src="figs/web/U007.png" alt=""/>        if (timer_settime(tidlist[j], 0, &amp;ts, NULL) == -1)
+                errExit("timer_settime");
+        }
+
+        /* The main thread waits on a condition variable that is signaled
+           on each invocation of the thread notification function. We
+           print a message so that the user can see that this occurred. */
+
+        s = pthread_mutex_lock(&amp;mtx);
+        if (s != 0)
+            errExitEN(s, "pthread_mutex_lock");
+<img src="figs/web/U008.png" alt=""/>    for (;;) {
+            s = pthread_cond_wait(&amp;cond, &amp;mtx);
+            if (s != 0)
+                errExitEN(s, "pthread_cond_wait");
+            printf("main(): expireCnt = %d\n", expireCnt);
+        }
+    }
+
+          <strong class="userinput"><code>timers/ptmr_sigev_thread.c</code></strong></pre></div></div></div></div><div class="sect1" title="Timers That Notify via File Descriptors: The timerfd API"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="timers_that_notify_via_file_descriptors">Timers That Notify via File Descriptors: The <span class="emphasis"><em>timerfd</em></span>
+                API</h2></div></div></div><p>Starting with kernel 2.6.25, Linux provides another API for creating timers. The
+                Linux-specific <span class="emphasis"><em>timerfd</em></span> API creates a timer whose expiration
+                notifications can be read from a file descriptor. This is useful because the file
+                descriptor can be monitored along with other descriptors using
+                    <span class="emphasis"><em>select()</em></span>, <span class="emphasis"><em>poll()</em></span>, and
+                    <span class="emphasis"><em>epoll</em></span> (described in <a class="xref" href="ch63.html" title="Chapter 63. Alternative I/O Models">Chapter 63</a>). (With the other timer APIs
+                discussed in this chapter, it requires some effort to be able to simultaneously
+                monitor one or more timers along with a set of file descriptors.)<a id="IDX-CHP-23-3734" class="indexterm"/><a id="IDX-CHP-23-3735" class="indexterm"/><a id="IDX-CHP-23-3736" class="indexterm"/><a id="IDX-CHP-23-3737" class="indexterm"/><a id="IDX-CHP-23-3738" class="indexterm"/><a id="IDX-CHP-23-3739" class="indexterm"/><a id="IDX-CHP-23-3740" class="indexterm"/><a id="IDX-CHP-23-3741" class="indexterm"/><a id="IDX-CHP-23-3742" class="indexterm"/><a id="IDX-CHP-23-3743" class="indexterm"/><a id="IDX-CHP-23-3744" class="indexterm"/><a id="IDX-CHP-23-3745" class="indexterm"/><a id="IDX-CHP-23-3746" class="indexterm"/><a id="IDX-CHP-23-3747" class="indexterm"/><a id="IDX-CHP-23-3748" class="indexterm"/></p><p>The operation of the three new system calls in this API is analogous to the
+                operation of the <span class="emphasis"><em>timer_create()</em></span>,
+                    <span class="emphasis"><em>timer_settime()</em></span>, and <span class="emphasis"><em>timer_gettime()</em></span>
+                system calls described in Section 23.6.</p><p>The first of the new system calls is <span class="emphasis"><em>timerfd_create()</em></span>, which
+                creates a new timer object and returns a file descriptor referring to that
+                    object.<a id="IDX-CHP-23-3749" class="indexterm"/></p><a id="I_programlisting23_d1e69292"/><pre class="programlisting">#include &lt;sys/timerfd.h&gt;
+
+int <strong class="userinput"><code>timerfd_create</code></strong>(int <span class="emphasis"><em>clockid</em></span>, int <span class="emphasis"><em>flags</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns file descriptor on success, or -1 on error</p></div><p>The value of <span class="emphasis"><em>clockid</em></span> can be either <code class="literal">CLOCK_REALTIME</code> or <code class="literal">CLOCK_MONOTONIC</code>
+                (see <a class="xref" href="ch23.html#posix.1b_clock_types" title="Table 23-1. POSIX.1b clock types">Table 23-1</a>).</p><p>In the initial implementation of <span class="emphasis"><em>timerfd_create()</em></span>, the
+                    <span class="emphasis"><em>flags</em></span> argument was reserved for future use and had to be
+                specified as 0. However, since Linux 2.6.27, two flags are supported:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">TFD_CLOEXEC</code>
+                    </span></dt><dd><p>Set the close-on-exec flag (<code class="literal">FD_CLOEXEC</code>) for the new file descriptor. This flag is
+                            useful for the same reasons as the <span class="emphasis"><em>open()</em></span>
+                            <code class="literal">O_CLOEXEC</code> flag described in <a class="xref" href="ch04.html#file_descriptor_number_returned_by-id1" title="File descriptor number returned by open()">File descriptor number returned by <span class="emphasis"><em>open()</em></span></a>.</p></dd><dt><span class="term">
+                        <code class="literal">TFD_NONBLOCK</code>
+                    </span></dt><dd><p>Set the <code class="literal">O_NONBLOCK</code> flag on the
+                            underlying open file description, so that future reads will be
+                            nonblocking. This saves additional calls to <span class="emphasis"><em>fcntl()</em></span>
+                            to achieve the same result.</p></dd></dl></div><p>When we have finished using a timer created by
+                    <span class="emphasis"><em>timerfd_create()</em></span>, we should <span class="emphasis"><em>close()</em></span>
+                the associated file descriptor, so that the kernel can free the resources associated
+                with the timer.</p><p>The <span class="emphasis"><em>timerfd_settime()</em></span> system call arms (starts) or disarms
+                (stops) the timer referred to by the file descriptor
+                    <span class="emphasis"><em>fd</em></span>.<a id="IDX-CHP-23-3750" class="indexterm"/></p><a id="I_programlisting23_d1e69380"/><pre class="programlisting">#include &lt;sys/timerfd.h&gt;
+
+int <strong class="userinput"><code>timerfd_settime</code></strong>(int <span class="emphasis"><em>fd</em></span>, int <span class="emphasis"><em>flags</em></span>, const struct itimerspec *<span class="emphasis"><em>new_value</em></span>,
+                    struct itimerspec *<span class="emphasis"><em>old_value</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>new_value</em></span> argument specifies the new settings for the
+                timer. The <span class="emphasis"><em>old_value</em></span> argument can be used to return the
+                previous settings of the timer (see the description of
+                    <span class="emphasis"><em>timerfd_gettime()</em></span> below for details). If we are not
+                interested in the previous settings, we can specify <span class="emphasis"><em>old_value</em></span>
+                as <code class="literal">NULL</code>. Both of these arguments are
+                    <span class="emphasis"><em>itimerspec</em></span> structures that are used in the same way as for
+                    <span class="emphasis"><em>timer_settime()</em></span> (see <a class="xref" href="ch23.html#arming_and_disarming_a_timer_colon_timer" title="Arming and Disarming a Timer: timer_settime()">Arming and Disarming a Timer: <span class="emphasis"><em>timer_settime()</em></span></a>).</p><p>The <span class="emphasis"><em>flags</em></span> argument is similar to the corresponding argument
+                for <span class="emphasis"><em>timer_settime()</em></span>. It may either be 0, meaning that
+                    <span class="emphasis"><em>new_value.it_value</em></span> is interpreted relative to the time of
+                the call to <span class="emphasis"><em>timerfd_settime()</em></span>, or it can be <code class="literal">TFD_TIMER_ABSTIME</code>, meaning that
+                    <span class="emphasis"><em>new_value.it_value</em></span> is interpreted as an absolute time
+                (i.e., measured from the clock’s zero point).</p><p>The <span class="emphasis"><em>timerfd_gettime()</em></span> system call returns the interval and
+                remaining time for the timer identified by the file descriptor
+                    <span class="emphasis"><em>fd</em></span>.<a id="IDX-CHP-23-3751" class="indexterm"/></p><a id="I_programlisting23_d1e69459"/><pre class="programlisting">#include &lt;sys/timerfd.h&gt;
+
+int <strong class="userinput"><code>timerfd_gettime</code></strong>(int <span class="emphasis"><em>fd</em></span>, struct itimerspec *<span class="emphasis"><em>curr_value</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>As with <span class="emphasis"><em>timer_gettime()</em></span>, the interval and the time until the
+                next expiration of the timer are returned in the <span class="emphasis"><em>itimerspec</em></span>
+                structure pointed to by <span class="emphasis"><em>curr_value</em></span>. The
+                    <span class="emphasis"><em>curr_value.it_value</em></span> field returns the time until the next
+                timer expiration, even if this timer was established as an absolute timer using
+                    <code class="literal">TFD_TIMER_ABSTIME</code>. If both fields of the
+                returned <span class="emphasis"><em>curr_value.it_value</em></span> structure are 0, then the timer is
+                currently disarmed. If both fields of the returned
+                    <span class="emphasis"><em>curr_value.it_interval</em></span> structure are 0, then the timer
+                expires just once, at the time given in
+                    <span class="emphasis"><em>curr_value.it_value</em></span>.<a id="IDX-CHP-23-3752" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="interactions_of_timerfd_with_fork"/></div></div></div><div class="sect3" title="Interactions of timerfd with fork() and exec()"><div class="titlepage"><div><div><h4 class="title" id="interactions_of_timerfd_with_fork-id1">Interactions of <span class="emphasis"><em>timerfd</em></span> with
+                            <span class="emphasis"><em>fork()</em></span> and <span class="emphasis"><em>exec()</em></span></h4></div></div></div><p>During a <span class="emphasis"><em>fork()</em></span>, a child process inherits copies of
+                        file descriptors created by <span class="emphasis"><em>timerfd_create()</em></span>. These
+                        file descriptors refer to the same timer objects as the corresponding
+                        descriptors in the parent, and timer expirations can be read in either
+                            process.<a id="IDX-CHP-23-3753" class="indexterm"/><a id="IDX-CHP-23-3754" class="indexterm"/></p><p>File descriptors created by <span class="emphasis"><em>timerfd_create()</em></span> are
+                        preserved across an <span class="emphasis"><em>exec()</em></span> (unless the descriptors are
+                        marked close-on-exec, as described in <a class="xref" href="ch27.html#file_descriptors_and_exec_open_parenthes" title="File Descriptors and exec()">File Descriptors and <span class="emphasis"><em>exec()</em></span></a>), and armed timers
+                        will continue to generate timer expirations after the
+                            <span class="emphasis"><em>exec()</em></span>.</p></div><div class="sect3" title="Reading from the timerfd file descriptor"><div class="titlepage"><div><div><h4 class="title" id="reading_from_the_timerfd_file_descriptor">Reading from the <span class="emphasis"><em>timerfd</em></span> file descriptor</h4></div></div></div><p>Once we have armed a timer with <span class="emphasis"><em>timerfd_settime()</em></span>, we
+                        can use <span class="emphasis"><em>read()</em></span> to read information about timer
+                        expirations from the associated file descriptor. For this purpose, the
+                        buffer given to <span class="emphasis"><em>read()</em></span> must be large enough to hold an
+                        unsigned 8-byte integer (<span class="emphasis"><em>uint64_t</em></span>).</p><p>If one or more expirations have occurred since the timer settings were
+                        last modified using <span class="emphasis"><em>timerfd_settime()</em></span> or the last
+                            <span class="emphasis"><em>read()</em></span> was performed, then
+                            <span class="emphasis"><em>read()</em></span> returns immediately, and the returned buffer
+                        contains the number of expirations that have occurred. If no timer
+                        expirations have occurred, then <span class="emphasis"><em>read()</em></span> blocks until the
+                        next expiration occurs. It is also possible to use the
+                            <span class="emphasis"><em>fcntl()</em></span>
+                        <code class="literal">F_SETFL</code> operation (<a class="xref" href="ch05.html#open_file_status_flags" title="Open File Status Flags">Open File Status Flags</a>) to set the <code class="literal">O_NONBLOCK</code> flag for the file descriptor, so that reads are
+                        nonblocking, and will fail with the error <code class="literal">EAGAIN</code> if no timer expirations have occurred.</p><p>As stated earlier, a <span class="emphasis"><em>timerfd</em></span> file descriptor can be
+                        monitored using <span class="emphasis"><em>select()</em></span>, <span class="emphasis"><em>poll()</em></span>,
+                        and <span class="emphasis"><em>epoll</em></span>. If the timer has expired, then the file
+                        descriptor indicates as being readable.</p></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id29">Example program</h4></div></div></div><p><a class="xref" href="ch23.html#using_the_timerfd_api" title="Example 23-8. Using the timerfd API">Example 23-8</a> demonstrates the use of the
+                            <span class="emphasis"><em>timerfd</em></span> API. This program takes two command-line
+                        arguments. The first argument is mandatory, and specifies the initial time
+                        and interval for a timer. (This argument is interpreted using the
+                            <span class="emphasis"><em>itimerspecFromStr()</em></span> function shown in <a class="xref" href="ch23.html#converting_time-plus-interval_string_to" title="Example 23-6. Converting time-plus-interval string to an itimerspec value">Example 23-6</a>.) The second
+                        argument, which is optional, specifies the maximum number of expirations of
+                        the timer that the program should wait for before terminating; the default
+                        for this argument is 1.<a id="IDX-CHP-23-3755" class="indexterm"/></p><p>The program creates a timer using <span class="emphasis"><em>timerfd_create()</em></span>,
+                        and arms it using <span class="emphasis"><em>timerfd_settime()</em></span>. It then loops,
+                        reading expiration notifications from the file descriptor until the
+                        specified number of expirations has been reached. After each
+                            <span class="emphasis"><em>read()</em></span>, the program displays the time elapsed since
+                        the timer was started, the number of expirations read, and the total number
+                        of expirations so far.</p><p>In the following shell session log, the command-line arguments specify a
+                        timer with a 1-second initial value and 1-second interval, and a maximum of
+                        100 expirations.</p><a id="I_programlisting23_d1e69645"/><pre class="programlisting">$ <strong class="userinput"><code>./demo_timerfd 1:1 100</code></strong>
+1.000: expirations read: 1; total=1
+2.000: expirations read: 1; total=2
+3.000: expirations read: 1; total=3
+<em class="lineannotation"><span class="lineannotation">Type Control-Z to suspend program in background for a few seconds</span></em>
+[1]+  Stopped           ./demo_timerfd 1:1 100
+$ <strong class="userinput"><code>fg</code></strong>                                      <em class="lineannotation"><span class="lineannotation">Resume program in foreground</span></em>
+./demo_timerfd 1:1 100
+14.205: expirations read: 11; total=14    <em class="lineannotation"><span class="lineannotation">Multiple expirations since last</span></em> <span class="emphasis"><em>read()</em></span>
+15.000: expirations read: 1; total=15
+16.000: expirations read: 1; total=16
+<em class="lineannotation"><span class="lineannotation">Type Control-C to terminate the program</span></em></pre><p>From the above output, we can see that multiple timer expirations occurred
+                        while the program was suspended in the background, and all of these
+                        expirations were returned on the first <span class="emphasis"><em>read()</em></span> after the
+                        program resumed execution.</p><div class="example"><a id="using_the_timerfd_api"/><div class="example-title">Example 23-8. Using the <span class="emphasis"><em>timerfd</em></span> API</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>timers/demo_timerfd.c</code></strong>
+#include &lt;sys/timerfd.h&gt;
+#include &lt;time.h&gt;
+#include &lt;stdint.h&gt;                     /* Definition of uint64_t */
+#include "itimerspec_from_str.h"        /* Declares itimerspecFromStr() */
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    struct itimerspec ts;
+    struct timespec start, now;
+    int maxExp, fd, secs, nanosecs;
+    uint64_t numExp, totalExp;
+    ssize_t s;
+
+    if (argc &lt; 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s secs[/nsecs][:int-secs[/int-nsecs]] [max-exp]\n", argv[0]);
+
+    itimerspecFromStr(argv[1], &amp;ts);
+    maxExp = (argc &gt; 2) ? getInt(argv[2], GN_GT_0, "max-exp") : 1;
+
+    fd = timerfd_create(CLOCK_REALTIME, 0);
+    if (fd == -1)
+        errExit("timerfd_create");
+
+    if (timerfd_settime(fd, 0, &amp;ts, NULL) == -1)
+        errExit("timerfd_settime");
+
+    if (clock_gettime(CLOCK_MONOTONIC, &amp;start) == -1)
+        errExit("clock_gettime");
+
+    for (totalExp = 0; totalExp &lt; maxExp;) {
+
+        /* Read number of expirations on the timer, and then display
+           time elapsed since timer was started, followed by number
+           of expirations read and total expirations so far. */
+
+        s = read(fd, &amp;numExp, sizeof(uint64_t));
+        if (s != sizeof(uint64_t))
+            errExit("read");
+
+        totalExp += numExp;
+
+        if (clock_gettime(CLOCK_MONOTONIC, &amp;now) == -1)
+            errExit("clock_gettime");
+
+        secs = now.tv_sec - start.tv_sec;
+        nanosecs = now.tv_nsec - start.tv_nsec;
+        if (nanosecs &lt; 0) {
+            secs--;
+            nanosecs += 1000000000;
+        }
+
+        printf("%d.%03d: expirations read: %llu; total=%llu\n",
+                secs, (nanosecs + 500000) / 1000000,
+                (unsigned long long) numExp, (unsigned long long) totalExp);
+    }
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>timers/demo_timerfd.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id22">Summary</h2></div></div></div><p>A process can use <span class="emphasis"><em>setitimer()</em></span> or <span class="emphasis"><em>alarm()</em></span>
+                to set a timer, so that it receives a signal after the passage of a specified amount
+                of real or process time. One use of timers is to set an upper limit on the time for
+                which a system call can block.<a id="IDX-CHP-23-3756" class="indexterm"/><a id="IDX-CHP-23-3757" class="indexterm"/><a id="IDX-CHP-23-3758" class="indexterm"/></p><p>Applications that need to suspend execution for a specified interval of real time
+                can use a variety of sleep functions for this purpose.</p><p>Linux 2.6 implements the POSIX.1b extensions that define an API for high-precision
+                clocks and timers. POSIX.1b timers provide a number of advantages over traditional
+                    (<span class="emphasis"><em>setitimer()</em></span>) UNIX timers. We can: create multiple timers;
+                choose the signal that is delivered on timer expiration; retrieve the timer overrun
+                count in order to determine if a timer has expired multiple times since the last
+                expiration notification; and choose to receive timer notifications via execution of
+                a thread function instead of delivery of a signal.</p><p>The Linux-specific <span class="emphasis"><em>timerfd</em></span> API provides a set of interfaces
+                for creating timers that is similar to the POSIX timers API, but allows timer
+                notifications to be read via a file descriptor. This file descriptor can be
+                monitored using <span class="emphasis"><em>select()</em></span>, <span class="emphasis"><em>poll()</em></span>, and
+                    <span class="emphasis"><em>epoll</em></span>.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id23"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id24">Further information</h4></div></div></div><p>Under the rationale for individual functions, SUSv3 provides useful notes
+                        on the (standard) timer and sleep interface described in this chapter.
+                        [Gallmeister, 1995] discusses POSIX.1b clocks and timers.<a id="IDX-CHP-23-3759" class="indexterm"/></p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id14">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Although <span class="emphasis"><em>alarm()</em></span> is implemented as a system call
+                        within the Linux kernel, this is redundant. Implement
+                            <span class="emphasis"><em>alarm()</em></span> using
+                        <span class="emphasis"><em>setitimer()</em></span>.</p></li><li class="listitem"><p>Try running the program in <a class="xref" href="ch23.html#using_nanosleep_open_parenthesis_close_p" title="Example 23-3. Using nanosleep()">Example 23-3</a> (<code class="literal">t_nanosleep.c</code>) in the background with a
+                        60-second sleep interval, while using the following command to send as many
+                            <code class="literal">SIGINT</code> signals as possible to the
+                        background process:</p><a id="I_programlisting23_d1e69776"/><pre class="programlisting">$ <strong class="userinput"><code>while true; do kill -INT</code></strong> <strong class="userinput"><code><em class="replaceable"><code>pid</code></em></code></strong><strong class="userinput"><code>; done</code></strong></pre><p>You should observe that the program sleeps rather longer than expected.
+                        Replace the use of <span class="emphasis"><em>nanosleep()</em></span> with the use of
+                            <span class="emphasis"><em>clock_gettime()</em></span> (use a <code class="literal">CLOCK_REALTIME</code> clock) and
+                            <span class="emphasis"><em>clock_nanosleep()</em></span> with the <code class="literal">TIMER_ABSTIME</code> flag. (This exercise requires Linux 2.6.)
+                        Repeat the test with the modified program and explain the difference.</p></li><li class="listitem"><p>Write a program to show that if the <span class="emphasis"><em>evp</em></span> argument to
+                            <span class="emphasis"><em>timer_create()</em></span> is specified as <code class="literal">NULL</code>, then this is equivalent to specifying
+                            <span class="emphasis"><em>evp</em></span> as a pointer to a <span class="emphasis"><em>sigevent</em></span>
+                        structure with <span class="emphasis"><em>sigev_notify</em></span> set to <code class="literal">SIGEV_SIGNAL</code>, <span class="emphasis"><em>sigev_signo</em></span>
+                        set to <code class="literal">SIGALRM</code>, and
+                            <span class="emphasis"><em>si_value.sival_int</em></span> set to the timer ID.</p></li><li class="listitem"><p>Modify the program in <a class="xref" href="ch23.html#posix_timer_notification_using_a_signal" title="Example 23-5. POSIX timer notification using a signal">Example 23-5</a> (<code class="literal">ptmr_sigev_signal.c</code>) to use
+                            <span class="emphasis"><em>sigwaitinfo()</em></span> instead of a signal handler.</p></li></ol></div></div></section></body></html>

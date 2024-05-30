@@ -1,0 +1,1339 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 13. File I/O Buffering</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch12.html" title="Chapter 12. System and Process Information"/><link rel="next" href="ch14.html" title="Chapter 14. File Systems"/></head><body><section class="chapter" title="Chapter 13. File I/O Buffering" epub:type="chapter" id="file_i_solidus_o_buffering"><div class="titlepage"><div><div><h2 class="title">Chapter 13. File I/O Buffering</h2></div></div></div><p>In the interests of speed and efficiency, I/O system calls (i.e., the kernel) and the
+            I/O functions of the standard C library (i.e., the <span class="emphasis"><em>stdio</em></span> functions)
+            buffer data when operating on disk files. In this chapter, we describe both types of
+            buffering and consider how they affect application performance. We also look at various
+            techniques for influencing and disabling both types of buffering, and look at a
+            technique called direct I/O, which is useful for bypassing kernel buffering in certain
+                circumstances.<a id="IDX-CHP-13-1608" class="indexterm"/></p><div class="sect1" title="Kernel Buffering of File I/O: The Buffer Cache"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="kernel_buffering_of_file_i_solidus_o_col">Kernel Buffering of File I/O: The Buffer Cache</h2></div></div></div><p>When working with disk files, the <span class="emphasis"><em>read()</em></span> and
+                    <span class="emphasis"><em>write()</em></span> system calls don’t directly initiate disk access.
+                Instead, they simply copy data between a user-space buffer and a buffer in the
+                kernel <span class="emphasis"><em>buffer cache</em></span>. For example, the following call transfers
+                3 bytes of data from a buffer in user-space memory to a buffer in kernel
+                    space:<a id="IDX-CHP-13-1609" class="indexterm"/><a id="IDX-CHP-13-1610" class="indexterm"/><a id="IDX-CHP-13-1611" class="indexterm"/></p><a id="I_programlisting13_d1e28592"/><pre class="programlisting">write(fd, "abc", 3);</pre><p>At this point, <span class="emphasis"><em>write()</em></span> returns. At some later point, the
+                kernel writes (flushes) its buffer to the disk. (Hence, we say that the system call
+                is not <span class="emphasis"><em>synchronized</em></span> with the disk operation.) If, in the
+                interim, another process attempts to read these bytes of the file, then the kernel
+                automatically supplies the data from the buffer cache, rather than from (the
+                outdated contents of) the file.</p><p>Correspondingly, for input, the kernel reads data from the disk and stores it in a
+                kernel buffer. Calls to <span class="emphasis"><em>read()</em></span> fetch data from this buffer
+                until it is exhausted, at which point the kernel reads the next segment of the file
+                into the buffer cache. (This is a simplification; for sequential file access, the
+                kernel typically performs read-ahead to try to ensure that the next blocks of a file
+                are read into the buffer cache before the reading process requires them. We say a
+                bit more about read-ahead in Section 13.5.)<a id="IDX-CHP-13-1612" class="indexterm"/></p><p>The aim of this design is to allow <span class="emphasis"><em>read()</em></span> and
+                    <span class="emphasis"><em>write()</em></span> to be fast, since they don’t need to wait on a
+                (slow) disk operation. This design is also efficient, since it reduces the number of
+                disk transfers that the kernel must perform.</p><p>The Linux kernel imposes no fixed upper limit on the size of the buffer cache. The
+                kernel will allocate as many buffer cache pages as are required, limited only by the
+                amount of available physical memory and the demands for physical memory for other
+                purposes (e.g., holding the text and data pages required by running processes). If
+                available memory is scarce, then the kernel flushes some modified buffer cache pages
+                to disk, in order to free those pages for reuse.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Speaking more precisely, from kernel 2.4 onward, Linux no longer maintains a
+                    separate buffer cache. Instead, file I/O buffers are included in the page cache,
+                    which, for example, also contains pages from memory-mapped files. Nevertheless,
+                    in the discussion in the main text, we use the term <span class="emphasis"><em>buffer
+                        cache</em></span>, since that term is historically common on UNIX
+                    implementations.</p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="effect_of_buffer_size_on_i_solidus"/></div></div></div><div class="sect3" title="Effect of buffer size on I/O system call performance"><div class="titlepage"><div><div><h4 class="title" id="effect_of_buffer_size_on_i_solidus-id1">Effect of buffer size on I/O system call performance</h4></div></div></div><p>The kernel performs the same number of disk accesses, regardless of
+                        whether we perform 1000 writes of a single byte or a single write of a 1000
+                        bytes. However, the latter is preferable, since it requires a single system
+                        call, while the former requires 1000. Although much faster than disk
+                        operations, system calls nevertheless take an appreciable amount of time,
+                        since the kernel must trap the call, check the validity of the system call
+                        arguments, and transfer data between user space and kernel space (refer to
+                            <a class="xref" href="ch03.html#system_calls" title="System Calls">System Calls</a> for further details).<a id="IDX-CHP-13-1613" class="indexterm"/><a id="IDX-CHP-13-1614" class="indexterm"/></p><p>The impact of performing file I/O using different buffer sizes can be seen
+                        by running the program in <a class="xref" href="ch04.html#using_i_solidus_o_system_calls" title="Example 4-1. Using I/O system calls">Example 4-1</a>
+                        (in <a class="xref" href="ch04.html#universality_of_i_solidus_o" title="Universality of I/O">Universality of I/O</a>) with different <code class="literal">BUF_SIZE</code> values. (The <code class="literal">BUF_SIZE</code> constant specifies how many bytes are transferred by
+                        each call to <span class="emphasis"><em>read()</em></span> and <span class="emphasis"><em>write()</em></span>.)
+                            <a class="xref" href="ch13.html#time_required_to_duplicate_a_file_of_100" title="Table 13-1. Time required to duplicate a file of 100 million bytes">Table 13-1</a> shows the
+                        time that this program requires to copy a file of 100 million bytes on a
+                        Linux <span class="emphasis"><em>ext2</em></span> file system using different <code class="literal">BUF_SIZE</code> values. Note the following points
+                        concerning the information in this table:<a id="IDX-CHP-13-1615" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>Elapsed</em></span> and <span class="emphasis"><em>Total
+                                    CPU</em></span> time columns have the obvious meanings. The
+                                    <span class="emphasis"><em>User CPU</em></span> and <span class="emphasis"><em>System
+                                    CPU</em></span> columns show a breakdown of the <span class="emphasis"><em>Total
+                                    CPU</em></span> time into, respectively, the time spent executing
+                                code in user mode and the time spent executing kernel code (i.e.,
+                                system calls).</p></li><li class="listitem"><p>The tests shown in the table were performed using a vanilla 2.6.30
+                                kernel on an <span class="emphasis"><em>ext2</em></span> file system with a block size
+                                of 4096 bytes.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>When we talk about a <span class="emphasis"><em>vanilla kernel</em></span>, we mean an
+                            unpatched mainline kernel. This is in contrast to kernels that are
+                            supplied by most distributors, which often include various patches to
+                            fix bugs or add features.<a id="IDX-CHP-13-1616" class="indexterm"/></p></div><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Each row shows the average of 20 runs for the given buffer size.
+                                In these tests, as in other tests shown later in this chapter, the
+                                file system was unmounted and remounted between each execution of
+                                the program to ensure that the buffer cache for the file system was
+                                empty. Timing was done using the shell <span class="emphasis"><em>time</em></span>
+                                command.</p></li></ul></div><div class="table"><a id="time_required_to_duplicate_a_file_of_100"/><div class="table-title">Table 13-1. Time required to duplicate a file of 100 million bytes</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/><col class="col4"/><col class="col5"/></colgroup><thead><tr><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; " rowspan="2">
+                                        <p>
+                                            <code class="literal">BUF_SIZE</code>
+                                        </p>
+                                    </td><td style="text-align: center; vertical-align: bottom; border-bottom: 0.5pt solid ; " colspan="4">
+                                        <p>Time (seconds)</p>
+                                    </td></tr><tr><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Elapsed</p>
+                                    </td><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Total CPU</p>
+                                    </td><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>User CPU</p>
+                                    </td><td style="text-align: center; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                        <p>System CPU</p>
+                                    </td></tr></thead><tbody><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">107.43</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">107.32</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">8.20</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">99.12</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">54.16</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">53.89</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">4.13</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">49.76</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">4</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">31.72</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">30.96</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.30</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">28.66</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">8</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">15.59</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">14.34</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1.08</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">13.26</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">16</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">7.50</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">7.14</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.51</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">6.63</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">32</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">3.76</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">3.68</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.26</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">3.41</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">64</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.19</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.04</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.13</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1.91</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">128</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.16</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1.59</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.11</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1.48</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">256</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.06</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1.75</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.10</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1.65</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">512</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.06</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1.03</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.05</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.98</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1024</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.05</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.65</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.02</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.63</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">4096</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.05</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.38</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.01</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.38</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">16384</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.05</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.34</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.00</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.33</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">65536</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.06</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.32</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.00</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; ">
+                                        <p>
+                                            <code class="literal">0.32</code>
+                                        </p>
+                                    </td></tr></tbody></table></div></div><p>Since the total amount of data transferred (and hence the number of disk
+                        operations) is the same for the various buffer sizes, what <a class="xref" href="ch13.html#time_required_to_duplicate_a_file_of_100" title="Table 13-1. Time required to duplicate a file of 100 million bytes">Table 13-1</a> illustrates is the
+                        overhead of making <span class="emphasis"><em>read()</em></span> and
+                            <span class="emphasis"><em>write()</em></span> calls. With a buffer size of 1 byte, 100
+                        million calls are made to <span class="emphasis"><em>read()</em></span> and
+                            <span class="emphasis"><em>write()</em></span>. With a buffer size of 4096 bytes, the
+                        number of invocations of each system call falls to around 24,000, and near
+                        optimal performance is reached. Beyond this point, there is no significant
+                        performance improvement, because the cost of making
+                            <span class="emphasis"><em>read()</em></span> and <span class="emphasis"><em>write()</em></span> system
+                        calls becomes negligible compared to the time required to copy data between
+                        user space and kernel space, and to perform actual disk I/O.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The final rows of <a class="xref" href="ch13.html#time_required_to_duplicate_a_file_of_100" title="Table 13-1. Time required to duplicate a file of 100 million bytes">Table 13-1</a> allow us to
+                            make rough estimates of the times required for data transfer between
+                            user space and kernel space, and for file I/O. Since the number of
+                            system calls in these cases is relatively small, their contribution to
+                            the elapsed and CPU times is negligible. Thus, we can say that the
+                                <span class="emphasis"><em>System CPU</em></span> time is essentially measuring the
+                            time for data transfers between user space and kernel space. The
+                                <span class="emphasis"><em>Elapsed</em></span> time value gives us an estimate of the
+                            time required for data transfer to and from the disk. (As we’ll see in a
+                            moment, this is mainly the time required for disk reads.)</p></div><p>In summary, if we are transferring a large amount of data to or from a
+                        file, then by buffering data in large blocks, and thus performing fewer
+                        system calls, we can greatly improve I/O performance.</p><p>The data in <a class="xref" href="ch13.html#time_required_to_duplicate_a_file_of_100" title="Table 13-1. Time required to duplicate a file of 100 million bytes">Table 13-1</a>
+                        measures a range of factors: the time to perform <span class="emphasis"><em>read()</em></span>
+                        and <span class="emphasis"><em>write()</em></span> system calls, the time to transfer data
+                        between buffers in kernel space and user space, and the time to transfer
+                        data between kernel buffers and the disk. Let’s consider the last factor
+                        further. Obviously, transferring the contents of the input file into the
+                        buffer cache is unavoidable. However, we already saw that
+                            <span class="emphasis"><em>write()</em></span> returns immediately after transferring data
+                        from user space to the kernel buffer cache. Since the RAM size on the test
+                        system (4 GB) far exceeds the size of the file being copied (100 MB), we can
+                        assume that by the time the program completes, the output file has not
+                        actually been written to disk. Therefore, as a further experiment, we ran a
+                        program that simply wrote arbitrary data to a file using different
+                            <span class="emphasis"><em>write()</em></span> buffer sizes. The results are shown in
+                            <a class="xref" href="ch13.html#time_required_to_write_a_file_of_100_mil" title="Table 13-2. Time required to write a file of 100 million bytes">Table 13-2</a>.</p><p>Again, the data shown in <a class="xref" href="ch13.html#time_required_to_write_a_file_of_100_mil" title="Table 13-2. Time required to write a file of 100 million bytes">Table 13-2</a> was obtained from
+                        kernel 2.6.30, on an <span class="emphasis"><em>ext2</em></span> file system with a 4096-byte
+                        block size, and each row shows the average of 20 runs. We don’t show the
+                        test program (<code class="literal">filebuff/write_bytes.c</code>),
+                        but it is available in the source code distribution for this book.</p><div class="table"><a id="time_required_to_write_a_file_of_100_mil"/><div class="table-title">Table 13-2. Time required to write a file of 100 million bytes</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/><col class="col4"/><col class="col5"/></colgroup><thead><tr><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; " rowspan="2">
+                                        <p>
+                                            <code class="literal">BUF_SIZE</code>
+                                        </p>
+                                    </td><td style="text-align: center; vertical-align: bottom; border-bottom: 0.5pt solid ; " colspan="4">
+                                        <p>Time (seconds)</p>
+                                    </td></tr><tr><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Elapsed</p>
+                                    </td><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Total CPU</p>
+                                    </td><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>User CPU</p>
+                                    </td><td style="text-align: center; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                        <p>System CPU</p>
+                                    </td></tr></thead><tbody><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">72.13</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">72.11</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">5.00</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">67.11</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">36.19</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">36.17</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.47</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">33.70</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">4</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">20.01</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">19.99</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1.26</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">18.73</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">8</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">9.35</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">9.32</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.62</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">8.70</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">16</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">4.70</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">4.68</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.31</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">4.37</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">32</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.39</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.39</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.16</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">2.23</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">64</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1.24</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1.24</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.07</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1.16</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">128</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.67</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.67</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.04</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.63</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">256</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.38</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.38</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.02</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.36</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">512</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.24</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.24</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.01</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.23</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1024</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.17</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.17</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.01</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.16</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">4096</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.11</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.11</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.00</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.11</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">16384</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.10</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.10</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.00</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.10</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">65536</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.09</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.09</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.00</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; ">
+                                        <p>
+                                            <code class="literal">0.09</code>
+                                        </p>
+                                    </td></tr></tbody></table></div></div><p><a class="xref" href="ch13.html#time_required_to_write_a_file_of_100_mil" title="Table 13-2. Time required to write a file of 100 million bytes">Table 13-2</a> shows the costs
+                        just for making <span class="emphasis"><em>write()</em></span> system calls and transferring
+                        data from user space to the kernel buffer cache using different
+                            <span class="emphasis"><em>write()</em></span> buffer sizes. For larger buffer sizes, we
+                        see significant differences from the data shown in <a class="xref" href="ch13.html#time_required_to_duplicate_a_file_of_100" title="Table 13-1. Time required to duplicate a file of 100 million bytes">Table 13-1</a>. For example, for a
+                        65,536-byte buffer size, the elapsed time in <a class="xref" href="ch13.html#time_required_to_duplicate_a_file_of_100" title="Table 13-1. Time required to duplicate a file of 100 million bytes">Table 13-1</a> is 2.06 seconds,
+                        while for <a class="xref" href="ch13.html#time_required_to_write_a_file_of_100_mil" title="Table 13-2. Time required to write a file of 100 million bytes">Table 13-2</a> it is
+                        0.09 seconds. This is because no actual disk I/O is being performed in the
+                        latter case. In other words, the majority of the time required for the large
+                        buffer cases in <a class="xref" href="ch13.html#time_required_to_duplicate_a_file_of_100" title="Table 13-1. Time required to duplicate a file of 100 million bytes">Table 13-1</a>
+                        is due to the disk reads.</p><p>As we’ll see in <a class="xref" href="ch13.html#controlling_kernel_buffering_of_file_i_s" title="Controlling Kernel Buffering of File I/O">Controlling Kernel Buffering of File I/O</a>, when we force output operations to block until data is transferred to
+                        the disk, the times for <span class="emphasis"><em>write()</em></span> calls rise
+                        significantly.</p><p>Finally, it is worth noting that the information in <a class="xref" href="ch13.html#time_required_to_write_a_file_of_100_mil" title="Table 13-2. Time required to write a file of 100 million bytes">Table 13-2</a> (and later, in
+                            <a class="xref" href="ch13.html#impact_of_the_o_underscore_sync_flag_on" title="Table 13-3. Impact of the O_SYNC flag on the speed of writing 1 million bytes">Table 13-3</a>) represents
+                        just one form of (naive) benchmark for a file system. Furthermore, the
+                        results will probably show some variation across file systems. File systems
+                        can be measured by various other criteria, such as performance under heavy
+                        multiuser load, speed of file creation and deletion, time required to search
+                        for a file in a large directory, space required to store small files, or
+                        maintenance of file integrity in the event of a system crash. Where the
+                        performance of I/O or other file-system operations is critical, there is no
+                        substitute for application-specific benchmarks on the target
+                            platform.<a id="IDX-CHP-13-1617" class="indexterm"/></p></div></div></div><div class="sect1" title="Buffering in the stdio Library"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="buffering_in_the_stdio_library">Buffering in the <span class="emphasis"><em>stdio</em></span> Library</h2></div></div></div><p>Buffering of data into large blocks to reduce system calls is exactly what is done
+                by the C library I/O functions (e.g., <span class="emphasis"><em>fprintf()</em></span>,
+                    <span class="emphasis"><em>fscanf()</em></span>, <span class="emphasis"><em>fgets()</em></span>,
+                    <span class="emphasis"><em>fputs()</em></span>, <span class="emphasis"><em>fputc()</em></span>,
+                    <span class="emphasis"><em>fgetc()</em></span>) when operating on disk files. Thus, using the
+                    <span class="emphasis"><em>stdio</em></span> library relieves us of the task of buffering data for
+                output with <span class="emphasis"><em>write()</em></span> or input via
+                <span class="emphasis"><em>read()</em></span>.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="setting_the_buffering_mode_of_a"/></div></div></div><div class="sect3" title="Setting the buffering mode of a stdio stream"><div class="titlepage"><div><div><h4 class="title" id="setting_the_buffering_mode_of_a-id1">Setting the buffering mode of a <span class="emphasis"><em>stdio</em></span> stream</h4></div></div></div><p>The <span class="emphasis"><em>setvbuf()</em></span> function controls the form of buffering
+                        employed by the <span class="emphasis"><em>stdio</em></span> library.<a id="IDX-CHP-13-1618" class="indexterm"/><a id="IDX-CHP-13-1619" class="indexterm"/><a id="IDX-CHP-13-1620" class="indexterm"/><a id="IDX-CHP-13-1621" class="indexterm"/><a id="IDX-CHP-13-1622" class="indexterm"/><a id="IDX-CHP-13-1623" class="indexterm"/><a id="IDX-CHP-13-1624" class="indexterm"/></p><a id="I_programlisting13_d1e29564"/><pre class="programlisting">#include &lt;stdio.h&gt;
+
+int <strong class="userinput"><code>setvbuf</code></strong>(FILE *<span class="emphasis"><em>stream</em></span>, char *<span class="emphasis"><em>buf</em></span>, int <span class="emphasis"><em>mode</em></span>, size_t <span class="emphasis"><em>size</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or nonzero on error</p></div><p>The <span class="emphasis"><em>stream</em></span> argument identifies the file stream whose
+                        buffering is to be modified. After the stream has been opened, the
+                            <span class="emphasis"><em>setvbuf()</em></span> call must be made before calling any
+                        other <span class="emphasis"><em>stdio</em></span> function on the stream. The
+                            <span class="emphasis"><em>setvbuf()</em></span> call affects the behavior of all
+                        subsequent <span class="emphasis"><em>stdio</em></span> operations on the specified
+                        stream.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The streams used by the <span class="emphasis"><em>stdio</em></span> library should not
+                            be confused with the STREAMS facility of System V. The System V STREAMS
+                            facility is not implemented in the mainline Linux kernel.</p></div><p>The <span class="emphasis"><em>buf</em></span> and <span class="emphasis"><em>size</em></span> arguments
+                        specify the buffer to be used for <span class="emphasis"><em>stream</em></span>. These
+                        arguments may be specified in two ways:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If <span class="emphasis"><em>buf</em></span> is non-<code class="literal">NULL</code>, then it points to a block of memory of
+                                    <span class="emphasis"><em>size</em></span> bytes that is to be used as the buffer
+                                for <span class="emphasis"><em>stream</em></span>. Since the buffer pointed to by
+                                    <span class="emphasis"><em>buf</em></span> is then used by the
+                                    <span class="emphasis"><em>stdio</em></span> library, it should be either
+                                statically allocated or dynamically allocated on the heap (using
+                                    <span class="emphasis"><em>malloc()</em></span> or similar). It should not be
+                                allocated as a local function variable on the stack, since chaos
+                                will result when that function returns and its stack frame is
+                                deallocated.</p></li><li class="listitem"><p>If <span class="emphasis"><em>buf</em></span> is <code class="literal">NULL</code>, then the <span class="emphasis"><em>stdio</em></span> library
+                                automatically allocates a buffer for use with
+                                    <span class="emphasis"><em>stream</em></span> (unless we select unbuffered I/O, as
+                                described below). SUSv3 permits, but does not require, an
+                                implementation to use <span class="emphasis"><em>size</em></span> to determine the
+                                size for this buffer. In the <span class="emphasis"><em>glibc</em></span>
+                                implementation, <span class="emphasis"><em>size</em></span> is ignored in this
+                                case.</p></li></ul></div><p>The <span class="emphasis"><em>mode</em></span> argument specifies the type of buffering and
+                        has one of the following values:</p><div class="variablelist"><dl><dt><span class="term">
+                                <code class="literal">_IONBF</code>
+                            </span></dt><dd><p>Don’t buffer I/O. Each <span class="emphasis"><em>stdio</em></span> library call
+                                    results in an immediate <span class="emphasis"><em>write()</em></span> or
+                                        <span class="emphasis"><em>read()</em></span> system call. The
+                                        <span class="emphasis"><em>buf</em></span> and <span class="emphasis"><em>size</em></span>
+                                    arguments are ignored, and can be specified as <code class="literal">NULL</code> and 0, respectively. This is
+                                    the default for <span class="emphasis"><em>stderr</em></span>, so that error
+                                    output is guaranteed to appear immediately.</p></dd><dt><span class="term">
+                                <code class="literal">_IOLBF</code>
+                            </span></dt><dd><p>Employ line-buffered I/O. This flag is the default for streams
+                                    referring to terminal devices. For output streams, data is
+                                    buffered until a newline character is output (unless the buffer
+                                    fills first). For input streams, data is read a line at a
+                                    time.</p></dd><dt><span class="term">
+                                <code class="literal">_IOFBF</code>
+                            </span></dt><dd><p>Employ fully buffered I/O. Data is read or written (via calls
+                                    to <span class="emphasis"><em>read()</em></span> or <span class="emphasis"><em>write()</em></span>)
+                                    in units equal to the size of the buffer. This mode is the
+                                    default for streams referring to disk files.</p></dd></dl></div><p>The following code demonstrates the use of
+                        <span class="emphasis"><em>setvbuf()</em></span>:</p><a id="I_programlisting13_d1e29730"/><pre class="programlisting">#define BUF_SIZE 1024
+static char buf[BUF_SIZE];
+
+if (setvbuf(stdout, buf, _IOFBF, BUF_SIZE) != 0)
+    errExit("setvbuf");</pre><p>Note that <span class="emphasis"><em>setvbuf()</em></span> returns a nonzero value (not
+                        necessarily -1) on error.</p><p>The <span class="emphasis"><em>setbuf()</em></span> function is layered on top of
+                            <span class="emphasis"><em>setvbuf()</em></span>, and performs a similar task.<a id="IDX-CHP-13-1625" class="indexterm"/></p><a id="I_programlisting13_d1e29749"/><pre class="programlisting">#include &lt;stdio.h&gt;
+
+void <strong class="userinput"><code>setbuf</code></strong>(FILE *<span class="emphasis"><em>stream</em></span>, char *<span class="emphasis"><em>buf</em></span>);</pre><p>Other than the fact that it doesn’t return a function result, the call
+                            <span class="emphasis"><em>setbuf(fp, buf)</em></span> is equivalent to:</p><a id="I_programlisting13_d1e29765"/><pre class="programlisting">setvbuf(fp, buf, (buf != NULL) ? _IOFBF: _IONBF, BUFSIZ);</pre><p>The <span class="emphasis"><em>buf</em></span> argument is specified either as <code class="literal">NULL</code>, for no buffering, or as a pointer to a
+                        caller-allocated buffer of <code class="literal">BUFSIZ</code> bytes.
+                            (<code class="literal">BUFSIZ</code> is defined in <code class="literal">&lt;stdio.h&gt;</code>. In the
+                            <span class="emphasis"><em>glibc</em></span> implementation, this constant has the value
+                        8192, which is typical.)</p><p>The <span class="emphasis"><em>setbuffer()</em></span> function is similar to
+                            <span class="emphasis"><em>setbuf()</em></span>, but allows the caller to specify the size
+                        of <span class="emphasis"><em>buf</em></span>.<a id="IDX-CHP-13-1626" class="indexterm"/></p><a id="I_programlisting13_d1e29803"/><pre class="programlisting">#define _BSD_SOURCE
+#include &lt;stdio.h&gt;
+
+void <strong class="userinput"><code>setbuffer</code></strong>(FILE *<span class="emphasis"><em>stream</em></span>, char *<span class="emphasis"><em>buf</em></span>, size_t <span class="emphasis"><em>size</em></span>);</pre><p>The call <span class="emphasis"><em>setbuffer(fp, buf, size)</em></span> is equivalent to
+                        the following:</p><a id="I_programlisting13_d1e29822"/><pre class="programlisting">setvbuf(fp, buf, (buf != NULL) ? _IOFBF : _IONBF, size);</pre><p>The <span class="emphasis"><em>setbuffer()</em></span> function is not specified in SUSv3,
+                        but is available on most UNIX implementations.</p></div><div class="sect3" title="Flushing a stdio buffer"><div class="titlepage"><div><div><h4 class="title" id="flushing_a_stdio_buffer">Flushing a <span class="emphasis"><em>stdio</em></span> buffer</h4></div></div></div><p>Regardless of the current buffering mode, at any time, we can force the
+                        data in a <span class="emphasis"><em>stdio</em></span> output stream to be written (i.e.,
+                        flushed to a kernel buffer via <span class="emphasis"><em>write()</em></span>) using the
+                            <span class="emphasis"><em>fflush()</em></span> library function. This function flushes
+                        the output buffer for the specified <span class="emphasis"><em>stream</em></span>.<a id="IDX-CHP-13-1627" class="indexterm"/></p><a id="I_programlisting13_d1e29854"/><pre class="programlisting">#include &lt;stdio.h&gt;
+
+int <strong class="userinput"><code>fflush</code></strong>(FILE *<span class="emphasis"><em>stream</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, <code class="literal">EOF</code> on
+                            error</p></div><p>If <span class="emphasis"><em>stream</em></span> is <code class="literal">NULL</code>,
+                            <span class="emphasis"><em>fflush()</em></span> flushes all <span class="emphasis"><em>stdio</em></span>
+                        buffers.</p><p>The <span class="emphasis"><em>fflush()</em></span> function can also be applied to an input
+                        stream. This causes any buffered input to be discarded. (The buffer will be
+                        refilled when the program next tries to read from the stream.)</p><p>A <span class="emphasis"><em>stdio</em></span> buffer is automatically flushed when the
+                        corresponding stream is closed.</p><p>In many C library implementations, including <span class="emphasis"><em>glibc</em></span>,
+                        if <span class="emphasis"><em>stdin</em></span> and <span class="emphasis"><em>stdout</em></span> refer to a
+                        terminal, then an implicit <span class="emphasis"><em>fflush(stdout)</em></span> is performed
+                        whenever input is read from <span class="emphasis"><em>stdin</em></span>. This has the effect
+                        of flushing any prompts written to <span class="emphasis"><em>stdout</em></span> that don’t
+                        include a terminating newline character (e.g., <span class="emphasis"><em>printf(“Date:
+                            ”)</em></span>). However, this behavior is not specified in SUSv3 or C99
+                        and is not implemented in all C libraries. Portable programs should use
+                        explicit <span class="emphasis"><em>fflush(stdout)</em></span> calls to ensure that such
+                        prompts are displayed.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The C99 standard makes two requirements if a stream is opened for both
+                            input and output. First, an output operation can’t be directly followed
+                            by an input operation without an intervening call to
+                                <span class="emphasis"><em>fflush()</em></span> or one of the file-positioning
+                            functions (<span class="emphasis"><em>fseek()</em></span>, <span class="emphasis"><em>fsetpos()</em></span>,
+                            or <span class="emphasis"><em>rewind()</em></span>). Second, an input operation can’t be
+                            directly followed by an output operation without an intervening call to
+                            one of the file-positioning functions, unless the input operation
+                            encountered end-of-file.</p></div></div></div></div><div class="sect1" title="Controlling Kernel Buffering of File I/O"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="controlling_kernel_buffering_of_file_i_s">Controlling Kernel Buffering of File I/O</h2></div></div></div><p>It is possible to force flushing of kernel buffers for output files. Sometimes,
+                this is necessary if an application (e.g., a database journaling process) must
+                ensure that output really has been written to the disk (or at least to the disk’s
+                hardware cache) before continuing.<a id="IDX-CHP-13-1628" class="indexterm"/><a id="IDX-CHP-13-1629" class="indexterm"/></p><p>Before we describe the system calls used to control kernel buffering, it is useful
+                to consider a few relevant definitions from SUSv3.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="synchronized_i_solidus_o_data_int"/></div></div></div><div class="sect3" title="Synchronized I/O data integrity and synchronized I/O file integrity"><div class="titlepage"><div><div><h4 class="title" id="synchronized_i_solidus_o_data_int-id1">Synchronized I/O data integrity and synchronized I/O file
+                        integrity</h4></div></div></div><p>SUSv3 defines the term <span class="emphasis"><em>synchronized I/O completion</em></span> to
+                        mean “an I/O operation that has either been successfully transferred [to the
+                        disk] or diagnosed as unsuccessful.”<a id="IDX-CHP-13-1630" class="indexterm"/></p><p>SUSv3 defines two different types of synchronized I/O completion. The
+                        difference between the types involves the <span class="emphasis"><em>metadata</em></span>
+                        (“data about data”) describing the file, which the kernel stores along with
+                        the data for a file. We consider file metadata in detail when we look at
+                        file i-nodes in <a class="xref" href="ch14.html#i-nodes" title="I-nodes">I-nodes</a>, but for now, it is sufficient to
+                        note that the file metadata includes information such as the file owner and
+                        group; file permissions; file size; number of (hard) links to the file;
+                        timestamps indicating the time of the last file access, last file
+                        modification, and last metadata change; and file data block
+                            pointers.<a id="IDX-CHP-13-1631" class="indexterm"/></p><p>The first type of synchronized I/O completion defined by SUSv3 is
+                            <span class="emphasis"><em>synchronized I/O data integrity completion</em></span>. This is
+                        concerned with ensuring that a file data update transfers sufficient
+                        information to allow a later retrieval of that data to proceed.<a id="IDX-CHP-13-1632" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>For a read operation, this means that the requested file data has
+                                been transferred (from the disk) to the process. If there were any
+                                pending write operations affecting the requested data, these are
+                                transferred to the disk before performing the read.</p></li><li class="listitem"><p>For a write operation, this means that the data specified in the
+                                write request has been transferred (to the disk) and all file
+                                metadata required to retrieve that data has also been transferred.
+                                The key point to note here is that not all modified file metadata
+                                attributes need to be transferred to allow the file data to be
+                                retrieved. An example of a modified file metadata attribute that
+                                would need to be transferred is the file size (if the write
+                                operation extended the file). By contrast, modified file timestamps
+                                would not need to be transferred to disk before a subsequent data
+                                retrieval could proceed.</p></li></ul></div><p>The other type of synchronized I/O completion defined by SUSv3 is
+                            <span class="emphasis"><em>synchronized I/O file integrity completion</em></span>, which
+                        is a superset of synchronized I/O data integrity completion. The difference
+                        with this mode of I/O completion is that during a file update,
+                            <span class="emphasis"><em>all</em></span> updated file metadata is transferred to disk,
+                        even if it is not necessary for the operation of a subsequent read of the
+                        file data.<a id="IDX-CHP-13-1633" class="indexterm"/></p></div><div class="sect3" title="System calls for controlling kernel buffering of file I/O"><div class="titlepage"><div><div><h4 class="title" id="system_calls_for_controlling_kernel_buff">System calls for controlling kernel buffering of file I/O</h4></div></div></div><p>The <span class="emphasis"><em>fsync()</em></span> system call causes the buffered data and
+                        all metadata associated with the open file descriptor
+                            <span class="emphasis"><em>fd</em></span> to be flushed to disk. Calling
+                            <span class="emphasis"><em>fsync()</em></span> forces the file to the synchronized I/O
+                        file integrity completion state.<a id="IDX-CHP-13-1634" class="indexterm"/><a id="IDX-CHP-13-1635" class="indexterm"/><a id="IDX-CHP-13-1636" class="indexterm"/></p><a id="I_programlisting13_d1e30034"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+int <strong class="userinput"><code>fsync</code></strong>(int <span class="emphasis"><em>fd</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>An <span class="emphasis"><em>fsync()</em></span> call returns only after the transfer to
+                        the disk device (or at least its cache) has completed.</p><p>The <span class="emphasis"><em>fdatasync()</em></span> system call operates similarly to
+                            <span class="emphasis"><em>fsync()</em></span>, but only forces the file to the
+                        synchronized I/O data integrity completion state.<a id="IDX-CHP-13-1637" class="indexterm"/></p><a id="I_programlisting13_d1e30062"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+int <strong class="userinput"><code>fdatasync</code></strong>(int <span class="emphasis"><em>fd</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>Using <span class="emphasis"><em>fdatasync()</em></span> potentially reduces the number of
+                        disk operations from the two required by <span class="emphasis"><em>fsync()</em></span> to
+                        one. For example, if the file data has changed, but the file size has not,
+                        then calling <span class="emphasis"><em>fdatasync()</em></span> only forces the data to be
+                        updated. (We noted above that changes to file metadata attributes such as
+                        the last modification timestamp don’t need to be transferred for
+                        synchronized I/O data completion.) By contrast, calling
+                            <span class="emphasis"><em>fsync()</em></span> would also force the metadata to be
+                        transferred to disk.</p><p>Reducing the number of disk I/O operations in this manner is useful for
+                        certain applications in which performance is crucial and the accurate
+                        maintenance of certain metadata (such as timestamps) is not essential. This
+                        can make a considerable performance difference for applications that are
+                        making multiple file updates: because the file data and metadata normally
+                        reside on different parts of the disk, updating them both would require
+                        repeated seek operations backward and forward across the disk.</p><p>In Linux 2.2 and earlier, <span class="emphasis"><em>fdatasync()</em></span> is implemented
+                        as a call to <span class="emphasis"><em>fsync()</em></span>, and thus carries no performance
+                        gain.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Starting with kernel 2.6.17, Linux provides the nonstandard
+                                <span class="emphasis"><em>sync_file_range()</em></span> system call, which allows
+                            more precise control than <span class="emphasis"><em>fdatasync()</em></span> when flushing
+                            file data. The caller can specify the file region to be flushed, and
+                            specify flags controlling whether the system call blocks on disk writes.
+                            See the <span class="emphasis"><em>sync_file_range(2)</em></span> manual page for further
+                                details.<a id="IDX-CHP-13-1638" class="indexterm"/></p></div><p>The <span class="emphasis"><em>sync()</em></span> system call causes all kernel buffers
+                        containing updated file information (i.e., data blocks, pointer blocks,
+                        metadata, and so on) to be flushed to disk.<a id="IDX-CHP-13-1639" class="indexterm"/></p><a id="I_programlisting13_d1e30123"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+void <strong class="userinput"><code>sync</code></strong>(void);</pre><p>In the Linux implementation, <span class="emphasis"><em>sync()</em></span> returns only
+                        after all data has been transferred to the disk device (or at least to its
+                        cache). However, SUSv3 permits an implementation of
+                            <span class="emphasis"><em>sync()</em></span> to simply schedule the I/O transfer and
+                        return before it has completed.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>A permanently running kernel thread ensures that modified kernel
+                            buffers are flushed to disk if they are not explicitly synchronized
+                            within 30 seconds. This is done to ensure that buffers don’t remain
+                            unsynchronized with the corresponding disk file (and thus vulnerable to
+                            loss in the event of a system crash) for long periods. In Linux 2.6,
+                            this task is performed by the <span class="emphasis"><em>pdflush</em></span> kernel
+                            thread. (In Linux 2.4, it is performed by the
+                                <span class="emphasis"><em>kupdated</em></span> kernel thread.)<a id="IDX-CHP-13-1640" class="indexterm"/><a id="IDX-CHP-13-1641" class="indexterm"/><a id="IDX-CHP-13-1642" class="indexterm"/></p><p>The file <code class="literal">/proc/sys/vm/dirty_expire_centisecs</code> specifies the age (in
+                            hundredths of a second) that a dirty buffer must reach before it is
+                            flushed by <span class="emphasis"><em>pdflush</em></span>. Additional files in the same
+                            directory control other aspects of the operation of
+                                <span class="emphasis"><em>pdflush</em></span>.</p></div></div><div class="sect3" title="Making all writes synchronous: O_SYNC"><div class="titlepage"><div><div><h4 class="title" id="making_all_writes_synchronous_colon_o_un">Making all writes synchronous: <code class="literal">O_SYNC</code></h4></div></div></div><p>Specifying the <code class="literal">O_SYNC</code> flag when calling
+                            <span class="emphasis"><em>open()</em></span> makes all subsequent output
+                            <span class="emphasis"><em>synchronous</em></span>:<a id="IDX-CHP-13-1644" class="indexterm"/><a id="IDX-CHP-13-1645" class="indexterm"/><a id="IDX-CHP-13-1646" class="indexterm"/><a id="IDX-CHP-13-1647" class="indexterm"/><a id="IDX-CHP-13-1643" class="indexterm"/></p><a id="I_programlisting13_d1e30211"/><pre class="programlisting">fd = open(pathname, O_WRONLY | O_SYNC);</pre><p>After this <span class="emphasis"><em>open()</em></span> call, every
+                            <span class="emphasis"><em>write()</em></span> to the file automatically flushes the file
+                        data and metadata to the disk (i.e., writes are performed according to
+                        synchronized I/O file integrity completion).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Older BSD systems used the <code class="literal">O_FSYNC</code>
+                            flag to provide <code class="literal">O_SYNC</code> functionality.
+                            In <span class="emphasis"><em>glibc</em></span>, <code class="literal">O_FSYNC</code> is defined as a synonym for <code class="literal">O_SYNC</code>.</p></div></div><div class="sect3" title="Performance impact of O_SYNC"><div class="titlepage"><div><div><h4 class="title" id="performance_impact_of_o_underscore_sync">Performance impact of <code class="literal">O_SYNC</code></h4></div></div></div><p>Using the <code class="literal">O_SYNC</code> flag (or making
+                        frequent calls to <span class="emphasis"><em>fsync()</em></span>,
+                            <span class="emphasis"><em>fdatasync()</em></span>, or <span class="emphasis"><em>sync()</em></span>) can
+                        strongly affect performance. <a class="xref" href="ch13.html#impact_of_the_o_underscore_sync_flag_on" title="Table 13-3. Impact of the O_SYNC flag on the speed of writing 1 million bytes">Table 13-3</a> shows the time
+                        required to write 1 million bytes to a newly created file (on an
+                            <span class="emphasis"><em>ext2</em></span> file system) for a range of buffer sizes with
+                        and without <code class="literal">O_SYNC</code>. The results were
+                        obtained (using the <code class="literal">filebuff/write_bytes.c</code> program provided in the source code
+                        distribution for this book) using a vanilla 2.6.30 kernel and an
+                            <span class="emphasis"><em>ext2</em></span> file system with a block size of 4096 bytes.
+                        Each row shows the average of 20 runs for the given buffer size.<a id="IDX-CHP-13-1648" class="indexterm"/><a id="IDX-CHP-13-1649" class="indexterm"/><a id="IDX-CHP-13-1650" class="indexterm"/><a id="IDX-CHP-13-1651" class="indexterm"/><a id="IDX-CHP-13-1652" class="indexterm"/></p><p>As can be seen from the table, <code class="literal">O_SYNC</code>
+                        increases elapsed times enormously—in the 1-byte buffer case, by a factor of
+                        more than 1000. Note also the large differences between the elapsed and CPU
+                        times for writes with <code class="literal">O_SYNC</code>. This is a
+                        consequence of the program being blocked while each buffer is actually
+                        transferred to disk.</p><p>The results shown in <a class="xref" href="ch13.html#impact_of_the_o_underscore_sync_flag_on" title="Table 13-3. Impact of the O_SYNC flag on the speed of writing 1 million bytes">Table 13-3</a> omit a further
+                        factor that affects performance when using <code class="literal">O_SYNC</code>. Modern disk drives have large internal caches, and by
+                        default, <code class="literal">O_SYNC</code> merely causes data to be
+                        transferred to the cache. If we disable caching on the disk (using the
+                        command <span class="emphasis"><em>hdparm -W0</em></span>), then the performance impact of
+                            <code class="literal">O_SYNC</code> becomes even more extreme. In
+                        the 1-byte case, the elapsed time rises from 1030 seconds to around 16,000
+                        seconds. In the 4096-byte case, the elapsed time rises from 0.34 seconds to
+                        4 seconds.<a id="IDX-CHP-13-1653" class="indexterm"/></p><p>In summary, if we need to force flushing of kernel buffers, we should
+                        consider whether we can design our application to use large
+                            <span class="emphasis"><em>write()</em></span> buffer sizes or make judicious use of
+                        occasional calls to <span class="emphasis"><em>fsync()</em></span> or
+                            <span class="emphasis"><em>fdatasync()</em></span>, instead of using the <code class="literal">O_SYNC</code> flag when opening the file.</p><div class="table"><a id="impact_of_the_o_underscore_sync_flag_on"/><div class="table-title">Table 13-3. Impact of the <code class="literal">O_SYNC</code> flag on the
+                            speed of writing 1 million bytes</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/><col class="col4"/><col class="col5"/></colgroup><thead><tr><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; " rowspan="3">
+                                        <p>
+                                            <code class="literal">BUF_SIZE</code>
+                                            <a id="IDX-CHP-13-1654" class="indexterm"/>
+                                        </p>
+                                    </td><td style="text-align: center; vertical-align: bottom; border-bottom: 0.5pt solid ; " colspan="4">
+                                        <p>Time required (seconds)</p>
+                                    </td></tr><tr><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; " colspan="2">
+                                        <p>Without <code class="literal">O_SYNC</code></p>
+                                    </td><td style="text-align: center; vertical-align: bottom; border-bottom: 0.5pt solid ; " colspan="2">
+                                        <p>With <code class="literal">O_SYNC</code></p>
+                                    </td></tr><tr><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Elapsed</p>
+                                    </td><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Total CPU</p>
+                                    </td><td style="text-align: center; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Elapsed</p>
+                                    </td><td style="text-align: center; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                        <p>Total CPU</p>
+                                    </td></tr></thead><tbody><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.73</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.73</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">1030</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">98.8</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">16</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.05</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.05</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">65.0</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.40</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">256</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.02</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.02</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">4.07</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.03</code>
+                                        </p>
+                                    </td></tr><tr><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">4096</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.01</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.01</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">0.34</code>
+                                        </p>
+                                    </td><td style="text-align: right; vertical-align: top; ">
+                                        <p>
+                                            <code class="literal">0.03</code>
+                                        </p>
+                                    </td></tr></tbody></table></div></div></div><div class="sect3" title="The O_DSYNC and O_RSYNC flags"><div class="titlepage"><div><div><h4 class="title" id="the_o_underscore_dsync_and_o_underscore">The <code class="literal">O_DSYNC</code> and <code class="literal">O_RSYNC</code> flags</h4></div></div></div><p>SUSv3 specifies two further open file status flags related to synchronized
+                        I/O: <code class="literal">O_DSYNC</code> and <code class="literal">O_RSYNC</code>.</p><p>The <code class="literal">O_DSYNC</code> flag causes writes to be
+                        performed according to the requirements of synchronized I/O data integrity
+                        completion (like <span class="emphasis"><em>fdatasync()</em></span>). This contrasts with
+                            <code class="literal">O_SYNC</code>, which causes writes to be
+                        performed according to the requirements of synchronized I/O file integrity
+                        completion (like <span class="emphasis"><em>fsync()</em></span>).</p><p>The <code class="literal">O_RSYNC</code> flag is specified in
+                        conjunction with either <code class="literal">O_SYNC</code> or
+                            <code class="literal">O_DSYNC</code>, and extends the write
+                        behaviors of these flags to read operations. Specifying both <code class="literal">O_RSYNC</code> and <code class="literal">O_DSYNC</code> when opening a file means that all subsequent reads
+                        are completed according to the requirements of synchronized I/O data
+                        integrity (i.e., prior to performing the read, all pending file writes are
+                        completed as though carried out with <code class="literal">O_DSYNC</code>). Specifying both <code class="literal">O_RSYNC</code> and <code class="literal">O_SYNC</code> when
+                        opening a file means that all subsequent reads are completed according to
+                        the requirements of synchronized I/O file integrity (i.e., prior to
+                        performing the read, all pending file writes are completed as though carried
+                        out with <code class="literal">O_SYNC</code>).</p><p>Before kernel 2.6.33, the <code class="literal">O_DSYNC</code> and
+                            <code class="literal">O_RSYNC</code> flags were not implemented on
+                        Linux, and the <span class="emphasis"><em>glibc</em></span> headers defined these constants to
+                        be the same as <code class="literal">O_SYNC</code>. (This isn’t
+                        actually correct in the case of <code class="literal">O_RSYNC</code>,
+                        since <code class="literal">O_SYNC</code> doesn’t provide any
+                        functionality for read operations.)</p><p>Starting with kernel 2.6.33, Linux implements <code class="literal">O_DSYNC</code>, and an implementation of <code class="literal">O_RSYNC</code> is likely to be added in a future kernel
+                        release.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Before kernel 2.6.33, Linux didn’t fully implement <code class="literal">O_SYNC</code> semantics. Instead, <code class="literal">O_SYNC</code> was implemented as <code class="literal">O_DSYNC</code>. To maintain consistent behavior
+                            for applications that were built for older kernels, applications that
+                            were linked against older versions of the GNU C library continue to
+                            provide <code class="literal">O_DSYNC</code> semantics for
+                                <code class="literal">O_SYNC</code>, even on Linux 2.6.33 and
+                            later.</p></div></div></div></div><div class="sect1" title="Summary of I/O Buffering"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary_of_i_solidus_o_buffering">Summary of I/O Buffering</h2></div></div></div><p><a class="xref" href="ch13.html#summary_of_i_solidus_o_bufferin" title="Figure 13-1. Summary of I/O buffering">Figure 13-1</a> provides an overview of the
+                buffering employed (for output files) by the <span class="emphasis"><em>stdio</em></span> library and
+                the kernel, along with the mechanisms for controlling each type of buffering.
+                Traveling downward through the middle of this diagram, we see the transfer of user
+                data by the <span class="emphasis"><em>stdio</em></span> library functions to the
+                    <span class="emphasis"><em>stdio</em></span> buffer, which is maintained in user memory space.
+                When this buffer is filled, the <span class="emphasis"><em>stdio</em></span> library invokes the
+                    <span class="emphasis"><em>write()</em></span> system call, which transfers the data into the
+                kernel buffer cache (maintained in kernel memory). Eventually, the kernel initiates
+                a disk operation to transfer the data to the disk.<a id="IDX-CHP-13-1655" class="indexterm"/><a id="IDX-CHP-13-1656" class="indexterm"/><a id="IDX-CHP-13-1657" class="indexterm"/></p><p>The left side of <a class="xref" href="ch13.html#summary_of_i_solidus_o_bufferin" title="Figure 13-1. Summary of I/O buffering">Figure 13-1</a> shows the calls
+                that can be used at any time to explicitly force a flush of either of the buffers.
+                The right side shows the calls that can be used to make flushing automatic, either
+                by disabling buffering in the <span class="emphasis"><em>stdio</em></span> library or by making file
+                output system calls synchronous, so that each <span class="emphasis"><em>write()</em></span> is
+                immediately flushed to the disk.</p><div class="figure"><a id="summary_of_i_solidus_o_bufferin"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject13_d1e30634"/><img src="figs/web/13-1_FILEBUFF-buffering.png.jpg" alt="Summary of I/O buffering"/></div></div><div class="figure-title">Figure 13-1. Summary of I/O buffering</div></div></div><div class="sect1" title="Advising the Kernel About I/O Patterns"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="advising_the_kernel_about_i_solidus_o_pa">Advising the Kernel About I/O Patterns</h2></div></div></div><p>The <span class="emphasis"><em>posix_fadvise()</em></span> system call allows a process to inform
+                the kernel about its likely pattern for accessing file data.<a id="IDX-CHP-13-1658" class="indexterm"/><a id="IDX-CHP-13-1659" class="indexterm"/><a id="IDX-CHP-13-1660" class="indexterm"/><a id="IDX-CHP-13-1661" class="indexterm"/><a id="IDX-CHP-13-1662" class="indexterm"/><a id="IDX-CHP-13-1663" class="indexterm"/><a id="IDX-CHP-13-1664" class="indexterm"/><a id="IDX-CHP-13-1665" class="indexterm"/><a id="IDX-CHP-13-1666" class="indexterm"/><a id="IDX-CHP-13-1667" class="indexterm"/><a id="IDX-CHP-13-1668" class="indexterm"/><a id="IDX-CHP-13-1669" class="indexterm"/><a id="IDX-CHP-13-1670" class="indexterm"/><a id="IDX-CHP-13-1671" class="indexterm"/><a id="IDX-CHP-13-1672" class="indexterm"/><a id="IDX-CHP-13-1673" class="indexterm"/></p><a id="I_programlisting13_d1e30733"/><pre class="programlisting">#include &lt;fcntl.h&gt;
+
+int <strong class="userinput"><code>posix_fadvise</code></strong>(int <span class="emphasis"><em>fd</em></span>, off_t <span class="emphasis"><em>offset</em></span>, off_t <span class="emphasis"><em>len</em></span>, int <span class="emphasis"><em>advice</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or a positive error number on error</p></div><p>The kernel may (but is not obliged to) use the information provided by
+                    <span class="emphasis"><em>posix_fadvise()</em></span> to optimize its use of the buffer cache,
+                thereby improving I/O performance for the process and for the system as a whole.
+                Calling <span class="emphasis"><em>posix_fadvise()</em></span> has no effect on the semantics of a
+                program.</p><p>The <span class="emphasis"><em>fd</em></span> argument is a file descriptor identifying the file
+                about whose access patterns we wish to inform the kernel. The
+                    <span class="emphasis"><em>offset</em></span> and <span class="emphasis"><em>len</em></span> arguments identify the
+                region of the file about which advice is being given: <span class="emphasis"><em>offset</em></span>
+                specifies the starting offset of the region, and <span class="emphasis"><em>len</em></span> specifies
+                the size of the region in bytes. A <span class="emphasis"><em>len</em></span> value of 0 means all
+                bytes from <span class="emphasis"><em>offset</em></span> through to the end of the file. (In kernels
+                before 2.6.6, a <span class="emphasis"><em>len</em></span> of 0 was interpreted literally as zero
+                bytes.)</p><p>The <span class="emphasis"><em>advice</em></span> argument indicates the process’s expected pattern
+                of access for the file. It is specified as one of the following:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">POSIX_FADV_NORMAL</code>
+                    </span></dt><dd><p>The process has no special advice to give about access patterns. This
+                            is the default behavior if no advice is given for the file. On Linux,
+                            this operation sets the file read-ahead window to the default size (128
+                            kB).</p></dd><dt><span class="term">
+                        <code class="literal">POSIX_FADV_SEQUENTIAL</code>
+                    </span></dt><dd><p>The process expects to read data sequentially from lower offsets to
+                            higher offsets. On Linux, this operation sets the file read-ahead window
+                            to the twice the default size.</p></dd><dt><span class="term">
+                        <code class="literal">POSIX_FADV_RANDOM</code>
+                    </span></dt><dd><p>The process expects to access the data in random order. On Linux, this
+                            option disables file read-ahead.</p></dd><dt><span class="term">
+                        <code class="literal">POSIX_FADV_WILLNEED</code>
+                    </span></dt><dd><p>The process expects to access the specified file region in the near
+                            future. The kernel performs read-ahead to populate the buffer cache with
+                            file data in the range specified by <span class="emphasis"><em>offset</em></span> and
+                                <span class="emphasis"><em>len</em></span>. Subsequent <span class="emphasis"><em>read()</em></span>
+                            calls on the file don’t block on disk I/O; instead, they simply fetch
+                            data from the buffer cache. The kernel provides no guarantees about how
+                            long the data fetched from the file will remain resident in the buffer
+                            cache. If other processes or kernel activities place a sufficiently
+                            strong demand on memory, then the pages will eventually be reused. In
+                            other words, if memory pressure is high, then we should ensure that the
+                            elapsed time between the <span class="emphasis"><em>posix_fadvise()</em></span> call and
+                            the subsequent <span class="emphasis"><em>read()</em></span> call(s) is short. (The
+                            Linux-specific <span class="emphasis"><em>readahead()</em></span> system call provides
+                            functionality equivalent to the <code class="literal">POSIX_FADV_WILLNEED</code> operation.)<a id="IDX-CHP-13-1674" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">POSIX_FADV_DONTNEED</code>
+                    </span></dt><dd><p>The process expects not to access the specified file region in the
+                            near future. This advises the kernel that it can free the corresponding
+                            cache pages (if there are any). On Linux, this operation is performed in
+                            two steps. First, if the underlying device is not currently congested
+                            with a series of queued write operations, the kernel flushes any
+                            modified pages in the specified region. Second, the kernel attempts to
+                            free any cache pages for the region. For modified pages in the region,
+                            this second step will succeed only if the pages have been written to the
+                            underlying device in the first step—that is, if the device’s write queue
+                            was not congested. Since congestion on the device can’t be controlled by
+                            the application, an alternate way of ensuring that the cache pages can
+                            be freed is to precede the <code class="literal">POSIX_FADV_DONTNEED</code> operation with a
+                                <span class="emphasis"><em>sync()</em></span> or <span class="emphasis"><em>fdatasync()</em></span> call
+                            that specifies <span class="emphasis"><em>fd</em></span>.</p></dd><dt><span class="term">
+                        <code class="literal">POSIX_FADV_NOREUSE</code>
+                    </span></dt><dd><p>The process expects to access data in the specified file region once,
+                            and then not to reuse it. This hint tells the kernel that it can free
+                            the pages after they have been accessed once. On Linux, this operation
+                            currently has no effect.</p></dd></dl></div><p>The specification of <span class="emphasis"><em>posix_fadvise()</em></span> is new in SUSv3, and not
+                all UNIX implementations support this interface. Linux provides
+                    <span class="emphasis"><em>posix_fadvise()</em></span> since kernel 2.6.</p></div><div class="sect1" title="Bypassing the Buffer Cache: Direct I/O"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="bypassing_the_buffer_cache_colon_direct">Bypassing the Buffer Cache: Direct I/O</h2></div></div></div><p>Starting with kernel 2.4, Linux allows an application to bypass the buffer cache
+                when performing disk I/O, thus transferring data directly from user space to a file
+                or disk device. This is sometimes termed <span class="emphasis"><em>direct I/O</em></span> or
+                    <span class="emphasis"><em>raw I/O</em></span>.<a id="IDX-CHP-13-1675" class="indexterm"/><a id="IDX-CHP-13-1676" class="indexterm"/><a id="IDX-CHP-13-1677" class="indexterm"/><a id="IDX-CHP-13-1678" class="indexterm"/><a id="IDX-CHP-13-1679" class="indexterm"/><a id="IDX-CHP-13-1680" class="indexterm"/><a id="IDX-CHP-13-1681" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The details described here are Linux-specific and are not standardized by
+                    SUSv3. Nevertheless, most UNIX implementations provide some form of direct I/O
+                    access to devices and files.</p></div><p>Direct I/O is sometimes misunderstood as being a means of obtaining fast I/O
+                performance. However, for most applications, using direct I/O can considerably
+                degrade performance. This is because the kernel applies a number of optimizations to
+                improve the performance of I/O done via the buffer cache, including performing
+                sequential read-ahead, performing I/O in clusters of disk blocks, and allowing
+                processes accessing the same file to share buffers in the cache. All of these
+                optimizations are lost when we use direct I/O. Direct I/O is intended only for
+                applications with specialized I/O requirements. For example, database systems that
+                perform their own caching and I/O optimizations don’t need the kernel to consume CPU
+                time and memory performing the same tasks.</p><p>We can perform direct I/O either on an individual file or on a block device (e.g.,
+                a disk). To do this, we specify the <code class="literal">O_DIRECT</code> flag
+                when opening the file or device with <span class="emphasis"><em>open()</em></span>.</p><p>The <code class="literal">O_DIRECT</code> flag is effective since kernel
+                2.4.10. Not all Linux file systems and kernel versions support the use of this flag.
+                Most native file systems support <code class="literal">O_DIRECT</code>, but
+                many non-UNIX file systems (e.g., VFAT) do not. It may be necessary to test the file
+                system concerned (if a file system doesn’t support <code class="literal">O_DIRECT</code>, then <span class="emphasis"><em>open()</em></span> fails with the error
+                    <code class="literal">EINVAL</code>) or read the kernel source code to
+                check for this support.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>If a file is opened with <code class="literal">O_DIRECT</code> by one
+                    process, and opened normally (i.e., so that the buffer cache is used) by another
+                    process, then there is no coherency between the contents of the buffer cache and
+                    the data read or written via direct I/O. Such scenarios should be
+                    avoided.</p><p>The <span class="emphasis"><em>raw(8)</em></span> manual page describes an older (now
+                    deprecated) technique for obtaining raw access to a disk device.</p></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="alignment_restrictions_for_direct_i"/></div></div></div><div class="sect3" title="Alignment restrictions for direct I/O"><div class="titlepage"><div><div><h4 class="title" id="alignment_restrictions_for_direct_i-id1">Alignment restrictions for direct I/O</h4></div></div></div><p>Because direct I/O (on both disk devices and files) involves direct access
+                        to the disk, we must observe a number of restrictions when performing
+                        I/O:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The data buffer being transferred must be aligned on a memory
+                                boundary that is a multiple of the block size.</p></li><li class="listitem"><p>The file or device offset at which data transfer commences must be
+                                a multiple of the block size.</p></li><li class="listitem"><p>The length of the data to be transferred must be a multiple of the
+                                block size.</p></li></ul></div><p>Failure to observe any of these restrictions results in the error <code class="literal">EINVAL</code>. In the above list, <span class="emphasis"><em>block
+                            size</em></span> means the physical block size of the device (typically
+                        512 bytes).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>When performing direct I/O, Linux 2.4 is more restrictive than Linux
+                            2.6: the alignment, length, and offset must be multiples of the
+                                <span class="emphasis"><em>logical</em></span> block size of the underlying file
+                            system. (Typical file system logical block sizes are 1024, 2048, or 4096
+                            bytes.)</p></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id11">Example program</h4></div></div></div><p><a class="xref" href="ch13.html#using_o_underscore_direct_to_bypass_the" title="Example 13-1. Using O_DIRECT to bypass the buffer cache">Example 13-1</a> provides a
+                        simple example of the use of <code class="literal">O_DIRECT</code>
+                        while opening a file for reading. This program takes up to four command-line
+                        arguments specifying, in order, the file to be read, the number of bytes to
+                        be read from the file, the offset to which the program should seek before
+                        reading from the file, and the alignment of the data buffer passed to
+                            <span class="emphasis"><em>read()</em></span>. The last two arguments are optional, and
+                        default to offset 0 and 4096 bytes, respectively. Here are some examples of
+                        what we see when we run this program:<a id="IDX-CHP-13-1682" class="indexterm"/><a id="IDX-CHP-13-1683" class="indexterm"/></p><a id="I_programlisting13_d1e31017"/><pre class="programlisting">$ <strong class="userinput"><code>./direct_read /test/x 512</code></strong>                <em class="lineannotation"><span class="lineannotation">Read 512 bytes at offset 0</span></em>
+Read 512 bytes                              <em class="lineannotation"><span class="lineannotation">Succeeds</span></em>
+$ <strong class="userinput"><code>./direct_read /test/x 256</code></strong>
+ERROR [EINVAL Invalid argument] read        <em class="lineannotation"><span class="lineannotation">Length is not a multiple of 512</span></em>
+$ <strong class="userinput"><code>./direct_read /test/x 512 1</code></strong>
+ERROR [EINVAL Invalid argument] read        <em class="lineannotation"><span class="lineannotation">Offset is not a multiple of 512</span></em>
+$ <strong class="userinput"><code>./direct_read /test/x 4096 8192 512</code></strong>
+Read 4096 bytes                             <em class="lineannotation"><span class="lineannotation">Succeeds</span></em>
+$ <strong class="userinput"><code>./direct_read /test/x 4096 512 256</code></strong>
+ERROR [EINVAL Invalid argument] read        <em class="lineannotation"><span class="lineannotation">Alignment is not a multiple of 512</span></em></pre><div class="note" title="Note"><h3 class="title">Note</h3><p>The program in <a class="xref" href="ch13.html#using_o_underscore_direct_to_bypass_the" title="Example 13-1. Using O_DIRECT to bypass the buffer cache">Example 13-1</a> uses the <span class="emphasis"><em>memalign()</em></span> function to allocate a block
+                            of memory aligned on a multiple of its first argument. We describe
+                                <span class="emphasis"><em>memalign()</em></span> in <a class="xref" href="ch07.html#other_methods_of_allocating_memory_on_th" title="Other Methods of Allocating Memory on the Heap">Other Methods of Allocating Memory on the Heap</a>.</p></div><div class="example"><a id="using_o_underscore_direct_to_bypass_the"/><div class="example-title">Example 13-1. Using <code class="literal">O_DIRECT</code> to bypass the
+                            buffer cache</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>filebuff/direct_read.c</code></strong>
+#define _GNU_SOURCE     /* Obtain O_DIRECT definition from &lt;fcntl.h&gt; */
+#include &lt;fcntl.h&gt;
+#include &lt;malloc.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int fd;
+    ssize_t numRead;
+    size_t length, alignment;
+    off_t offset;
+    char *buf;
+
+    if (argc &lt; 3 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s file length [offset [alignment]]\n", argv[0]);
+
+    length = getLong(argv[2], GN_ANY_BASE, "length");
+    offset = (argc &gt; 3) ? getLong(argv[3], GN_ANY_BASE, "offset") : 0;
+    alignment = (argc &gt; 4) ? getLong(argv[4], GN_ANY_BASE, "alignment") : 4096;
+
+    fd = open(argv[1], O_RDONLY | O_DIRECT);
+    if (fd == -1)
+        errExit("open");
+
+    /* memalign() allocates a block of memory aligned on an address that
+      is a multiple of its first argument. By specifying this argument as
+      2 * 'alignment' and then adding 'alignment' to the returned pointer,
+      we ensure that 'buf' is aligned on a non-power-of-two multiple of
+      'alignment'. We do this to ensure that if, for example, we ask
+      for a 256-byte aligned buffer, we don't accidentally get a
+      buffer that is also aligned on a 512-byte boundary. */
+
+    buf = memalign(alignment * 2, length + alignment);
+    if (buf == NULL)
+        errExit("memalign");
+
+    buf += alignment;
+
+    if (lseek(fd, offset, SEEK_SET) == -1)
+        errExit("lseek");
+
+    numRead = read(fd, buf, length);
+    if (numRead == -1)
+        errExit("read");
+    printf("Read %ld bytes\n", (long) numRead);
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>filebuff/direct_read.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Mixing Library Functions and System Calls for File I/O"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="mixing_library_functions_and_system_call">Mixing Library Functions and System Calls for File I/O</h2></div></div></div><p>It is possible to mix the use of system calls and the standard C library functions
+                to perform I/O on the same file. The <span class="emphasis"><em>fileno()</em></span> and
+                    <span class="emphasis"><em>fdopen()</em></span> functions assist us with this task.<a id="IDX-CHP-13-1684" class="indexterm"/><a id="IDX-CHP-13-1685" class="indexterm"/><a id="IDX-CHP-13-1686" class="indexterm"/><a id="IDX-CHP-13-1687" class="indexterm"/><a id="IDX-CHP-13-1688" class="indexterm"/><a id="IDX-CHP-13-1689" class="indexterm"/><a id="IDX-CHP-13-1690" class="indexterm"/></p><a id="I_programlisting13_d1e31133"/><pre class="programlisting">#include &lt;stdio.h&gt;
+
+int <strong class="userinput"><code>fileno</code></strong>(FILE *<span class="emphasis"><em>stream</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns file descriptor on success, or -1 on error</p></div><a id="I_programlisting13_d1e31144"/><pre class="programlisting">FILE *<strong class="userinput"><code>fdopen</code></strong>(int <span class="emphasis"><em>fd</em></span>, const char *<span class="emphasis"><em>mode</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns (new) file pointer on success, or <code class="literal">NULL</code> on error</p></div><p>Given a stream, <span class="emphasis"><em>fileno()</em></span> returns the corresponding file
+                descriptor (i.e., the one that the <span class="emphasis"><em>stdio</em></span> library has opened for
+                this stream). This file descriptor can then be used in the usual way with I/O system
+                calls such as <span class="emphasis"><em>read()</em></span>, <span class="emphasis"><em>write()</em></span>,
+                    <span class="emphasis"><em>dup()</em></span>, and <span class="emphasis"><em>fcntl()</em></span>.</p><p>The <span class="emphasis"><em>fdopen()</em></span> function is the converse of
+                    <span class="emphasis"><em>fileno()</em></span>. Given a file descriptor, it creates a
+                corresponding stream that uses this descriptor for its I/O. The
+                    <span class="emphasis"><em>mode</em></span> argument is the same as for
+                    <span class="emphasis"><em>fopen()</em></span>; for example, <span class="emphasis"><em>r</em></span> for read,
+                    <span class="emphasis"><em>w</em></span> for write, or <span class="emphasis"><em>a</em></span> for append. If this
+                argument is not consistent with the access mode of the file descriptor
+                    <span class="emphasis"><em>fd</em></span>, then <span class="emphasis"><em>fdopen()</em></span> fails.</p><p>The <span class="emphasis"><em>fdopen()</em></span> function is especially useful for descriptors
+                referring to files other than regular files. As we’ll see in later chapters, the
+                system calls for creating sockets and pipes always return file descriptors. To use
+                the <span class="emphasis"><em>stdio</em></span> library with these file types, we must use
+                    <span class="emphasis"><em>fdopen()</em></span> to create a corresponding file stream.</p><p>When using the <span class="emphasis"><em>stdio</em></span> library functions in conjunction with
+                I/O system calls to perform I/O on disk files, we must keep buffering issues in
+                mind. I/O system calls transfer data directly to the kernel buffer cache, while the
+                    <span class="emphasis"><em>stdio</em></span> library waits until the stream’s user-space buffer is
+                full before calling <span class="emphasis"><em>write()</em></span> to transfer that buffer to the
+                kernel buffer cache. Consider the following code used to write to standard
+                output:</p><a id="I_programlisting13_d1e31234"/><pre class="programlisting">printf("To man the world is twofold, ");
+write(STDOUT_FILENO, "in accordance with his twofold attitude.\n", 41);</pre><p>In the usual case, the output of the <span class="emphasis"><em>printf()</em></span> will typically
+                appear <span class="emphasis"><em>after</em></span> the output of the <span class="emphasis"><em>write()</em></span>, so
+                that this code yields the following output:</p><a id="I_programlisting13_d1e31248"/><pre class="programlisting">in accordance with his twofold attitude.
+To man the world is twofold,</pre><p>When intermingling I/O system calls and <span class="emphasis"><em>stdio</em></span> functions,
+                judicious use of <span class="emphasis"><em>fflush()</em></span> may be required to avoid this
+                problem. We could also use <span class="emphasis"><em>setvbuf()</em></span> or
+                    <span class="emphasis"><em>setbuf()</em></span> to disable buffering, but doing so might impact
+                I/O performance for the application, since each output operation would then result
+                in the execution of a <span class="emphasis"><em>write()</em></span> system call.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv3 goes to some length specifying the requirements for an application to be
+                    able to mix the use of I/O system calls and <span class="emphasis"><em>stdio</em></span>
+                    functions. See the section headed <span class="emphasis"><em>Interaction of File Descriptors and
+                        Standard I/O Streams</em></span> under the chapter <span class="emphasis"><em>General
+                        Information</em></span> in the <span class="emphasis"><em>System Interfaces</em></span> (XSH)
+                    volume for details.</p></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id12">Summary</h2></div></div></div><p>Buffering of input and output data is performed by the kernel, and also by the
+                    <span class="emphasis"><em>stdio</em></span> library. In some cases, we may wish to prevent
+                buffering, but we need to be aware of the impact this has on application
+                performance. Various system calls and library functions can be used to control
+                kernel and <span class="emphasis"><em>stdio</em></span> buffering and to perform one-off buffer
+                    flushes.<a id="IDX-CHP-13-1691" class="indexterm"/></p><p>A process can use <span class="emphasis"><em>posix_fadvise()</em></span> to advise the kernel of its
+                likely pattern for accessing data from a specified file. The kernel may use this
+                information to optimize the use of the buffer cache, thus improving I/O
+                performance.</p><p>The Linux-specific <span class="emphasis"><em>open()</em></span>
+                <code class="literal">O_DIRECT</code> flag allows specialized applications to
+                bypass the buffer cache.</p><p>The <span class="emphasis"><em>fileno()</em></span> and <span class="emphasis"><em>fdopen()</em></span> functions
+                assist us with the task of mixing system calls and standard C library functions to
+                perform I/O on the same file. Given a stream, <span class="emphasis"><em>fileno()</em></span> returns
+                the corresponding file descriptor; <span class="emphasis"><em>fdopen()</em></span> performs the
+                converse operation, creating a new stream that employs a specified open file
+                descriptor.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id11"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id12">Further information</h4></div></div></div><p>[Bach, 1986] describes the implementation and advantages of the buffer
+                        cache on System V. [Goodheart &amp; Cox, 1994] and [Vahalia, 1996] also
+                        describe the rationale and implementation of the System V buffer cache.
+                        Further relevant information specific to Linux can be found in [Bovet
+                        &amp; Cesati, 2005] and [Love, 2010].</p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id9">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Using the <span class="emphasis"><em>time</em></span> built-in command of the shell, try
+                        timing the operation of the program in <a class="xref" href="ch04.html#using_i_solidus_o_system_calls" title="Example 4-1. Using I/O system calls">Example 4-1</a> (<code class="literal">copy.c</code>) on your system.<a id="IDX-CHP-13-1692" class="indexterm"/><a id="IDX-CHP-13-1693" class="indexterm"/><a id="IDX-CHP-13-1694" class="indexterm"/><a id="IDX-CHP-13-1695" class="indexterm"/><a id="IDX-CHP-13-1696" class="indexterm"/><a id="IDX-CHP-13-1697" class="indexterm"/><a id="IDX-CHP-13-1698" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="a"><li class="listitem"><p>Experiment with different file and buffer sizes. You can set the
+                                buffer size using the <span class="emphasis"><em>-DBUF_SIZE=nbytes</em></span> option
+                                when compiling the program.</p></li><li class="listitem"><p>Modify the <span class="emphasis"><em>open()</em></span> system call to include the
+                                    <code class="literal">O_SYNC</code> flag. How much
+                                difference does this make to the speed for various buffer
+                                sizes?</p></li><li class="listitem"><p>Try performing these timing tests on a range of file systems
+                                (e.g., <span class="emphasis"><em>ext3</em></span>, <span class="emphasis"><em>XFS</em></span>,
+                                    <span class="emphasis"><em>Btrfs</em></span>, and <span class="emphasis"><em>JFS</em></span>). Are
+                                the results similar? Are the trends the same when going from small
+                                to large buffer sizes?</p></li></ol></div></li><li class="listitem"><p>Time the operation of the <code class="literal">filebuff/write_bytes.c</code> program (provided in the source code
+                        distribution for this book) for various buffer sizes and file
+                        systems.</p></li><li class="listitem"><p>What is the effect of the following statements?</p><a id="I_programlisting13_d1e31415"/><pre class="programlisting">fflush(fp);
+fsync(fileno(fp));</pre></li><li class="listitem"><p>Explain why the output of the following code differs depending on whether
+                        standard output is redirected to a terminal or to a disk file.</p><a id="I_programlisting13_d1e31420"/><pre class="programlisting">printf("If I had more time, \n");
+write(STDOUT_FILENO, "I would have written you a shorter letter.\n", 43);</pre></li><li class="listitem"><p>The command <span class="emphasis"><em>tail [ -n num ] file</em></span> prints the last
+                            <span class="emphasis"><em>num</em></span> lines (ten by default) of the named file.
+                        Implement this command using I/O system calls (<span class="emphasis"><em>lseek()</em></span>,
+                            <span class="emphasis"><em>read()</em></span>, <span class="emphasis"><em>write()</em></span>, and so on).
+                        Keep in mind the buffering issues described in this chapter, in order to
+                        make the implementation efficient.</p></li></ol></div></div></section></body></html>

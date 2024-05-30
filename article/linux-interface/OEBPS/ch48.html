@@ -1,0 +1,777 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 48. System V Shared Memory</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch47.html" title="Chapter 47. System V Semaphores"/><link rel="next" href="ch49.html" title="Chapter 49. Memory Mappings"/></head><body><section class="chapter" title="Chapter 48. System V Shared Memory" epub:type="chapter" id="system_v_shared_memory"><div class="titlepage"><div><div><h2 class="title">Chapter 48. System V Shared Memory</h2></div></div></div><p>This chapter describes System V shared memory. Shared memory allows two or more
+            processes to share the same region (usually referred to as a
+                <span class="emphasis"><em>segment</em></span>) of physical memory. Since a shared memory segment
+            becomes part of a process’s user-space memory, no kernel intervention is required for
+            IPC. All that is required is that one process copies data into the shared memory; that
+            data is immediately available to all other processes sharing the same segment. This
+            provides fast IPC by comparison with techniques such as pipes or message queues, where
+            the sending process copies data from a buffer in user space into kernel memory and the
+            receiving process copies in the reverse direction. (Each process also incurs the
+            overhead of a system call to perform the copy operation.)<a id="IDX-CHP-48-6569" class="indexterm"/></p><p>On the other hand, the fact that IPC using shared memory is not mediated by the kernel
+            means that, typically, some method of synchronization is required so that processes
+            don’t simultaneously access the shared memory (e.g., two processes performing
+            simultaneous updates, or one process fetching data from the shared memory while another
+            process is in the middle of updating it). System V semaphores are a natural method for
+            such synchronization. Other methods, such as POSIX semaphores (<a class="xref" href="ch53.html" title="Chapter 53. POSIX Semaphores">Chapter 53</a>) and file locks (<a class="xref" href="ch55.html" title="Chapter 55. File Locking">Chapter 55</a>), are
+            also possible.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>In <span class="emphasis"><em>mmap()</em></span> terminology, a memory region is
+                    <span class="emphasis"><em>mapped</em></span> at an address, while in System V terminology, a
+                shared memory segment is <span class="emphasis"><em>attached</em></span> at an address. These terms
+                are equivalent; the terminology differences are a consequence of the separate
+                origins of these two APIs.</p></div><div class="sect1" title="Overview"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="overview-id13">Overview</h2></div></div></div><p>In order to use a shared memory segment, we typically perform the following
+                steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Call <span class="emphasis"><em>shmget()</em></span> to create a new shared memory segment
+                        or obtain the identifier of an existing segment (i.e., one created by
+                        another process). This call returns a shared memory identifier for use in
+                        later calls.<a id="IDX-CHP-48-6570" class="indexterm"/></p></li><li class="listitem"><p>Use <span class="emphasis"><em>shmat()</em></span> to <span class="emphasis"><em>attach</em></span> the shared
+                        memory segment; that is, make the segment part of the virtual memory of the
+                        calling process.</p></li><li class="listitem"><p>At this point, the shared memory segment can be treated just like any
+                        other memory available to the program. In order to refer to the shared
+                        memory, the program uses the <span class="emphasis"><em>addr</em></span> value returned by the
+                            <span class="emphasis"><em>shmat()</em></span> call, which is a pointer to the start of
+                        the shared memory segment in the process’s virtual address space.</p></li><li class="listitem"><p>Call <span class="emphasis"><em>shmdt()</em></span> to detach the shared memory segment.
+                        After this call, the process can no longer refer to the shared memory. This
+                        step is optional, and happens automatically on process termination.</p></li><li class="listitem"><p>Call <span class="emphasis"><em>shmctl()</em></span> to delete the shared memory segment.
+                        The segment will be destroyed only after all currently attached processes
+                        have detached it. Only one process needs to perform this step.</p></li></ul></div></div><div class="sect1" title="Creating or Opening a Shared Memory Segment"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="creating_or_opening_a_shared_memory_segm">Creating or Opening a Shared Memory Segment</h2></div></div></div><p>The <span class="emphasis"><em>shmget()</em></span> system call creates a new shared memory segment
+                or obtains the identifier of an existing segment. The contents of a newly created
+                shared memory segment are initialized to 0.<a id="IDX-CHP-48-6571" class="indexterm"/><a id="IDX-CHP-48-6572" class="indexterm"/><a id="IDX-CHP-48-6573" class="indexterm"/><a id="IDX-CHP-48-6574" class="indexterm"/><a id="IDX-CHP-48-6575" class="indexterm"/></p><a id="I_programlisting48_d1e127638"/><pre class="programlisting">#include &lt;sys/types.h&gt;        /* For portability */
+#include &lt;sys/shm.h&gt;
+
+int <strong class="userinput"><code>shmget</code></strong>(key_t <span class="emphasis"><em>key</em></span>, size_t <span class="emphasis"><em>size</em></span>, int <span class="emphasis"><em>shmflg</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns shared memory segment identifier on success, or -1 on error</p></div><p>The <span class="emphasis"><em>key</em></span> argument is a key generated using one of the methods
+                described in <a class="xref" href="ch45.html#ipc_keys" title="IPC Keys">IPC Keys</a> (i.e., usually the value <code class="literal">IPC_PRIVATE</code> or a key returned by
+                    <span class="emphasis"><em>ftok()</em></span>).</p><p>When we use <span class="emphasis"><em>shmget()</em></span> to create a new shared memory segment,
+                    <span class="emphasis"><em>size</em></span> specifies a positive integer that indicates the
+                desired size of the segment, in bytes. The kernel allocates shared memory in
+                multiples of the system page size, so <span class="emphasis"><em>size</em></span> is effectively
+                rounded up to the next multiple of the system page size. If we are using
+                    <span class="emphasis"><em>shmget()</em></span> to obtain the identifier of an existing segment,
+                then <span class="emphasis"><em>size</em></span> has no effect on the segment, but it must be less
+                than or equal to the size of the segment.</p><p>The <span class="emphasis"><em>shmflg</em></span> argument performs the same task as for the other
+                IPC <span class="emphasis"><em>get</em></span> calls, specifying the permissions (<a class="xref" href="ch15.html#constants_for_file_permission_bits" title="Table 15-4. Constants for file permission bits">Table 15-4</a>, in <a class="xref" href="ch15.html#permissions_on_regular_files" title="Permissions on Regular Files">Permissions on Regular Files</a>) to be placed on a new shared memory
+                segment or checked against an existing segment. In addition, zero or more of the
+                following flags can be ORed (|) in <span class="emphasis"><em>shmflg</em></span> to control the
+                operation of <span class="emphasis"><em>shmget()</em></span>:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">IPC_CREAT</code>
+                    </span></dt><dd><p>If no segment with the specified <span class="emphasis"><em>key</em></span> exists,
+                            create a new segment.</p></dd><dt><span class="term">
+                        <code class="literal">IPC_EXCL</code>
+                    </span></dt><dd><p>If <code class="literal">IPC_CREAT</code> was also specified,
+                            and a segment with the specified <span class="emphasis"><em>key</em></span> already
+                            exists, fail with the error <code class="literal">EEXIST</code>.</p></dd></dl></div><p>The above flags are described in more detail in Section 45.1. In addition, Linux
+                permits the following nonstandard flags:</p><div class="variablelist"><dl><dt><span class="term"><code class="literal">SHM_HUGETLB</code> (since Linux 2.6)</span></dt><dd><p>A privileged (<code class="literal">CAP_IPC_LOCK</code>) process
+                            can use this flag to create a shared memory segment that uses
+                                <span class="emphasis"><em>huge pages</em></span>. Huge pages are a feature provided
+                            by many modern hardware architectures to manage memory using very large
+                            page sizes. (For example, x86-32 allows 4-MB pages as an alternative to
+                            4-kB pages.) On systems that have large amounts of memory, and where
+                            applications require large blocks of memory, using huge pages reduces
+                            the number of entries required in the hardware memory management unit’s
+                            translation look-aside buffer (TLB). This is beneficial because entries
+                            in the TLB are usually a scarce resource. See the kernel source file
+                                <code class="literal">Documentation/vm/hugetlbpage.txt</code>
+                            for further information.<a id="IDX-CHP-48-6576" class="indexterm"/></p></dd><dt><span class="term"><code class="literal">SHM_NORESERVE</code> (since Linux
+                        2.6.15)</span></dt><dd><p>This flag serves the same purpose for <span class="emphasis"><em>shmget()</em></span> as
+                            the <code class="literal">MAP_NORESERVE</code> flag serves for
+                                <span class="emphasis"><em>mmap()</em></span>. See Section 49.9.</p></dd></dl></div><p>On success, <span class="emphasis"><em>shmget()</em></span> returns the identifier for the new or
+                existing shared memory segment.</p></div><div class="sect1" title="Using Shared Memory"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="using_shared_memory">Using Shared Memory</h2></div></div></div><p>The <span class="emphasis"><em>shmat()</em></span> system call attaches the shared memory segment
+                identified by <span class="emphasis"><em>shmid</em></span> to the calling process’s virtual address
+                    space.<a id="IDX-CHP-48-6577" class="indexterm"/><a id="IDX-CHP-48-6578" class="indexterm"/><a id="IDX-CHP-48-6579" class="indexterm"/><a id="IDX-CHP-48-6580" class="indexterm"/><a id="IDX-CHP-48-6581" class="indexterm"/><a id="IDX-CHP-48-6582" class="indexterm"/><a id="IDX-CHP-48-6583" class="indexterm"/><a id="IDX-CHP-48-6584" class="indexterm"/><a id="IDX-CHP-48-6585" class="indexterm"/><a id="IDX-CHP-48-6586" class="indexterm"/><a id="IDX-CHP-48-6587" class="indexterm"/><a id="IDX-CHP-48-6588" class="indexterm"/><a id="IDX-CHP-48-6589" class="indexterm"/><a id="IDX-CHP-48-6590" class="indexterm"/><a id="IDX-CHP-48-6591" class="indexterm"/><a id="IDX-CHP-48-6592" class="indexterm"/></p><a id="I_programlisting48_d1e127867"/><pre class="programlisting">#include &lt;sys/types.h&gt;        /* For portability */
+#include &lt;sys/shm.h&gt;
+
+void *<strong class="userinput"><code>shmat</code></strong>(int <span class="emphasis"><em>shmid</em></span>, const void *<span class="emphasis"><em>shmaddr</em></span>, int <span class="emphasis"><em>shmflg</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns address at which shared memory is attached on success, or
+                        <span class="emphasis"><em>(void *)</em></span> -1 on error</p></div><p>The <span class="emphasis"><em>shmaddr</em></span> argument and the setting of the <code class="literal">SHM_RND</code> bit in the <span class="emphasis"><em>shmflg</em></span>
+                bit-mask argument control how the segment is attached:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If <span class="emphasis"><em>shmaddr</em></span> is <code class="literal">NULL</code>, then the segment is attached at a suitable address selected
+                        by the kernel. This is the preferred method of attaching a
+                            segment.<a id="IDX-CHP-48-6593" class="indexterm"/></p></li><li class="listitem"><p>If <span class="emphasis"><em>shmaddr</em></span> is not <code class="literal">NULL</code>, and <code class="literal">SHM_RND</code> is not
+                        set, then the segment is attached at the address specified by
+                            <span class="emphasis"><em>shmaddr</em></span>, which must be a multiple of the system
+                        page size (or the error <code class="literal">EINVAL</code>
+                        results).</p></li><li class="listitem"><p>If <span class="emphasis"><em>shmaddr</em></span> is not <code class="literal">NULL</code>, and <code class="literal">SHM_RND</code> is set,
+                        then the segment is mapped at the address provided in
+                            <span class="emphasis"><em>shmaddr</em></span>, rounded down to the nearest multiple of
+                        the constant <code class="literal">SHMLBA</code> (<span class="emphasis"><em>shared
+                            memory low boundary address</em></span>). This constant is equal to some
+                        multiple of the system page size. Attaching a segment at an address that is
+                        a multiple of <code class="literal">SHMLBA</code> is necessary on some
+                        architectures in order to improve CPU cache performance and to prevent the
+                        possibility that different attaches of the same segment have inconsistent
+                        views within the CPU cache.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>On the x86 architectures, <code class="literal">SHMLBA</code> is the
+                    same as the system page size, reflecting the fact that such caching
+                    inconsistencies can’t arise on those architectures.</p></div><p>Specifying a non-<code class="literal">NULL</code> value for
+                    <span class="emphasis"><em>shmaddr</em></span> (i.e., either the second or third option listed
+                above) is not recommended, for the following reasons:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>It reduces the portability of an application. An address valid on one UNIX
+                        implementation may be invalid on another.</p></li><li class="listitem"><p>An attempt to attach a shared memory segment at a particular address will
+                        fail if that address is already in use. This could happen if, for example,
+                        the application (perhaps inside a library function) had already attached
+                        another segment or created a memory mapping at that address.</p></li></ul></div><p>As its function result, <span class="emphasis"><em>shmat()</em></span> returns the address at which
+                the shared memory segment is attached. This value can be treated like a normal C
+                pointer; the segment looks just like any other part of the process’s virtual memory.
+                Typically, we assign the return value from <span class="emphasis"><em>shmat()</em></span> to a pointer
+                to some programmer-defined structure, in order to impose that structure on the
+                segment (see, for example, <a class="xref" href="ch48.html#transfer_blocks_of_data_from_stdin_to_a" title="Example 48-2. Transfer blocks of data from stdin to a System V shared memory segment">Example 48-2</a>).</p><p>To attach a shared memory segment for read-only access, we specify the flag
+                    <code class="literal">SHM_RDONLY</code> in <span class="emphasis"><em>shmflg</em></span>.
+                Attempts to update the contents of a read-only segment result in a segmentation
+                fault (the <code class="literal">SIGSEGV</code> signal). If <code class="literal">SHM_RDONLY</code> is not specified, the memory can be both
+                read and modified.<a id="IDX-CHP-48-6594" class="indexterm"/></p><p>To attach a shared memory segment, a process requires read and write permissions
+                on the segment, unless <code class="literal">SHM_RDONLY</code> is specified,
+                in which case only read permission is required.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>It is possible to attach the same shared memory segment multiple times within
+                    a process, and even to make one attach read-only while another is read-write.
+                    The contents of the memory at each attachment point are the same, since the
+                    different entries of the process virtual memory page tables are referring to the
+                    same physical pages of memory.</p></div><p>One final value that may be specified in <span class="emphasis"><em>shmflg</em></span> is <code class="literal">SHM_REMAP</code>. In this case, <span class="emphasis"><em>shmaddr</em></span>
+                must be non-<code class="literal">NULL</code>. This flag requests that the
+                    <span class="emphasis"><em>shmat()</em></span> call replace any existing shared memory attachment
+                or memory mapping in the range starting at <span class="emphasis"><em>shmaddr</em></span> and
+                continuing for the length of the shared memory segment. Normally, if we try to
+                attach a shared memory segment at an address range that is already in use, the error
+                    <code class="literal">EINVAL</code> results. <code class="literal">SHM_REMAP</code> is a nonstandard Linux extension.</p><p><a class="xref" href="ch48.html#shmflg_bit-mask_values_for_shmat_open_pa" title="Table 48-1. shmflg bit-mask values for shmat()">Table 48-1</a> summarizes the
+                constants that can be ORed in the <span class="emphasis"><em>shmflg</em></span> argument of
+                    <span class="emphasis"><em>shmat()</em></span>.</p><p>When a process no longer needs to access a shared memory segment, it can call
+                    <span class="emphasis"><em>shmdt()</em></span> to detach the segment from its virtual address
+                space. The <span class="emphasis"><em>shmaddr</em></span> argument identifies the segment to be
+                detached. It should be a value returned by a previous call to
+                    <span class="emphasis"><em>shmat()</em></span>.<a id="IDX-CHP-48-6595" class="indexterm"/></p><a id="I_programlisting48_d1e128066"/><pre class="programlisting">#include &lt;sys/types.h&gt;        /* For portability */
+#include &lt;sys/shm.h&gt;
+
+int <strong class="userinput"><code>shmdt</code></strong>(const void *<span class="emphasis"><em>shmaddr</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>Detaching a shared memory segment is not the same as deleting it. Deletion is
+                performed using the <span class="emphasis"><em>shmctl()</em></span>
+                <code class="literal">IPC_RMID</code> operation, as described in Section
+                48.7.</p><p>A child created by <span class="emphasis"><em>fork()</em></span> inherits its parent’s attached
+                shared memory segments. Thus, shared memory provides an easy method of IPC between
+                parent and child.</p><p>During an <span class="emphasis"><em>exec()</em></span>, all attached shared memory segments are
+                detached. Shared memory segments are also automatically detached on process
+                termination.</p><div class="table"><a id="shmflg_bit-mask_values_for_shmat_open_pa"/><div class="table-title">Table 48-1. <span class="emphasis"><em>shmflg</em></span> bit-mask values for
+                    <span class="emphasis"><em>shmat()</em></span></div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Value</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>Description</p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SHM_RDONLY</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Attach segment read-only</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SHM_REMAP</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>Replace any existing mapping at
+                                    <span class="emphasis"><em>shmaddr</em></span></p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SHM_RND</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>Round <span class="emphasis"><em>shmaddr</em></span> down to multiple of
+                                        <code class="literal">SHMLBA</code> bytes</p>
+                            </td></tr></tbody></table></div></div></div><div class="sect1" title="Example: Transferring Data via Shared Memory"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="example_colon_transferring_data_via_shar">Example: Transferring Data via Shared Memory</h2></div></div></div><p>We now look at an example application that uses System V shared memory and
+                semaphores. The application consists of two programs: the
+                    <span class="emphasis"><em>writer</em></span> and the <span class="emphasis"><em>reader</em></span>. The writer
+                reads blocks of data from standard input and copies (“writes”) them into a shared
+                memory segment. The reader copies (“reads”) blocks of data from the shared memory
+                segment to standard output. In effect, the programs treat the shared memory somewhat
+                like a pipe.<a id="IDX-CHP-48-6596" class="indexterm"/><a id="IDX-CHP-48-6597" class="indexterm"/><a id="IDX-CHP-48-6598" class="indexterm"/><a id="IDX-CHP-48-6599" class="indexterm"/><a id="IDX-CHP-48-6600" class="indexterm"/><a id="IDX-CHP-48-6601" class="indexterm"/><a id="IDX-CHP-48-6602" class="indexterm"/><a id="IDX-CHP-48-6603" class="indexterm"/><a id="IDX-CHP-48-6604" class="indexterm"/><a id="IDX-CHP-48-6605" class="indexterm"/><a id="IDX-CHP-48-6606" class="indexterm"/><a id="IDX-CHP-48-6607" class="indexterm"/><a id="IDX-CHP-48-6608" class="indexterm"/><a id="IDX-CHP-48-6609" class="indexterm"/><a id="IDX-CHP-48-6610" class="indexterm"/><a id="IDX-CHP-48-6611" class="indexterm"/><a id="IDX-CHP-48-6612" class="indexterm"/><a id="IDX-CHP-48-6613" class="indexterm"/><a id="IDX-CHP-48-6614" class="indexterm"/><a id="IDX-CHP-48-6615" class="indexterm"/><a id="IDX-CHP-48-6616" class="indexterm"/><a id="IDX-CHP-48-6617" class="indexterm"/><a id="IDX-CHP-48-6618" class="indexterm"/><a id="IDX-CHP-48-6619" class="indexterm"/></p><p>The two programs employ a pair of System V semaphores in a binary semaphore
+                protocol (the <span class="emphasis"><em>initSemAvailable()</em></span>,
+                    <span class="emphasis"><em>initSemInUse()</em></span>, <span class="emphasis"><em>reserveSem()</em></span>, and
+                    <span class="emphasis"><em>releaseSem()</em></span> functions defined in <a class="xref" href="ch47.html#implementing_a_binary_semaphores_protoco" title="Implementing a Binary Semaphores Protocol">Implementing a Binary Semaphores Protocol</a>) to ensure that:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>only one process accesses the shared memory segment at a time; and</p></li><li class="listitem"><p>the processes alternate in accessing the segment (i.e., the writer writes
+                        some data, then the reader reads the data, then the writer writes again, and
+                        so on).</p></li></ul></div><p><a class="xref" href="ch48.html#using_semaphores_to_ensure_exclusive_com" title="Figure 48-1. Using semaphores to ensure exclusive, alternating access to shared memory">Figure 48-1</a> provides an overview of
+                the use of these two semaphores. Note that the writer initializes the two semaphores
+                so that it is the first of the two programs to be able to access the shared memory
+                segment; that is, the writer’s semaphore is initially available, and the reader’s
+                semaphore is initially in use.</p><p>The source code for the application consists of three files. The first of these,
+                    <a class="xref" href="ch48.html#header_file_for_svshm_underscore_xfr_und" title="Example 48-1. Header file for svshm_xfr_writer.c and svshm_xfr_reader.c">Example 48-1</a>, is a header file
+                shared by the reader and writer programs. This header defines the
+                    <span class="emphasis"><em>shmseg</em></span> structure that we use to declare pointers to the
+                shared memory segment. Doing this allows us to impose a structure on the bytes of
+                the shared memory segment.</p><div class="figure"><a id="using_semaphores_to_ensure_exclusive_com"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject48_d1e128346"/><img src="figs/web/48-1_SVSHM-shm_xfr.png.jpg" alt="Using semaphores to ensure exclusive, alternating access to shared memory"/></div></div><div class="figure-title">Figure 48-1. Using semaphores to ensure exclusive, alternating access to shared
+                    memory</div></div><div class="example"><a id="header_file_for_svshm_underscore_xfr_und"/><div class="example-title">Example 48-1. Header file for <code class="literal">svshm_xfr_writer.c</code> and
+                        <code class="literal">svshm_xfr_reader.c</code></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>svshm/svshm_xfr.h</code></strong>
+#include &lt;sys/types.h&gt;
+#include &lt;sys/stat.h&gt;
+#include &lt;sys/sem.h&gt;
+#include &lt;sys/shm.h&gt;
+#include "binary_sems.h"        /* Declares our binary semaphore functions */
+#include "tlpi_hdr.h"
+
+#define SHM_KEY 0x1234          /* Key for shared memory segment */
+#define SEM_KEY 0x5678          /* Key for semaphore set */
+
+#define OBJ_PERMS (S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP)
+                                /* Permissions for our IPC objects */
+
+#define WRITE_SEM 0             /* Writer has access to shared memory */
+#define READ_SEM 1              /* Reader has access to shared memory */
+
+#ifndef BUF_SIZE                /* Allow "cc -D" to override definition */
+#define BUF_SIZE 1024           /* Size of transfer buffer */
+#endif
+
+struct shmseg {                 /* Defines structure of shared memory segment */
+    int cnt;                    /* Number of bytes used in 'buf' */
+    char buf[BUF_SIZE];         /* Data being transferred */
+};
+      <strong class="userinput"><code>svshm/svshm_xfr.h</code></strong></pre></div></div><p><a class="xref" href="ch48.html#transfer_blocks_of_data_from_stdin_to_a" title="Example 48-2. Transfer blocks of data from stdin to a System V shared memory segment">Example 48-2</a> is the writer program.
+                This program performs the following steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Create a set containing the two semaphores that are used by the writer and
+                        reader program to ensure that they alternate in accessing the shared memory
+                        segment <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128372"/><img src="figs/web/U001.png" alt=""/></span>. The semaphores are initialized so that the writer has
+                        first access to the shared memory segment. Since the writer creates the
+                        semaphore set, it must be started before the reader.</p></li><li class="listitem"><p>Create the shared memory segment and attach it to the writer’s virtual
+                        address space at an address chosen by the system <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128381"/><img src="figs/web/U002.png" alt=""/></span>.</p></li><li class="listitem"><p>Enter a loop that transfers data from standard input to the shared memory
+                        segment <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128390"/><img src="figs/web/U003.png" alt=""/></span>. The following steps are performed in each loop
+                        iteration:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Reserve (decrement) the writer semaphore <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128400"/><img src="figs/web/U004.png" alt=""/></span>.</p></li><li class="listitem"><p>Read data from standard input into the shared memory segment
+                                    <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128409"/><img src="figs/web/U005.png" alt=""/></span>.</p></li><li class="listitem"><p>Release (increment) the reader semaphore <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128418"/><img src="figs/web/U006.png" alt=""/></span>.</p></li></ul></div></li><li class="listitem"><p>The loop terminates when no further data is available from standard input
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128427"/><img src="figs/web/U007.png" alt=""/></span>. On the last pass through the loop, the writer
+                        indicates to the reader that there is no more data by passing a block of
+                        data of length 0 (<span class="emphasis"><em>shmp -&gt; cnt</em></span> is 0).</p></li><li class="listitem"><p>Upon exiting the loop, the writer once more reserves its semaphore, so
+                        that it knows that the reader has completed the final access to the shared
+                        memory <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128439"/><img src="figs/web/U008.png" alt=""/></span>. The writer then removes the shared memory segment and
+                        semaphore set <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128445"/><img src="figs/web/U009.png" alt=""/></span>.</p></li></ul></div><p><a class="xref" href="ch48.html#transfer_blocks_of_data_from_a_system_v" title="Example 48-3. Transfer blocks of data from a System V shared memory segment to stdout">Example 48-3</a> is the reader program.
+                It transfers blocks of data from the shared memory segment to standard output. The
+                reader performs the following steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Obtain the IDs of the semaphore set and shared memory segment that were
+                        created by the writer program <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128459"/><img src="figs/web/U001.png" alt=""/></span>.</p></li><li class="listitem"><p>Attach the shared memory segment for read-only access <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128468"/><img src="figs/web/U002.png" alt=""/></span>.</p></li><li class="listitem"><p>Enter a loop that transfers data from the shared memory segment
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128477"/><img src="figs/web/U003.png" alt=""/></span>. The following steps are performed in each loop
+                        iteration:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Reserve (decrement) the reader semaphore <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128487"/><img src="figs/web/U004.png" alt=""/></span>.</p></li><li class="listitem"><p>Check whether <span class="emphasis"><em>shmp -&gt; cnt</em></span> is 0; if so,
+                                exit this loop <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128499"/><img src="figs/web/U005.png" alt=""/></span>.</p></li><li class="listitem"><p>Write the block of data in the shared memory segment to standard
+                                output <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128508"/><img src="figs/web/U006.png" alt=""/></span>.</p></li><li class="listitem"><p>Release (increment) the writer semaphore <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128517"/><img src="figs/web/U007.png" alt=""/></span>.</p></li></ul></div></li><li class="listitem"><p>After exiting the loop, detach the shared memory segment
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128526"/><img src="figs/web/U008.png" alt=""/></span> and releases the writer semaphore <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128532"/><img src="figs/web/U009.png" alt=""/></span>, so that the writer program can remove the IPC
+                        objects.</p></li></ul></div><div class="example"><a id="transfer_blocks_of_data_from_stdin_to_a"/><div class="example-title">Example 48-2. Transfer blocks of data from <span class="emphasis"><em>stdin</em></span> to a System V shared
+                    memory segment</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>svshm/svshm_xfr_writer.c</code></strong>
+    #include "semun.h"              /* Definition of semun union */
+    #include "svshm_xfr.h"
+
+    int
+    main(int argc, char *argv[])
+    {
+        int semid, shmid, bytes, xfrs;
+        struct shmseg *shmp;
+        union semun dummy;
+
+<img src="figs/web/U001.png" alt=""/>    semid = semget(SEM_KEY, 2, IPC_CREAT | OBJ_PERMS);
+        if (semid == -1)
+            errExit("semget");
+
+            if (initSemAvailable(semid, WRITE_SEM) == -1)
+            errExit("initSemAvailable");
+        if (initSemInUse(semid, READ_SEM) == -1)
+            errExit("initSemInUse");
+
+<img src="figs/web/U002.png" alt=""/>    shmid = shmget(SHM_KEY, sizeof(struct shmseg), IPC_CREAT | OBJ_PERMS);
+        if (shmid == -1)
+            errExit("shmget");
+
+        shmp = shmat(shmid, NULL, 0);
+        if (shmp == (void *) -1)
+            errExit("shmat");
+
+        /* Transfer blocks of data from stdin to shared memory */
+
+<img src="figs/web/U003.png" alt=""/>    for (xfrs = 0, bytes = 0; ; xfrs++, bytes += shmp-&gt;cnt) {
+
+<img src="figs/web/U004.png" alt=""/>
+        if (reserveSem(semid, WRITE_SEM) == -1)         /* Wait for our turn */
+                errExit("reserveSem");
+
+<img src="figs/web/U005.png" alt=""/>        shmp-&gt;cnt = read(STDIN_FILENO, shmp-&gt;buf, BUF_SIZE);
+            if (shmp-&gt;cnt == -1)
+                errExit("read");
+
+<img src="figs/web/U006.png" alt=""/>
+        if (releaseSem(semid, READ_SEM) == -1)          /* Give reader a turn */
+                errExit("releaseSem");
+
+            /* Have we reached EOF? We test this after giving the reader
+               a turn so that it can see the 0 value in shmp-&gt;cnt. */
+
+<img src="figs/web/U007.png" alt=""/>        if (shmp-&gt;cnt == 0)
+                break;
+        }
+
+        /* Wait until reader has let us have one more turn. We then know
+           reader has finished, and so we can delete the IPC objects. */
+
+<img src="figs/web/U008.png" alt=""/>    if (reserveSem(semid, WRITE_SEM) == -1)
+            errExit("reserveSem");
+
+<img src="figs/web/U009.png" alt=""/>    if (semctl(semid, 0, IPC_RMID, dummy) == -1)
+            errExit("semctl");
+        if (shmdt(shmp) == -1)
+            errExit("shmdt");
+        if (shmctl(shmid, IPC_RMID, 0) == -1)
+            errExit("shmctl");
+
+        fprintf(stderr, "Sent %d bytes (%d xfrs)\n", bytes, xfrs);
+        exit(EXIT_SUCCESS);
+    }
+          <strong class="userinput"><code>svshm/svshm_xfr_writer.c</code></strong></pre></div></div><div class="example"><a id="transfer_blocks_of_data_from_a_system_v"/><div class="example-title">Example 48-3. Transfer blocks of data from a System V shared memory segment to
+                        <span class="emphasis"><em>stdout</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>svshm/svshm_xfr_reader.c</code></strong>
+    #include "svshm_xfr.h"
+
+    int
+    main(int argc, char *argv[])
+    {
+        int semid, shmid, xfrs, bytes;
+        struct shmseg *shmp;
+
+        /* Get IDs for semaphore set and shared memory created by writer */
+
+<img src="figs/web/U001.png" alt=""/>    semid = semget(SEM_KEY, 0, 0);
+        if (semid == -1)
+            errExit("semget");
+
+        shmid  = shmget(SHM_KEY, 0, 0);
+        if (shmid == -1)
+            errExit("shmget");
+
+<img src="figs/web/U002.png" alt=""/>    shmp = shmat(shmid, NULL, SHM_RDONLY);
+        if (shmp == (void *) -1)
+            errExit("shmat");
+
+        /* Transfer blocks of data from shared memory to stdout */
+
+<img src="figs/web/U003.png" alt=""/>    for (xfrs = 0, bytes = 0; ; xfrs++) {
+
+<img src="figs/web/U004.png" alt=""/>
+        if (reserveSem(semid, READ_SEM) == -1)          /* Wait for our turn */
+                errExit("reserveSem");
+
+<img src="figs/web/U005.png" alt=""/>        if (shmp-&gt;cnt == 0)                    /* Writer encountered EOF */
+                break;
+            bytes += shmp-&gt;cnt;
+
+<img src="figs/web/U006.png" alt=""/>        if (write(STDOUT_FILENO, shmp-&gt;buf, shmp-&gt;cnt) != shmp-&gt;cnt)
+                fatal("partial/failed write");
+
+<img src="figs/web/U007.png" alt=""/>
+        if (releaseSem(semid, WRITE_SEM) == -1)         /* Give writer a turn */
+                errExit("releaseSem");
+        }
+
+<img src="figs/web/U008.png" alt=""/>    if (shmdt(shmp) == -1)
+            errExit("shmdt");
+
+        /* Give writer one more turn, so it can clean up */
+
+<img src="figs/web/U009.png" alt=""/>    if (releaseSem(semid, WRITE_SEM) == -1)
+            errExit("releaseSem");
+
+        fprintf(stderr, "Received %d bytes (%d xfrs)\n", bytes, xfrs);
+        exit(EXIT_SUCCESS);
+    }
+          <strong class="userinput"><code>svshm/svshm_xfr_reader.c</code></strong></pre></div></div><p>The following shell session demonstrates the use of the programs in <a class="xref" href="ch48.html#transfer_blocks_of_data_from_stdin_to_a" title="Example 48-2. Transfer blocks of data from stdin to a System V shared memory segment">Example 48-2</a> and <a class="xref" href="ch46.html#client_for_file_server_using_system_v_me" title="Example 46-9. Client for file server using System V message queues">Example 46-9</a>. We invoke the writer,
+                using the file <code class="literal">/etc/services</code> as input, and then
+                invoke the reader, directing its output to another file:</p><a id="I_programlisting48_d1e128680"/><pre class="programlisting">$ <strong class="userinput"><code>wc -c /etc/services</code></strong>                               <em class="lineannotation"><span class="lineannotation">Display size of test file</span></em>
+764360 /etc/services
+$ <strong class="userinput"><code>./svshm_xfr_writer &lt; /etc/services &amp;</code></strong>
+[1] 9403
+$ <strong class="userinput"><code>./svshm_xfr_reader &gt; out.txt</code></strong>
+Received 764360 bytes (747 xfrs)                    <em class="lineannotation"><span class="lineannotation">Message from reader</span></em>
+Sent 764360 bytes (747 xfrs)                        <em class="lineannotation"><span class="lineannotation">Message from writer</span></em>
+[1]+  Done              ./svshm_xfr_writer &lt; /etc/services
+$ <strong class="userinput"><code>diff /etc/services out.txt</code></strong>
+$</pre><p>The <span class="emphasis"><em>diff</em></span> command produced no output, indicating that the
+                output file produced by the reader has the same content as the input file used by
+                the writer.</p></div><div class="sect1" title="Location of Shared Memory in Virtual Memory"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="location_of_shared_memory_in_virtual_mem">Location of Shared Memory in Virtual Memory</h2></div></div></div><p>In <a class="xref" href="ch06.html#memory_layout_of_a_process" title="Memory Layout of a Process">Memory Layout of a Process</a>, we considered the layout of the
+                various parts of a process in virtual memory. It is useful to revisit this topic in
+                the context of attaching System V shared memory segments. If we follow the
+                recommended approach of allowing the kernel to choose where to attach a shared
+                memory segment, then (on the x86-32 architecture) the memory layout appears as shown
+                in <a class="xref" href="ch48.html#locations_of_shared_memory_comma_memory" title="Figure 48-2. Locations of shared memory, memory mappings, and shared libraries (x86-32)">Figure 48-2</a>, with the segment being
+                attached in the unallocated space between the upwardly growing heap and the
+                downwardly growing stack. To allow space for heap and stack growth, shared memory
+                segments are attached starting at the virtual address <code class="literal">0x40000000</code>. Mapped mappings (<a class="xref" href="ch49.html" title="Chapter 49. Memory Mappings">Chapter 49</a>)
+                and shared libraries (<a class="xref" href="ch41.html" title="Chapter 41. Fundamentals of Shared Libraries">Chapter 41</a> and <a class="xref" href="ch42.html" title="Chapter 42. Advanced Features of Shared Libraries">Chapter 42</a>) are also placed in this area.
+                (There is some variation in the default location at which shared memory mappings and
+                memory segments are placed, depending on the kernel versions and the setting of the
+                process’s <code class="literal">RLIMIT_STACK</code> resource limit.)<a id="IDX-CHP-48-6620" class="indexterm"/><a id="IDX-CHP-48-6621" class="indexterm"/><a id="IDX-CHP-48-6622" class="indexterm"/><a id="IDX-CHP-48-6623" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The address <code class="literal">0x40000000</code> is defined as the
+                    kernel constant <code class="literal">TASK_UNMAPPED_BASE</code>. It is
+                    possible to change this address by defining this constant with a different value
+                    and rebuilding the kernel.</p><p>A shared memory segment (or memory mapping) can be placed at an address below
+                        <code class="literal">TASK_UNMAPPED_BASE</code>, if we employ the
+                    unrecommended approach of explicitly specifying an address when calling
+                        <span class="emphasis"><em>shmat()</em></span> (or <span class="emphasis"><em>mmap()</em></span>).</p></div><p>Using the Linux-specific <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/maps</code> file, we can see the location of the shared memory segments and
+                shared libraries mapped by a program, as we demonstrate in the shell session
+                    below.<a id="IDX-CHP-48-6624" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Starting with kernel 2.6.14, Linux also provides the <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/smaps</code> file, which exposes more information about the memory
+                    consumption of each of a process’s mappings. For further details, see the
+                        <span class="emphasis"><em>proc(5)</em></span> manual page.<a id="IDX-CHP-48-6625" class="indexterm"/></p></div><div class="figure"><a id="locations_of_shared_memory_comma_memory"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject48_d1e128817"/><img src="figs/web/48-2_SVSHM-shm-layout.png.jpg" alt="Locations of shared memory, memory mappings, and shared libraries (x86-32)"/></div></div><div class="figure-title">Figure 48-2. Locations of shared memory, memory mappings, and shared libraries
+                    (x86-32)</div></div><p>In the shell session below, we employ three programs that are not shown in this
+                chapter, but are provided in the <code class="literal">svshm</code>
+                subdirectory in the source code distribution for this book. These programs perform
+                the following tasks:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <code class="literal">svshm_create.c</code> program creates a
+                        shared memory segment. This program takes the same command-line options as
+                        the corresponding programs that we provide for message queues (<a class="xref" href="ch46.html#using_msgget_open_parenthesis_close_pare" title="Example 46-1. Using msgget()">Example 46-1</a>, in <a class="xref" href="ch46.html#creating_or_opening_a_message_queue" title="Creating or Opening a Message Queue">Creating or Opening a Message Queue</a>) and semaphores, but
+                        includes an additional argument that specifies the size of the
+                            segment.<a id="IDX-CHP-48-6626" class="indexterm"/></p></li><li class="listitem"><p>The <code class="literal">svshm_attach.c</code> program attaches the
+                        shared memory segments identified by its command-line arguments. Each of
+                        these arguments is a colon-separated pair of numbers consisting of a shared
+                        memory identifier and an attach address. Specifying 0 for the attach address
+                        means that the system should choose the address. The program displays the
+                        address at which the memory is actually attached. For informational
+                        purposes, the program also displays the value of the SHMLBA constant and the
+                        process ID of the process running the program.<a id="IDX-CHP-48-6627" class="indexterm"/></p></li><li class="listitem"><p>The <code class="literal">svshm_rm.c</code> program deletes the
+                        shared memory segments identified by its command-line arguments.<a id="IDX-CHP-48-6628" class="indexterm"/></p></li></ul></div><p>We begin the shell session by creating two shared memory segments (100 kB and 3200
+                kB in size):</p><a id="I_programlisting48_d1e128864"/><pre class="programlisting">$ <strong class="userinput"><code>./svshm_create -p 102400</code></strong>
+9633796
+$ <strong class="userinput"><code>./svshm_create -p 3276800</code></strong>
+9666565
+$ <strong class="userinput"><code>./svshm_create -p 102400</code></strong>
+1015817
+$ <strong class="userinput"><code>./svshm_create -p 3276800</code></strong>
+1048586</pre><p>We then start a program that attaches these two segments at addresses chosen by
+                the kernel:</p><a id="I_programlisting48_d1e128881"/><pre class="programlisting">$ <strong class="userinput"><code>./svshm_attach 9633796:0 9666565:0</code></strong>
+SHMLBA = 4096 (0x1000), PID = 9903
+1: 9633796:0 ==&gt; 0xb7f0d000
+2: 9666565:0 ==&gt; 0xb7bed000
+Sleeping 5 seconds</pre><p>The output above shows the addresses at which the segments were attached. Before
+                the program completes sleeping, we suspend it, and then examine the contents of the
+                corresponding <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/maps</code> file:<a id="IDX-CHP-48-6629" class="indexterm"/></p><a id="I_programlisting48_d1e128904"/><pre class="programlisting"><span class="emphasis"><em>Type Control-Z to suspend program</em></span>
+[1]+  Stopped           ./svshm_attach 9633796:0 9666565:0
+$ <strong class="userinput"><code>cat /proc/9903/maps</code></strong></pre><p>The output produced by the <span class="emphasis"><em>cat</em></span> command is shown in <a class="xref" href="ch48.html#example_of_contents_of_solidus_proc_soli" title="Example 48-4. Example of contents of /proc/PID/maps">Example 48-4</a>.</p><div class="example"><a id="example_of_contents_of_solidus_proc_soli"/><div class="example-title">Example 48-4. Example of contents of <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/maps</code></div><div class="example-contents"><pre class="programlisting">$ <strong class="userinput"><code>cat /proc/9903/maps</code></strong>
+<img src="figs/web/U001.png" alt=""/>
+    08048000-0804a000 r-xp 00000000 08:05 5526989  /home/mtk/svshm_attach
+    0804a000-0804b000 r--p 00001000 08:05 5526989  /home/mtk/svshm_attach
+    0804b000-0804c000 rw-p 00002000 08:05 5526989  /home/mtk/svshm_attach
+<img src="figs/web/U002.png" alt=""/> b7bed000-b7f0d000 rw-s 00000000 00:09 9666565  /SYSV00000000 (deleted)
+    b7f0d000-b7f26000 rw-s 00000000 00:09 9633796  /SYSV00000000 (deleted)
+    b7f26000-b7f27000 rw-p b7f26000 00:00 0
+<img src="figs/web/U003.png" alt=""/> b7f27000-b8064000 r-xp 00000000 08:06 122031   /lib/libc-2.8.so
+    b8064000-b8066000 r--p 0013d000 08:06 122031   /lib/libc-2.8.so
+    b8066000-b8067000 rw-p 0013f000 08:06 122031   /lib/libc-2.8.so
+    b8067000-b806b000 rw-p b8067000 00:00 0
+    b8082000-b8083000 rw-p b8082000 00:00 0
+<img src="figs/web/U004.png" alt=""/> b8083000-b809e000 r-xp 00000000 08:06 122125   /lib/ld-2.8.so
+    b809e000-b809f000 r--p 0001a000 08:06 122125   /lib/ld-2.8.so
+    b809f000-b80a0000 rw-p 0001b000 08:06 122125   /lib/ld-2.8.so
+<img src="figs/web/U005.png" alt=""/> bfd8a000-bfda0000 rw-p bffea000 00:00 0        [stack]
+<img src="figs/web/U006.png" alt=""/> ffffe000-fffff000 r-xp 00000000 00:00 0        [vdso]</pre></div></div><p>In the output from <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/maps</code> shown in <a class="xref" href="ch48.html#example_of_contents_of_solidus_proc_soli" title="Example 48-4. Example of contents of /proc/PID/maps">Example 48-4</a>, we can see the
+                following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Three lines for the main program, <span class="emphasis"><em>shm_attach</em></span>. These
+                        correspond to the text and data segments of the program <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128986"/><img src="figs/web/U001.png" alt=""/></span>. The second of these lines is for a read-only page
+                        holding the string constants used by the program.</p></li><li class="listitem"><p>Two lines for the attached System V shared memory segments
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e128995"/><img src="figs/web/U002.png" alt=""/></span>.</p></li><li class="listitem"><p>Lines corresponding to the segments for two shared libraries. One of these
+                        is the standard C library (<code class="literal">libc</code>-<span class="emphasis"><em>version</em></span>.<code class="literal">so</code>) <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e129013"/><img src="figs/web/U003.png" alt=""/></span>. The other is the dynamic linker (<code class="literal">ld</code>-<span class="emphasis"><em>version</em></span>.<code class="literal">so</code>), which we describe in <a class="xref" href="ch41.html#using_a_shared_library" title="Using a Shared Library">Using a Shared Library</a>
+                        <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e129031"/><img src="figs/web/U004.png" alt=""/></span>.</p></li><li class="listitem"><p>A line labeled <code class="literal">[stack]</code>. This
+                        corresponds to the process stack <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e129043"/><img src="figs/web/U005.png" alt=""/></span>.</p></li><li class="listitem"><p>A line containing the tag <code class="literal">[vdso]</code>
+                        <span class="inlinemediaobject"><a id="I_inlinemediaobject48_d1e129055"/><img src="figs/web/U006.png" alt=""/></span>. This is an entry for the
+                            <span class="emphasis"><em>linux-gate</em></span> virtual dynamic shared object (DSO).
+                        This entry appears only in kernels since 2.6.12. See <a class="ulink" href="http://www.trilithium.com/johan/2005/08/linux-gate/" target="_top">http://www.trilithium.com/johan/2005/08/linux-gate/</a> for further
+                        information about this entry.</p></li></ul></div><p>The following columns are shown in each line of <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/maps</code>, in order from left to right:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>A pair of hyphen-separated numbers indicating the virtual address range
+                        (in hexadecimal) at which the memory segment is mapped. The second of these
+                        numbers is the address of the next byte <span class="emphasis"><em>after</em></span> the end
+                        of the segment.</p></li><li class="listitem"><p>Protection and flags for this memory segment. The first three letters
+                        indicate the protection of the segment: read (<code class="literal">r</code>), write (<code class="literal">w</code>), and execute
+                            (<code class="literal">x</code>). A hyphen (<code class="literal">-</code>) in place of any of these letters indicates
+                        that the corresponding protection is disabled. The final letter indicates
+                        the mapping flag for the memory segment; it is either private (<code class="literal">p</code>) or shared (<code class="literal">s</code>). For an explanation of these flags, see the description of
+                        the <code class="literal">MAP_PRIVATE</code> and <code class="literal">MAP_SHARED</code> flags in Section 49.2. (A System V
+                        shared memory segment is always marked shared.)</p></li><li class="listitem"><p>The hexadecimal offset (in bytes) of the segment within the corresponding
+                        mapped file. The meanings of this and the following two columns will become
+                        clearer when we describe the <span class="emphasis"><em>mmap()</em></span> system call in
+                            <a class="xref" href="ch49.html" title="Chapter 49. Memory Mappings">Chapter 49</a>. For a System V shared memory
+                        segment, the offset is always 0.</p></li><li class="listitem"><p>The device number (major and minor IDs) of the device on which the
+                        corresponding mapped file is located.</p></li><li class="listitem"><p>The i-node number of the mapped file, or, for System V shared memory
+                        segments, the identifier for the segment.</p></li><li class="listitem"><p>The filename or other identifying tag associated with this memory segment.
+                        For a System V shared memory segment, this consists of the string <code class="literal">SYSV</code> concatenated with the <span class="emphasis"><em>shmget()
+                            key</em></span> of the segment (expressed in hexadecimal). In this
+                        example, <code class="literal">SYSV</code> is followed by zeros
+                        because we created the segments using the key <code class="literal">IPC_PRIVATE</code> (which has the value 0). The string <code class="literal">(deleted)</code> that appears after the <code class="literal">SYSV</code> field for a System V shared memory
+                        segment is an artifact of the implementation of shared memory segments. Such
+                        segments are created as mapped files in an invisible
+                            <span class="emphasis"><em>tmpfs</em></span> file system (<a class="xref" href="ch14.html#a_virtual_memory_file_system_colon_tmpfs" title="A Virtual Memory File System: tmpfs">A Virtual Memory File System: <span class="emphasis"><em>tmpfs</em></span></a>), and then later
+                        unlinked. Shared anonymous memory mappings are implemented in the same
+                        manner. (We describe mapped files and shared anonymous memory mappings in
+                            <a class="xref" href="ch49.html" title="Chapter 49. Memory Mappings">Chapter 49</a>.)<a id="IDX-CHP-48-6630" class="indexterm"/></p></li></ol></div></div><div class="sect1" title="Storing Pointers in Shared Memory"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="storing_pointers_in_shared_memory">Storing Pointers in Shared Memory</h2></div></div></div><p>Each process may employ different shared libraries and memory mappings, and may
+                attach different sets of shared memory segments. Therefore, if we follow the
+                recommended practice of letting the kernel choose where to attach a shared memory
+                segment, the segment may be attached at a different address in each process. For
+                this reason, when storing references inside a shared memory segment that point to
+                other addresses within the segment, we should use (relative) offsets, rather than
+                (absolute) pointers.</p><p>For example, suppose we have a shared memory segment whose starting address is
+                pointed to by <span class="emphasis"><em>baseaddr</em></span> (i.e., <span class="emphasis"><em>baseaddr</em></span> is
+                the value returned by <span class="emphasis"><em>shmat()</em></span>). Furthermore, at the location
+                pointed to by <span class="emphasis"><em>p</em></span>, we want to store a pointer to the same
+                location as is pointed to by <span class="emphasis"><em>target</em></span>, as shown in <a class="xref" href="ch48.html#using_pointers_in_a_shared_memory_segmen" title="Figure 48-3. Using pointers in a shared memory segment">Figure 48-3</a>. This sort of operation
+                would be typical if we were building a linked list or a binary tree within the
+                segment. The usual C idiom for setting <span class="emphasis"><em>*p</em></span> would be the
+                following:</p><a id="I_programlisting48_d1e129186"/><pre class="programlisting">*p = target;                    /* Place pointer in *p (WRONG!) */</pre><div class="figure"><a id="using_pointers_in_a_shared_memory_segmen"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject48_d1e129191"/><img src="figs/web/48-3_SVSHM-pointers-scale90.png.jpg" alt="Using pointers in a shared memory segment"/></div></div><div class="figure-title">Figure 48-3. Using pointers in a shared memory segment</div></div><p>The problem with this code is that the location pointed to by
+                    <span class="emphasis"><em>target</em></span> may reside at a different virtual address when the
+                shared memory segment is attached in another process, which means that the value
+                stored at <span class="emphasis"><em>*p</em></span> is meaningless in that process. The correct
+                approach is to store an offset at <span class="emphasis"><em>*p</em></span>, as in the
+                following:</p><a id="I_programlisting48_d1e129207"/><pre class="programlisting">*p = (target - baseaddr);       /* Place offset in *p */</pre><p>When dereferencing such pointers, we reverse the above step:</p><a id="I_programlisting48_d1e129211"/><pre class="programlisting">target = baseaddr + *p;         /* Interpret offset */</pre><p>Here, we assume that in each process, <span class="emphasis"><em>baseaddr</em></span> points to the
+                start of the shared memory segment (i.e., it is the value returned by
+                    <span class="emphasis"><em>shmat()</em></span> in each process). Given this assumption, an offset
+                value is correctly interpreted, no matter where the shared memory segment is
+                attached in a process’s virtual address space.</p><p>Alternatively, if we are linking together a set of fixed-size structures, we can
+                cast the shared memory segment (or a part thereof) as an array, and then use index
+                numbers as the “pointers” referring from one structure to another.</p></div><div class="sect1" title="Shared Memory Control Operations"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="shared_memory_control_operations">Shared Memory Control Operations</h2></div></div></div><p>The <span class="emphasis"><em>shmctl()</em></span> system call performs a range of control
+                operations on the shared memory segment identified by
+                    <span class="emphasis"><em>shmid</em></span>.<a id="IDX-CHP-48-6631" class="indexterm"/><a id="IDX-CHP-48-6632" class="indexterm"/></p><a id="I_programlisting48_d1e129243"/><pre class="programlisting">#include &lt;sys/types.h&gt;        /* For portability */
+#include &lt;sys/shm.h&gt;
+
+int <strong class="userinput"><code>shmctl</code></strong>(int <span class="emphasis"><em>shmid</em></span>, int <span class="emphasis"><em>cmd</em></span>, struct shmid_ds *<span class="emphasis"><em>buf</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>cmd</em></span> argument specifies the control operation to be
+                performed. The <span class="emphasis"><em>buf</em></span> argument is required by the <code class="literal">IPC_STAT</code> and <code class="literal">IPC_SET</code> operations (described below), and should be specified as
+                    <code class="literal">NULL</code> for the remaining operations.</p><p>In the remainder of this section, we describe the various operations that can be
+                specified for <span class="emphasis"><em>cmd</em></span>.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="generic_control_operations-id2"/></div></div></div><div class="sect3" title="Generic control operations"><div class="titlepage"><div><div><h4 class="title" id="generic_control_operations-id3">Generic control operations</h4></div></div></div><p>The following operations are the same as for other types of System V IPC
+                        objects. Further details about these operations, including the privileges
+                        and permissions required by the calling process, are described in Section
+                            45.3.<a id="IDX-CHP-48-6633" class="indexterm"/><a id="IDX-CHP-48-6634" class="indexterm"/><a id="IDX-CHP-48-6635" class="indexterm"/><a id="IDX-CHP-48-6636" class="indexterm"/><a id="IDX-CHP-48-6637" class="indexterm"/><a id="IDX-CHP-48-6638" class="indexterm"/></p><div class="variablelist"><dl><dt><span class="term">
+                                <code class="literal">IPC_RMID</code>
+                            </span></dt><dd><p>Mark the shared memory segment and its associated
+                                        <span class="emphasis"><em>shmid_ds</em></span> data structure for deletion.
+                                    If no processes currently have the segment attached, deletion is
+                                    immediate; otherwise, the segment is removed after all processes
+                                    have detached from it (i.e., when the value of the
+                                        <span class="emphasis"><em>shm_nattch</em></span> field in the
+                                        <span class="emphasis"><em>shmid_ds</em></span> data structure falls to 0). In
+                                    some applications, we can make sure that a shared memory segment
+                                    is tidily cleared away on application termination by marking it
+                                    for deletion immediately after all processes have attached it to
+                                    their virtual address space with <span class="emphasis"><em>shmat()</em></span>.
+                                    This is analogous to unlinking a file once we’ve opened
+                                    it.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On Linux, if a shared segment has been marked for deletion
+                                        using <code class="literal">IPC_RMID</code>, but has
+                                        not yet been removed because some process still has it
+                                        attached, then it is possible for another process to attach
+                                        that segment. However, this behavior is not portable: most
+                                        UNIX implementations prevent new attaches to a segment
+                                        marked for deletion. (SUSv3 is silent on what behavior
+                                        should occur in this scenario.) A few Linux applications
+                                        have come to depend on this behavior, which is why Linux has
+                                        not been changed to match other UNIX implementations.</p></div></dd><dt><span class="term">
+                                <code class="literal">IPC_STAT</code>
+                            </span></dt><dd><p>Place a copy of the <span class="emphasis"><em>shmid_ds</em></span> data
+                                    structure associated with this shared memory segment in the
+                                    buffer pointed to by <span class="emphasis"><em>buf</em></span>. (We describe this
+                                    data structure in Section 48.8.)</p></dd><dt><span class="term">
+                                <code class="literal">IPC_SET</code>
+                            </span></dt><dd><p>Update selected fields of the <span class="emphasis"><em>shmid_ds</em></span>
+                                    data structure associated with this shared memory segment using
+                                    values in the buffer pointed to by
+                                    <span class="emphasis"><em>buf</em></span>.</p></dd></dl></div></div><div class="sect3" title="Locking and unlocking shared memory"><div class="titlepage"><div><div><h4 class="title" id="locking_and_unlocking_shared_memory">Locking and unlocking shared memory</h4></div></div></div><p>A shared memory segment can be locked into RAM, so that it is never
+                        swapped out. This provides a performance benefit, since, once each page of
+                        the segment is memory-resident, an application is guaranteed never to be
+                        delayed by a page fault when it accesses the page. There are two
+                            <span class="emphasis"><em>shmctl()</em></span> locking operations:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <code class="literal">SHM_LOCK</code> operation locks a
+                                shared memory segment into memory.</p></li><li class="listitem"><p>The <code class="literal">SHM_UNLOCK</code> operation
+                                unlocks the shared memory segment, allowing it to be swapped
+                                out.</p></li></ul></div><p>These operations are not specified by SUSv3, and they are not provided on
+                        all UNIX implementations.</p><p>In versions of Linux before 2.6.10, only privileged (<code class="literal">CAP_IPC_LOCK</code>) processes can lock a shared
+                        memory segment into memory. Since Linux 2.6.10, an unprivileged process can
+                        lock and unlock a shared memory segment if its effective user ID matches
+                        either the owner or the creator user ID of the segment and (in the case of
+                            <code class="literal">SHM_LOCK</code>) the process has a
+                        sufficiently high <code class="literal">RLIMIT_MEMLOCK</code> resource
+                        limit. See <a class="xref" href="ch50.html#memory_locking_colon_mlock_open_parenthe" title="Memory Locking: mlock() and mlockall()">Memory Locking: <span class="emphasis"><em>mlock()</em></span> and
+                <span class="emphasis"><em>mlockall()</em></span></a> for
+                            details.<a id="IDX-CHP-48-6639" class="indexterm"/></p><p>Locking a shared memory segment does not guarantee that all of the pages
+                        of the segment are memory-resident at the completion of the
+                            <span class="emphasis"><em>shmctl()</em></span> call. Rather, nonresident pages are
+                        individually locked in only as they are faulted into memory by subsequent
+                        references by processes that have attached the shared memory segment. Once
+                        faulted in, the pages stay resident until subsequently unlocked, even if all
+                        processes detach the segment. (In other words, the <code class="literal">SHM_LOCK</code> operation sets a property of the shared memory
+                        segment, rather than a property of the calling process.)</p><div class="note" title="Note"><h3 class="title">Note</h3><p>By <span class="emphasis"><em>faulted into memory</em></span>, we mean that when the
+                            process references the nonresident page, a page fault occurs. At this
+                            point, if the page is in the swap area, then it is reloaded into memory.
+                            If the page is being referenced for the first time, no corresponding
+                            page exists in the swap file. Therefore, the kernel allocates a new page
+                            of physical memory and adjusts the process’s page tables and the
+                            bookkeeping data structures for the shared memory segment.</p></div><p>An alternative method of locking memory, with slightly different
+                        semantics, is the use of <span class="emphasis"><em>mlock()</em></span>, which we describe in
+                        Section 50.2.</p></div></div></div><div class="sect1" title="Shared Memory Associated Data Structure"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="shared_memory_associated_data_structure">Shared Memory Associated Data Structure</h2></div></div></div><p>Each shared memory segment has an associated <span class="emphasis"><em>shmid_ds</em></span> data
+                structure of the following form:<a id="IDX-CHP-48-6640" class="indexterm"/><a id="IDX-CHP-48-6641" class="indexterm"/><a id="IDX-CHP-48-6642" class="indexterm"/><a id="IDX-CHP-48-6643" class="indexterm"/><a id="IDX-CHP-48-6644" class="indexterm"/><a id="IDX-CHP-48-6645" class="indexterm"/><a id="IDX-CHP-48-6646" class="indexterm"/><a id="IDX-CHP-48-6647" class="indexterm"/><a id="IDX-CHP-48-6648" class="indexterm"/><a id="IDX-CHP-48-6649" class="indexterm"/><a id="IDX-CHP-48-6650" class="indexterm"/><a id="IDX-CHP-48-6651" class="indexterm"/><a id="IDX-CHP-48-6652" class="indexterm"/><a id="IDX-CHP-48-6653" class="indexterm"/><a id="IDX-CHP-48-6654" class="indexterm"/><a id="IDX-CHP-48-6655" class="indexterm"/></p><a id="I_programlisting48_d1e129524"/><pre class="programlisting">struct shmid_ds {
+    struct ipc_perm shm_perm;   /* Ownership and permissions */
+    size_t   shm_segsz;         /* Size of segment in bytes */
+    time_t   shm_atime;         /* Time of last shmat() */
+    time_t   shm_dtime;         /* Time of last shmdt() */
+    time_t   shm_ctime;         /* Time of last change */
+    pid_t    shm_cpid;          /* PID of creator */
+    pid_t    shm_lpid;          /* PID of last shmat() / shmdt() */
+    shmatt_t shm_nattch;        /* Number of currently attached processes */
+};</pre><p>SUSv3 requires all of the fields shown here. Some other UNIX implementations
+                include additional nonstandard fields in the <span class="emphasis"><em>shmid_ds</em></span>
+                structure.</p><p>The fields of the <span class="emphasis"><em>shmid_ds</em></span> structure are implicitly updated
+                by various shared memory system calls, and certain subfields of the
+                    <span class="emphasis"><em>shm_perm</em></span> field can be explicitly updated using the
+                    <span class="emphasis"><em>shmctl()</em></span>
+                <code class="literal">IPC_SET</code> operation. The details are as
+                follows:</p><div class="variablelist"><dl><dt><span class="term">
+                        <span class="emphasis"><em>shm_perm</em></span>
+                    </span></dt><dd><p>When the shared memory segment is created, the fields of this
+                            substructure are initialized as described in Section 45.3. The
+                                <span class="emphasis"><em>uid</em></span>, <span class="emphasis"><em>gid</em></span>, and (the lower 9
+                            bits of the) <span class="emphasis"><em>mode</em></span> subfields can be updated via
+                                <code class="literal">IPC_SET</code>. As well as the usual
+                            permission bits, the <span class="emphasis"><em>shm_perm.mode</em></span> field holds two
+                            read-only bit-mask flags. The first of these, <code class="literal">SHM_DEST</code> (destroy), indicates whether the segment is
+                            marked for deletion (via the <span class="emphasis"><em>shmctl()</em></span>
+                            <code class="literal">IPC_RMID</code> operation) when all
+                            processes have detached it from their address space. The other flag,
+                                <code class="literal">SHM_LOCKED</code>, indicates whether the
+                            segment is locked into physical memory (via the
+                                <span class="emphasis"><em>shmctl()</em></span>
+                            <code class="literal">SHM_LOCK</code> operation). Neither of these
+                            flags is standardized in SUSv3, and equivalents appear on only a few
+                            other UNIX implementations, in some cases with different names.</p></dd><dt><span class="term">
+                        <span class="emphasis"><em>shm_segsz</em></span>
+                    </span></dt><dd><p>On creation of the shared memory segment, this field is set to the
+                            requested size of the segment in bytes (i.e., to the value of the
+                                <span class="emphasis"><em>size</em></span> argument specified in the call to
+                                <span class="emphasis"><em>shmget()</em></span>). As noted in <a class="xref" href="ch48.html#creating_or_opening_a_shared_memory_segm" title="Creating or Opening a Shared Memory Segment">Creating or Opening a Shared Memory Segment</a>, shared memory
+                            is allocated in units of pages, so the actual size of the segment may be
+                            larger than this value.</p></dd><dt><span class="term">
+                        <span class="emphasis"><em>shm_atime</em></span>
+                    </span></dt><dd><p>This field is set to 0 when the shared memory segment is created, and
+                            set to the current time whenever a process attaches the segment
+                                (<span class="emphasis"><em>shmat()</em></span>). This field and the other timestamp
+                            fields in the <span class="emphasis"><em>shmid_ds</em></span> structure are typed as
+                                <span class="emphasis"><em>time_t</em></span>, and store time in seconds since the
+                                Epoch.<a id="IDX-CHP-48-6656" class="indexterm"/></p></dd><dt><span class="term">
+                        <span class="emphasis"><em>shm_dtime</em></span>
+                    </span></dt><dd><p>This field is set to 0 when the shared memory segment is created, and
+                            set to the current time whenever a process detaches the segment
+                                (<span class="emphasis"><em>shmdt()</em></span>).<a id="IDX-CHP-48-6657" class="indexterm"/></p></dd><dt><span class="term">
+                        <span class="emphasis"><em>shm_ctime</em></span>
+                    </span></dt><dd><p>This field is set to the current time when the segment is created, and
+                            on each successful <code class="literal">IPC_SET</code>
+                            operation.</p></dd><dt><span class="term">
+                        <span class="emphasis"><em>shm_cpid</em></span>
+                    </span></dt><dd><p>This field is set to the process ID of the process that created the
+                            segment using <span class="emphasis"><em>shmget()</em></span>.</p></dd><dt><span class="term">
+                        <span class="emphasis"><em>shm_lpid</em></span>
+                    </span></dt><dd><p>This field is set to 0 when the shared memory segment is created, and
+                            then set to the process ID of the calling process on each successful
+                                <span class="emphasis"><em>shmat()</em></span> or <span class="emphasis"><em>shmdt()</em></span>.</p></dd><dt><span class="term">
+                        <span class="emphasis"><em>shm_nattch</em></span>
+                    </span></dt><dd><p>This field counts the number of processes that currently have the
+                            segment attached. It is initialized to 0 when the segment is created,
+                            and then incremented by each successful <span class="emphasis"><em>shmat()</em></span> and
+                            decremented by each successful <span class="emphasis"><em>shmdt()</em></span>. The
+                                <span class="emphasis"><em>shmatt_t</em></span> data type used to define this field is
+                            an unsigned integer type that SUSv3 requires to be at least the size of
+                                <span class="emphasis"><em>unsigned short</em></span>. (On Linux, this type is defined
+                            as <span class="emphasis"><em>unsigned long</em></span>.)<a id="IDX-CHP-48-6658" class="indexterm"/><a id="IDX-CHP-48-6659" class="indexterm"/><a id="IDX-CHP-48-6660" class="indexterm"/></p></dd></dl></div></div><div class="sect1" title="Shared Memory Limits"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="shared_memory_limits">Shared Memory Limits</h2></div></div></div><p>Most UNIX implementations impose various limits on System V shared memory. Below
+                is a list of the Linux shared memory limits. The system call affected by the limit
+                and the error that results if the limit is reached are noted in
+                    parentheses.<a id="IDX-CHP-48-6661" class="indexterm"/><a id="IDX-CHP-48-6662" class="indexterm"/><a id="IDX-CHP-48-6663" class="indexterm"/><a id="IDX-CHP-48-6664" class="indexterm"/><a id="IDX-CHP-48-6665" class="indexterm"/><a id="IDX-CHP-48-6666" class="indexterm"/><a id="IDX-CHP-48-6667" class="indexterm"/><a id="IDX-CHP-48-6668" class="indexterm"/></p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">SHMMNI</code>
+                    </span></dt><dd><p>This is a system-wide limit on the number of shared memory identifiers
+                            (in other words, shared memory segments) that can be created.
+                                (<span class="emphasis"><em>shmget()</em></span>, <code class="literal">ENOSPC</code>)<a id="IDX-CHP-48-6669" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SHMMIN</code>
+                    </span></dt><dd><p>This is the minimum size (in bytes) of a shared memory segment. This
+                            limit is defined with the value 1 (this can’t be changed). However, the
+                            effective limit is the system page size. (<span class="emphasis"><em>shmget()</em></span>,
+                                <code class="literal">EINVAL</code>)</p></dd><dt><span class="term">
+                        <code class="literal">SHMMAX</code>
+                    </span></dt><dd><p>This is the maximum size (in bytes) of a shared memory segment. The
+                            practical upper limit for <code class="literal">SHMMAX</code>
+                            depends on available RAM and swap space. (<span class="emphasis"><em>shmget()</em></span>,
+                                <code class="literal">EINVAL</code>)</p></dd><dt><span class="term">
+                        <code class="literal">SHMALL</code>
+                    </span></dt><dd><p>This is a system-wide limit on the total number of pages of shared
+                            memory. Most other UNIX implementations don’t provide this limit. The
+                            practical upper limit for <code class="literal">SHMALL</code>
+                            depends on available RAM and swap space. (<span class="emphasis"><em>shmget()</em></span>,
+                                <code class="literal">ENOSPC</code>)</p></dd></dl></div><p>Some other UNIX implementations also impose the following limit (which is not
+                implemented on Linux):</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">SHMSEG</code>
+                    </span></dt><dd><p>This is a per-process limit on the number of attached shared memory
+                            segments.</p></dd></dl></div><p>At system startup, the shared memory limits are set to default values. (These
+                defaults may vary across kernel versions, and some distributors’ kernels set
+                different defaults from those provided by vanilla kernels.) On Linux, some of the
+                limits can be viewed or changed via files in the <code class="literal">/proc</code> file system. <a class="xref" href="ch48.html#system_v_shared_memory_limits" title="Table 48-2. System V shared memory limits">Table 48-2</a>
+                lists the <code class="literal">/proc</code> file corresponding to each limit.
+                As an example, here are the default limits that we see for Linux 2.6.31 on one
+                x86-32 system:</p><a id="I_programlisting48_d1e129833"/><pre class="programlisting">$ <strong class="userinput"><code>cd /proc/sys/kernel</code></strong>
+$ <strong class="userinput"><code>cat shmmni</code></strong>
+4096
+$ <strong class="userinput"><code>cat shmmax</code></strong>
+33554432
+$ <strong class="userinput"><code>cat shmall</code></strong>
+2097152</pre><p>The Linux-specific <span class="emphasis"><em>shmctl()</em></span>
+                <code class="literal">IPC_INFO</code> operation retrieves a structure of type
+                    <span class="emphasis"><em>shminfo</em></span>, which contains the values of the various shared
+                memory limits:</p><a id="I_programlisting48_d1e129858"/><pre class="programlisting">struct shminfo buf;
+
+shmctl(0, IPC_INFO, (struct shmid_ds *) &amp;buf);</pre><p>A related Linux-specific operation, <code class="literal">SHM_INFO</code>,
+                retrieves a structure of type <span class="emphasis"><em>shm_info</em></span> that contains
+                information about actual resources used for shared memory objects. An example of the
+                use of <code class="literal">SHM_INFO</code> is provided in the file <code class="literal">svshm/svshm_info.c</code> in the source code distribution for
+                this book.</p><p>Details about <code class="literal">IPC_INFO</code>, <code class="literal">SHM_INFO</code>, and the <span class="emphasis"><em>shminfo</em></span> and
+                    <span class="emphasis"><em>shm_info</em></span> structures can be found in the
+                    <span class="emphasis"><em>shmctl(2)</em></span> manual page.</p><div class="table"><a id="system_v_shared_memory_limits"/><div class="table-title">Table 48-2. System V shared memory limits</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Limit</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Ceiling value (x86-32)</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>Corresponding file in <code class="literal">/proc/sys/kernel</code></p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SHMMNI</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p><code class="literal">32768</code> (<code class="literal">IPCMNI</code>)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">shmmni</code>
+                                </p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SHMMAX</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Depends on available memory</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">shmmax</code>
+                                </p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SHMALL</code>
+                                </p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>Depends on available memory</p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>
+                                    <code class="literal">shmall</code>
+                                </p>
+                            </td></tr></tbody></table></div></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id47">Summary</h2></div></div></div><p>Shared memory allows two or more processes to share the same pages of memory. No
+                kernel intervention is required to exchange data via shared memory. Once a process
+                has copied data into a shared memory segment, that data is immediately visible to
+                other processes. Shared memory provides fast IPC, although this speed advantage is
+                somewhat offset by the fact that normally we must use some type of synchronization
+                technique, such as a System V semaphore, to synchronize access to the shared
+                    memory.<a id="IDX-CHP-48-6670" class="indexterm"/><a id="IDX-CHP-48-6671" class="indexterm"/><a id="IDX-CHP-48-6672" class="indexterm"/><a id="IDX-CHP-48-6673" class="indexterm"/><a id="IDX-CHP-48-6674" class="indexterm"/><a id="IDX-CHP-48-6675" class="indexterm"/><a id="IDX-CHP-48-6676" class="indexterm"/><a id="IDX-CHP-48-6677" class="indexterm"/><a id="IDX-CHP-48-6678" class="indexterm"/><a id="IDX-CHP-48-6679" class="indexterm"/><a id="IDX-CHP-48-6680" class="indexterm"/><a id="IDX-CHP-48-6681" class="indexterm"/><a id="IDX-CHP-48-6682" class="indexterm"/></p><p>The recommended approach when attaching a shared memory segment is to allow the
+                kernel to choose the address at which the segment is attached in the process’s
+                virtual address space. This means that the segment may reside at different virtual
+                addresses in different processes. For this reason, any references to addresses
+                within the segment should be maintained as relative offsets, rather than as absolute
+                pointers.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id65"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id66">Further information</h4></div></div></div><p>The Linux memory-management scheme and some details of the implementation
+                        of shared memory are described in [Bovet &amp; Cesati, 2005].</p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id33">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Replace the use of binary semaphores in <a class="xref" href="ch48.html#transfer_blocks_of_data_from_stdin_to_a" title="Example 48-2. Transfer blocks of data from stdin to a System V shared memory segment">Example 48-2</a> (<code class="literal">svshm_xfr_writer.c</code>) and <a class="xref" href="ch48.html#transfer_blocks_of_data_from_a_system_v" title="Example 48-3. Transfer blocks of data from a System V shared memory segment to stdout">Example 48-3</a> (<code class="literal">svshm_xfr_reader.c</code>) with the use of event
+                        flags (Exercise 47-5).</p></li><li class="listitem"><p>Explain why the program in <a class="xref" href="ch48.html#transfer_blocks_of_data_from_a_system_v" title="Example 48-3. Transfer blocks of data from a System V shared memory segment to stdout">Example 48-3</a> incorrectly reports
+                        the number of bytes transferred if the <code class="literal">for</code> loop is modified as follows:</p><a id="I_programlisting48_d1e130056"/><pre class="programlisting">for (xfrs = 0, bytes = 0; shmp-&gt;cnt != 0; xfrs++, bytes += shmp-&gt;cnt) {
+    reserveSem(semid, READ_SEM);            /* Wait for our turn */
+
+    if (write(STDOUT_FILENO, shmp-&gt;buf, shmp-&gt;cnt) != shmp-&gt;cnt)
+        fatal("write");
+
+    releaseSem(semid, WRITE_SEM);           /* Give writer a turn */
+}</pre></li><li class="listitem"><p>Try compiling the programs in <a class="xref" href="ch48.html#transfer_blocks_of_data_from_stdin_to_a" title="Example 48-2. Transfer blocks of data from stdin to a System V shared memory segment">Example 48-2</a> (<code class="literal">svshm_xfr_writer.c</code>) and <a class="xref" href="ch48.html#transfer_blocks_of_data_from_a_system_v" title="Example 48-3. Transfer blocks of data from a System V shared memory segment to stdout">Example 48-3</a> (<code class="literal">svshm_xfr_reader.c</code>) with a range of different
+                        sizes (defined by the constant <code class="literal">BUF_SIZE</code>)
+                        for the buffer used to exchange data between the two programs. Time the
+                        execution of <code class="literal">svshm_xfr_reader.c</code> for each
+                        buffer size.</p></li><li class="listitem"><p>Write a program that displays the contents of the
+                            <span class="emphasis"><em>shmid_ds</em></span> data structure (<a class="xref" href="ch48.html#shared_memory_associated_data_structure" title="Shared Memory Associated Data Structure">Shared Memory Associated Data Structure</a>) associated with a
+                        shared memory segment. The identifier of the segment should be specified as
+                        a command-line argument. (See the program in <a class="xref" href="ch47.html#a_semaphore_monitoring_program" title="Example 47-3. A semaphore monitoring program">Example 47-3</a>, in <a class="xref" href="ch47.html#monitoring_a_semaphore_set-id1" title="Monitoring a semaphore set">Monitoring a semaphore set</a>, which performs the analogous
+                        task for System V semaphores.)</p></li><li class="listitem"><p>Write a directory service that uses a shared memory segment to publish
+                        name-value pairs. You will need to provide an API that allows callers to
+                        create a new name, modify an existing name, delete an existing name, and
+                        retrieve the value associated with a name. Use semaphores to ensure that a
+                        process performing an update to the shared memory segment has exclusive
+                        access to the segment.</p></li><li class="listitem"><p>Write a program (analogous to program in <a class="xref" href="ch46.html#displaying_all_system_v_message_queues_o" title="Example 46-6. Displaying all System V message queues on the system">Example 46-6</a>, in <a class="xref" href="ch46.html#client-server_programming_with_message_q" title="Client-Server Programming with Message Queues">Client-Server Programming with Message Queues</a>) that uses the
+                            <span class="emphasis"><em>shmctl()</em></span>
+                        <code class="literal">SHM_INFO</code> and <code class="literal">SHM_STAT</code> operations to obtain and display a list of all
+                        shared memory segments on the system.</p></li></ol></div></div></section></body></html>

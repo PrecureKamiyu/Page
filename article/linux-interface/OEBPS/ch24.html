@@ -1,0 +1,679 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 24. Process Creation</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch23.html" title="Chapter 23. Timers and Sleeping"/><link rel="next" href="ch25.html" title="Chapter 25. Process Termination"/></head><body><section class="chapter" title="Chapter 24. Process Creation" epub:type="chapter" id="process_creation"><div class="titlepage"><div><div><h2 class="title">Chapter 24. Process Creation</h2></div></div></div><p>In this and the next three chapters, we look at how a process is created and
+            terminates, and how a process can execute a new program. This chapter covers process
+            creation. However, before diving into that subject, we present a short overview of the
+            main system calls covered in these four chapters.</p><div class="sect1" title="Overview of fork(), exit(), wait(), and execve()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="overview_of_fork_open_parenthesis_close">Overview of <span class="emphasis"><em>fork()</em></span>, <span class="emphasis"><em>exit()</em></span>,
+                    <span class="emphasis"><em>wait()</em></span>, and <span class="emphasis"><em>execve()</em></span></h2></div></div></div><p>The principal topics of this and the next few chapters are the system calls
+                    <span class="emphasis"><em>fork()</em></span>, <span class="emphasis"><em>exit()</em></span>,
+                    <span class="emphasis"><em>wait()</em></span>, and <span class="emphasis"><em>execve()</em></span>. Each of these
+                system calls has variants, which we’ll also look at. For now, we provide an overview
+                of these four system calls and how they are typically used together.<a id="IDX-CHP-24-3762" class="indexterm"/><a id="IDX-CHP-24-3760" class="indexterm"/><a id="IDX-CHP-24-3761" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>fork()</em></span> system call allows one process, the
+                        parent, to create a new process, the child. This is done by making the new
+                        child process an (almost) exact duplicate of the parent: the child obtains
+                        copies of the parent’s stack, data, heap, and text segments (<a class="xref" href="ch06.html#memory_layout_of_a_process" title="Memory Layout of a Process">Memory Layout of a Process</a>). The term
+                            <span class="emphasis"><em>fork</em></span> derives from the fact that we can envisage the
+                        parent process as dividing to yield two copies of itself.<a id="IDX-CHP-24-3763" class="indexterm"/><a id="IDX-CHP-24-3764" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>exit(status)</em></span> library function terminates a
+                        process, making all resources (memory, open file descriptors, and so on)
+                        used by the process available for subsequent reallocation by the kernel. The
+                            <span class="emphasis"><em>status</em></span> argument is an integer that determines the
+                        termination status for the process. Using the <span class="emphasis"><em>wait()</em></span>
+                        system call, the parent can retrieve this status.<a id="IDX-CHP-24-3765" class="indexterm"/></p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>exit()</em></span> library function is layered on top of the
+                        <span class="emphasis"><em>_exit()</em></span> system call. In <a class="xref" href="ch25.html" title="Chapter 25. Process Termination">Chapter 25</a>, we explain the difference between the two
+                    interfaces. In the meantime, we’ll just note that, after a
+                        <span class="emphasis"><em>fork()</em></span>, generally only one of the parent and child
+                    terminate by calling <span class="emphasis"><em>exit()</em></span>; the other process should
+                    terminate using <span class="emphasis"><em>_exit()</em></span>.<a id="IDX-CHP-24-3766" class="indexterm"/></p></div><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>wait(&amp;status)</em></span> system call has two
+                        purposes. First, if a child of this process has not yet terminated by
+                        calling <span class="emphasis"><em>exit()</em></span>, then <span class="emphasis"><em>wait()</em></span>
+                        suspends execution of the process until one of its children has terminated.
+                        Second, the termination status of the child is returned in the status
+                        argument of <span class="emphasis"><em>wait()</em></span>.<a id="IDX-CHP-24-3767" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>execve(pathname, argv, envp)</em></span> system call loads a
+                        new program (<span class="emphasis"><em>pathname</em></span>, with argument list
+                            <span class="emphasis"><em>argv</em></span>, and environment list
+                            <span class="emphasis"><em>envp</em></span>) into a process’s memory. The existing program
+                        text is discarded, and the stack, data, and heap segments are freshly
+                        created for the new program. This operation is often referred to as
+                            <span class="emphasis"><em>execing</em></span> a new program. Later, we’ll see that
+                        several library functions are layered on top of
+                            <span class="emphasis"><em>execve()</em></span>, each of which provides a useful variation
+                        in the programming interface. Where we don’t care about these interface
+                        variations, we follow the common convention of referring to these calls
+                        generically as <span class="emphasis"><em>exec()</em></span>, but be aware that there is no
+                        system call or library function with this name.<a id="IDX-CHP-24-3768" class="indexterm"/><a id="IDX-CHP-24-3769" class="indexterm"/></p></li></ul></div><p>Some other operating systems combine the functionality of
+                    <span class="emphasis"><em>fork()</em></span> and <span class="emphasis"><em>exec()</em></span> into a single
+                operation—a so-called <span class="emphasis"><em>spawn</em></span>—that creates a new process that
+                then executes a specified program. By comparison, the UNIX approach is usually
+                simpler and more elegant. Separating these two steps makes the APIs simpler (the
+                    <span class="emphasis"><em>fork()</em></span> system call takes <span class="emphasis"><em>no</em></span> arguments)
+                and allows a program a great degree of flexibility in the actions it performs
+                between the two steps. Moreover, it is often useful to perform a
+                    <span class="emphasis"><em>fork()</em></span> without a following
+                    <span class="emphasis"><em>exec()</em></span>.<a id="IDX-CHP-24-3770" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv3 specifies the optional <span class="emphasis"><em>posix_spawn()</em></span> function,
+                    which combines the effect of <span class="emphasis"><em>fork()</em></span> and
+                        <span class="emphasis"><em>exec()</em></span>. This function, and several related APIs
+                    specified by SUSv3, are implemented on Linux in <span class="emphasis"><em>glibc</em></span>.
+                    SUSv3 specifies <span class="emphasis"><em>posix_spawn()</em></span> to permit portable
+                    applications to be written for hardware architectures that don’t provide swap
+                    facilities or memory-management units (this is typical of many embedded
+                    systems). On such architectures, a traditional <span class="emphasis"><em>fork()</em></span> is
+                    difficult or impossible to implement.<a id="IDX-CHP-24-3771" class="indexterm"/></p></div><p><a class="xref" href="ch24.html#overview_of_the_use_of_fork_open_parenth" title="Figure 24-1. Overview of the use of fork(), exit(), wait(), and execve()">Figure 24-1</a> provides an overview of
+                how <span class="emphasis"><em>fork()</em></span>, <span class="emphasis"><em>exit()</em></span>,
+                    <span class="emphasis"><em>wait()</em></span>, and <span class="emphasis"><em>execve()</em></span> are commonly used
+                together. (This diagram outlines the steps taken by the shell in executing a
+                command: the shell continuously executes a loop that reads a command, performs
+                various processing on it, and then forks a child process to exec the
+                command.)</p><p>The use of <span class="emphasis"><em>execve()</em></span> shown in this diagram is optional.
+                Sometimes, it is instead useful to have the child carry on executing the same
+                program as the parent. In either case, the execution of the child is ultimately
+                terminated by a call to <span class="emphasis"><em>exit()</em></span> (or by delivery of a signal),
+                yielding a termination status that the parent can obtain via
+                    <span class="emphasis"><em>wait()</em></span>.</p><p>The call to <span class="emphasis"><em>wait()</em></span> is likewise optional. The parent can
+                simply ignore its child and continue executing. However, we’ll see later that the
+                use of <span class="emphasis"><em>wait()</em></span> is usually desirable, and is often employed
+                within a handler for the <code class="literal">SIGCHLD</code> signal, which
+                the kernel generates for a parent process when one of its children terminates. (By
+                default, <code class="literal">SIGCHLD</code> is ignored, which is why we
+                label it as being optionally delivered in the diagram.)<a id="IDX-CHP-24-3772" class="indexterm"/></p><div class="figure"><a id="overview_of_the_use_of_fork_open_parenth"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject24_d1e70118"/><img src="figs/web/24-1_PROCEXEC-overview-scale90.png.jpg" alt="Overview of the use of fork(), exit(), wait(), and execve()"/></div></div><div class="figure-title">Figure 24-1. Overview of the use of <span class="emphasis"><em>fork()</em></span>,
+                        <span class="emphasis"><em>exit()</em></span>, <span class="emphasis"><em>wait()</em></span>, and
+                        <span class="emphasis"><em>execve()</em></span></div></div></div><div class="sect1" title="Creating a New Process: fork()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="creating_a_new_process_colon_fork_open_p">Creating a New Process: <span class="emphasis"><em>fork()</em></span></h2></div></div></div><p>In many applications, creating multiple processes can be a useful way of dividing
+                up a task. For example, a network server process may listen for incoming client
+                requests and create a new child process to handle each request; meanwhile, the
+                server process continues to listen for further client connections. Dividing tasks up
+                in this way often makes application design simpler. It also permits greater
+                concurrency (i.e., more tasks or requests can be handled simultaneously).<a id="IDX-CHP-24-3774" class="indexterm"/><a id="IDX-CHP-24-3775" class="indexterm"/><a id="IDX-CHP-24-3776" class="indexterm"/><a id="IDX-CHP-24-3777" class="indexterm"/><a id="IDX-CHP-24-3778" class="indexterm"/><a id="IDX-CHP-24-3779" class="indexterm"/><a id="IDX-CHP-24-3780" class="indexterm"/><a id="IDX-CHP-24-3781" class="indexterm"/><a id="IDX-CHP-24-3782" class="indexterm"/><a id="IDX-CHP-24-3783" class="indexterm"/><a id="IDX-CHP-24-3773" class="indexterm"/><a id="IDX-CHP-24-3784" class="indexterm"/><a id="IDX-CHP-24-3785" class="indexterm"/></p><p>The <span class="emphasis"><em>fork()</em></span> system call creates a new process, the
+                    <span class="emphasis"><em>child</em></span>, which is an almost exact duplicate of the calling
+                process, the <span class="emphasis"><em>parent</em></span>.</p><a id="I_programlisting24_d1e70217"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+pid_t <strong class="userinput"><code>fork</code></strong>(void);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>In parent: returns process ID of child on success, or -1 on error; in
+                    successfully created child: always returns 0</p></div><p>The key point to understanding <span class="emphasis"><em>fork()</em></span> is to realize that
+                after it has completed its work, two processes exist, and, in each process,
+                execution continues from the point where <span class="emphasis"><em>fork()</em></span> returns.</p><p>The two processes are executing the same program text, but they have separate
+                copies of the stack, data, and heap segments. The child’s stack, data, and heap
+                segments are initially exact duplicates of the corresponding parts the parent’s
+                memory. After the <span class="emphasis"><em>fork()</em></span>, each process can modify the variables
+                in its stack, data, and heap segments without affecting the other process.</p><p>Within the code of a program, we can distinguish the two processes via the value
+                returned from <span class="emphasis"><em>fork()</em></span>. For the parent,
+                    <span class="emphasis"><em>fork()</em></span> returns the process ID of the newly created child.
+                This is useful because the parent may create, and thus need to track, several
+                children (via <span class="emphasis"><em>wait()</em></span> or one of its relatives). For the child,
+                    <span class="emphasis"><em>fork()</em></span> returns 0. If necessary, the child can obtain its
+                own process ID using <span class="emphasis"><em>getpid()</em></span>, and the process ID of its parent
+                using <span class="emphasis"><em>getppid()</em></span>.</p><p>If a new process can’t be created, <span class="emphasis"><em>fork()</em></span> returns -1.
+                Possible reasons for failure are that the resource limit (<code class="literal">RLIMIT_NPROC</code>, described in <a class="xref" href="ch36.html#details_of_specific_resource_limits" title="Details of Specific Resource Limits">Details of Specific Resource Limits</a>) on the number of processes
+                permitted to this (real) user ID has been exceeded or that the system-wide limit on
+                the number of processes that can be created has been reached.</p><p>The following idiom is sometimes employed when calling
+                <span class="emphasis"><em>fork()</em></span>:</p><a id="I_programlisting24_d1e70274"/><pre class="programlisting">pid_t childPid;             /* Used in parent after successful fork()
+                               to record PID of child */
+switch (childPid = fork()) {
+case -1:                    /* fork() failed */
+    /* Handle error */
+
+case 0:                     /* Child of successful fork() comes here */
+    /* Perform actions specific to child */
+
+default:                    /* Parent comes here after successful fork() */
+    /* Perform actions specific to parent */
+}</pre><p>It is important to realize that after a <span class="emphasis"><em>fork()</em></span>, it is
+                indeterminate which of the two processes is next scheduled to use the CPU. In poorly
+                written programs, this indeterminacy can lead to errors known as race conditions,
+                which we describe further in Section 24.4.</p><p><a class="xref" href="ch24.html#using_fork_open_parenthesis_close_parent" title="Example 24-1. Using fork()">Example 24-1</a> demonstrates the use of
+                    <span class="emphasis"><em>fork()</em></span>. This program creates a child that modifies the
+                copies of global and automatic variables that it inherits during the during the
+                    <span class="emphasis"><em>fork()</em></span>.</p><p>The use of <span class="emphasis"><em>sleep()</em></span> (in the code executed by the parent) in
+                this program permits the child to be scheduled for the CPU before the parent, so
+                that the child can complete its work and terminate before the parent continues
+                execution. Using <span class="emphasis"><em>sleep()</em></span> in this manner is not a foolproof
+                method of guaranteeing this result; we look at a better method in Section
+                24.5.</p><p>When we run the program in <a class="xref" href="ch24.html#using_fork_open_parenthesis_close_parent" title="Example 24-1. Using fork()">Example 24-1</a>, we see the following
+                output:</p><a id="I_programlisting24_d1e70303"/><pre class="programlisting"><strong class="userinput"><code>./t_fork</code></strong>
+PID=28557 (child)  idata=333 istack=666
+PID=28556 (parent) idata=111 istack=222</pre><p>The above output demonstrates that the child process gets its own copy of the
+                stack and data segments at the time of the <span class="emphasis"><em>fork()</em></span>, and it is
+                able to modify variables in these segments without affecting the parent.</p><div class="example"><a id="using_fork_open_parenthesis_close_parent"/><div class="example-title">Example 24-1. Using <span class="emphasis"><em>fork()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/t_fork.c</code></strong>
+#include "tlpi_hdr.h"
+
+static int idata = 111;             /* Allocated in data segment */
+
+int
+main(int argc, char *argv[])
+{
+    int istack = 222;               /* Allocated in stack segment */
+    pid_t childPid;
+
+    switch (childPid = fork()) {
+    case -1:
+        errExit("fork");
+
+    case 0:
+        idata *= 3;
+        istack *= 3;
+        break;
+
+    default:
+        sleep(3);                   /* Give child a chance to execute */
+        break;
+    }
+
+    /* Both parent and child come here */
+
+    printf("PID=%ld %s idata=%d istack=%d\n", (long) getpid(),
+            (childPid == 0) ? "(child) " : "(parent)", idata, istack);
+
+    exit(EXIT_SUCCESS);
+}
+      <strong class="userinput"><code>procexec/t_fork.c</code></strong></pre></div></div><div class="sect2" title="File Sharing Between Parent and Child"><div class="titlepage"><div><div><h3 class="title" id="file_sharing_between_parent_and_child">File Sharing Between Parent and Child</h3></div></div></div><p>When a <span class="emphasis"><em>fork()</em></span> is performed, the child receives duplicates
+                    of all of the parent’s file descriptors. These duplicates are made in the manner
+                    of <span class="emphasis"><em>dup()</em></span>, which means that corresponding descriptors in the
+                    parent and the child refer to the same open file description. As we saw in <a class="xref" href="ch05.html#relationship_between_file_descriptors_an" title="Relationship Between File Descriptors and Open Files">Relationship Between File Descriptors and Open Files</a>, the open file
+                    description contains the current file offset (as modified by
+                        <span class="emphasis"><em>read()</em></span>, <span class="emphasis"><em>write()</em></span>, and
+                        <span class="emphasis"><em>lseek()</em></span>) and the open file status flags (set by
+                        <span class="emphasis"><em>open()</em></span> and changed by the <span class="emphasis"><em>fcntl()</em></span>
+                    <code class="literal">F_SETFL</code> operation). Consequently, these
+                    attributes of an open file are shared between the parent and child. For example,
+                    if the child updates the file offset, this change is visible through the
+                    corresponding descriptor in the parent.<a id="IDX-CHP-24-3786" class="indexterm"/><a id="IDX-CHP-24-3787" class="indexterm"/><a id="IDX-CHP-24-3788" class="indexterm"/><a id="IDX-CHP-24-3789" class="indexterm"/><a id="IDX-CHP-24-3790" class="indexterm"/><a id="IDX-CHP-24-3791" class="indexterm"/><a id="IDX-CHP-24-3792" class="indexterm"/><a id="IDX-CHP-24-3793" class="indexterm"/><a id="IDX-CHP-24-3794" class="indexterm"/><a id="IDX-CHP-24-3795" class="indexterm"/><a id="IDX-CHP-24-3796" class="indexterm"/><a id="IDX-CHP-24-3797" class="indexterm"/><a id="IDX-CHP-24-3798" class="indexterm"/><a id="IDX-CHP-24-3799" class="indexterm"/><a id="IDX-CHP-24-3800" class="indexterm"/></p><p>The fact that these attributes are shared by the parent and child after a
+                        <span class="emphasis"><em>fork()</em></span> is demonstrated by the program in <a class="xref" href="ch24.html#sharing_of_file_offset_and_open_file_sta" title="Example 24-2. Sharing of file offset and open file status flags between parent and child">Example 24-2</a>. This program opens a
+                    temporary file using <span class="emphasis"><em>mkstemp()</em></span>, and then calls
+                        <span class="emphasis"><em>fork()</em></span> to create a child process. The child changes the
+                    file offset and open file status flags of the temporary file, and exits. The
+                    parent then retrieves the file offset and flags to verify that it can see the
+                    changes made by the child. When we run the program, we see the following:</p><a id="I_programlisting24_d1e70459"/><pre class="programlisting">$ <strong class="userinput"><code>./fork_file_sharing</code></strong>
+File offset before fork(): 0
+O_APPEND flag before fork() is: off
+Child has exited
+File offset in parent: 1000
+O_APPEND flag in parent is: on</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>For an explanation of why we cast the return value from
+                            <span class="emphasis"><em>lseek()</em></span> to <span class="emphasis"><em>long long</em></span> in <a class="xref" href="ch24.html#sharing_of_file_offset_and_open_file_sta" title="Example 24-2. Sharing of file offset and open file status flags between parent and child">Example 24-2</a>, see <a class="xref" href="ch05.html#i_solidus_o_on_large_files" title="I/O on Large Files">I/O on Large Files</a>.</p></div><div class="example"><a id="sharing_of_file_offset_and_open_file_sta"/><div class="example-title">Example 24-2. Sharing of file offset and open file status flags between parent and
+                        child</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/fork_file_sharing.c</code></strong>
+#include &lt;sys/stat.h&gt;
+#include &lt;fcntl.h&gt;
+#include &lt;sys/wait.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int fd, flags;
+    char template[] = "/tmp/testXXXXXX";
+
+    setbuf(stdout, NULL);                   /* Disable buffering of stdout */
+
+    fd = mkstemp(template);
+    if (fd == -1)
+        errExit("mkstemp");
+
+    printf("File offset before fork(): %lld\n",
+            (long long) lseek(fd, 0, SEEK_CUR));
+
+    flags = fcntl(fd, F_GETFL);
+    if (flags == -1)
+        errExit("fcntl - F_GETFL");
+    printf("O_APPEND flag before fork() is: %s\n",
+            (flags &amp; O_APPEND) ? "on" : "off");
+
+    switch (fork()) {
+    case -1:
+        errExit("fork");
+
+    case 0:     /* Child: change file offset and status flags */
+        if (lseek(fd, 1000, SEEK_SET) == -1)
+            errExit("lseek");
+
+        flags = fcntl(fd, F_GETFL);         /* Fetch current flags */
+        if (flags == -1)
+            errExit("fcntl - F_GETFL");
+        flags |= O_APPEND;                  /* Turn O_APPEND on */
+        if (fcntl(fd, F_SETFL, flags) == -1)
+            errExit("fcntl - F_SETFL");
+        _exit(EXIT_SUCCESS);
+
+    default:    /* Parent: can see file changes made by child */
+        if (wait(NULL) == -1)
+            errExit("wait");                /* Wait for child exit */
+        printf("Child has exited\n");
+
+        printf("File offset in parent: %lld\n",
+                (long long) lseek(fd, 0, SEEK_CUR));
+
+        flags = fcntl(fd, F_GETFL);
+        if (flags == -1)
+            errExit("fcntl - F_GETFL");
+        printf("O_APPEND flag in parent is: %s\n",
+                (flags &amp; O_APPEND) ? "on" : "off");
+        exit(EXIT_SUCCESS);
+    }
+}
+     <strong class="userinput"><code>procexec/fork_file_sharing.c</code></strong></pre></div></div><p>Sharing of open file attributes between the parent and child processes is
+                    frequently useful. For example, if the parent and child are both writing to a
+                    file, sharing the file offset ensures that the two processes don’t overwrite
+                    each other’s output. It does not, however, prevent the output of the two
+                    processes from being randomly intermingled. If this is not desired, then some
+                    form of process synchronization is required. For example, the parent can use the
+                        <span class="emphasis"><em>wait()</em></span> system call to pause until the child has exited.
+                    This is what the shell does, so that it prints its prompt only after the child
+                    process executing a command has terminated (unless the user explicitly runs the
+                    command in the background by placing an ampersand character at the end of the
+                    command).</p><p>If sharing of file descriptors in this manner is not required, then an
+                    application should be designed so that, after a <span class="emphasis"><em>fork()</em></span>, the
+                    parent and child use different file descriptors, with each process closing
+                    unused descriptors (i.e., those used by the other process) immediately after
+                    forking. (If one of the processes performs an <span class="emphasis"><em>exec()</em></span>, the
+                    close-on-exec flag described in <a class="xref" href="ch27.html#file_descriptors_and_exec_open_parenthes" title="File Descriptors and exec()">File Descriptors and <span class="emphasis"><em>exec()</em></span></a> can also be useful.)
+                    These steps are shown in <a class="xref" href="ch24.html#duplication_of_file_descriptors_during_f" title="Figure 24-2. Duplication of file descriptors during fork(), and closing of unused descriptors">Figure 24-2</a>.</p><div class="figure"><a id="duplication_of_file_descriptors_during_f"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject24_d1e70509"/><img src="figs/web/24-2_PROCEXEC-fork-descriptors.png.jpg" alt="Duplication of file descriptors during fork(), and closing of unused descriptors"/></div></div><div class="figure-title">Figure 24-2. Duplication of file descriptors during <span class="emphasis"><em>fork()</em></span>, and
+                        closing of unused descriptors</div></div></div><div class="sect2" title="Memory Semantics of fork()"><div class="titlepage"><div><div><h3 class="title" id="memory_semantics_of_fork_open_parenthesi">Memory Semantics of <span class="emphasis"><em>fork()</em></span></h3></div></div></div><p>Conceptually, we can consider <span class="emphasis"><em>fork()</em></span> as creating copies
+                    of the parent’s text, data, heap, and stack segments. (Indeed, in some early
+                    UNIX implementations, such duplication was literally performed: a new process
+                    image was created by copying the parent’s memory to swap space, and making that
+                    swapped-out image the child process while the parent kept its own memory.)
+                    However, actually performing a simple copy of the parent’s virtual memory pages
+                    into the new child process would be wasteful for a number of reasons—one being
+                    that a <span class="emphasis"><em>fork()</em></span> is often followed by an immediate
+                        <span class="emphasis"><em>exec()</em></span>, which replaces the process’s text with a new
+                    program and reinitializes the process’s data, heap, and stack segments. Most
+                    modern UNIX implementations, including Linux, use two techniques to avoid such
+                    wasteful copying:<a id="IDX-CHP-24-3801" class="indexterm"/><a id="IDX-CHP-24-3802" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The kernel marks the text segment of each process as read-only, so
+                            that a process can’t modify its own code. This means that the parent and
+                            child can share the same text segment. The <span class="emphasis"><em>fork()</em></span>
+                            system call creates a text segment for the child by building a set of
+                            per-process page-table entries that refer to the same virtual memory
+                            page frames already used by the parent.</p></li><li class="listitem"><p>For the pages in the data, heap, and stack segments of the parent
+                            process, the kernel employs a technique known as
+                                <span class="emphasis"><em>copy-on-write</em></span>. (The implementation of
+                            copy-on-write is described in [Bach, 1986] and [Bovet &amp; Cesati,
+                            2005].) Initially, the kernel sets things up so that the page-table
+                            entries for these segments refer to the same physical memory pages as
+                            the corresponding page-table entries in the parent, and the pages
+                            themselves are marked read-only. After the <span class="emphasis"><em>fork()</em></span>,
+                            the kernel traps any attempts by either the parent or the child to
+                            modify one of these pages, and makes a duplicate copy of the
+                            about-to-be-modified page. This new page copy is assigned to the
+                            faulting process, and the corresponding page-table entry for the child
+                            is adjusted appropriately. From this point on, the parent and child can
+                            each modify their private copies of the page, without the changes being
+                            visible to the other process. <a class="xref" href="ch24.html#page_tables_before_and_after_modificatio" title="Figure 24-3. Page tables before and after modification of a shared copy-on-write page">Figure 24-3</a> illustrates the
+                            copy-on-write technique.<a id="IDX-CHP-24-3803" class="indexterm"/></p></li></ul></div><div class="figure"><a id="page_tables_before_and_after_modificatio"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject24_d1e70566"/><img src="figs/web/24-3_PROCEXEC-fork-cow.png.jpg" alt="Page tables before and after modification of a shared copy-on-write page"/></div></div><div class="figure-title">Figure 24-3. Page tables before and after modification of a shared copy-on-write
+                        page</div></div><div class="sect3" title="Controlling a process’s memory footprint"><div class="titlepage"><div><div><h4 class="title" id="controlling_a_process_number_symble_s_me">Controlling a process’s memory footprint</h4></div></div></div><p>We can combine the use of <span class="emphasis"><em>fork()</em></span> and
+                            <span class="emphasis"><em>wait()</em></span> to control the memory footprint of a
+                        process. The process’s memory footprint is the range of virtual memory pages
+                        used by the process, as affected by factors such as the adjustment of the
+                        stack as functions are called and return, calls to
+                            <span class="emphasis"><em>exec()</em></span>, and, of particular interest to this
+                        discussion, modification of the heap as a consequence of calls to
+                            <span class="emphasis"><em>malloc()</em></span> and <span class="emphasis"><em>free()</em></span>.<a id="IDX-CHP-24-3804" class="indexterm"/><a id="IDX-CHP-24-3805" class="indexterm"/><a id="IDX-CHP-24-3806" class="indexterm"/><a id="IDX-CHP-24-3807" class="indexterm"/><a id="IDX-CHP-24-3808" class="indexterm"/><a id="IDX-CHP-24-3809" class="indexterm"/><a id="IDX-CHP-24-3810" class="indexterm"/><a id="IDX-CHP-24-3811" class="indexterm"/></p><p>Suppose that we bracket a call to some function,
+                            <span class="emphasis"><em>func()</em></span>, using <span class="emphasis"><em>fork()</em></span> and
+                            <span class="emphasis"><em>wait()</em></span> in the manner shown in <a class="xref" href="ch24.html#calling_a_function_without_changing_the" title="Example 24-3. Calling a function without changing the process’s memory footprint">Example 24-3</a>. After executing
+                        this code, we know that the memory footprint of the parent is unchanged from
+                        the point before <span class="emphasis"><em>func()</em></span> was called, since all possible
+                        changes will have occurred in the child process. This can be useful for the
+                        following reasons:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If we know that <span class="emphasis"><em>func()</em></span> causes memory leaks or
+                                excessive fragmentation of the heap, this technique eliminates the
+                                problem. (We might not otherwise be able to deal with these problems
+                                if we don’t have access to the source code of
+                                    <span class="emphasis"><em>func()</em></span>.)</p></li><li class="listitem"><p>Suppose that we have some algorithm that performs memory
+                                allocation while doing a tree analysis (for example, a game program
+                                that analyzes a range of possible moves and their responses). We
+                                could code such a program to make calls to
+                                    <span class="emphasis"><em>free()</em></span> to deallocate all of the allocated
+                                memory. However, in some cases, it is simpler to employ the
+                                technique we describe here in order to allow us to backtrack,
+                                leaving the caller (the parent) with its original memory footprint
+                                unchanged.</p></li></ul></div><p>In the implementation shown in <a class="xref" href="ch24.html#calling_a_function_without_changing_the" title="Example 24-3. Calling a function without changing the process’s memory footprint">Example 24-3</a>, the result of
+                            <span class="emphasis"><em>func()</em></span> must be expressed in the 8 bits that
+                            <span class="emphasis"><em>exit()</em></span> passes from the terminating child to the
+                        parent calling <span class="emphasis"><em>wait()</em></span>. However, we could employ a file,
+                        a pipe, or some other interprocess communication technique to allow
+                            <span class="emphasis"><em>func()</em></span> to return larger results.</p><div class="example"><a id="calling_a_function_without_changing_the"/><div class="example-title">Example 24-3. Calling a function without changing the process’s memory
+                            footprint</div><div class="example-contents"><pre class="programlisting"><em class="lineannotation"><span class="lineannotation">from</span></em> <strong class="userinput"><code>procexec/footprint.c</code></strong>
+    pid_t childPid;
+    int status;
+
+    childPid = fork();
+    if (childPid == -1)
+        errExit("fork");
+
+    if (childPid == 0)              /* Child calls func() and */
+        exit(func(arg));            /* uses return value as exit status */
+
+    /* Parent waits for child to terminate. It can determine the
+       result of func() by inspecting 'status'. */
+
+    if (wait(&amp;status) == -1)
+        errExit("wait");
+
+     <span class="emphasis"><em>from</em></span> <strong class="userinput"><code>procexec/footprint.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="The vfork() System Call"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_vfork_open_parenthesis_close_parenth">The <span class="emphasis"><em>vfork()</em></span> System Call</h2></div></div></div><p>Early BSD implementations were among those in which <span class="emphasis"><em>fork()</em></span>
+                performed a literal duplication of the parent’s data, heap, and stack. As noted
+                earlier, this is wasteful, especially if the <span class="emphasis"><em>fork()</em></span> is followed
+                by an immediate <span class="emphasis"><em>exec()</em></span>. For this reason, later versions of BSD
+                introduced the <span class="emphasis"><em>vfork()</em></span> system call, which was far more
+                efficient than BSD’s <span class="emphasis"><em>fork()</em></span>, although it operated with slightly
+                different (in fact, somewhat strange) semantics. Modern UNIX implementations
+                employing copy-on-write for implementing <span class="emphasis"><em>fork()</em></span> are much more
+                efficient than older <span class="emphasis"><em>fork()</em></span> implementations, thus largely
+                eliminating the need for <span class="emphasis"><em>vfork()</em></span>. Nevertheless, Linux (like
+                many other UNIX implementations) provides a <span class="emphasis"><em>vfork()</em></span> system call
+                with BSD semantics for programs that require the fastest possible fork. However,
+                because the unusual semantics of <span class="emphasis"><em>vfork()</em></span> can lead to some
+                subtle program bugs, its use should normally be avoided, except in the rare cases
+                where it provides worthwhile performance gains.<a id="IDX-CHP-24-3812" class="indexterm"/><a id="IDX-CHP-24-3813" class="indexterm"/><a id="IDX-CHP-24-3814" class="indexterm"/><a id="IDX-CHP-24-3815" class="indexterm"/><a id="IDX-CHP-24-3816" class="indexterm"/><a id="IDX-CHP-24-3817" class="indexterm"/><a id="IDX-CHP-24-3818" class="indexterm"/><a id="IDX-CHP-24-3819" class="indexterm"/><a id="IDX-CHP-24-3820" class="indexterm"/></p><p>Like <span class="emphasis"><em>fork()</em></span>, <span class="emphasis"><em>vfork()</em></span> is used by the
+                calling process to create a new child process. However, <span class="emphasis"><em>vfork()</em></span>
+                is expressly designed to be used in programs where the child performs an immediate
+                    <span class="emphasis"><em>exec()</em></span> call.</p><a id="I_programlisting24_d1e70807"/><pre class="programlisting">#include &lt;unistd.h&gt;
+pid_t <strong class="userinput"><code>vfork</code></strong>(void);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>In parent: returns process ID of child on success, or -1 on error; in
+                    successfully created child: always returns 0</p></div><p>Two features distinguish the <span class="emphasis"><em>vfork()</em></span> system call from
+                    <span class="emphasis"><em>fork()</em></span> and make it more efficient:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>No duplication of virtual memory pages or page tables is done for the
+                        child process. Instead, the child shares the parent’s memory until it either
+                        performs a successful <span class="emphasis"><em>exec()</em></span> or calls
+                            <span class="emphasis"><em>_exit()</em></span> to terminate.</p></li><li class="listitem"><p>Execution of the parent process is suspended until the child has performed
+                        an <span class="emphasis"><em>exec()</em></span> or <span class="emphasis"><em>_exit()</em></span>.</p></li></ul></div><p>These points have some important implications. Since the child is using the
+                parent’s memory, any changes made by the child to the data, heap, or stack segments
+                will be visible to the parent once it resumes. Furthermore, if the child performs a
+                function return between the <span class="emphasis"><em>vfork()</em></span> and a later
+                    <span class="emphasis"><em>exec()</em></span> or <span class="emphasis"><em>_exit()</em></span>, this will also
+                affect the parent. This is similar to the example described in <a class="xref" href="ch06.html#performing_a_nonlocal_goto_colon_setjmp" title="Performing a Nonlocal Goto: setjmp() and long jmp()">Performing a Nonlocal Goto: <span class="emphasis"><em>setjmp()</em></span> and <span class="emphasis"><em>long
+                    jmp()</em></span></a> of trying to
+                    <span class="emphasis"><em>longjmp()</em></span> into a function from which a return has already
+                been performed. Similar chaos—typically a segmentation fault (<code class="literal">SIGSEGV</code>)—is likely to result.</p><p>There are a few things that the child process can do between
+                    <span class="emphasis"><em>vfork()</em></span> and <span class="emphasis"><em>exec()</em></span> without affecting
+                the parent. Among these are operations on open file descriptors (but not
+                    <span class="emphasis"><em>stdio</em></span> file streams). Since the file descriptor table for
+                each process is maintained in kernel space (<a class="xref" href="ch05.html#relationship_between_file_descriptors_an" title="Relationship Between File Descriptors and Open Files">Relationship Between File Descriptors and Open Files</a>) and is duplicated during
+                    <span class="emphasis"><em>vfork()</em></span>, the child process can perform file descriptor
+                operations without affecting the parent.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv3 says that the behavior of a program is undefined if it: a) modifies any
+                    data other than a variable of type <span class="emphasis"><em>pid_t</em></span> used to store the
+                    return value of <span class="emphasis"><em>vfork()</em></span>; b) returns from the function in
+                    which <span class="emphasis"><em>vfork()</em></span> was called; or c) calls any other function
+                    before successfully calling <span class="emphasis"><em>_exit()</em></span> or performing an
+                        <span class="emphasis"><em>exec()</em></span>.</p><p>When we look at the <span class="emphasis"><em>clone()</em></span> system call in <a class="xref" href="ch28.html#the_clone_open_parenthesis_close_parenth" title="The clone() System Call">The <span class="emphasis"><em>clone()</em></span> System Call</a>, we’ll see that a child
+                    created using <span class="emphasis"><em>fork()</em></span> or <span class="emphasis"><em>vfork()</em></span> also
+                    obtains its own copies of a few other process attributes.</p></div><p>The semantics of <span class="emphasis"><em>vfork()</em></span> mean that after the call, the child
+                is guaranteed to be scheduled for the CPU before the parent. In <a class="xref" href="ch24.html#creating_a_new_process_colon_fork_open_p" title="Creating a New Process: fork()">Creating a New Process: <span class="emphasis"><em>fork()</em></span></a>, we noted that this is not
+                a guarantee made by <span class="emphasis"><em>fork()</em></span>, after which either the parent or
+                the child may be scheduled first.</p><p><a class="xref" href="ch24.html#using_vfork_open_parenthesis_close_paren" title="Example 24-4. Using vfork()">Example 24-4</a> shows the use of
+                    <span class="emphasis"><em>vfork()</em></span>, demonstrating both of the semantic features that
+                distinguish it from <span class="emphasis"><em>fork()</em></span>: the child shares the parent’s
+                memory, and the parent is suspended until the child terminates or calls
+                    <span class="emphasis"><em>exec()</em></span>. When we run this program, we see the following
+                output:</p><a id="I_programlisting24_d1e70932"/><pre class="programlisting">$ <strong class="userinput"><code>./t_vfork</code></strong>
+Child executing           <em class="lineannotation"><span class="lineannotation">Even though child slept, parent was not scheduled</span></em>
+Parent executing
+istack=666</pre><p>From the last line of output, we can see that the change made by the child to the
+                variable <span class="emphasis"><em>istack</em></span> was performed on the parent’s variable.</p><div class="example"><a id="using_vfork_open_parenthesis_close_paren"/><div class="example-title">Example 24-4. Using <span class="emphasis"><em>vfork()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/t_vfork.c</code></strong>
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int istack = 222;
+
+    switch (vfork()) {
+    case -1:
+        errExit("vfork");
+
+    case 0:             /* Child executes first, in parent's memory space */
+        sleep(3);                   /* Even if we sleep for a while,
+                                       parent still is not scheduled */
+        write(STDOUT_FILENO, "Child executing\n", 16);
+        istack *= 3;                /* This change will be seen by parent */
+        _exit(EXIT_SUCCESS);
+
+    default:            /* Parent is blocked until child exits */
+        write(STDOUT_FILENO, "Parent executing\n", 17);
+        printf("istack=%d\n", istack);
+        exit(EXIT_SUCCESS);
+    }
+}
+      <strong class="userinput"><code>procexec/t_vfork.c</code></strong></pre></div></div><p>Except where speed is absolutely critical, new programs should avoid the use of
+                    <span class="emphasis"><em>vfork()</em></span> in favor of <span class="emphasis"><em>fork()</em></span>. This is
+                because, when <span class="emphasis"><em>fork()</em></span> is implemented using copy-on-write
+                semantics (as is done on most modern UNIX implementations), it approaches the speed
+                of <span class="emphasis"><em>vfork()</em></span>, and we avoid the eccentric behaviors associated
+                with <span class="emphasis"><em>vfork()</em></span> described above. (We show some speed comparisons
+                between <span class="emphasis"><em>fork()</em></span> and <span class="emphasis"><em>vfork()</em></span> in Section
+                28.3.)</p><p>SUSv3 marks <span class="emphasis"><em>vfork()</em></span> as obsolete, and SUSv4 goes further,
+                removing the specification of <span class="emphasis"><em>vfork()</em></span>. SUSv3 leaves many
+                details of the operation of <span class="emphasis"><em>vfork()</em></span> unspecified, allowing the
+                possibility that it is implemented as a call to <span class="emphasis"><em>fork()</em></span>. When
+                implemented in this manner, the BSD semantics for <span class="emphasis"><em>vfork()</em></span> are
+                not preserved. Some UNIX systems do indeed implement <span class="emphasis"><em>vfork()</em></span> as
+                a call to <span class="emphasis"><em>fork()</em></span>, and Linux also did this in kernel 2.0 and
+                earlier.</p><p>Where it is used, <span class="emphasis"><em>vfork()</em></span> should generally be immediately
+                followed by a call to <span class="emphasis"><em>exec()</em></span>. If the
+                    <span class="emphasis"><em>exec()</em></span> call fails, the child process should terminate using
+                    <span class="emphasis"><em>_exit()</em></span>. (The child of a <span class="emphasis"><em>vfork()</em></span>
+                should not terminate by calling <span class="emphasis"><em>exit()</em></span>, since that would cause
+                the parent’s <span class="emphasis"><em>stdio</em></span> buffers to be flushed and closed. We go into
+                more detail on this point in Section 25.4.)</p><p>Other uses of <span class="emphasis"><em>vfork()</em></span>—in particular, those relying on its
+                unusual semantics for memory sharing and process scheduling—are likely to render a
+                program nonportable, especially to implementations where
+                    <span class="emphasis"><em>vfork()</em></span> is implemented simply as a call to
+                    <span class="emphasis"><em>fork()</em></span>.</p></div><div class="sect1" title="Race Conditions After fork()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="race_conditions_after_fork_open_parenthe">Race Conditions After <span class="emphasis"><em>fork()</em></span></h2></div></div></div><p>After a <span class="emphasis"><em>fork()</em></span>, it is indeterminate which process—the parent
+                or the child—next has access to the CPU. (On a multiprocessor system, they may both
+                simultaneously get access to a CPU.) Applications that implicitly or explicitly rely
+                on a particular sequence of execution in order to achieve correct results are open
+                to failure due to <span class="emphasis"><em>race conditions</em></span>, which we described in
+                Section 5.1. Such bugs can be hard to find, as their occurrence depends on
+                scheduling decisions that the kernel makes according to system load.<a id="IDX-CHP-24-3821" class="indexterm"/><a id="IDX-CHP-24-3822" class="indexterm"/><a id="IDX-CHP-24-3823" class="indexterm"/><a id="IDX-CHP-24-3824" class="indexterm"/><a id="IDX-CHP-24-3825" class="indexterm"/></p><p>We can use the program in <a class="xref" href="ch24.html#parent_and_child_race_to_write_a_message" title="Example 24-5. Parent and child race to write a message after fork()">Example 24-5</a> to demonstrate this indeterminacy. This program loops, using
+                    <span class="emphasis"><em>fork()</em></span> to create multiple children. After each
+                    <span class="emphasis"><em>fork()</em></span>, both parent and child print a message containing
+                the loop counter value and a string indicating whether the process is the parent or
+                child. For example, if we asked the program to produce just one child, we might see
+                the following:</p><a id="I_programlisting24_d1e71087"/><pre class="programlisting">$ <strong class="userinput"><code>./fork_whos_on_first 1</code></strong>
+0 parent
+0 child</pre><p>We can use this program to create a large number of children, and then analyze the
+                output to see whether the parent or the child is the first to print its message each
+                time. Analyzing the results when using this program to create 1 million children on
+                a Linux/x86-32 2.2.19 system showed that the parent printed its message first in all
+                but 332 cases (i.e., in 99.97% of the cases).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The results from running the program in <a class="xref" href="ch24.html#parent_and_child_race_to_write_a_message" title="Example 24-5. Parent and child race to write a message after fork()">Example 24-5</a> were analyzed using the
+                    script <code class="literal">procexec/fork_whos_on_first.count.awk</code>,
+                    which is provided in the source code distribution for this book.</p></div><p>From these results, we may surmise that, on Linux 2.2.19, execution always
+                continues with the parent process after a <span class="emphasis"><em>fork()</em></span>. The reason
+                that the child occasionally printed its message first was that, in 0.03% of cases,
+                the parent’s CPU time slice ran out before it had time to print its message. In
+                other words, if this example represented a case where we were relying on the parent
+                to always be scheduled first after <span class="emphasis"><em>fork()</em></span>, then things would
+                usually go right, but one time out of every 3000, things would go wrong. Of course,
+                if the application expected that the parent should be able to carry out a larger
+                piece of work before the child was scheduled, the possibility of things going wrong
+                would be greater. Trying to debug such errors in a complex program can be
+                difficult.</p><div class="example"><a id="parent_and_child_race_to_write_a_message"/><div class="example-title">Example 24-5. Parent and child race to write a message after
+                    <span class="emphasis"><em>fork()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/fork_whos_on_first.c</code></strong>
+#include &lt;sys/wait.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int numChildren, j;
+    pid_t childPid;
+
+    if (argc &gt; 1 &amp;&amp; strcmp(argv[1], "--help") == 0)
+        usageErr("%s [num-children]\n", argv[0]);
+
+    numChildren = (argc &gt; 1) ? getInt(argv[1], GN_GT_0, "num-children") : 1;
+
+    setbuf(stdout, NULL);                /* Make stdout unbuffered */
+
+    for (j = 0; j &lt; numChildren; j++) {
+        switch (childPid = fork()) {
+        case -1:
+            errExit("fork");
+
+        case 0:
+            printf("%d child\n", j);
+            _exit(EXIT_SUCCESS);
+
+        default:
+            printf("%d parent\n", j);
+            wait(NULL);                   /* Wait for child to terminate */
+            break;
+        }
+    }
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>procexec/fork_whos_on_first.c</code></strong></pre></div></div><p>Although Linux 2.2.19 always continues execution with the parent after a
+                    <span class="emphasis"><em>fork()</em></span>, we can’t rely on this being the case on other UNIX
+                implementations, or even across different versions of the Linux kernel. During the
+                2.4 stable kernel series, experiments were briefly made with a “child first after
+                    <span class="emphasis"><em>fork()</em></span>” patch, which completely reverses the results
+                obtained from 2.2.19. Although this change was later dropped from the 2.4 kernel
+                series, it was subsequently adopted in Linux 2.6. Thus, programs that assume the
+                2.2.19 behavior would be broken by the 2.6 kernel.</p><p>Some more recent experiments reversed the kernel developers’ assessment of whether
+                it was better to run the child or the parent first after
+                <span class="emphasis"><em>fork()</em></span>, and, since Linux 2.6.32, it is once more the parent
+                that is, by default, run first after a <span class="emphasis"><em>fork()</em></span>. This default can
+                be changed by assigning a nonzero value to the Linux-specific /<code class="literal">proc/sys/kernel/sched_child_runs_first</code> file.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>To see the argument for the “children first after <span class="emphasis"><em>fork()</em></span>”
+                    behavior, consider what happens with copy-on-write semantics when the child of a
+                        <span class="emphasis"><em>fork()</em></span> performs an immediate
+                        <span class="emphasis"><em>exec()</em></span>. In this case, as the parent carries on after
+                    the <span class="emphasis"><em>fork()</em></span> to modify data and stack pages, the kernel
+                    duplicates the to-be-modified pages for the child. Since the child performs an
+                        <span class="emphasis"><em>exec()</em></span> as soon as it is scheduled to run, this
+                    duplication is wasted. According to this argument, it is better to schedule the
+                    child first, so that by the time the parent is next scheduled, no page copying
+                    is required. Using the program in <a class="xref" href="ch24.html#parent_and_child_race_to_write_a_message" title="Example 24-5. Parent and child race to write a message after fork()">Example 24-5</a> to create 1 million
+                    child processes on one busy Linux/x86-32 system running kernel 2.6.30 showed
+                    that, in 99.98% of cases, the child process displayed its message first. (The
+                    precise percentage depends on factors such as system load.) Testing this program
+                    on other UNIX implementations showed wide variation in the rules that govern
+                    which process runs first after <span class="emphasis"><em>fork()</em></span>.</p><p>The argument for switching back to “parent first after
+                        <span class="emphasis"><em>fork()</em></span>” in Linux 2.6.32 was based on the observation
+                    that, after a <span class="emphasis"><em>fork()</em></span>, the parent’s state is already active
+                    in the CPU and its memory-management information is already cached in the
+                    hardware memory management unit’s translation look-aside buffer (TLB).
+                    Therefore, running the parent first should result in better performance. This
+                    was informally verified by measuring the time required for kernel builds under
+                    the two behaviors.<a id="IDX-CHP-24-3826" class="indexterm"/></p><p>In conclusion, it is worth noting that the performance differences between the
+                    two behaviors are rather small, and won’t affect most applications.</p></div><p>From the preceding discussion, it is clear that we can’t assume a particular order
+                of execution for the parent and child after a <span class="emphasis"><em>fork()</em></span>. If we
+                need to guarantee a particular order, we must use some kind of synchronization
+                technique. We describe several synchronization techniques in later chapters,
+                including semaphores, file locks, and sending messages between processes using
+                pipes. One other method, which we describe next, is to use signals.</p></div><div class="sect1" title="Avoiding Race Conditions by Synchronizing with Signals"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="avoiding_race_conditions_by_synchronizin">Avoiding Race Conditions by Synchronizing with Signals</h2></div></div></div><p>After a <span class="emphasis"><em>fork()</em></span>, if either process needs to wait for the other
+                to complete an action, then the active process can send a signal after completing
+                the action; the other process waits for the signal.<a id="IDX-CHP-24-3827" class="indexterm"/><a id="IDX-CHP-24-3828" class="indexterm"/><a id="IDX-CHP-24-3829" class="indexterm"/></p><p><a class="xref" href="ch24.html#using_signals_to_synchronize_process_act" title="Example 24-6. Using signals to synchronize process actions">Example 24-6</a> demonstrates this
+                technique. In this program, we assume that it is the parent that must wait on the
+                child to carry out some action. The signal-related calls in the parent and child can
+                be swapped if the child must wait on the parent. It is even possible for both parent
+                and child to signal each other multiple times in order to coordinate their actions,
+                although, in practice, such coordination is more likely to be done using semaphores,
+                file locks, or message passing.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>[Stevens &amp; Rago, 2005] suggests encapsulating such synchronization
+                    steps (block signal, send signal, catch signal) into a standard set of functions
+                    for process synchronization. The advantage of such encapsulation is that we can
+                    then later replace the use of signals by another IPC mechanism, if
+                    desired.</p></div><p>Note that we block the synchronization signal <code class="literal">(SIGUSR1)</code> before the <span class="emphasis"><em>fork()</em></span> call in <a class="xref" href="ch24.html#using_signals_to_synchronize_process_act" title="Example 24-6. Using signals to synchronize process actions">Example 24-6</a>. If the parent tried
+                blocking the signal after the <span class="emphasis"><em>fork()</em></span>, it would remain
+                vulnerable to the very race condition we are trying to avoid. (In this program, we
+                assume that the state of the signal mask in the child is irrelevant; if necessary,
+                we can unblock <code class="literal">SIGUSR1</code> in the child after the
+                    <span class="emphasis"><em>fork()</em></span>.)</p><p>The following shell session log shows what happens when we run the program in
+                    <a class="xref" href="ch24.html#using_signals_to_synchronize_process_act" title="Example 24-6. Using signals to synchronize process actions">Example 24-6</a>:</p><a id="I_programlisting24_d1e71233"/><pre class="programlisting">$ <strong class="userinput"><code>./fork_sig_sync</code></strong>
+[17:59:02 5173] Child started - doing some work
+[17:59:02 5172] Parent about to wait for signal
+[17:59:04 5173] Child about to signal parent
+[17:59:04 5172] Parent got signal</pre><div class="example"><a id="using_signals_to_synchronize_process_act"/><div class="example-title">Example 24-6. Using signals to synchronize process actions</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procexec/fork_sig_sync.c</code></strong>
+#include &lt;signal.h&gt;
+#include "curr_time.h"                  /* Declaration of currTime() */
+#include "tlpi_hdr.h"
+
+#define SYNC_SIG SIGUSR1                /* Synchronization signal */
+
+static void             /* Signal handler - does nothing but return */
+handler(int sig)
+{
+}
+
+int
+main(int argc, char *argv[])
+{
+    pid_t childPid;
+    sigset_t blockMask, origMask, emptyMask;
+    struct sigaction sa;
+
+    setbuf(stdout, NULL);               /* Disable buffering of stdout */
+
+    sigemptyset(&amp;blockMask);
+    sigaddset(&amp;blockMask, SYNC_SIG);    /* Block signal */
+    if (sigprocmask(SIG_BLOCK, &amp;blockMask, &amp;origMask) == -1)
+        errExit("sigprocmask");
+
+    sigemptyset(&amp;sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sa.sa_handler = handler;
+    if (sigaction(SYNC_SIG, &amp;sa, NULL) == -1)
+        errExit("sigaction");
+
+    switch (childPid = fork()) {
+    case -1:
+        errExit("fork");
+
+    case 0: /* Child */
+
+        /* Child does some required action here... */
+
+        printf("[%s %ld] Child started - doing some work\n",
+                currTime("%T"), (long) getpid());
+        sleep(2);               /* Simulate time spent doing some work */
+
+        /* And then signals parent that it's done */
+
+        printf("[%s %ld] Child about to signal parent\n",
+                currTime("%T"), (long) getpid());
+        if (kill(getppid(), SYNC_SIG) == -1)
+            errExit("kill");
+
+        /* Now child can do other things... */
+
+        _exit(EXIT_SUCCESS);
+
+    default: /* Parent */
+
+        /* Parent may do some work here, and then waits for child to
+           complete the required action */
+
+        printf("[%s %ld] Parent about to wait for signal\n",
+                currTime("%T"), (long) getpid());
+        sigemptyset(&amp;emptyMask);
+        if (sigsuspend(&amp;emptyMask) == -1 &amp;&amp; errno != EINTR)
+            errExit("sigsuspend");
+        printf("[%s %ld] Parent got signal\n", currTime("%T"), (long) getpid());
+
+        /* If required, return signal mask to its original state */
+
+        if (sigprocmask(SIG_SETMASK, &amp;origMask, NULL) == -1)
+            errExit("sigprocmask");
+
+        /* Parent carries on to do other things... */
+
+        exit(EXIT_SUCCESS);
+    }
+}
+      <strong class="userinput"><code>procexec/fork_sig_sync.c</code></strong></pre></div></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id23">Summary</h2></div></div></div><p>The <span class="emphasis"><em>fork()</em></span> system call creates a new process (the child) by
+                making an almost exact duplicate of the calling process (the parent). The
+                    <span class="emphasis"><em>vfork()</em></span> system call is a more efficient version of
+                    <span class="emphasis"><em>fork()</em></span>, but is usually best avoided because of its unusual
+                semantics, whereby the child uses the parent’s memory until it either performs an
+                    <span class="emphasis"><em>exec()</em></span> or terminates; in the meantime, execution of the
+                parent process is suspended.</p><p>After a <span class="emphasis"><em>fork()</em></span> call, we can’t rely on the order in which the
+                parent and the child are next scheduled to use the CPU(s). Programs that make
+                assumptions about the order of execution are susceptible to errors known as race
+                conditions. Because the occurrence of such errors depends on external factors such
+                as system load, they can be difficult to find and debug.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id25"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id26">Further information</h4></div></div></div><p>[Bach, 1986] and [Goodheart &amp; Cox, 1994] provide details of the
+                        implementation of <span class="emphasis"><em>fork()</em></span>,
+                        <span class="emphasis"><em>execve()</em></span>, <span class="emphasis"><em>wait()</em></span>, and
+                            <span class="emphasis"><em>exit()</em></span> on UNIX systems. [Bovet &amp; Cesati,
+                        2005] and [Love, 2010] provide Linux-specific implementation details of
+                        process creation and termination.</p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id15">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>After a program executes the following series of
+                            <span class="emphasis"><em>fork()</em></span> calls, how many new processes will result
+                        (assuming that none of the calls fails)?<a id="IDX-CHP-24-3830" class="indexterm"/><a id="IDX-CHP-24-3831" class="indexterm"/><a id="IDX-CHP-24-3832" class="indexterm"/><a id="IDX-CHP-24-3833" class="indexterm"/><a id="IDX-CHP-24-3834" class="indexterm"/></p><a id="I_programlisting24_d1e71313"/><pre class="programlisting">fork();
+fork();
+fork();</pre></li><li class="listitem"><p>Write a program to demonstrate that after a <span class="emphasis"><em>vfork()</em></span>,
+                        the child process can close a file descriptor (e.g., descriptor 0) without
+                        affecting the corresponding file descriptor in the parent.<a id="IDX-CHP-24-3835" class="indexterm"/><a id="IDX-CHP-24-3836" class="indexterm"/></p></li><li class="listitem"><p>Assuming that we can modify the program source code, how could we get a
+                        core dump of a process at a given moment in time, while letting the process
+                        continue execution?</p></li><li class="listitem"><p>Experiment with the program in <a class="xref" href="ch24.html#parent_and_child_race_to_write_a_message" title="Example 24-5. Parent and child race to write a message after fork()">Example 24-5</a> (<code class="literal">fork_whos_on_first.c</code>) on other UNIX
+                        implementations to determine how these implementations schedule the parent
+                        and child processes after a <span class="emphasis"><em>fork()</em></span>.</p></li><li class="listitem"><p>Suppose that in the program in <a class="xref" href="ch24.html#using_signals_to_synchronize_process_act" title="Example 24-6. Using signals to synchronize process actions">Example 24-6</a>, the child process
+                        also needed to wait on the parent to complete some actions. What changes to
+                        the program would be required in order to enforce this?</p></li></ol></div></div></section></body></html>

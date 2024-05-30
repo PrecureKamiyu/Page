@@ -1,0 +1,458 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 50. Virtual Memory Operations</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch49.html" title="Chapter 49. Memory Mappings"/><link rel="next" href="ch51.html" title="Chapter 51. Introduction to POSIX IPC"/></head><body><section class="chapter" title="Chapter 50. Virtual Memory Operations" epub:type="chapter" id="virtual_memory_operations"><div class="titlepage"><div><div><h2 class="title">Chapter 50. Virtual Memory Operations</h2></div></div></div><p>This chapter looks at various system calls that perform operations on a process’s
+            virtual address space:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>mprotect()</em></span> system call changes the protection on a
+                    region of virtual memory.<a id="IDX-CHP-50-6832" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>mlock()</em></span> and <span class="emphasis"><em>mlockall()</em></span> system
+                    calls lock a region of virtual memory into physical memory, thus preventing it
+                    from being swapped out.</p></li><li class="listitem"><p>The <span class="emphasis"><em>mincore()</em></span> system call allows a process to determine
+                    whether the pages in a region of virtual memory are resident in physical
+                    memory.</p></li><li class="listitem"><p>The <span class="emphasis"><em>madvise()</em></span> system call allows a process to advise the
+                    kernel about its future patterns of usage of a virtual memory region.</p></li></ul></div><p>Some of these system calls find particular use in conjunction with shared memory
+            regions (<a class="xref" href="ch48.html" title="Chapter 48. System V Shared Memory">Chapter 48</a>, <a class="xref" href="ch49.html" title="Chapter 49. Memory Mappings">Chapter 49</a>, and <a class="xref" href="ch54.html" title="Chapter 54. POSIX Shared Memory">Chapter 54</a>), but they can be applied to any region of
+            a process’s virtual memory.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The techniques described in this chapter are not in fact about IPC at all, but we
+                include them in this part of the book because they are sometimes used with shared
+                memory.</p></div><div class="sect1" title="Changing Memory Protection: mprotect()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="changing_memory_protection_colon_mprotec">Changing Memory Protection: <span class="emphasis"><em>mprotect()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>mprotect()</em></span> system call changes the protection on the
+                virtual memory pages in the range starting at <span class="emphasis"><em>addr</em></span> and
+                continuing for <span class="emphasis"><em>length</em></span> bytes.<a id="IDX-CHP-50-6833" class="indexterm"/><a id="IDX-CHP-50-6834" class="indexterm"/><a id="IDX-CHP-50-6835" class="indexterm"/><a id="IDX-CHP-50-6836" class="indexterm"/><a id="IDX-CHP-50-6837" class="indexterm"/></p><a id="I_programlisting50_d1e133661"/><pre class="programlisting">#include &lt;sys/mman.h&gt;
+
+int <strong class="userinput"><code>mprotect</code></strong>(void *<span class="emphasis"><em>addr</em></span>, size_t <span class="emphasis"><em>length</em></span>, int <span class="emphasis"><em>prot</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The value given in <span class="emphasis"><em>addr</em></span> must be a multiple of the system page
+                size (as returned by <span class="emphasis"><em>sysconf(_SC_PAGESIZE)</em></span>). (SUSv3 specified
+                that <span class="emphasis"><em>addr must</em></span> be page-aligned. SUSv4 says that an
+                implementation <span class="emphasis"><em>may</em></span> require this argument to be page-aligned.)
+                Because protections are set on whole pages, <span class="emphasis"><em>length</em></span> is, in
+                effect, rounded up to the next multiple of the system page size.</p><p>The <span class="emphasis"><em>prot</em></span> argument is a bit mask specifying the new protection
+                for this region of memory. It must be specified as either <code class="literal">PROT_NONE</code> or a combination created by ORing together one or more of
+                    <code class="literal">PROT_READ</code>, <code class="literal">PROT_WRITE</code>, and <code class="literal">PROT_EXEC</code>. All of
+                these values have the same meaning as for <span class="emphasis"><em>mmap()</em></span> (<a class="xref" href="ch49.html#memory_protection_values" title="Table 49-2. Memory protection values">Table 49-2</a>, in <a class="xref" href="ch49.html#creating_a_mapping_colon_mmap_open_paren" title="Creating a Mapping: mmap()">Creating a Mapping: <span class="emphasis"><em>mmap()</em></span></a>).</p><p>If a process attempts to access a region of memory in a manner that violates the
+                memory protection, the kernel generates a <code class="literal">SIGSEGV</code>
+                signal for the process.<a id="IDX-CHP-50-6838" class="indexterm"/></p><p>One use of <span class="emphasis"><em>mprotect()</em></span> is to change the protection of a region
+                of mapped memory originally set in a call to <span class="emphasis"><em>mmap()</em></span>, as shown
+                in <a class="xref" href="ch50.html#changing_memory_protection_with_mprotect" title="Example 50-1. Changing memory protection with mprotect()">Example 50-1</a>. This program creates
+                an anonymous mapping that initially has all access denied (<code class="literal">PROT_NONE</code>). The program then changes the protection on the region to
+                read plus write. Before and after making the change, the program uses the
+                    <span class="emphasis"><em>system()</em></span> function to execute a shell command that displays
+                the line from the <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/maps</code> file corresponding to the mapped region, so that we can see the
+                change in memory protection. (We could have obtained the mapping information by
+                directly parsing <code class="literal">/proc/self/maps</code>, but we used the
+                call to <span class="emphasis"><em>system()</em></span> because it results in a shorter program.) When
+                we run this program, we see the following:</p><a id="I_programlisting50_d1e133760"/><pre class="programlisting">$ <strong class="userinput"><code>./t_mprotect</code></strong>
+Before mprotect()
+b7cde000-b7dde000 ---s 00000000 00:04 18258    /dev/zero (deleted)
+After mprotect()
+b7cde000-b7dde000 rw-s 00000000 00:04 18258    /dev/zero (deleted)</pre><p>From the last line of output, we can see that <span class="emphasis"><em>mprotect()</em></span> has
+                changed the permissions of the memory region to <code class="literal">PROT_READ |
+                    PROT_WRITE</code>. (For an explanation of the <code class="literal">(deleted)</code> string that appears after <code class="literal">/dev/zero</code> in the shell output, refer to Section 48.5.)</p><div class="example"><a id="changing_memory_protection_with_mprotect"/><div class="example-title">Example 50-1. Changing memory protection with <span class="emphasis"><em>mprotect()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>vmem/t_mprotect.c</code></strong>
+#define _BSD_SOURCE         /* Get MAP_ANONYMOUS definition from &lt;sys/mman.h&gt; */
+#include &lt;sys/mman.h&gt;
+#include "tlpi_hdr.h"
+
+#define LEN (1024 * 1024)
+
+#define SHELL_FMT "cat /proc/%ld/maps | grep zero"
+#define CMD_SIZE (sizeof(SHELL_FMT) + 20)
+                            /* Allow extra space for integer string */
+
+int
+main(int argc, char *argv[])
+{
+    char cmd[CMD_SIZE];
+    char *addr;
+
+    /* Create an anonymous mapping with all access denied */
+
+    addr = mmap(NULL, LEN, PROT_NONE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (addr == MAP_FAILED)
+        errExit("mmap");
+
+    /* Display line from /proc/self/maps corresponding to mapping */
+
+    printf("Before mprotect()\n");
+    snprintf(cmd, CMD_SIZE, SHELL_FMT, (long) getpid());
+    system(cmd);
+
+    /* Change protection on memory to allow read and write access */
+
+    if (mprotect(addr, LEN, PROT_READ | PROT_WRITE) == -1)
+        errExit("mprotect");
+
+    printf("After mprotect()\n");
+    system(cmd);                /* Review protection via /proc/self/maps */
+
+    exit(EXIT_SUCCESS);
+}
+      <strong class="userinput"><code>vmem/t_mprotect.c</code></strong></pre></div></div></div><div class="sect1" title="Memory Locking: mlock() and mlockall()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="memory_locking_colon_mlock_open_parenthe">Memory Locking: <span class="emphasis"><em>mlock()</em></span> and
+                <span class="emphasis"><em>mlockall()</em></span></h2></div></div></div><p>In some applications, it is useful to lock part or all of a process’s virtual
+                memory so that it is guaranteed to always be in physical memory. One reason for
+                doing this is to improve performance. Accesses to locked pages are guaranteed never
+                to be delayed by a page fault. This is useful for applications that must ensure
+                rapid response times.<a id="IDX-CHP-50-6839" class="indexterm"/><a id="IDX-CHP-50-6840" class="indexterm"/></p><p>Another reason for locking memory is security. If a virtual memory page containing
+                sensitive data is never swapped out, then no copy of the page is ever written to the
+                disk. If the page was written to the disk, it could, in theory, be read directly
+                from the disk device at some later time. (An attacker could deliberately engineer
+                this situation by running a program that consumes a large amount of memory, thus
+                forcing the memory of other processes to be swapped out to disk.) Reading
+                information from the swap space could even be done after the process has terminated,
+                since the kernel makes no guarantees about zeroing out the data held in swap space.
+                (Normally, only privileged processes would be able to read from the swap
+                device.)</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The suspend mode on laptop computers, as well some desktop systems, saves a
+                    copy of a system’s RAM to disk, regardless of memory locks.</p></div><p>In this section, we look at the system calls used for locking and unlocking part
+                or all of a process’s virtual memory. However, before doing this, we first look at a
+                resource limit that governs memory locking.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="the_rlimit_underscore_memlock_re"/></div></div></div><div class="sect3" title="The RLIMIT_MEMLOCK resource limit"><div class="titlepage"><div><div><h4 class="title" id="the_rlimit_underscore_memlock_re-id1">The <code class="literal">RLIMIT_MEMLOCK</code> resource
+                        limit</h4></div></div></div><p>In <a class="xref" href="ch36.html#details_of_specific_resource_limits" title="Details of Specific Resource Limits">Details of Specific Resource Limits</a>, we briefly
+                        described the <code class="literal">RLIMIT_MEMLOCK</code> limit, which
+                        defines a limit on the number of bytes that a process can lock into memory.
+                        We now consider this limit in more detail.<a id="IDX-CHP-50-6842" class="indexterm"/><a id="IDX-CHP-50-6843" class="indexterm"/><a id="IDX-CHP-50-6844" class="indexterm"/><a id="IDX-CHP-50-6841" class="indexterm"/></p><p>In Linux kernels before 2.6.9, only privileged processes (<code class="literal">CAP_IPC_LOCK</code>) can lock memory, and the
+                            <code class="literal">RLIMIT_MEMLOCK</code> soft resource limit
+                        places an upper limit on the number of bytes that a privileged process can
+                        lock.</p><p>Starting with Linux 2.6.9, changes to the memory locking model allow
+                        unprivileged processes to lock small amounts of memory. This is useful for
+                        an application that needs to place a small piece of sensitive information in
+                        locked memory in order to ensure that it is never written to the swap space
+                        on disk; for example, <span class="emphasis"><em>gpg</em></span> does this with pass phrases.
+                        As a result of these changes:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>no limits are placed on the amount of memory that a privileged
+                                process can lock (i.e., <code class="literal">RLIMIT_MEMLOCK</code> is ignored); and</p></li><li class="listitem"><p>an unprivileged process is now able to lock memory up to the soft
+                                limit defined by <code class="literal">RLIMIT_MEMLOCK</code>.</p></li></ul></div><p>The default value for both the soft and hard <code class="literal">RLIMIT_MEMLOCK</code> limits is 8 pages (i.e., 32,768 bytes on
+                        x86-32).</p><p>The <code class="literal">RLIMIT_MEMLOCK</code> limit
+                        affects:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>mlock()</em></span> and
+                                    <span class="emphasis"><em>mlockall()</em></span>;<a id="IDX-CHP-50-6845" class="indexterm"/><a id="IDX-CHP-50-6846" class="indexterm"/></p></li><li class="listitem"><p>the <span class="emphasis"><em>mmap()</em></span>
+                                <code class="literal">MAP_LOCKED</code> flag, which is used to
+                                lock a memory mapping when it is created, as described in <a class="xref" href="ch49.html#additional_mmap_open_parenthesis_close_p" title="Additional mmap() Flags">Additional <span class="emphasis"><em>mmap()</em></span> Flags</a>; and</p></li><li class="listitem"><p>the <span class="emphasis"><em>shmctl()</em></span>
+                                <code class="literal">SHM_LOCK</code> operation, which is used
+                                to lock System V shared memory segments, as described in Section
+                                48.7.</p></li></ul></div><p>Since virtual memory is managed in units of pages, memory locks apply to
+                        complete pages. When performing limit checks, the <code class="literal">RLIMIT_MEMLOCK</code> limit is rounded <span class="emphasis"><em>down</em></span> to
+                        the nearest multiple of the system page size.</p><p>Although this resource limit has a single (soft) value, in effect, it
+                        defines two separate limits:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>For <span class="emphasis"><em>mlock()</em></span>, <span class="emphasis"><em>mlockall()</em></span>,
+                                and the <span class="emphasis"><em>mmap()</em></span>
+                                <code class="literal">MAP_LOCKED</code> operation, <code class="literal">RLIMIT_MEMLOCK</code> defines a per-process
+                                limit on the number of bytes of its virtual address space that a
+                                process may lock.</p></li><li class="listitem"><p>For the <span class="emphasis"><em>shmctl()</em></span>
+                                <code class="literal">SHM_LOCK</code> operation, <code class="literal">RLIMIT_MEMLOCK</code> defines a per-user
+                                limit on the number of bytes in shared memory segments that may be
+                                locked by the real user ID of this process. When a process performs
+                                a <span class="emphasis"><em>shmctl()</em></span>
+                                <code class="literal">SHM_LOCK</code> operation, the kernel
+                                checks the total number of bytes of System V shared memory that are
+                                already recorded as being locked by the real user ID of the calling
+                                process. If the size of the to-be-locked segment would not push that
+                                total over the process’s <code class="literal">RLIMIT_MEMLOCK</code> limit, the operation succeeds.</p></li></ul></div><p>The reason <code class="literal">RLIMIT_MEMLOCK</code> has different
+                        semantics for System V shared memory is that a shared memory segment can
+                        continue to exist even when it is not attached by any process. (It is
+                        removed only after an explicit <span class="emphasis"><em>shmctl()</em></span>
+                        <code class="literal">IPC_RMID</code> operation, and then only after
+                        all processes have detached it from their address space.)</p></div><div class="sect3" title="Locking and unlocking memory regions"><div class="titlepage"><div><div><h4 class="title" id="locking_and_unlocking_memory_regions">Locking and unlocking memory regions</h4></div></div></div><p>A process can use <span class="emphasis"><em>mlock()</em></span> and
+                            <span class="emphasis"><em>munlock()</em></span> to lock and unlock regions of
+                            memory.<a id="IDX-CHP-50-6847" class="indexterm"/><a id="IDX-CHP-50-6848" class="indexterm"/><a id="IDX-CHP-50-6849" class="indexterm"/><a id="IDX-CHP-50-6850" class="indexterm"/><a id="IDX-CHP-50-6851" class="indexterm"/><a id="IDX-CHP-50-6852" class="indexterm"/></p><a id="I_programlisting50_d1e134031"/><pre class="programlisting">#include &lt;sys/mman.h&gt;
+
+int <strong class="userinput"><code>mlock</code></strong>(void *<span class="emphasis"><em>addr</em></span>, size_t <span class="emphasis"><em>length</em></span>);
+int <strong class="userinput"><code>munlock</code></strong>(void *<span class="emphasis"><em>addr</em></span>, size_t <span class="emphasis"><em>length</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Both return 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>mlock()</em></span> system call locks all of the pages of the
+                        calling process’s virtual address range starting at
+                            <span class="emphasis"><em>addr</em></span> and continuing for <span class="emphasis"><em>length</em></span>
+                        bytes. Unlike the corresponding argument passed to several other
+                        memory-related system calls, <span class="emphasis"><em>addr</em></span> does not need to be
+                        page-aligned: the kernel locks pages starting at the next page boundary
+                        below <span class="emphasis"><em>addr</em></span>. However, SUSv3 optionally allows an
+                        implementation to require that <span class="emphasis"><em>addr</em></span> be a multiple of
+                        the system page size, and portable applications should ensure that this is
+                        so when calling <span class="emphasis"><em>mlock()</em></span> and
+                            <span class="emphasis"><em>munlock()</em></span>.</p><p>Because locking is done in units of whole pages, the end of the locked
+                        region is the next page boundary greater than <span class="emphasis"><em>length</em></span>
+                        plus <span class="emphasis"><em>addr</em></span>. For example, on a system where the page size
+                        is 4096 bytes, the call <span class="emphasis"><em>mlock(2000, 4000)</em></span> will lock
+                        bytes 0 through to 8191.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>We can find out how much memory a process currently has locked by
+                            inspecting the <code class="literal">VmLck</code> entry of the
+                            Linux-specific <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/status</code> file.<a id="IDX-CHP-50-6853" class="indexterm"/></p></div><p>After a successful <span class="emphasis"><em>mlock()</em></span> call, all of the pages in
+                        the specified range are guaranteed to be locked and resident in physical
+                        memory. The <span class="emphasis"><em>mlock()</em></span> system call fails if there is
+                        insufficient physical memory to lock all of the requested pages or if the
+                        request violates the <code class="literal">RLIMIT_MEMLOCK</code> soft
+                        resource limit.</p><p>We show an example of the use of <span class="emphasis"><em>mlock()</em></span> in <a class="xref" href="ch50.html#using_mlock_open_parenthesis_close_paren" title="Example 50-2. Using mlock() and mincore()">Example 50-2</a>.</p><p>The <span class="emphasis"><em>munlock()</em></span> system call performs the converse of
+                            <span class="emphasis"><em>mlock()</em></span>, removing a memory lock previously
+                        established by the calling process. The <span class="emphasis"><em>addr</em></span> and
+                            <span class="emphasis"><em>length</em></span> arguments are interpreted in the same way as
+                        for <span class="emphasis"><em>munlock()</em></span>. Unlocking a set of pages doesn’t
+                        guarantee that they cease to be memory-resident: pages are removed from RAM
+                        only in response to memory demands by other processes.</p><p>Aside from the explicit use of <span class="emphasis"><em>munlock()</em></span>, memory
+                        locks are automatically removed in the following circumstances:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>on process termination;</p></li><li class="listitem"><p>if the locked pages are unmapped via
+                                <span class="emphasis"><em>munmap()</em></span>; or</p></li><li class="listitem"><p>if the locked pages are overlaid using the
+                                    <span class="emphasis"><em>mmap()</em></span>
+                                <code class="literal">MAP_FIXED</code> flag.</p></li></ul></div></div><div class="sect3" title="Details of the semantics of memory locking"><div class="titlepage"><div><div><h4 class="title" id="details_of_the_semantics_of_memory_locki">Details of the semantics of memory locking</h4></div></div></div><p>In the following paragraphs, we note some details of the semantics of
+                        memory locks.</p><p>Memory locks are not inherited by a child created via
+                            <span class="emphasis"><em>fork()</em></span>, and are not preserved across an
+                            <span class="emphasis"><em>exec()</em></span>.</p><p>Where multiple processes share a set of pages (e.g., a <code class="literal">MAP_SHARED</code> mapping), these pages remain locked
+                        in memory as long as at least one of the processes holds a memory lock on
+                        the pages.</p><p>Memory locks don’t nest for a single process. If a process repeatedly
+                        calls <span class="emphasis"><em>mlock()</em></span> on a certain virtual address range, only
+                        one lock is established, and this lock will be removed by a single call to
+                            <span class="emphasis"><em>munlock()</em></span>. On the other hand, if we use
+                            <span class="emphasis"><em>mmap()</em></span> to map the same set of pages (i.e., the same
+                        file) at several different locations within a single process, and then lock
+                        each of these mappings, the pages remain locked in RAM until all of the
+                        mappings have been unlocked.</p><p>The fact that memory locks are performed in units of pages and can’t be
+                        nested means that it isn’t logically correct to independently apply
+                            <span class="emphasis"><em>mlock()</em></span> and <span class="emphasis"><em>munlock()</em></span> calls to
+                        different data structures on the same virtual page. For example, suppose we
+                        have two data structures within the same virtual memory page pointed to by
+                        pointers <span class="emphasis"><em>p1</em></span> and <span class="emphasis"><em>p2</em></span>, and we make
+                        the following calls:</p><a id="I_programlisting50_d1e134218"/><pre class="programlisting">mlock(*p1, len1);
+mlock(*p2, len2);               /* Actually has no effect */
+munlock(*p1, len1);</pre><p>All of the above calls will succeed, but at the end of this sequence, the
+                        entire page is unlocked; that is, the data structure pointed to by
+                            <span class="emphasis"><em>p2</em></span> is not locked into memory.</p><p>Note that the semantics of the <span class="emphasis"><em>shmctl()</em></span>
+                        <code class="literal">SHM_LOCK</code> operation (<a class="xref" href="ch48.html#shared_memory_control_operations" title="Shared Memory Control Operations">Shared Memory Control Operations</a>) differ from those of
+                            <span class="emphasis"><em>mlock()</em></span> and <span class="emphasis"><em>mlockall()</em></span>, as
+                            follows:<a id="IDX-CHP-50-6854" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>After a <code class="literal">SHM_LOCK</code> operation,
+                                pages are locked into memory only as they are faulted in by
+                                subsequent references. By contrast, <span class="emphasis"><em>mlock()</em></span> and
+                                    <span class="emphasis"><em>mlockall()</em></span> fault all of the locked pages
+                                into memory before the call returns.</p></li><li class="listitem"><p>The <code class="literal">SHM_LOCK</code> operation sets a
+                                property of the shared memory segment, rather than the process. (For
+                                this reason, the value in the <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/status VmLck</code> field doesn’t include
+                                the size of any attached System V shared memory segments that have
+                                been locked using <code class="literal">SHM_LOCK</code>.) This
+                                means that, once faulted into memory, the pages remain resident even
+                                if all processes detach the shared memory segment. By contrast, a
+                                region locked into memory using <span class="emphasis"><em>mlock()</em></span> (or
+                                    <span class="emphasis"><em>mlockall()</em></span>) remains locked only as long as
+                                at least one process holds a lock on the region.</p></li></ul></div></div><div class="sect3" title="Locking and unlocking all of a process’s memory"><div class="titlepage"><div><div><h4 class="title" id="locking_and_unlocking_all_of_a_process_n">Locking and unlocking all of a process’s memory</h4></div></div></div><p>A process can use <span class="emphasis"><em>mlockall()</em></span> and
+                            <span class="emphasis"><em>munlockall()</em></span> to lock and unlock all of its
+                            memory.<a id="IDX-CHP-50-6855" class="indexterm"/><a id="IDX-CHP-50-6856" class="indexterm"/><a id="IDX-CHP-50-6857" class="indexterm"/><a id="IDX-CHP-50-6858" class="indexterm"/><a id="IDX-CHP-50-6859" class="indexterm"/></p><a id="I_programlisting50_d1e134325"/><pre class="programlisting">#include &lt;sys/mman.h&gt;
+
+int <strong class="userinput"><code>mlockall</code></strong>(int <span class="emphasis"><em>flags</em></span>);
+int <strong class="userinput"><code>munlockall</code></strong>(void);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Both return 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>mlockall()</em></span> system call locks all of the currently
+                        mapped pages in a process’s virtual address space, all of the pages mapped
+                        in the future, or both, according to the <span class="emphasis"><em>flags</em></span> bit
+                        mask, which is specified by ORing together one or both of the following
+                        constants:</p><div class="variablelist"><dl><dt><span class="term">
+                                <code class="literal">MCL_CURRENT</code>
+                            </span></dt><dd><p>Lock all pages that are currently mapped into the calling
+                                    process’s virtual address space. This includes all pages
+                                    currently allocated for the program text, data segments, memory
+                                    mappings, and the stack. After a successful call specifying the
+                                        <code class="literal">MCL_CURRENT</code> flag, all of
+                                    the pages of the calling process are guaranteed to be
+                                    memory-resident. This flag doesn’t affect pages that are
+                                    subsequently allocated in the process’s virtual address space;
+                                    for this, we must use <code class="literal">MCL_FUTURE</code>.<a id="IDX-CHP-50-6860" class="indexterm"/></p></dd><dt><span class="term">
+                                <code class="literal">MCL_FUTURE</code>
+                            </span></dt><dd><p>Lock all pages subsequently mapped into the calling process’s
+                                    virtual address space. Such pages may, for example, be part of a
+                                    shared memory region mapped via <span class="emphasis"><em>mmap()</em></span> or
+                                        <span class="emphasis"><em>shmat()</em></span>, or part of the upwardly
+                                    growing heap or downwardly growing stack. As a consequence of
+                                    specifying the <code class="literal">MCL_FUTURE</code>
+                                    flag, a later memory allocation operation (e.g.,
+                                        <span class="emphasis"><em>mmap()</em></span>, <span class="emphasis"><em>sbrk()</em></span>, or
+                                        <span class="emphasis"><em>malloc()</em></span>) may fail, or stack growth may
+                                    yield a <code class="literal">SIGSEGV</code> signal, if
+                                    the system runs out of RAM to allocate to the process or the
+                                        <code class="literal">RLIMIT_MEMLOCK</code> soft
+                                    resource limit is encountered.<a id="IDX-CHP-50-6861" class="indexterm"/></p></dd></dl></div><p>The same rules regarding the constraints, lifetime, and inheritance of
+                        memory locks created with <span class="emphasis"><em>mlock()</em></span> also apply for memory
+                        locks created via <span class="emphasis"><em>mlockall()</em></span>.</p><p>The <span class="emphasis"><em>munlockall()</em></span> system call unlocks all of the pages
+                        of the calling process and undoes the effect of any previous
+                            <span class="emphasis"><em>mlockall(MCL_FUTURE)</em></span> call. As with
+                            <span class="emphasis"><em>munlock()</em></span>, unlocked pages are not guaranteed to be
+                        removed from RAM by this call.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Before Linux 2.6.9, privilege (<code class="literal">CAP_IPC_LOCK</code>) was required to call
+                                <span class="emphasis"><em>munlockall()</em></span> (inconsistently, privilege was not
+                            required for <span class="emphasis"><em>munlock()</em></span>). Since Linux 2.6.9,
+                            privilege is no longer required.</p></div></div></div></div><div class="sect1" title="Determining Memory Residence: mincore()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="determining_memory_residence_colon_minco">Determining Memory Residence: <span class="emphasis"><em>mincore()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>mincore()</em></span> system call is the complement of the memory
+                locking system calls. It reports which pages in a virtual address range are
+                currently resident in RAM, and thus won’t cause a page fault if accessed.<a id="IDX-CHP-50-6863" class="indexterm"/><a id="IDX-CHP-50-6864" class="indexterm"/><a id="IDX-CHP-50-6865" class="indexterm"/><a id="IDX-CHP-50-6866" class="indexterm"/><a id="IDX-CHP-50-6867" class="indexterm"/><a id="IDX-CHP-50-6868" class="indexterm"/><a id="IDX-CHP-50-6869" class="indexterm"/><a id="IDX-CHP-50-6870" class="indexterm"/><a id="IDX-CHP-50-6871" class="indexterm"/><a id="IDX-CHP-50-6872" class="indexterm"/><a id="IDX-CHP-50-6862" class="indexterm"/></p><p>SUSv3 doesn’t specify <span class="emphasis"><em>mincore()</em></span>. It is available on many, but
+                not all, UNIX implementations. On Linux, <span class="emphasis"><em>mincore()</em></span> has been
+                available since kernel 2.4.</p><a id="I_programlisting50_d1e134508"/><pre class="programlisting">#define _BSD_SOURCE           /* Or: #define _SVID_SOURCE */
+#include &lt;sys/mman.h&gt;
+
+int <strong class="userinput"><code>mincore</code></strong>(void *<span class="emphasis"><em>addr</em></span>, size_t <span class="emphasis"><em>length</em></span>, unsigned char *<span class="emphasis"><em>vec</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>mincore()</em></span> system call returns memory-residence
+                information about pages in the virtual address range starting at
+                    <span class="emphasis"><em>addr</em></span> and running for <span class="emphasis"><em>length</em></span> bytes. The
+                address supplied in <span class="emphasis"><em>addr</em></span> must be page-aligned, and, since
+                information is returned about whole pages, <span class="emphasis"><em>length</em></span> is
+                effectively rounded up to the next multiple of the system page size.</p><p>Information about memory residency is returned in <span class="emphasis"><em>vec</em></span>, which
+                must be an array of <span class="emphasis"><em>(length + PAGE_SIZE – 1) / PAGE_SIZE</em></span> bytes.
+                (On Linux, <span class="emphasis"><em>vec</em></span> has the type <span class="emphasis"><em>unsigned char
+                    *</em></span>; on some other UNIX implementations, <span class="emphasis"><em>vec</em></span> has
+                the type <span class="emphasis"><em>char *</em></span>.) The least significant bit of each byte is set
+                if the corresponding page is memory-resident. The setting of the other bits is
+                undefined on some UNIX implementations, so portable applications should test only
+                this bit.</p><p>The information returned by <span class="emphasis"><em>mincore()</em></span> can change between the
+                time the call is made and the time the elements of <span class="emphasis"><em>vec</em></span> are
+                checked. The only pages guaranteed to remain memory-resident are those locked with
+                    <span class="emphasis"><em>mlock()</em></span> or <span class="emphasis"><em>mlockall()</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Prior to Linux 2.6.21, various implementation problems meant that
+                        <span class="emphasis"><em>mincore()</em></span> did not correctly report memory-residence
+                    information for <code class="literal">MAP_PRIVATE</code> mappings or for
+                    nonlinear mappings (established using
+                    <span class="emphasis"><em>remap_file_pages()</em></span>).</p></div><p><a class="xref" href="ch50.html#using_mlock_open_parenthesis_close_paren" title="Example 50-2. Using mlock() and mincore()">Example 50-2</a> demonstrates the use of
+                    <span class="emphasis"><em>mlock()</em></span> and <span class="emphasis"><em>mincore()</em></span>. After
+                allocating and mapping a region of memory using <span class="emphasis"><em>mmap()</em></span>, this
+                program uses <span class="emphasis"><em>mlock()</em></span> to lock either the entire region or
+                otherwise groups of pages at regular intervals. (Each of the command-line arguments
+                to the program is expressed in terms of pages; the program converts these to bytes,
+                as required for the calls to <span class="emphasis"><em>mmap()</em></span>,
+                    <span class="emphasis"><em>mlock()</em></span>, and <span class="emphasis"><em>mincore()</em></span>.) Before and
+                after the <span class="emphasis"><em>mlock()</em></span> call, the program uses
+                    <span class="emphasis"><em>mincore()</em></span> to retrieve information about the memory
+                residency of pages in the region and displays this information graphically.</p><div class="example"><a id="using_mlock_open_parenthesis_close_paren"/><div class="example-title">Example 50-2. Using <span class="emphasis"><em>mlock()</em></span> and <span class="emphasis"><em>mincore()</em></span></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>vmem/memlock.c</code></strong>
+#define _BSD_SOURCE     /* Get mincore() declaration and MAP_ANONYMOUS
+                           definition from &lt;sys/mman.h&gt; */
+#include &lt;sys/mman.h&gt;
+#include "tlpi_hdr.h"
+
+/* Display residency of pages in range [addr .. (addr + length - 1)] */
+
+static void
+displayMincore(char *addr, size_t length)
+{
+    unsigned char *vec;
+    long pageSize, numPages, j;
+
+    pageSize = sysconf(_SC_PAGESIZE);
+
+    numPages = (length + pageSize - 1) / pageSize;
+    vec = malloc(numPages);
+    if (vec == NULL)
+        errExit("malloc");
+
+    if (mincore(addr, length, vec) == -1)
+        errExit("mincore");
+
+    for (j = 0; j &lt; numPages; j++) {
+        if (j % 64 == 0)
+            printf("%s%10p: ", (j == 0) ? "" : "\n", addr + (j * pageSize));
+        printf("%c", (vec[j] &amp; 1) ? '*' : '.');
+    }
+    printf("\n");
+
+    free(vec);
+}
+
+int
+main(int argc, char *argv[])
+{
+    char *addr;
+    size_t len, lockLen;
+    long pageSize, stepSize, j;
+
+    if (argc != 4 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s num-pages lock-page-step lock-page-len\n", argv[0]);
+
+    pageSize = sysconf(_SC_PAGESIZE);
+    if (pageSize == -1)
+        errExit("sysconf(_SC_PAGESIZE)");
+
+    len =      getInt(argv[1], GN_GT_0, "num-pages") * pageSize;
+    stepSize = getInt(argv[2], GN_GT_0, "lock-page-step") * pageSize;
+    lockLen =  getInt(argv[3], GN_GT_0, "lock-page-len") * pageSize;
+
+    addr = mmap(NULL, len, PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (addr == MAP_FAILED)
+        errExit("mmap");
+
+    printf("Allocated %ld (%#lx) bytes starting at %p\n",
+            (long) len, (unsigned long) len, addr);
+
+    printf("Before mlock:\n");
+    displayMincore(addr, len);
+
+    /* Lock pages specified by command line arguments into memory */
+
+    for (j = 0; j + lockLen &lt;= len; j += stepSize)
+        if (mlock(addr + j, lockLen) == -1)
+            errExit("mlock");
+
+    printf("After mlock:\n");
+    displayMincore(addr, len);
+
+    exit(EXIT_SUCCESS);
+}
+      <strong class="userinput"><code>vmem/memlock.c</code></strong></pre></div></div><p>The following shell session shows a sample run of the program in <a class="xref" href="ch50.html#using_mlock_open_parenthesis_close_paren" title="Example 50-2. Using mlock() and mincore()">Example 50-2</a>. In this example, we
+                allocate 32 pages, and in each group of 8 pages, we lock 3 consecutive pages:</p><a id="I_programlisting50_d1e134639"/><pre class="programlisting">$ <strong class="userinput"><code>su</code></strong>                                        <em class="lineannotation"><span class="lineannotation">Assume privilege</span></em>
+Password:
+# <strong class="userinput"><code>./memlock 32 8 3</code></strong>
+Allocated 131072 (0x20000) bytes starting at 0x4014a000
+Before mlock:
+0x4014a000: ................................
+After mlock:
+0x4014a000: ***.....***.....***.....***.....</pre><p>In the program output, dots represent pages that are not resident in memory, and
+                asterisks represent pages that are resident in memory. As we can see from the final
+                line of output, 3 out of each group of 8 pages are memory-resident.</p><p>In this example, we assumed superuser privilege so that the program can use
+                    <span class="emphasis"><em>mlock()</em></span>. This is not necessary in Linux 2.6.9 and later if
+                the amount of memory to be locked falls within the <code class="literal">RLIMIT_MEMLOCK</code> soft resource limit.</p></div><div class="sect1" title="Advising Future Memory Usage Patterns: madvise()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="advising_future_memory_usage_patterns_co">Advising Future Memory Usage Patterns: <span class="emphasis"><em>madvise()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>madvise()</em></span> system call is used is to improve the
+                performance of an application by informing the kernel about the calling process’s
+                likely usage of the pages in the range starting at <span class="emphasis"><em>addr</em></span> and
+                continuing for <span class="emphasis"><em>length</em></span> bytes. The kernel may use this
+                information to improve the efficiency of I/O performed on the file mapping that
+                underlies the pages. (See <a class="xref" href="ch49.html#file_mappings" title="File Mappings">File Mappings</a> for a discussion of file
+                mappings.) On Linux, <span class="emphasis"><em>madvise()</em></span> has been available since kernel
+                    2.4.<a id="IDX-CHP-50-6874" class="indexterm"/><a id="IDX-CHP-50-6875" class="indexterm"/><a id="IDX-CHP-50-6876" class="indexterm"/><a id="IDX-CHP-50-6877" class="indexterm"/><a id="IDX-CHP-50-6878" class="indexterm"/><a id="IDX-CHP-50-6873" class="indexterm"/></p><a id="I_programlisting50_d1e134711"/><pre class="programlisting">#define _BSD_SOURCE
+#include &lt;sys/mman.h&gt;
+
+int <strong class="userinput"><code>madvise</code></strong>(void *<span class="emphasis"><em>addr</em></span>, size_t <span class="emphasis"><em>length</em></span>, int <span class="emphasis"><em>advice</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The value specified in <span class="emphasis"><em>addr</em></span> must be page-aligned, and
+                    <span class="emphasis"><em>length</em></span> is effectively rounded up to the next multiple of
+                the system page size. The <span class="emphasis"><em>advice</em></span> argument is one of the
+                following:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">MADV_NORMAL</code>
+                    </span></dt><dd><p>This is the default behavior. Pages are transferred in clusters (a
+                            small multiple of the system page size). This results in some read-ahead
+                            and read-behind.</p></dd><dt><span class="term">
+                        <code class="literal">MADV_RANDOM</code>
+                    </span></dt><dd><p>Pages in this region will be accessed randomly, so read-ahead will
+                            yield no benefit. Thus, the kernel should fetch the minimum amount of
+                            data on each read.</p></dd><dt><span class="term">
+                        <code class="literal">MADV_SEQUENTIAL</code>
+                    </span></dt><dd><p>Pages in this range will be accessed once, sequentially. Thus, the
+                            kernel can aggressively read ahead, and pages can be quickly freed after
+                            they have been accessed.</p></dd><dt><span class="term">
+                        <code class="literal">MADV_WILLNEED</code>
+                    </span></dt><dd><p>Read pages in this region ahead, in preparation for future access. The
+                                <code class="literal">MADV_WILLNEED</code> operation has an
+                            effect similar to the Linux-specific <span class="emphasis"><em>readahead()</em></span>
+                            system call and the <span class="emphasis"><em>posix_fadvise()</em></span>
+                            <code class="literal">POSIX_FADV_WILLNEED</code>
+                                operation.<a id="IDX-CHP-50-6879" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">MADV_DONTNEED</code>
+                    </span></dt><dd><p>The calling process no longer requires the pages in this region to be
+                            memory-resident. The precise effect of this flag varies across UNIX
+                            implementations. We first note the behavior on Linux. For a <code class="literal">MAP_PRIVATE</code> region, the mapped pages are
+                            explicitly discarded, which means that modifications to the pages are
+                            lost. The virtual memory address range remains accessible, but the next
+                            access of each page will result in a page fault reinitializing the page,
+                            either with the contents of the file from which it is mapped or with
+                            zeros in the case of an anonymous mapping. This can be used as a means
+                            of explicitly reinitializing the contents of a <code class="literal">MAP_PRIVATE</code> region. For a <code class="literal">MAP_SHARED</code> region, the kernel <span class="emphasis"><em>may</em></span>
+                            discard modified pages in some circumstances, depending on the
+                            architecture (this behavior doesn’t occur on x86). Some other UNIX
+                            implementations also behave in the same way as Linux. However, on some
+                            UNIX implementations, <code class="literal">MADV_DONTNEED</code>
+                            simply informs the kernel that the specified pages can be swapped out if
+                            necessary. Portable applications should not rely on the Linux’s
+                            destructive semantics for <code class="literal">MADV_DONTNEED</code>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Linux 2.6.16 added three new nonstandard
+                                    <span class="emphasis"><em>advice</em></span> values: <code class="literal">MADV_DONTFORK</code>, <code class="literal">MADV_DOFORK</code>, and <code class="literal">MADV_REMOVE</code>. Linux 2.6.32 and 2.6.33 added another
+                                four nonstandard <span class="emphasis"><em>advice</em></span> values: <code class="literal">MADV_HWPOISON</code>, <code class="literal">MADV_SOFT_OFFLINE</code>, <code class="literal">MADV_MERGEABLE</code>, and <code class="literal">MADV_UNMERGEABLE</code>. These values are
+                                used in special circumstances and are described in the
+                                    <span class="emphasis"><em>madvise(2)</em></span> manual page.</p></div></dd></dl></div><p>Most UNIX implementations provide a version of <span class="emphasis"><em>madvise()</em></span>,
+                typically allowing at least the <span class="emphasis"><em>advice</em></span> constants described
+                above. However, SUSv3 standardizes this API under a different name,
+                    <span class="emphasis"><em>posix_madvise()</em></span>, and prefixes the corresponding
+                    <span class="emphasis"><em>advice</em></span> constants with the string <code class="literal">POSIX_</code>. Thus, the constants are <code class="literal">POSIX_MADV_NORMAL</code>, <code class="literal">POSIX_MADV_RANDOM</code>, <code class="literal">POSIX_MADV_SEQUENTIAL</code>, <code class="literal">POSIX_MADV_WILLNEED</code>, and <code class="literal">POSIX_MADV_DONTNEED</code>. This alternative interface is implemented in
+                    <span class="emphasis"><em>glibc</em></span> (version 2.2 and later) by calls to
+                    <span class="emphasis"><em>madvise()</em></span>, but it is not available on all UNIX
+                    implementations.<a id="IDX-CHP-50-6880" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv3 says that <span class="emphasis"><em>posix_madvise()</em></span> should not affect the
+                    semantics of a program. However, in <span class="emphasis"><em>glibc</em></span> versions before
+                    2.7, the <code class="literal">POSIX_MADV_DONTNEED</code> operation is
+                    implemented using <span class="emphasis"><em>madvise()</em></span>
+                    <code class="literal">MADV_DONTNEED</code>, which does affect the
+                    semantics of a program, as described earlier. Since <span class="emphasis"><em>glibc</em></span>
+                    2.7, the <span class="emphasis"><em>posix_madvise()</em></span> wrapper implements <code class="literal">POSIX_MADV_DONTNEED</code> to do nothing, so that it does
+                    not affect the semantics of a program.</p></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id49">Summary</h2></div></div></div><p>In this chapter, we considered various operations that can be performed on a
+                process’s virtual memory:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>mprotect()</em></span> system call changes the protection on
+                        a region of virtual memory.</p></li><li class="listitem"><p>The <span class="emphasis"><em>mlock()</em></span> and <span class="emphasis"><em>mlockall()</em></span>
+                        system calls lock part or all of a process’s virtual address space,
+                        respectively, into physical memory.</p></li><li class="listitem"><p>The <span class="emphasis"><em>mincore()</em></span> system call reports which pages in a
+                        virtual memory region are currently resident in physical memory.</p></li><li class="listitem"><p>The <span class="emphasis"><em>madvise()</em></span> system call and the
+                            <span class="emphasis"><em>posix_madvise()</em></span> function allow a process to advise
+                        the kernel about the process’s expected patterns of memory use.</p></li></ul></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id35">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Verify the effect of the <code class="literal">RLIMIT_MEMLOCK</code>
+                        resource limit by writing a program that sets a value for this limit and
+                        then attempts to lock more memory than the limit.</p></li><li class="listitem"><p>Write a program to verify the operation of the
+                            <span class="emphasis"><em>madvise()</em></span>
+                        <code class="literal">MADV_DONTNEED</code> operation for a writable
+                            <code class="literal">MAP_PRIVATE</code> mapping.</p></li></ol></div></div></section></body></html>

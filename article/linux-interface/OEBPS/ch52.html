@@ -1,0 +1,1035 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 52. POSIX Message Queues</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch51.html" title="Chapter 51. Introduction to POSIX IPC"/><link rel="next" href="ch53.html" title="Chapter 53. POSIX Semaphores"/></head><body><section class="chapter" title="Chapter 52. POSIX Message Queues" epub:type="chapter" id="posix_message_queues"><div class="titlepage"><div><div><h2 class="title">Chapter 52. POSIX Message Queues</h2></div></div></div><p>This chapter describes POSIX message queues, which allow processes to exchange data in
+            the form of messages. POSIX message queues are similar to their System V counterparts,
+            in that data is exchanged in units of whole messages. However, there are also some
+            notable differences:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>POSIX message queues are reference counted. A queue that is marked for
+                    deletion is removed only after it is closed by all processes that are currently
+                    using it.</p></li><li class="listitem"><p>Each System V message has an integer type, and messages can be selected in a
+                    variety of ways using <span class="emphasis"><em>msgrcv()</em></span>. By contrast, POSIX messages
+                    have an associated priority, and messages are always strictly queued (and thus
+                    received) in priority order.</p></li><li class="listitem"><p>POSIX message queues provide a feature that allows a process to be
+                    asynchronously notified when a message is available on a queue.</p></li></ul></div><p>POSIX message queues are a relatively recent addition to Linux. The required
+            implementation support was added in kernel 2.6.6 (in addition,
+                <span class="emphasis"><em>glibc</em></span> 2.3.4 or later is required).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>POSIX message queue support is an optional kernel component that is configured via
+                the <code class="literal">CONFIG_POSIX_MQUEUE</code> option.<a id="IDX-CHP-52-6926" class="indexterm"/></p></div><div class="sect1" title="Overview"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="overview-id15">Overview</h2></div></div></div><p>The main functions in the POSIX message queue API are the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>mq_open()</em></span> function creates a new message queue or
+                        opens an existing queue, returning a message queue descriptor for use in
+                        later calls.<a id="IDX-CHP-52-6927" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>mq_send()</em></span> function writes a message to a
+                            queue.<a id="IDX-CHP-52-6928" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>mq_receive()</em></span> function reads a message from a
+                            queue.<a id="IDX-CHP-52-6929" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>mq_close()</em></span> function closes a message queue that
+                        the process previously opened.<a id="IDX-CHP-52-6930" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>mq_unlink()</em></span> function removes a message queue name
+                        and marks the queue for deletion when all processes have closed
+                            it.<a id="IDX-CHP-52-6931" class="indexterm"/></p></li></ul></div><p>The above functions all serve fairly obvious purposes. In addition, a couple of
+                features are peculiar to the POSIX message queue API:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Each message queue has an associated set of attributes. Some of these
+                        attributes can be set when the queue is created or opened using
+                            <span class="emphasis"><em>mq_open()</em></span>. Two functions are provided to retrieve
+                        and change queue attributes: <span class="emphasis"><em>mq_getattr()</em></span> and
+                            <span class="emphasis"><em>mq_setattr()</em></span>.<a id="IDX-CHP-52-6932" class="indexterm"/><a id="IDX-CHP-52-6933" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>mq_notify()</em></span> function allows a process to register
+                        for message notification from a queue. After registering, the process is
+                        notified of the availability of a message by delivery of a signal or by the
+                        invocation of a function in a separate thread.<a id="IDX-CHP-52-6934" class="indexterm"/></p></li></ul></div></div><div class="sect1" title="Opening, Closing, and Unlinking a Message Queue"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="opening_comma_closing_comma_and_unlinkin">Opening, Closing, and Unlinking a Message Queue</h2></div></div></div><p>In this section, we look at the functions used to open, close, and remove message
+                    queues.<a id="IDX-CHP-52-6935" class="indexterm"/><a id="IDX-CHP-52-6936" class="indexterm"/><a id="IDX-CHP-52-6937" class="indexterm"/><a id="IDX-CHP-52-6938" class="indexterm"/><a id="IDX-CHP-52-6939" class="indexterm"/><a id="IDX-CHP-52-6940" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="opening_a_message_queue"/></div></div></div><div class="sect3" title="Opening a message queue"><div class="titlepage"><div><div><h4 class="title" id="opening_a_message_queue-id1">Opening a message queue</h4></div></div></div><p>The <span class="emphasis"><em>mq_open()</em></span> function creates a new message queue or
+                        opens an existing queue.</p><a id="I_programlisting52_d1e135922"/><pre class="programlisting">#include &lt;fcntl.h&gt;            /* Defines O_* constants */
+#include &lt;sys/stat.h&gt;         /* Defines mode constants */
+#include &lt;mqueue.h&gt;
+
+mqd_t <strong class="userinput"><code>mq_open</code></strong>(const char *<span class="emphasis"><em>name</em></span>, int <span class="emphasis"><em>oflag</em></span>, ...
+              /* mode_t <span class="emphasis"><em>mode</em></span>, struct mq_attr *<span class="emphasis"><em>attr</em></span> */);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns a message queue descriptor on success, or
+                                <span class="emphasis"><em>(mqd_t)</em></span> -1 on error</p></div><p>The <span class="emphasis"><em>name</em></span> argument identifies the message queue, and
+                        is specified according to the rules given in Section 51.1.</p><p>The <span class="emphasis"><em>oflag</em></span> argument is a bit mask that controls
+                        various aspects of the operation of <span class="emphasis"><em>mq_open()</em></span>. The
+                        values that can be included in this mask are summarized in <a class="xref" href="ch52.html#bit_values_for_the_mq_underscore_open_op" title="Table 52-1. Bit values for the mq_open() oflag argument">Table 52-1</a>.</p><div class="table"><a id="bit_values_for_the_mq_underscore_open_op"/><div class="table-title">Table 52-1. Bit values for the <span class="emphasis"><em>mq_open() oflag</em></span>
+                            argument</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Flag</p>
+                                    </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                        <p>Description</p>
+                                    </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">O_CREAT</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Create queue if it doesn’t already exist</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">O_EXCL</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>With <code class="literal">O_CREAT</code>,
+                                            create queue exclusively</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">O_RDONLY</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Open for reading only</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">O_WRONLY</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Open for writing only</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">O_RDWR</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>Open for reading and writing</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">O_NONBLOCK</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; ">
+                                        <p>Open in nonblocking mode</p>
+                                    </td></tr></tbody></table></div></div><p>One of the purposes of the <span class="emphasis"><em>oflag</em></span> argument is to
+                        determine whether we are opening an existing queue or creating and opening a
+                        new queue. If <span class="emphasis"><em>oflag</em></span> doesn’t include <code class="literal">O_CREAT</code>, we are opening an existing queue. If
+                            <span class="emphasis"><em>oflag</em></span> includes <code class="literal">O_CREAT</code>, a new, empty queue is created if one with the given
+                            <span class="emphasis"><em>name</em></span> doesn’t already exist. If
+                            <span class="emphasis"><em>oflag</em></span> specifies both <code class="literal">O_CREAT</code> and <code class="literal">O_EXCL</code>, and a
+                        queue with the given <span class="emphasis"><em>name</em></span> already exists, then
+                            <span class="emphasis"><em>mq_open()</em></span> fails.</p><p>The <span class="emphasis"><em>oflag</em></span> argument also indicates the kind of access
+                        that the calling process will make to the message queue, by specifying
+                        exactly one of the values <code class="literal">O_RDONLY</code>,
+                            <code class="literal">O_WRONLY</code>, or <code class="literal">O_RDWR</code>.</p><p>The remaining flag value, <code class="literal">O_NONBLOCK</code>,
+                        causes the queue to be opened in nonblocking mode. If a subsequent call to
+                            <span class="emphasis"><em>mq_receive()</em></span> or <span class="emphasis"><em>mq_send()</em></span>
+                        can’t be performed without blocking, the call will fail immediately with the
+                        error <code class="literal">EAGAIN</code>.</p><p>If <span class="emphasis"><em>mq_open()</em></span> is being used to open an existing
+                        message queue, the call requires only two arguments. However, if <code class="literal">O_CREAT</code> is specified in
+                            <span class="emphasis"><em>flags</em></span>, two further arguments are required:
+                            <span class="emphasis"><em>mode</em></span> and <span class="emphasis"><em>attr</em></span>. (If the queue
+                        specified by <span class="emphasis"><em>name</em></span> already exists, these two arguments
+                        are ignored.) These arguments are used as follows:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>mode</em></span> argument is a bit mask that
+                                specifies the permissions to be placed on the new message queue. The
+                                bit values that may be specified are the same as for files (<a class="xref" href="ch15.html#constants_for_file_permission_bits" title="Table 15-4. Constants for file permission bits">Table 15-4</a>, in <a class="xref" href="ch15.html#permissions_on_regular_files" title="Permissions on Regular Files">Permissions on Regular Files</a>), and, as with
+                                    <span class="emphasis"><em>open()</em></span>, the value in
+                                    <span class="emphasis"><em>mode</em></span> is masked against the process umask
+                                    (<a class="xref" href="ch15.html#the_process_file_mode_creation_mask_colo" title="The Process File Mode Creation Mask: umask()">The Process File Mode Creation Mask: <span class="emphasis"><em>umask()</em></span></a>). To
+                                read from a queue (<span class="emphasis"><em>mq_receive()</em></span>), read
+                                permission must be granted to the corresponding class of user; to
+                                write to a queue (<span class="emphasis"><em>mq_send()</em></span>), write permission
+                                is required.<a id="IDX-CHP-52-6941" class="indexterm"/></p></li><li class="listitem"><p>The <span class="emphasis"><em>attr</em></span> argument is an
+                                    <span class="emphasis"><em>mq_attr</em></span> structure that specifies attributes
+                                for the new message queue. If <span class="emphasis"><em>attr</em></span> is <code class="literal">NULL</code>, the queue is created with
+                                implementation-defined default attributes. We describe the
+                                    <span class="emphasis"><em>mq_attr</em></span> structure in Section 52.4.</p></li></ul></div><p>Upon successful completion, <span class="emphasis"><em>mq_open()</em></span> returns a
+                            <span class="emphasis"><em>message queue descriptor</em></span>, a value of type
+                            <span class="emphasis"><em>mqd_t</em></span>, which is used in subsequent calls to refer
+                        to this open message queue. The only stipulation that SUSv3 makes about this
+                        data type is that it may not be an array; that is, it is guaranteed to be a
+                        type that can be used in an assignment statement or passed by value as a
+                        function argument. (On Linux, <span class="emphasis"><em>mqd_t</em></span> is an
+                            <span class="emphasis"><em>int</em></span>, but, for example, on Solaris it is defined as
+                            <span class="emphasis"><em>void *</em></span>.)<a id="IDX-CHP-52-6942" class="indexterm"/></p><p>An example of the use of <span class="emphasis"><em>mq_open()</em></span> is provided in
+                            <a class="xref" href="ch52.html#creating_a_posix_message_queue" title="Example 52-2. Creating a POSIX message queue">Example 52-2</a>.</p></div><div class="sect3" title="Effect of fork(), exec(), and process termination on message queue descriptors"><div class="titlepage"><div><div><h4 class="title" id="effect_of_fork_open_parenthesis_close_pa">Effect of <span class="emphasis"><em>fork()</em></span>, <span class="emphasis"><em>exec()</em></span>, and
+                        process termination on message queue descriptors</h4></div></div></div><p>During a <span class="emphasis"><em>fork()</em></span>, the child process receives copies of
+                        its parent’s message queue descriptors, and these descriptors refer to the
+                        same open message queue descriptions. (We explain message queue descriptions
+                        in Section 52.3.) The child doesn’t inherit any of its parent’s message
+                        notification registrations.<a id="IDX-CHP-52-6943" class="indexterm"/><a id="IDX-CHP-52-6944" class="indexterm"/><a id="IDX-CHP-52-6945" class="indexterm"/><a id="IDX-CHP-52-6946" class="indexterm"/><a id="IDX-CHP-52-6947" class="indexterm"/><a id="IDX-CHP-52-6948" class="indexterm"/><a id="IDX-CHP-52-6949" class="indexterm"/><a id="IDX-CHP-52-6950" class="indexterm"/><a id="IDX-CHP-52-6951" class="indexterm"/></p><p>When a process performs an <span class="emphasis"><em>exec()</em></span> or terminates, all
+                        of its open message queue descriptors are closed. As a consequence of
+                        closing its message queue descriptors, all of the process’s message
+                        notification registrations on the corresponding queues are
+                            deregistered.<a id="IDX-CHP-52-6952" class="indexterm"/></p></div><div class="sect3" title="Closing a message queue"><div class="titlepage"><div><div><h4 class="title" id="closing_a_message_queue">Closing a message queue</h4></div></div></div><p>The <span class="emphasis"><em>mq_close()</em></span> function closes the message queue
+                        descriptor <span class="emphasis"><em>mqdes</em></span>.<a id="IDX-CHP-52-6953" class="indexterm"/><a id="IDX-CHP-52-6954" class="indexterm"/><a id="IDX-CHP-52-6955" class="indexterm"/><a id="IDX-CHP-52-6956" class="indexterm"/><a id="IDX-CHP-52-6957" class="indexterm"/><a id="IDX-CHP-52-6958" class="indexterm"/></p><a id="I_programlisting52_d1e136308"/><pre class="programlisting">#include &lt;mqueue.h&gt;
+
+int <strong class="userinput"><code>mq_close</code></strong>(mqd_t <span class="emphasis"><em>mqdes</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>If the calling process has registered via <span class="emphasis"><em>mqdes</em></span> for
+                        message notification from the queue (<a class="xref" href="ch52.html#message_notification" title="Message Notification">Message Notification</a>), then the notification registration is automatically removed, and
+                        another process can subsequently register for message notification from the
+                        queue.</p><p>A message queue descriptor is automatically closed when a process
+                        terminates or calls <span class="emphasis"><em>exec()</em></span>. As with file descriptors,
+                        we should explicitly close message queue descriptors that are no longer
+                        required, in order to prevent the process from running out of message queue
+                        descriptors.</p><p>As <span class="emphasis"><em>close()</em></span> for files, closing a message queue doesn’t
+                        delete it. For that purpose, we need <span class="emphasis"><em>mq_unlink()</em></span>, which
+                        is the message queue analog of <span class="emphasis"><em>unlink()</em></span>.<a id="IDX-CHP-52-6959" class="indexterm"/></p></div><div class="sect3" title="Removing a message queue"><div class="titlepage"><div><div><h4 class="title" id="removing_a_message_queue">Removing a message queue</h4></div></div></div><p>The <span class="emphasis"><em>mq_unlink()</em></span> function removes the message queue
+                        identified by <span class="emphasis"><em>name</em></span>, and marks the queue to be destroyed
+                        once all processes cease using it (this may mean immediately, if all
+                        processes that had the queue open have already closed it).</p><a id="I_programlisting52_d1e136357"/><pre class="programlisting">#include &lt;mqueue.h&gt;
+
+int <strong class="userinput"><code>mq_unlink</code></strong>(const char *<span class="emphasis"><em>name</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p><a class="xref" href="ch52.html#using_mq_underscore_unlink_open_parenthe" title="Example 52-1. Using mq_unlink() to unlink a POSIX message queue">Example 52-1</a> demonstrates
+                        the use of <span class="emphasis"><em>mq_unlink()</em></span>.</p><div class="example"><a id="using_mq_underscore_unlink_open_parenthe"/><div class="example-title">Example 52-1. Using <span class="emphasis"><em>mq_unlink()</em></span> to unlink a POSIX message
+                            queue</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pmsg/pmsg_unlink.c</code></strong>
+#include &lt;mqueue.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    if (argc != 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s mq-name\n", argv[0]);
+
+    if (mq_unlink(argv[1]) == -1)
+        errExit("mq_unlink");
+    exit(EXIT_SUCCESS);
+}
+    <strong class="userinput"><code>pmsg/pmsg_unlink.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Relationship Between Descriptors and Message Queues"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="relationship_between_descriptors_and_mes">Relationship Between Descriptors and Message Queues</h2></div></div></div><p>The relationship between a message queue descriptor and an open message queue is
+                analogous to the relationship between a file descriptor and an open file (<a class="xref" href="ch05.html#relationship_between_file_descriptors_co" title="Figure 5-2. Relationship between file descriptors, open file descriptions, and i-nodes">Figure 5-2</a>, in <a class="xref" href="ch05.html#relationship_between_file_descriptors_an" title="Relationship Between File Descriptors and Open Files">Relationship Between File Descriptors and Open Files</a>). A message queue
+                descriptor is a per-process handle that refers to an entry in the system-wide table
+                of open message queue descriptions, and this entry in turn refers to a message queue
+                object. This relationship is illustrated in <a class="xref" href="ch52.html#relationship_between_kernel_data_structu" title="Figure 52-1. Relationship between kernel data structures for POSIX message queues">Figure 52-1</a>.<a id="IDX-CHP-52-6960" class="indexterm"/><a id="IDX-CHP-52-6961" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>On Linux, POSIX message queues are implemented as i-nodes in a virtual file
+                    system, and message queue descriptors and open message queue descriptions are
+                    implemented as file descriptors and open file descriptions, respectively.
+                    However, these are implementation details that are not required by SUSv3 and
+                    don’t hold true on some other UNIX implementations. Nevertheless, we return to
+                    this point in <a class="xref" href="ch52.html#linux-specific_features" title="Linux-Specific Features">Linux-Specific Features</a>, because Linux provides
+                    some nonstandard features that are made possible by this implementation.</p></div><div class="figure"><a id="relationship_between_kernel_data_structu"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject52_d1e136419"/><img src="figs/web/52-1_PMSG-mq-model.png.jpg" alt="Relationship between kernel data structures for POSIX message queues"/></div></div><div class="figure-title">Figure 52-1. Relationship between kernel data structures for POSIX message queues</div></div><p><a class="xref" href="ch52.html#relationship_between_kernel_data_structu" title="Figure 52-1. Relationship between kernel data structures for POSIX message queues">Figure 52-1</a> helps clarify a number
+                of details of the use of message queue descriptors (all of which are analogous to
+                the use to file descriptors):</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>An open message queue description has an associated set of flags. SUSv3
+                        specifies only one such flag, <code class="literal">O_NONBLOCK</code>,
+                        which determines whether I/O is nonblocking.</p></li><li class="listitem"><p>Two processes can hold message queue descriptors (descriptor
+                            <span class="emphasis"><em>x</em></span> in the diagram) that refer to the same open
+                        message queue description. This can occur because a process opens a message
+                        queue and then calls <span class="emphasis"><em>fork()</em></span>. These descriptors share
+                        the state of the <code class="literal">O_NONBLOCK</code> flag.</p></li><li class="listitem"><p>Two processes can hold open message queue descriptors that refer to
+                        different message queue descriptions that refer to the same message queue
+                        (e.g., descriptor <span class="emphasis"><em>z</em></span> in process A and descriptor
+                            <span class="emphasis"><em>y</em></span> in process B both refer to <code class="literal">/mq-r</code>). This occurs because the two processes
+                        each used <span class="emphasis"><em>mq_open()</em></span> to open the same queue.</p></li></ul></div></div><div class="sect1" title="Message Queue Attributes"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="message_queue_attributes">Message Queue Attributes</h2></div></div></div><p>The <span class="emphasis"><em>mq_open()</em></span>, <span class="emphasis"><em>mq_getattr()</em></span>, and
+                    <span class="emphasis"><em>mq_setattr()</em></span> functions all permit an argument that is a
+                pointer to an <span class="emphasis"><em>mq_attr</em></span> structure. This structure is defined in
+                    <code class="literal">&lt;mqueue.h&gt;</code> as
+                    follows:<a id="IDX-CHP-52-6962" class="indexterm"/><a id="IDX-CHP-52-6963" class="indexterm"/><a id="IDX-CHP-52-6964" class="indexterm"/></p><a id="I_programlisting52_d1e136500"/><pre class="programlisting">struct mq_attr {
+    long mq_flags;        /* Message queue description flags: 0 or
+                             O_NONBLOCK [mq_getattr(), mq_setattr()] */
+    long mq_maxmsg;       /* Maximum number of messages on queue
+                             [mq_open(), mq_getattr()] */
+    long mq_msgsize;      /* Maximum message size (in bytes)
+                             [mq_open(), mq_getattr()] */
+    long mq_curmsgs;      /* Number of messages currently in queue
+                             [mq_getattr()] */
+};</pre><p>Before we look at the <span class="emphasis"><em>mq_attr</em></span> structure in detail, it is
+                worth noting the following points:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Only some of the fields are used by each of the three functions. The
+                        fields used by each function are indicated in the comments accompanying the
+                        structure definition above.</p></li><li class="listitem"><p>The structure contains information about the open message queue
+                        description (<span class="emphasis"><em>mq_flags</em></span>) associated with a message
+                        descriptor and information about the queue referred to by that descriptor
+                            (<span class="emphasis"><em>mq_maxmsg</em></span>, <span class="emphasis"><em>mq_msgsize</em></span>,
+                            <span class="emphasis"><em>mq_curmsgs</em></span>).</p></li><li class="listitem"><p>Some of the fields contain information that is fixed at the time the queue
+                        is created with <span class="emphasis"><em>mq_open()</em></span>
+                            (<span class="emphasis"><em>mq_maxmsg</em></span> and <span class="emphasis"><em>mq_msgsize</em></span>);
+                        the others return information about the current state of the message queue
+                        description (<span class="emphasis"><em>mq_flags</em></span>) or message queue
+                            (<span class="emphasis"><em>mq_curmsgs</em></span>).</p></li></ul></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="setting_message_queue_attributes"/></div></div></div><div class="sect3" title="Setting message queue attributes during queue creation"><div class="titlepage"><div><div><h4 class="title" id="setting_message_queue_attributes-id1">Setting message queue attributes during queue creation</h4></div></div></div><p>When we create a message queue with <span class="emphasis"><em>mq_open()</em></span>, the
+                        following <span class="emphasis"><em>mq_attr</em></span> fields determine the attributes of
+                        the queue:<a id="IDX-CHP-52-6966" class="indexterm"/><a id="IDX-CHP-52-6967" class="indexterm"/><a id="IDX-CHP-52-6965" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>mq_maxmsg</em></span> field defines the limit on the
+                                number of messages that can be placed on the queue using
+                                    <span class="emphasis"><em>mq_send()</em></span>. This value must be greater than
+                                0.</p></li><li class="listitem"><p>The <span class="emphasis"><em>mq_msgsize</em></span> field defines the upper limit
+                                on the size of each message that may be placed on the queue. This
+                                value must be greater than 0.</p></li></ul></div><p>Together, these two values allow the kernel to determine the maximum
+                        amount of memory that this message queue may require.</p><p>The <span class="emphasis"><em>mq_maxmsg</em></span> and <span class="emphasis"><em>mq_msgsize</em></span>
+                        attributes are fixed when a message queue is created; they can’t
+                        subsequently be changed. In <a class="xref" href="ch52.html#message_queue_limits-id1" title="Message Queue Limits">Message Queue Limits</a>, we
+                        describe two <code class="literal">/proc</code> files that place
+                        system-wide limits on the values that can be specified for the
+                            <span class="emphasis"><em>mq_maxmsg</em></span> and <span class="emphasis"><em>mq_msgsize</em></span>
+                        attributes.</p><p>The program in <a class="xref" href="ch52.html#creating_a_posix_message_queue" title="Example 52-2. Creating a POSIX message queue">Example 52-2</a> provides a
+                        command-line interface to the <span class="emphasis"><em>mq_open()</em></span> function and
+                        shows how the <span class="emphasis"><em>mq_attr</em></span> structure is used with
+                            <span class="emphasis"><em>mq_open()</em></span>.</p><p>Two command-line options allow message queue attributes to be specified:
+                            <span class="emphasis"><em>-m</em></span> for <span class="emphasis"><em>mq_maxmsg</em></span> and
+                            <span class="emphasis"><em>-s</em></span> for <span class="emphasis"><em>mq_msgsize</em></span>. If either
+                        of these options is supplied, a non-<code class="literal">NULL</code>
+                        <span class="emphasis"><em>attrp</em></span> argument is passed to
+                            <span class="emphasis"><em>mq_open()</em></span>. Some default values are assigned to the
+                        fields of the <span class="emphasis"><em>mq_attr</em></span> structure to which
+                            <span class="emphasis"><em>attrp</em></span> points, in case only one of the
+                            <span class="emphasis"><em>-m</em></span> and <span class="emphasis"><em>-s</em></span> options is specified
+                        on the command line. If neither of these options is supplied,
+                            <span class="emphasis"><em>attrp</em></span> is specified as <code class="literal">NULL</code> when calling <span class="emphasis"><em>mq_open()</em></span>, which
+                        causes the queue to be created with the implementation-defined defaults for
+                        the queue attributes.</p><div class="example"><a id="creating_a_posix_message_queue"/><div class="example-title">Example 52-2. Creating a POSIX message queue</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pmsg/pmsg_create.c</code></strong>
+#include &lt;mqueue.h&gt;
+#include &lt;sys/stat.h&gt;
+#include &lt;fcntl.h&gt;
+#include "tlpi_hdr.h"
+
+static void
+usageError(const char *progName)
+{
+    fprintf(stderr, "Usage: %s [-cx] [-m maxmsg] [-s msgsize] mq-name "
+            "[octal-perms]\n", progName);
+    fprintf(stderr, "    -c          Create queue (O_CREAT)\n");
+    fprintf(stderr, "    -m maxmsg   Set maximum # of messages\n");
+    fprintf(stderr, "    -s msgsize  Set maximum message size\n");
+    fprintf(stderr, "    -x          Create exclusively (O_EXCL)\n");
+    exit(EXIT_FAILURE);
+}
+
+int
+main(int argc, char *argv[])
+{
+    int flags, opt;
+    mode_t perms;
+    mqd_t mqd;
+    struct mq_attr attr, *attrp;
+
+    attrp = NULL;
+    attr.mq_maxmsg = 50;
+    attr.mq_msgsize = 2048;
+    flags = O_RDWR;
+
+    /* Parse command-line options */
+
+    while ((opt = getopt(argc, argv, "cm:s:x")) != -1) {
+        switch (opt) {
+        case 'c':
+            flags |= O_CREAT;
+            break;
+
+        case 'm':
+            attr.mq_maxmsg = atoi(optarg);
+            attrp = &amp;attr;
+            break;
+
+        case 's':
+            attr.mq_msgsize = atoi(optarg);
+            attrp = &amp;attr;
+            break;
+
+        case 'x':
+            flags |= O_EXCL;
+            break;
+
+        default:
+            usageError(argv[0]);
+        }
+    }
+
+    if (optind &gt;= argc)
+        usageError(argv[0]);
+
+    perms = (argc &lt;= optind + 1) ? (S_IRUSR | S_IWUSR) :
+                getInt(argv[optind + 1], GN_BASE_8, "octal-perms");
+
+    mqd = mq_open(argv[optind], flags, perms, attrp);
+    if (mqd == (mqd_t) -1)
+        errExit("mq_open");
+
+    exit(EXIT_SUCCESS);
+}
+    <strong class="userinput"><code>pmsg/pmsg_create.c</code></strong></pre></div></div></div><div class="sect3" title="Retrieving message queue attributes"><div class="titlepage"><div><div><h4 class="title" id="retrieving_message_queue_attributes">Retrieving message queue attributes</h4></div></div></div><p>The <span class="emphasis"><em>mq_getattr()</em></span> function returns an
+                            <span class="emphasis"><em>mq_attr</em></span> structure containing information about the
+                        message queue description and the message queue associated with the
+                        descriptor <span class="emphasis"><em>mqdes</em></span>.<a id="IDX-CHP-52-6968" class="indexterm"/><a id="IDX-CHP-52-6969" class="indexterm"/><a id="IDX-CHP-52-6970" class="indexterm"/><a id="IDX-CHP-52-6971" class="indexterm"/><a id="IDX-CHP-52-6972" class="indexterm"/><a id="IDX-CHP-52-6973" class="indexterm"/><a id="IDX-CHP-52-6974" class="indexterm"/><a id="IDX-CHP-52-6975" class="indexterm"/><a id="IDX-CHP-52-6976" class="indexterm"/><a id="IDX-CHP-52-6977" class="indexterm"/></p><a id="I_programlisting52_d1e136754"/><pre class="programlisting">#include &lt;mqueue.h&gt;
+
+int <strong class="userinput"><code>mq_getattr</code></strong>(mqd_t <span class="emphasis"><em>mqdes</em></span>, struct mq_attr *<span class="emphasis"><em>attr</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>In addition to the <span class="emphasis"><em>mq_maxmsg</em></span> and
+                            <span class="emphasis"><em>mq_msgsize</em></span> fields, which we have already described,
+                        the following fields are returned in the structure pointed to by
+                            <span class="emphasis"><em>attr</em></span>:</p><div class="variablelist"><dl><dt><span class="term">
+                                <span class="emphasis"><em>mq_flags</em></span>
+                            </span></dt><dd><p>These are flags for the open message queue description
+                                    associated with the descriptor <span class="emphasis"><em>mqdes</em></span>. Only
+                                    one such flag is specified: <code class="literal">O_NONBLOCK</code>. This flag is initialized from the
+                                        <span class="emphasis"><em>oflag</em></span> argument of
+                                        <span class="emphasis"><em>mq_open()</em></span>, and can be changed using
+                                        <span class="emphasis"><em>mq_setattr()</em></span>.</p></dd><dt><span class="term">
+                                <span class="emphasis"><em>mq_curmsgs</em></span>
+                            </span></dt><dd><p>This is the number of messages that are currently in the
+                                    queue. This information may already have changed by the time
+                                        <span class="emphasis"><em>mq_getattr()</em></span> returns, if other
+                                    processes are reading messages from the queue or writing
+                                    messages to it.</p></dd></dl></div><p>The program in <a class="xref" href="ch52.html#retrieving_posix_message_queue_attribute" title="Example 52-3. Retrieving POSIX message queue attributes">Example 52-3</a>
+                        employs <span class="emphasis"><em>mq_getattr()</em></span> to retrieve the attributes for the
+                        message queue specified in its command-line argument, and then displays
+                        those attributes on standard output.</p><div class="example"><a id="retrieving_posix_message_queue_attribute"/><div class="example-title">Example 52-3. Retrieving POSIX message queue attributes</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pmsg/pmsg_getattr.c</code></strong>
+#include &lt;mqueue.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    mqd_t mqd;
+    struct mq_attr attr;
+
+    if (argc != 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s mq-name\n", argv[0]);
+
+    mqd = mq_open(argv[1], O_RDONLY);
+    if (mqd == (mqd_t) -1)
+        errExit("mq_open");
+
+    if (mq_getattr(mqd, &amp;attr) == -1)
+        errExit("mq_getattr");
+
+    printf("Maximum # of messages on queue:   %ld\n", attr.mq_maxmsg);
+    printf("Maximum message size:             %ld\n", attr.mq_msgsize);
+    printf("# of messages currently on queue: %ld\n", attr.mq_curmsgs);
+    exit(EXIT_SUCCESS);
+}
+    <strong class="userinput"><code>pmsg/pmsg_getattr.c</code></strong></pre></div></div><p>In the following shell session, we use the program in <a class="xref" href="ch52.html#creating_a_posix_message_queue" title="Example 52-2. Creating a POSIX message queue">Example 52-2</a> to create a message queue
+                        with implementation-defined default attributes (i.e., the final argument to
+                            <span class="emphasis"><em>mq_open()</em></span> is <code class="literal">NULL</code>), and then use the program in <a class="xref" href="ch52.html#retrieving_posix_message_queue_attribute" title="Example 52-3. Retrieving POSIX message queue attributes">Example 52-3</a> to display the
+                        queue attributes so that we can see the default settings on Linux.</p><a id="I_programlisting52_d1e136840"/><pre class="programlisting">$ <strong class="userinput"><code>./pmsg_create -cx /mq</code></strong>
+$ <strong class="userinput"><code>./pmsg_getattr /mq</code></strong>
+Maximum # of messages on queue:   10
+Maximum message size:             8192
+# of messages currently on queue: 0
+$ <strong class="userinput"><code>./pmsg_unlink /mq</code></strong>                             <em class="lineannotation"><span class="lineannotation">Remove message queue</span></em></pre><p>From the above output, we see that the Linux default values for
+                            <span class="emphasis"><em>mq_maxmsg</em></span> and <span class="emphasis"><em>mq_msgsize</em></span> are
+                        10 and 8192, respectively.</p><p>There is a wide variation in the implementation-defined defaults for
+                            <span class="emphasis"><em>mq_maxmsg</em></span> and <span class="emphasis"><em>mq_msgsize</em></span>.
+                        Portable applications generally need to choose explicit values for these
+                        attributes, rather than relying on the defaults.</p></div><div class="sect3" title="Modifying message queue attributes"><div class="titlepage"><div><div><h4 class="title" id="modifying_message_queue_attributes">Modifying message queue attributes</h4></div></div></div><p>The <span class="emphasis"><em>mq_setattr()</em></span> function sets attributes of the
+                        message queue description associated with the message queue descriptor
+                            <span class="emphasis"><em>mqdes</em></span>, and optionally returns information about the
+                        message queue.<a id="IDX-CHP-52-6978" class="indexterm"/><a id="IDX-CHP-52-6979" class="indexterm"/><a id="IDX-CHP-52-6980" class="indexterm"/><a id="IDX-CHP-52-6981" class="indexterm"/><a id="IDX-CHP-52-6982" class="indexterm"/></p><a id="I_programlisting52_d1e136909"/><pre class="programlisting">#include &lt;mqueue.h&gt;
+
+int <strong class="userinput"><code>mq_setattr</code></strong>(mqd_t <span class="emphasis"><em>mqdes</em></span>, const struct mq_attr *<span class="emphasis"><em>newattr</em></span>,
+               struct mq_attr *<span class="emphasis"><em>oldattr</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>mq_setattr()</em></span> function performs the following
+                        tasks:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>It uses the <span class="emphasis"><em>mq_flags</em></span> field in the
+                                    <span class="emphasis"><em>mq_attr</em></span> structure pointed to by
+                                    <span class="emphasis"><em>newattr</em></span> to change the flags of the message
+                                queue description associated with the descriptor
+                                    <span class="emphasis"><em>mqdes</em></span>.<a id="IDX-CHP-52-6983" class="indexterm"/></p></li><li class="listitem"><p>If <span class="emphasis"><em>oldattr</em></span> is non-<code class="literal">NULL</code>, it returns an <span class="emphasis"><em>mq_attr</em></span>
+                                structure containing the previous message queue description flags
+                                and message queue attributes (i.e., the same task as is performed by
+                                    <span class="emphasis"><em>mq_getattr()</em></span>).</p></li></ul></div><p>The only attribute that SUSv3 specifies that can be changed using
+                            <span class="emphasis"><em>mq_setattr()</em></span> is the state of the <code class="literal">O_NONBLOCK</code> flag.</p><p>Allowing for the possibility that a particular implementation may define
+                        other modifiable flags, or that SUSv3 may add new flags in the future, a
+                        portable application should change the state of the <code class="literal">O_NONBLOCK</code> flag by using <span class="emphasis"><em>mq_getattr()</em></span> to
+                        retrieve the <span class="emphasis"><em>mq_flags</em></span> value, modifying the <code class="literal">O_NONBLOCK</code> bit, and calling
+                            <span class="emphasis"><em>mq_setattr()</em></span> to change the
+                            <span class="emphasis"><em>mq_flags</em></span> settings. For example, to enable <code class="literal">O_NONBLOCK</code>, we would do the
+                            following:<a id="IDX-CHP-52-6984" class="indexterm"/></p><a id="I_programlisting52_d1e137006"/><pre class="programlisting">if (mq_getattr(mqd, &amp;attr) == -1)
+    errExit("mq_getattr");
+attr.mq_flags |= O_NONBLOCK;
+if (mq_setattr(mqd, &amp;attr, NULL) == -1)
+    errExit("mq_getattr");</pre></div></div></div><div class="sect1" title="Exchanging Messages"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exchanging_messages-id1">Exchanging Messages</h2></div></div></div><p>In this section, we look at the functions that are used to send messages to and
+                receive messages from a queue.</p><div class="sect2" title="Sending Messages"><div class="titlepage"><div><div><h3 class="title" id="sending_messages-id1">Sending Messages</h3></div></div></div><p>The <span class="emphasis"><em>mq_send()</em></span> function adds the message in the buffer
+                    pointed to by <span class="emphasis"><em>msg_ptr</em></span> to the message queue referred to by
+                    the descriptor <span class="emphasis"><em>mqdes</em></span>.<a id="IDX-CHP-52-6985" class="indexterm"/><a id="IDX-CHP-52-6986" class="indexterm"/><a id="IDX-CHP-52-6987" class="indexterm"/><a id="IDX-CHP-52-6988" class="indexterm"/><a id="IDX-CHP-52-6989" class="indexterm"/><a id="IDX-CHP-52-6990" class="indexterm"/><a id="IDX-CHP-52-6991" class="indexterm"/><a id="IDX-CHP-52-6992" class="indexterm"/><a id="IDX-CHP-52-6993" class="indexterm"/><a id="IDX-CHP-52-6994" class="indexterm"/><a id="IDX-CHP-52-6995" class="indexterm"/><a id="IDX-CHP-52-6996" class="indexterm"/></p><a id="I_programlisting52_d1e137089"/><pre class="programlisting">#include &lt;mqueue.h&gt;
+
+int <strong class="userinput"><code>mq_send</code></strong>(mqd_t <span class="emphasis"><em>mqdes</em></span>, const char *<span class="emphasis"><em>msg_ptr</em></span>, size_t <span class="emphasis"><em>msg_len</em></span>,
+            unsigned int <span class="emphasis"><em>msg_prio</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>msg_len</em></span> argument specifies the length of the message
+                    pointed to by <span class="emphasis"><em>msg_ptr</em></span>. This value must be less than or
+                    equal to the <span class="emphasis"><em>mq_msgsize</em></span> attribute of the queue; otherwise,
+                        <span class="emphasis"><em>mq_send()</em></span> fails with the error <code class="literal">EMSGSIZE</code>. Zero-length messages are permitted.</p><p>Each message has a nonnegative integer priority, specified by the
+                        <span class="emphasis"><em>msg_prio</em></span> argument. Messages are ordered within the
+                    queue in descending order of priority (i.e., 0 is the lowest priority). When a
+                    new message is added to the queue, it is placed after any other messages of the
+                    same priority. If an application doesn’t need to use message priorities, it is
+                    sufficient to always specify <span class="emphasis"><em>msg_prio</em></span> as 0.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>As noted at the beginning of this chapter, the type attribute of System V
+                        messages provides different functionality. System V messages are always
+                        queued in FIFO order, but <span class="emphasis"><em>msgrcv()</em></span> allows us to select
+                        messages in various ways: in FIFO order, by exact type, or by highest type
+                        less than or equal to some value.</p></div><p>SUSv3 allows an implementation to advertise its upper limit for message
+                    priorities, either by defining the constant <code class="literal">MQ_PRIO_MAX</code> or via the return from
+                        <span class="emphasis"><em>sysconf(_SC_MQ_PRIO_MAX)</em></span>. SUSv3 requires this limit to
+                    be at least 32 <code class="literal">(_POSIX_MQ_PRIO_MAX)</code>; that is,
+                    priorities at least in the range 0 to 31 are available. However, the actual
+                    range on implementations is highly variable. For example, on Linux, this
+                    constant has the value 32,768; on Solaris, it is 32; and on Tru64, it is
+                    256.</p><p>If the message queue is already full (i.e., the <span class="emphasis"><em>mq_maxmsg</em></span>
+                    limit for the queue has been reached), then a further
+                        <span class="emphasis"><em>mq_send()</em></span> either blocks until space becomes available
+                    in the queue, or, if the <code class="literal">O_NONBLOCK</code> flag is
+                    in effect, fails immediately with the error <code class="literal">EAGAIN</code>.</p><p>The program in <a class="xref" href="ch52.html#writing_a_message_to_a_posix_message_que" title="Example 52-4. Writing a message to a POSIX message queue">Example 52-4</a>
+                    provides a command-line interface to the <span class="emphasis"><em>mq_send()</em></span>
+                    function. We demonstrate the use of this program in the next section.</p><div class="example"><a id="writing_a_message_to_a_posix_message_que"/><div class="example-title">Example 52-4. Writing a message to a POSIX message queue</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pmsg/pmsg_send.c</code></strong>
+#include &lt;mqueue.h&gt;
+#include &lt;fcntl.h&gt;              /* For definition of O_NONBLOCK */
+#include "tlpi_hdr.h"
+
+static void
+usageError(const char *progName)
+{
+    fprintf(stderr, "Usage: %s [-n] name msg [prio]\n", progName);
+    fprintf(stderr, "    -n           Use O_NONBLOCK flag\n");
+    exit(EXIT_FAILURE);
+}
+
+int
+main(int argc, char *argv[])
+{
+    int flags, opt;
+    mqd_t mqd;
+    unsigned int prio;
+
+    flags = O_WRONLY;
+    while ((opt = getopt(argc, argv, "n")) != -1) {
+        switch (opt) {
+        case 'n':   flags |= O_NONBLOCK;        break;
+        default:    usageError(argv[0]);
+        }
+    }
+
+    if (optind + 1 &gt;= argc)
+        usageError(argv[0]);
+
+    mqd = mq_open(argv[optind], flags);
+    if (mqd == (mqd_t) -1)
+        errExit("mq_open");
+
+    prio = (argc &gt; optind + 2) ? atoi(argv[optind + 2]) : 0;
+
+    if (mq_send(mqd, argv[optind + 1], strlen(argv[optind + 1]), prio) == -1)
+        errExit("mq_send");
+    exit(EXIT_SUCCESS);
+}
+    <strong class="userinput"><code>pmsg/pmsg_send.c</code></strong></pre></div></div></div><div class="sect2" title="Receiving Messages"><div class="titlepage"><div><div><h3 class="title" id="receiving_messages-id12">Receiving Messages</h3></div></div></div><p>The <span class="emphasis"><em>mq_receive()</em></span> function removes the oldest message with
+                    the highest priority from the message queue referred to by
+                        <span class="emphasis"><em>mqdes</em></span> and returns that message in the buffer pointed to
+                    by <span class="emphasis"><em>msg_ptr</em></span>.<a id="IDX-CHP-52-6997" class="indexterm"/><a id="IDX-CHP-52-6998" class="indexterm"/><a id="IDX-CHP-52-6999" class="indexterm"/><a id="IDX-CHP-52-7000" class="indexterm"/><a id="IDX-CHP-52-7001" class="indexterm"/><a id="IDX-CHP-52-7002" class="indexterm"/><a id="IDX-CHP-52-7003" class="indexterm"/><a id="IDX-CHP-52-7004" class="indexterm"/><a id="IDX-CHP-52-7005" class="indexterm"/><a id="IDX-CHP-52-7006" class="indexterm"/><a id="IDX-CHP-52-7007" class="indexterm"/><a id="IDX-CHP-52-7008" class="indexterm"/></p><a id="I_programlisting52_d1e137257"/><pre class="programlisting">#include &lt;mqueue.h&gt;
+
+ssize_t <strong class="userinput"><code>mq_receive</code></strong>(mqd_t <span class="emphasis"><em>mqdes</em></span>, char *<span class="emphasis"><em>msg_ptr</em></span>, size_t <span class="emphasis"><em>msg_len</em></span>,
+                   unsigned int *<span class="emphasis"><em>msg_prio</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns number of bytes in received message on success, or -1 on
+                        error</p></div><p>The <span class="emphasis"><em>msg_len</em></span> argument is used by the caller to specify the
+                    number of bytes of space available in the buffer pointed to by
+                        <span class="emphasis"><em>msg_ptr</em></span>.</p><p>Regardless of the actual size of the message, <span class="emphasis"><em>msg_len</em></span>
+                    (and thus the size of the buffer pointed to by <span class="emphasis"><em>msg_ptr</em></span>)
+                    must be greater than or equal to the <span class="emphasis"><em>mq_msgsize</em></span> attribute
+                    of the queue; otherwise, <span class="emphasis"><em>mq_receive()</em></span> fails with the error
+                        <code class="literal">EMSGSIZE</code>. If we don’t know the value of
+                    the <span class="emphasis"><em>mq_msgsize</em></span> attribute of a queue, we can obtain it using
+                        <span class="emphasis"><em>mq_getattr()</em></span>. (In an application consisting of
+                    cooperating processes, the use of <span class="emphasis"><em>mq_getattr()</em></span> can usually
+                    be dispensed with, because the application can typically decide on a queue’s
+                        <span class="emphasis"><em>mq_msgsize</em></span> setting in advance.)</p><p>If <span class="emphasis"><em>msg_prio</em></span> is not <code class="literal">NULL</code>, then the priority of the received message is copied into
+                    the location pointed to by <span class="emphasis"><em>msg_prio</em></span>.</p><p>If the message queue is currently empty, then
+                        <span class="emphasis"><em>mq_receive()</em></span> either blocks until a message becomes
+                    available, or, if the <code class="literal">O_NONBLOCK</code> flag is in
+                    effect, fails immediately with the error <code class="literal">EAGAIN</code>. (There is no equivalent of the pipe behavior where a
+                    reader sees end-of-file if there are no writers.)</p><p>The program in <a class="xref" href="ch52.html#reading_a_message_from_a_posix_message_q" title="Example 52-5. Reading a message from a POSIX message queue">Example 52-5</a>
+                    provides a command-line interface to the <span class="emphasis"><em>mq_receive()</em></span>
+                    function. The command format for this program is shown in the
+                        <span class="emphasis"><em>usageError()</em></span> function.</p><p>The following shell session demonstrates the use of the programs in <a class="xref" href="ch52.html#writing_a_message_to_a_posix_message_que" title="Example 52-4. Writing a message to a POSIX message queue">Example 52-4</a> and <a class="xref" href="ch52.html#reading_a_message_from_a_posix_message_q" title="Example 52-5. Reading a message from a POSIX message queue">Example 52-5</a>. We begin by creating a
+                    message queue and sending a few messages with different priorities:</p><a id="I_programlisting52_d1e137353"/><pre class="programlisting">$ <strong class="userinput"><code>./pmsg_create -cx /mq</code></strong>
+$ <strong class="userinput"><code>./pmsg_send /mq msg-a 5</code></strong>
+$ <strong class="userinput"><code>./pmsg_send /mq msg-b 0</code></strong>
+$ <strong class="userinput"><code>./pmsg_send /mq msg-c 10</code></strong></pre><p>We then execute a series of commands to retrieve messages from the
+                    queue:</p><a id="I_programlisting52_d1e137369"/><pre class="programlisting">$ <strong class="userinput"><code>./pmsg_receive /mq</code></strong>
+Read 5 bytes; priority = 10
+msg-c
+$ <strong class="userinput"><code>./pmsg_receive /mq</code></strong>
+Read 5 bytes; priority = 5
+msg-a
+$ <strong class="userinput"><code>./pmsg_receive /mq</code></strong>
+Read 5 bytes; priority = 0
+msg-b</pre><p>As we can see from the above output, the messages were retrieved in order of
+                    priority.</p><p>At this point, the queue is now empty. When we perform another blocking
+                    receive, the operation blocks:</p><a id="I_programlisting52_d1e137384"/><pre class="programlisting">$ <strong class="userinput"><code>./pmsg_receive /mq</code></strong>
+<em class="lineannotation"><span class="lineannotation">Blocks; we type Control-C to terminate the program</span></em></pre><p>On the other hand, if we perform a nonblocking receive, the call returns
+                    immediately with a failure status:</p><a id="I_programlisting52_d1e137393"/><pre class="programlisting">$ <strong class="userinput"><code>./pmsg_receive -n /mq</code></strong>
+ERROR [EAGAIN/EWOULDBLOCK Resource temporarily unavailable] mq_receive</pre><div class="example"><a id="reading_a_message_from_a_posix_message_q"/><div class="example-title">Example 52-5. Reading a message from a POSIX message queue</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pmsg/pmsg_receive.c</code></strong>
+#include &lt;mqueue.h&gt;
+#include &lt;fcntl.h&gt;              /* For definition of O_NONBLOCK */
+#include "tlpi_hdr.h"
+
+static void
+usageError(const char *progName)
+{
+    fprintf(stderr, "Usage: %s [-n] name\n", progName);
+    fprintf(stderr, "    -n           Use O_NONBLOCK flag\n");
+    exit(EXIT_FAILURE);
+}
+
+int
+main(int argc, char *argv[])
+{
+    int flags, opt;
+    mqd_t mqd;
+    unsigned int prio;
+    void *buffer;
+    struct mq_attr attr;
+    ssize_t numRead;
+
+    flags = O_RDONLY;
+    while ((opt = getopt(argc, argv, "n")) != -1) {
+        switch (opt) {
+        case 'n':   flags |= O_NONBLOCK;        break;
+        default:    usageError(argv[0]);
+        }
+    }
+
+    if (optind &gt;= argc)
+        usageError(argv[0]);
+
+    mqd = mq_open(argv[optind], flags);
+    if (mqd == (mqd_t) -1)
+        errExit("mq_open");
+
+    if (mq_getattr(mqd, &amp;attr) == -1)
+        errExit("mq_getattr");
+
+    buffer = malloc(attr.mq_msgsize);
+    if (buffer == NULL)
+        errExit("malloc");
+
+    numRead = mq_receive(mqd, buffer, attr.mq_msgsize, &amp;prio);
+    if (numRead == -1)
+        errExit("mq_receive");
+
+    printf("Read %ld bytes; priority = %u\n", (long) numRead, prio);
+    if (write(STDOUT_FILENO, buffer, numRead) == -1)
+        errExit("write");
+    write(STDOUT_FILENO, "\n", 1);
+
+    exit(EXIT_SUCCESS);
+}
+    <strong class="userinput"><code>pmsg/pmsg_receive.c</code></strong></pre></div></div></div><div class="sect2" title="Sending and Receiving Messages with a Timeout"><div class="titlepage"><div><div><h3 class="title" id="sending_and_receiving_messages_with_a_ti">Sending and Receiving Messages with a Timeout</h3></div></div></div><p>The <span class="emphasis"><em>mq_timedsend()</em></span> and
+                        <span class="emphasis"><em>mq_timedreceive()</em></span> functions are exactly like
+                        <span class="emphasis"><em>mq_send()</em></span> and <span class="emphasis"><em>mq_receive()</em></span>, except
+                    that if the operation can’t be performed immediately, and the <code class="literal">O_NONBLOCK</code> flag is not in effect for the message
+                    queue description, then the <span class="emphasis"><em>abs_timeout</em></span> argument specifies
+                    a limit on the time for which the call will block.<a id="IDX-CHP-52-7009" class="indexterm"/><a id="IDX-CHP-52-7010" class="indexterm"/><a id="IDX-CHP-52-7011" class="indexterm"/><a id="IDX-CHP-52-7012" class="indexterm"/><a id="IDX-CHP-52-7013" class="indexterm"/><a id="IDX-CHP-52-7014" class="indexterm"/><a id="IDX-CHP-52-7015" class="indexterm"/><a id="IDX-CHP-52-7016" class="indexterm"/><a id="IDX-CHP-52-7017" class="indexterm"/><a id="IDX-CHP-52-7018" class="indexterm"/><a id="IDX-CHP-52-7019" class="indexterm"/><a id="IDX-CHP-52-7020" class="indexterm"/></p><a id="I_programlisting52_d1e137500"/><pre class="programlisting">#include &lt;mqueue.h&gt;
+#include &lt;time.h&gt;
+
+int <strong class="userinput"><code>mq_timedsend</code></strong>(mqd_t <span class="emphasis"><em>mqdes</em></span>, const char *<span class="emphasis"><em>msg_ptr</em></span>, size_t <span class="emphasis"><em>msg_len</em></span>,
+                 unsigned int <span class="emphasis"><em>msg_prio</em></span>, const struct timespec *<span class="emphasis"><em>abs_timeout</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><a id="I_programlisting52_d1e137524"/><pre class="programlisting">ssize_t <strong class="userinput"><code>mq_timedreceive</code></strong>(mqd_t <span class="emphasis"><em>mqdes</em></span>, char *<span class="emphasis"><em>msg_ptr</em></span>, size_t <span class="emphasis"><em>msg_len</em></span>,
+                 unsigned int *<span class="emphasis"><em>msg_prio</em></span>, const struct timespec *<span class="emphasis"><em>abs_timeout</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns number of bytes in received message on success, or -1 on
+                        error</p></div><p>The <span class="emphasis"><em>abs_timeout</em></span> argument is a
+                        <span class="emphasis"><em>timespec</em></span> structure (<a class="xref" href="ch23.html#high-resolution_sleeping_colon_nanosleep" title="High-Resolution Sleeping: nanosleep()">High-Resolution Sleeping: <span class="emphasis"><em>nanosleep()</em></span></a>) that specifies the
+                    timeout as an absolute value in seconds and nanoseconds since the Epoch. To
+                    perform a relative timeout, we can fetch the current value of the <code class="literal">CLOCK_REALTIME</code> clock using
+                        <span class="emphasis"><em>clock_gettime()</em></span> and add the required amount to that
+                    value to produce a suitably initialized <span class="emphasis"><em>timespec</em></span>
+                        structure.<a id="IDX-CHP-52-7021" class="indexterm"/></p><p>If a call to <span class="emphasis"><em>mq_timedsend()</em></span> or
+                        <span class="emphasis"><em>mq_timedreceive()</em></span> times out without being able to
+                    complete its operation, then the call fails with the error <code class="literal">ETIMEDOUT</code>.</p><p>On Linux, specifying <span class="emphasis"><em>abs_timeout</em></span> as <code class="literal">NULL</code> means an infinite timeout. However, this
+                    behavior is not specified in SUSv3, and portable applications can’t rely on
+                    it.</p><p>The <span class="emphasis"><em>mq_timedsend()</em></span> and
+                        <span class="emphasis"><em>mq_timedreceive()</em></span> functions originally derive from
+                    POSIX.1d (1999) and are not available on all UNIX implementations.<a id="IDX-CHP-52-7022" class="indexterm"/></p></div></div><div class="sect1" title="Message Notification"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="message_notification">Message Notification</h2></div></div></div><p>A feature that distinguishes POSIX message queues from their System V counterparts
+                is the ability to receive asynchronous notification of the availability of a message
+                on a previously empty queue (i.e., when the queue transitions from being empty to
+                nonempty). This feature means that instead of making a blocking
+                    <span class="emphasis"><em>mq_receive()</em></span> call or marking the message queue descriptor
+                nonblocking and performing periodic <span class="emphasis"><em>mq_receive()</em></span> calls
+                (“polls”) on the queue, a process can request a notification of message arrival and
+                then perform other tasks until it is notified. A process can choose to be notified
+                either via a signal or via invocation of a function in a separate thread.<a id="IDX-CHP-52-7023" class="indexterm"/><a id="IDX-CHP-52-7024" class="indexterm"/><a id="IDX-CHP-52-7025" class="indexterm"/><a id="IDX-CHP-52-7026" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>The notification feature of POSIX message queues is similar to the
+                    notification facility that we described for POSIX timers in Section 23.6. (Both
+                    of these APIs originated in POSIX.1b.)</p></div><p>The <span class="emphasis"><em>mq_notify()</em></span> function registers the calling process to
+                receive a notification when a message arrives on the empty queue referred to by the
+                descriptor <span class="emphasis"><em>mqdes</em></span>.<a id="IDX-CHP-52-7027" class="indexterm"/></p><a id="I_programlisting52_d1e137651"/><pre class="programlisting">#include &lt;mqueue.h&gt;
+
+int <strong class="userinput"><code>mq_notify</code></strong>(mqd_t <span class="emphasis"><em>mqdes</em></span>, const struct sigevent *<span class="emphasis"><em>notification</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>notification</em></span> argument specifies the mechanism by which
+                the process is to be notified. Before going into the details of the
+                    <span class="emphasis"><em>notification</em></span> argument, we note a few points about message
+                notification:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>At any time, only one process (“the registered process”) can be registered
+                        to receive a notification from a particular message queue. If there is
+                        already a process registered for a message queue, further attempts to
+                        register for that queue fail (<span class="emphasis"><em>mq_notify()</em></span> fails with
+                        the error <code class="literal">EBUSY</code>).</p></li><li class="listitem"><p>The registered process is notified only when a new message arrives on a
+                        queue that was previously empty. If a queue already contains messages at the
+                        time of the registration, a notification will occur only after the queue is
+                        emptied and a new message arrives.</p></li><li class="listitem"><p>After one notification is sent to the registered process, the registration
+                        is removed, and any process can then register itself for notification. In
+                        other words, as long as a process wishes to keep receiving notifications, it
+                        must reregister itself after each notification by once again calling
+                            <span class="emphasis"><em>mq_notify()</em></span>.</p></li><li class="listitem"><p>The registered process is notified only if some other process is not
+                        currently blocked in a call to <span class="emphasis"><em>mq_receive()</em></span> for the
+                        queue. If some other process is blocked in
+                        <span class="emphasis"><em>mq_receive()</em></span>, that process will read the message, and
+                        the registered process will remain registered.</p></li><li class="listitem"><p>A process can explicitly deregister itself as the target for message
+                        notification by calling <span class="emphasis"><em>mq_notify()</em></span> with a
+                            <span class="emphasis"><em>notification</em></span> argument of <code class="literal">NULL</code>.</p></li></ul></div><p>We already showed the <span class="emphasis"><em>sigevent</em></span> structure that is used to type
+                the <span class="emphasis"><em>notification</em></span> argument in <a class="xref" href="ch23.html#creating_a_timer_colon_timer_underscore" title="Creating a Timer: timer_create()">Creating a Timer: <span class="emphasis"><em>timer_create()</em></span></a>. Here, we present the
+                structure in simplified form, showing just those fields relevant to the discussion
+                of <span class="emphasis"><em>mq_notify()</em></span>:<a id="IDX-CHP-52-7028" class="indexterm"/></p><a id="I_programlisting52_d1e137731"/><pre class="programlisting">union sigval {
+    int    sival_int;             /* Integer value for accompanying data */
+    void  *sival_ptr;             /* Pointer value for accompanying data */
+};
+
+struct sigevent {
+    int    sigev_notify;          /* Notification method */
+    int    sigev_signo;           /* Notification signal for SIGEV_SIGNAL */
+    union sigval sigev_value;     /* Value passed to signal handler or
+                                     thread function */
+    void (*sigev_notify_function) (union sigval);
+                                  /* Thread notification function */
+    void  *sigev_notify_attributes;   /* Really 'pthread_attr_t' */
+};</pre><p>The <span class="emphasis"><em>sigev_notify</em></span> field of this structure is set to one of the
+                following values:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">SIGEV_NONE</code>
+                    </span></dt><dd><p>Register this process for notification, but when a message arrives on
+                            the previously empty queue, don’t actually notify the process. As usual,
+                            the registration is removed when a new messages arrives on an empty
+                            queue.</p></dd><dt><span class="term">
+                        <code class="literal">SIGEV_SIGNAL</code>
+                    </span></dt><dd><p>Notify the process by generating the signal specified in the
+                                <span class="emphasis"><em>sigev_signo</em></span> field. The
+                                <span class="emphasis"><em>sigev_value</em></span> field specifies data to accompany
+                            the signal (<a class="xref" href="ch22.html#limits_on_the_number_of_queued_real-id1" title="Limits on the number of queued realtime signals">Limits on the number of queued realtime signals</a>). This
+                            data can be retrieved via the <span class="emphasis"><em>si_value</em></span> field of the
+                                <span class="emphasis"><em>siginfo_t</em></span> structure that is passed to the
+                            signal handler or returned by a call to
+                                <span class="emphasis"><em>sigwaitinfo()</em></span> or
+                                <span class="emphasis"><em>sigtimedwait()</em></span>. The following fields in the
+                                <span class="emphasis"><em>siginfo_t</em></span> structure are also filled in:
+                                <span class="emphasis"><em>si_code</em></span>, with the value <code class="literal">SI_MESGQ</code>; <span class="emphasis"><em>si_signo</em></span>,
+                            with the signal number; <span class="emphasis"><em>si_pid</em></span>, with the process ID
+                            of the process that sent the message; and <span class="emphasis"><em>si_uid</em></span>,
+                            with the real user ID of the process that sent the message. (The
+                                <span class="emphasis"><em>si_pid</em></span> and <span class="emphasis"><em>si_uid</em></span> fields
+                            are not set on most other implementations.)<a id="IDX-CHP-52-7029" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGEV_THREAD</code>
+                    </span></dt><dd><p>Notify the process by calling the function specified in
+                                <span class="emphasis"><em>sigev_notify_function</em></span> as if it were the start
+                            function in a new thread. The
+                                <span class="emphasis"><em>sigev_notify_attributes</em></span> field can be specified
+                            as <code class="literal">NULL</code> or as a pointer to a
+                                <span class="emphasis"><em>pthread_attr_t</em></span> structure that defines
+                            attributes for the thread (<a class="xref" href="ch29.html#thread_attributes" title="Thread Attributes">Thread Attributes</a>). The
+                            union <span class="emphasis"><em>sigval</em></span> value specified in
+                                <span class="emphasis"><em>sigev_value</em></span> is passed as the argument of this
+                            function.</p></dd></dl></div><div class="sect2" title="Receiving Notification via a Signal"><div class="titlepage"><div><div><h3 class="title" id="receiving_notification_via_a_signal">Receiving Notification via a Signal</h3></div></div></div><p><a class="xref" href="ch52.html#receiving_message_notification_via_a_sig" title="Example 52-6. Receiving message notification via a signal">Example 52-6</a> provides an example
+                    of message notification using signals. This program performs the following
+                        steps:<a id="IDX-CHP-52-7030" class="indexterm"/><a id="IDX-CHP-52-7031" class="indexterm"/><a id="IDX-CHP-52-7032" class="indexterm"/><a id="IDX-CHP-52-7033" class="indexterm"/><a id="IDX-CHP-52-7034" class="indexterm"/><a id="IDX-CHP-52-7035" class="indexterm"/><a id="IDX-CHP-52-7036" class="indexterm"/><a id="IDX-CHP-52-7037" class="indexterm"/><a id="IDX-CHP-52-7038" class="indexterm"/></p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Open the message queue named on the command line in nonblocking mode
+                                <span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e137895"/><img src="figs/web/U001.png" alt=""/></span>, determine the <span class="emphasis"><em>mq_msgsize</em></span>
+                            attribute for the queue <span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e137904"/><img src="figs/web/U002.png" alt=""/></span>, and allocate a buffer of that size for receiving
+                            messages <span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e137910"/><img src="figs/web/U003.png" alt=""/></span>.</p></li><li class="listitem"><p>Block the notification signal (<code class="literal">SIGUSR1</code>) and establish a handler for it
+                                <span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e137922"/><img src="figs/web/U004.png" alt=""/></span>.</p></li><li class="listitem"><p>Make an initial call to <span class="emphasis"><em>mq_notify()</em></span> to register
+                            the process to receive message notification <span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e137934"/><img src="figs/web/U005.png" alt=""/></span>.</p></li><li class="listitem"><p>Execute an infinite loop that performs the following steps:</p><div class="orderedlist"><ol class="orderedlist" type="a"><li class="listitem"><p>Call <span class="emphasis"><em>sigsuspend()</em></span>, which unblocks the
+                                    notification signal and waits until the signal is caught
+                                        <span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e137950"/><img src="figs/web/U006.png" alt=""/></span>. Return from this system call indicates
+                                    that a message notification has occurred. At this point, the
+                                    process will have been deregistered for message
+                                    notification.</p></li><li class="listitem"><p>Call <span class="emphasis"><em>mq_notify()</em></span> to reregister this
+                                    process to receive message notification <span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e137962"/><img src="figs/web/U007.png" alt=""/></span>.</p></li><li class="listitem"><p>Execute a <code class="literal">while</code> loop that
+                                    drains the queue by reading as many messages as possible
+                                        <span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e137974"/><img src="figs/web/U008.png" alt=""/></span>.</p></li></ol></div></li></ol></div><div class="example"><a id="receiving_message_notification_via_a_sig"/><div class="example-title">Example 52-6. Receiving message notification via a signal</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pmsg/mq_notify_sig.c</code></strong>
+    #include &lt;signal.h&gt;
+    #include &lt;mqueue.h&gt;
+    #include &lt;fcntl.h&gt;              /* For definition of O_NONBLOCK */
+    #include "tlpi_hdr.h"
+
+    #define NOTIFY_SIG SIGUSR1
+
+    static void
+    handler(int sig)
+    {
+        /* Just interrupt sigsuspend() */
+    }
+
+    int
+    main(int argc, char *argv[])
+    {
+        struct sigevent sev;
+        mqd_t mqd;
+        struct mq_attr attr;
+        void *buffer;
+        ssize_t numRead;
+        sigset_t blockMask, emptyMask;
+        struct sigaction sa;
+
+        if (argc != 2 || strcmp(argv[1], "--help") == 0)
+            usageErr("%s mq-name\n", argv[0]);
+
+<img src="figs/web/U001.png" alt=""/>    mqd = mq_open(argv[1], O_RDONLY | O_NONBLOCK);
+        if (mqd == (mqd_t) -1)
+            errExit("mq_open");
+
+<img src="figs/web/U002.png" alt=""/>    if (mq_getattr(mqd, &amp;attr) == -1)
+            errExit("mq_getattr");
+
+<img src="figs/web/U003.png" alt=""/>    buffer = malloc(attr.mq_msgsize);
+        if (buffer == NULL)
+            errExit("malloc");
+
+<img src="figs/web/U004.png" alt=""/>    sigemptyset(&amp;blockMask);
+        sigaddset(&amp;blockMask, NOTIFY_SIG);
+        if (sigprocmask(SIG_BLOCK, &amp;blockMask, NULL) == -1)
+            errExit("sigprocmask");
+
+            sigemptyset(&amp;sa.sa_mask);
+        sa.sa_flags = 0;
+        sa.sa_handler = handler;
+        if (sigaction(NOTIFY_SIG, &amp;sa, NULL) == -1)
+            errExit("sigaction");
+
+<img src="figs/web/U005.png" alt=""/>    sev.sigev_notify = SIGEV_SIGNAL;
+        sev.sigev_signo = NOTIFY_SIG;
+        if (mq_notify(mqd, &amp;sev) == -1)
+            errExit("mq_notify");
+
+        sigemptyset(&amp;emptyMask);
+
+        for (;;) {
+<img src="figs/web/U006.png" alt=""/>        sigsuspend(&amp;emptyMask);         /* Wait for notification signal */
+
+<img src="figs/web/U007.png" alt=""/>        if (mq_notify(mqd, &amp;sev) == -1)
+                errExit("mq_notify");
+
+<img src="figs/web/U008.png" alt=""/>        while ((numRead = mq_receive(mqd, buffer,
+ attr.mq_msgsize, NULL)) &gt;= 0)
+                printf("Read %ld bytes\n", (long) numRead);
+
+            if (errno != EAGAIN)            /* Unexpected error */
+                errExit("mq_receive");
+        }
+    }
+        <strong class="userinput"><code>pmsg/mq_notify_sig.c</code></strong></pre></div></div><p>Various aspects of the program in <a class="xref" href="ch52.html#receiving_message_notification_via_a_sig" title="Example 52-6. Receiving message notification via a signal">Example 52-6</a> merit further
+                    comment:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>We block the notification signal and use
+                                <span class="emphasis"><em>sigsuspend()</em></span> to wait for it, rather than
+                                <span class="emphasis"><em>pause()</em></span>, to prevent the possibility of missing
+                            a signal that is delivered while the program is executing elsewhere
+                            (i.e., is not blocked waiting for signals) in the <code class="literal">for</code> loop. If this occurred, and we were
+                            using <span class="emphasis"><em>pause()</em></span> to wait for signals, then the next
+                            call to <span class="emphasis"><em>pause()</em></span> would block, even though a signal
+                            had already been delivered.</p></li><li class="listitem"><p>We open the queue in nonblocking mode, and, whenever a notification
+                            occurs, we use a <code class="literal">while</code> loop to read
+                            all messages from the queue. Emptying the queue in this way ensures that
+                            a further notification is generated when a new message arrives.
+                            Employing nonblocking mode means that the <code class="literal">while</code> loop will terminate
+                                (<span class="emphasis"><em>mq_receive()</em></span> will fail with the error <code class="literal">EAGAIN</code>) when we have emptied the queue.
+                            (This approach is analogous to the use of nonblocking I/O with
+                            edge-triggered I/O notification, which we describe in <a class="xref" href="ch63.html#which_technique_question-id1" title="Which technique?">Which technique?</a>, and is employed for similar
+                            reasons.)</p></li><li class="listitem"><p>Within the <code class="literal">for</code> loop, it is
+                            important that we reregister for message notification
+                                <span class="emphasis"><em>before</em></span> reading all messages from the queue. If
+                            we reversed these steps, the following sequence could occur: all
+                            messages are read from the queue, and the <code class="literal">while</code> loop terminates; another message is placed on the
+                            queue; <span class="emphasis"><em>mq_notify()</em></span> is called to reregister for
+                            message notification. At this point, no further notification signal
+                            would be generated, because the queue is already nonempty. Consequently,
+                            the program would remain permanently blocked in its next call to
+                                <span class="emphasis"><em>sigsuspend()</em></span>.</p></li></ul></div></div><div class="sect2" title="Receiving Notification via a Thread"><div class="titlepage"><div><div><h3 class="title" id="receiving_notification_via_a_thread">Receiving Notification via a Thread</h3></div></div></div><p><a class="xref" href="ch52.html#receiving_message_notification_via_a_thr" title="Example 52-7. Receiving message notification via a thread">Example 52-7</a> provides an example
+                    of message notification using threads. This program shares a number of design
+                    features with the program in <a class="xref" href="ch52.html#receiving_message_notification_via_a_sig" title="Example 52-6. Receiving message notification via a signal">Example 52-6</a>:<a id="IDX-CHP-52-7039" class="indexterm"/><a id="IDX-CHP-52-7040" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>When message notification occurs, the program reenables notification
+                            before draining the queue <span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e138120"/><img src="figs/web/U002.png" alt=""/></span>.</p></li><li class="listitem"><p>Nonblocking mode is employed so that, after receiving a notification,
+                            we can completely drain the queue without blocking <span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e138129"/><img src="figs/web/U005.png" alt=""/></span>.</p></li></ul></div><div class="example"><a id="receiving_message_notification_via_a_thr"/><div class="example-title">Example 52-7. Receiving message notification via a thread</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>pmsg/mq_notify_thread.c</code></strong>
+    #include &lt;pthread.h&gt;
+    #include &lt;mqueue.h&gt;
+    #include &lt;fcntl.h&gt;              /* For definition of O_NONBLOCK */
+    #include "tlpi_hdr.h"
+
+    static void notifySetup(mqd_t *mqdp);
+
+    static void                     /* Thread notification function */
+<img src="figs/web/U001.png" alt=""/>threadFunc(union sigval sv)
+    {
+        ssize_t numRead;
+        mqd_t *mqdp;
+        void *buffer;
+        struct mq_attr attr;
+
+        mqdp = sv.sival_ptr;
+
+        if (mq_getattr(*mqdp, &amp;attr) == -1)
+            errExit("mq_getattr");
+
+        buffer = malloc(attr.mq_msgsize);
+        if (buffer == NULL)
+            errExit("malloc");
+
+<img src="figs/web/U002.png" alt=""/>    notifySetup(mqdp);
+
+        while ((numRead = mq_receive(*mqdp, buffer, attr.mq_msgsize, NULL)) &gt;= 0)
+            printf("Read %ld bytes\n", (long) numRead);
+
+        if (errno != EAGAIN)                        /* Unexpected error */
+            errExit("mq_receive");
+
+        free(buffer);
+        pthread_exit(NULL);
+    }
+
+    static void
+    notifySetup(mqd_t *mqdp)
+    {
+        struct sigevent sev;
+
+    <img src="figs/web/U003.png" alt=""/>    sev.sigev_notify = SIGEV_THREAD;            /* Notify via thread */
+        sev.sigev_notify_function = threadFunc;
+        sev.sigev_notify_attributes = NULL;
+                /* Could be pointer to pthread_attr_t structure */
+<img src="figs/web/U004.png" alt=""/>    sev.sigev_value.sival_ptr = mqdp;           /* Argument to threadFunc() */
+
+        if (mq_notify(*mqdp, &amp;sev) == -1)
+            errExit("mq_notify");
+    }
+
+    int
+    main(int argc, char *argv[])
+    {
+        mqd_t mqd;
+
+        if (argc != 2 || strcmp(argv[1], "--help") == 0)
+            usageErr("%s mq-name\n", argv[0]);
+
+<img src="figs/web/U005.png" alt=""/>    mqd = mq_open(argv[1], O_RDONLY | O_NONBLOCK);
+        if (mqd == (mqd_t) -1)
+            errExit("mq_open");
+
+<img src="figs/web/U006.png" alt=""/>    notifySetup(&amp;mqd);
+        pause();                    /* Wait for notifications via thread function */
+    }
+
+        <strong class="userinput"><code>pmsg/mq_notify_thread.c</code></strong></pre></div></div><p>Note the following further points regarding the design of the program in <a class="xref" href="ch52.html#receiving_message_notification_via_a_thr" title="Example 52-7. Receiving message notification via a thread">Example 52-7</a>:<a id="IDX-CHP-52-7041" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The program requests notification via a thread, by specifying <code class="literal">SIGEV_THREAD</code> in the
+                                <span class="emphasis"><em>sigev_notify</em></span> field of the
+                                <span class="emphasis"><em>sigevent</em></span> structure passed to
+                                <span class="emphasis"><em>mq_notify()</em></span>. The thread’s start function,
+                                <span class="emphasis"><em>threadFunc()</em></span>, is specified in the
+                                <span class="emphasis"><em>sigev_notify_function</em></span> field <span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e138215"/><img src="figs/web/U003.png" alt=""/></span>.</p></li><li class="listitem"><p>After enabling message notification, the main program pauses
+                            indefinitely <span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e138224"/><img src="figs/web/U006.png" alt=""/></span>; timer notifications are delivered by invocations
+                            of <span class="emphasis"><em>threadFunc()</em></span> in a separate thread
+                                <span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e138233"/><img src="figs/web/U001.png" alt=""/></span>.</p></li><li class="listitem"><p>We could have made the message queue descriptor,
+                                <span class="emphasis"><em>mqd</em></span>, visible in
+                                <span class="emphasis"><em>threadFunc()</em></span> by making it a global variable.
+                            However, we adopted a different approach to illustrate the alternative:
+                            we place the address of the message queue descriptor in the
+                                <span class="emphasis"><em>sigev_value.sival_ptr</em></span> field that is passed to
+                                <span class="emphasis"><em>mq_notify()</em></span><span class="inlinemediaobject"><a id="I_inlinemediaobject52_d1e138253"/><img src="figs/web/U004.png" alt=""/></span>. When <span class="emphasis"><em>threadFunc()</em></span> is later
+                            invoked, this address is passed as its argument.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>We must assign a pointer to the message queue descriptor to
+                            <span class="emphasis"><em>sigev_value.sival_ptr</em></span>, rather than (some cast
+                        version of) the descriptor itself because, other than the stipulation that
+                        it is not an array type, SUSv3 makes no guarantee about the nature or size
+                        of the type used to represent the <span class="emphasis"><em>mqd_t</em></span> data
+                            type.<a id="IDX-CHP-52-7042" class="indexterm"/></p></div></div></div><div class="sect1" title="Linux-Specific Features"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="linux-specific_features">Linux-Specific Features</h2></div></div></div><p>The Linux implementation of POSIX message queues provides a number of features
+                that are unstandardized but nevertheless useful.<a id="IDX-CHP-52-7043" class="indexterm"/><a id="IDX-CHP-52-7044" class="indexterm"/><a id="IDX-CHP-52-7045" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="displaying_and_deleting_message_que"/></div></div></div><div class="sect3" title="Displaying and deleting message queue objects via the command line"><div class="titlepage"><div><div><h4 class="title" id="displaying_and_deleting_message_que-id1">Displaying and deleting message queue objects via the command
+                        line</h4></div></div></div><p>In <a class="xref" href="ch51.html" title="Chapter 51. Introduction to POSIX IPC">Chapter 51</a>, we mentioned that POSIX
+                        IPC objects are implemented as files in virtual file systems, and that these
+                        files can be listed and removed with <span class="emphasis"><em>ls</em></span> and
+                            <span class="emphasis"><em>rm</em></span>. In order to do this with POSIX message queues,
+                        we must mount the message queue file system using a command of the following
+                        form:</p><a id="I_programlisting52_d1e138317"/><pre class="programlisting"># <strong class="userinput"><code>mount -t mqueue</code></strong> <strong class="userinput"><code><em class="replaceable"><code>source</code></em></code></strong> <em class="replaceable"><code>target</code></em></pre><p>The <span class="emphasis"><em>source</em></span> can be any name at all (specifying the
+                        string <span class="emphasis"><em>none</em></span> is typical). Its only significance is that
+                        it appears in <code class="literal">/proc/mounts</code> and is
+                        displayed by the <span class="emphasis"><em>mount</em></span> and <span class="emphasis"><em>df</em></span>
+                        commands. The <span class="emphasis"><em>target</em></span> is the mount point for the message
+                        queue file system.</p><p>The following shell session shows how to mount the message queue file
+                        system and display its contents. We begin by creating a mount point for the
+                        file system and mounting it:</p><a id="I_programlisting52_d1e138351"/><pre class="programlisting">$ <strong class="userinput"><code>su</code></strong> <em class="lineannotation"><span class="lineannotation">Privilege is required for</span></em> <span class="emphasis"><em>mount</em></span>
+Password:
+# <strong class="userinput"><code>mkdir /dev/mqueue</code></strong>
+# <strong class="userinput"><code>mount -t mqueue none /dev/mqueue</code></strong>
+$ <strong class="userinput"><code>exit</code></strong>                                <em class="lineannotation"><span class="lineannotation">Terminate</span></em><span class="emphasis"><em>root</em></span> <em class="lineannotation"><span class="lineannotation">shell session</span></em></pre><p>Next, we display the record in <code class="literal">/proc/mounts</code> for the new mount, and then display the
+                        permissions for the mount directory:</p><a id="I_programlisting52_d1e138384"/><pre class="programlisting">$ <strong class="userinput"><code>cat /proc/mounts | grep mqueue</code></strong>
+none /dev/mqueue mqueue rw 0 0
+$ <strong class="userinput"><code>ls -ld /dev/mqueue</code></strong>
+drwxrwxrwt  2 root root 40 Jul 26 12:09 /dev/mqueue</pre><p>One point to note from the output of the <span class="emphasis"><em>ls</em></span> command
+                        is that the message queue file system is automatically mounted with the
+                        sticky bit set for the mount directory. (We see this from the fact that
+                        there is a <span class="emphasis"><em>t</em></span> in the other-execute permission field
+                        displayed by <span class="emphasis"><em>ls</em></span>.) This means that an unprivileged
+                        process can unlink only message queues that it owns.</p><p>Next, we create a message queue, use <span class="emphasis"><em>ls</em></span> to show that
+                        it is visible in the file system, and then delete the message queue:</p><a id="I_programlisting52_d1e138408"/><pre class="programlisting">$ <strong class="userinput"><code>./pmsg_create -c /newq</code></strong>
+$ <strong class="userinput"><code>ls /dev/mqueue</code></strong>
+newq
+$ <strong class="userinput"><code>rm /dev/mqueue/newq</code></strong></pre></div><div class="sect3" title="Obtaining information about a message queue"><div class="titlepage"><div><div><h4 class="title" id="obtaining_information_about_a_message_qu">Obtaining information about a message queue</h4></div></div></div><p>We can display the contents of the files in the message queue file system.
+                        Each of these virtual files contains information about the associated
+                        message queue:</p><a id="I_programlisting52_d1e138423"/><pre class="programlisting">$ <strong class="userinput"><code>./pmsg_create -c /mq</code></strong> <em class="lineannotation"><span class="lineannotation">Create a queue</span></em>
+$ <strong class="userinput"><code>./pmsg_send /mq abcdefg</code></strong> <em class="lineannotation"><span class="lineannotation">Write 7 bytes to the queue</span></em>
+$ <strong class="userinput"><code>cat /dev/mqueue/mq</code></strong>
+QSIZE:7       NOTIFY:0    SIGNO:0    NOTIFY_PID:0</pre><p>The <code class="literal">QSIZE</code> field is a count of the total
+                        number of bytes of data in the queue. The remaining fields relate to message
+                        notification. If <code class="literal">NOTIFY_PID</code> is nonzero,
+                        then the process with the specified process ID has registered for message
+                        notification from this queue, and the remaining fields provide information
+                        about the kind of notification:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><code class="literal">NOTIFY</code> is a value corresponding
+                                to one of the <span class="emphasis"><em>sigev_notify</em></span> constants: 0 for
+                                    <code class="literal">SIGEV_SIGNAL</code>, 1 for <code class="literal">SIGEV_NONE</code>, or 2 for <code class="literal">SIGEV_THREAD</code>.</p></li><li class="listitem"><p>If the notification method is <code class="literal">SIGEV_SIGNAL</code>, the <code class="literal">SIGNO</code> field indicates which signal is delivered for
+                                message notification.</p></li></ul></div><p>The following shell session illustrates the information that appears in
+                        these fields:</p><a id="I_programlisting52_d1e138477"/><pre class="programlisting">$ <strong class="userinput"><code>./mq_notify_sig /mq &amp;</code></strong> <em class="lineannotation"><span class="lineannotation">Notify using</span></em> SIGUSR1 <em class="lineannotation"><span class="lineannotation">(signal 10 on x86)</span></em>
+[1] 18158
+$ <strong class="userinput"><code>cat /dev/mqueue/mq</code></strong>
+QSIZE:7       NOTIFY:0    SIGNO:10   NOTIFY_PID:18158
+$ <strong class="userinput"><code>kill %1</code></strong>
+[1]   Terminated    ./mq_notify_sig /mq
+$ <strong class="userinput"><code>./mq_notify_thread /mq &amp;</code></strong> <em class="lineannotation"><span class="lineannotation">Notify using a thread</span></em>
+[2] 18160
+$ <strong class="userinput"><code>cat /dev/mqueue/mq</code></strong>
+QSIZE:7       NOTIFY:2    SIGNO:0    NOTIFY_PID:18160</pre></div><div class="sect3" title="Using message queues with alternative I/O models"><div class="titlepage"><div><div><h4 class="title" id="using_message_queues_with_alternative_i">Using message queues with alternative I/O models</h4></div></div></div><p>In the Linux implementation, a message queue descriptor is really a file
+                        descriptor. We can monitor this file descriptor using I/O multiplexing
+                        system calls (<span class="emphasis"><em>select()</em></span> and <span class="emphasis"><em>poll()</em></span>)
+                        or the <span class="emphasis"><em>epoll</em></span> API. (See <a class="xref" href="ch63.html" title="Chapter 63. Alternative I/O Models">Chapter 63</a> for further details of these
+                        APIs.) This allows us to avoid the difficulty that we encounter with System
+                        V messages queues when trying to wait for input on both a message queue and
+                        a file descriptor (refer to <a class="xref" href="ch46.html#disadvantages_of_system_v_message_queues" title="Disadvantages of System V Message Queues">Disadvantages of System V Message Queues</a>). However, this
+                        feature is nonstandard; SUSv3 doesn’t require that message queue descriptors
+                        are implemented as file descriptors.<a id="IDX-CHP-52-7046" class="indexterm"/><a id="IDX-CHP-52-7047" class="indexterm"/><a id="IDX-CHP-52-7048" class="indexterm"/></p></div></div></div><div class="sect1" title="Message Queue Limits"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="message_queue_limits-id1">Message Queue Limits</h2></div></div></div><p>SUSv3 defines two limits for POSIX message queues:<a id="IDX-CHP-52-7049" class="indexterm"/></p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">MQ_PRIO_MAX</code>
+                    </span></dt><dd><p>We described this limit, which defines the maximum priority for a
+                            message, in <a class="xref" href="ch52.html#sending_messages-id1" title="Sending Messages">Sending Messages</a>.</p></dd><dt><span class="term">
+                        <code class="literal">MQ_OPEN_MAX</code>
+                    </span></dt><dd><p>An implementation can define this limit to indicate the maximum number
+                            of message queues that a process can hold open. SUSv3 requires this
+                            limit to be at least <code class="literal">_POSIX_MQ_OPEN_MAX</code> (8). Linux doesn’t define this limit.
+                            Instead, because Linux implements message queue descriptors as file
+                            descriptors (<a class="xref" href="ch52.html#linux-specific_features" title="Linux-Specific Features">Linux-Specific Features</a>), the applicable
+                            limits are those that apply to file descriptors. (In other words, on
+                            Linux, the per-process and system-wide limits on the number of file
+                            descriptors actually apply to the sum of file descriptors and message
+                            queue descriptors.) For further details on the applicable limits, see
+                            the discussion of the <code class="literal">RLIMIT_NOFILE</code>
+                            resource limit in Section 36.3.</p></dd></dl></div><p>As well as the above SUSv3-specified limits, Linux provides a number of <code class="literal">/proc</code> files for viewing and (with privilege) changing
+                limits that control the use of POSIX message queues. The following three files
+                reside in the directory <code class="literal">/proc/sys/fs/mqueue</code>:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">msg_max</code>
+                    </span></dt><dd><p>This limit specifies a ceiling for the <span class="emphasis"><em>mq_maxmsg</em></span>
+                            attribute of new message queues (i.e., a ceiling for
+                                <span class="emphasis"><em>attr.mq_maxmsg</em></span> when creating a queue with
+                                <span class="emphasis"><em>mq_open()</em></span>). The default value for this limit is
+                            10. The minimum value is 1 (10 in kernels before Linux 2.6.28). The
+                            maximum value is defined by the kernel constant <code class="literal">HARD_MSGMAX</code>. The value for this constant is calculated as
+                            (131,072 / <span class="emphasis"><em>sizeof(void *)</em></span>), which evaluates to
+                            32,768 on Linux/x86-32. When a privileged process (<code class="literal">CAP_SYS_RESOURCE</code>) calls
+                                <span class="emphasis"><em>mq_open()</em></span>, the <code class="literal">msg_max</code> limit is ignored, but <code class="literal">HARD_MSGMAX</code> still acts as a ceiling for
+                                <span class="emphasis"><em>attr.mq_maxmsg</em></span>.</p></dd><dt><span class="term">
+                        <code class="literal">msgsize_max</code>
+                    </span></dt><dd><p>This limit specifies a ceiling for the <span class="emphasis"><em>mq_msgsize</em></span>
+                            attribute of new message queues created by unprivileged processes (i.e.,
+                            a ceiling for <span class="emphasis"><em>attr.mq_msgsize</em></span> when creating a queue
+                            with <span class="emphasis"><em>mq_open()</em></span>). The default value for this limit
+                            is 8192. The minimum value is 128 (8192 in kernels before Linux 2.6.28).
+                            The maximum value is 1,048,576 (<code class="literal">INT_MAX</code> in kernels before 2.6.28). This limit is ignored
+                            when a privileged process (<code class="literal">CAP_SYS_RESOURCE</code>) calls
+                            <span class="emphasis"><em>mq_open()</em></span>.</p></dd><dt><span class="term">
+                        <code class="literal">queues_max</code>
+                    </span></dt><dd><p>This is a system-wide limit on the number of message queues that may
+                            be created. Once this limit is reached, only a privileged process
+                                (<code class="literal">CAP_SYS_RESOURCE</code>) can create new
+                            queues. The default value for this limit is 256. It can be changed to
+                            any value in the range 0 to <code class="literal">INT_MAX</code>.</p></dd></dl></div><p>Linux also provides the <code class="literal">RLIMIT_MSGQUEUE</code>
+                resource limit, which can be used to place a ceiling on the amount of space that can
+                be consumed by all of the message queues belonging to the real user ID of the
+                calling process. See <a class="xref" href="ch36.html#details_of_specific_resource_limits" title="Details of Specific Resource Limits">Details of Specific Resource Limits</a> for
+                    details.<a id="IDX-CHP-52-7050" class="indexterm"/></p></div><div class="sect1" title="Comparison of POSIX and System V Message Queues"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="comparison_of_posix_and_system_v_message">Comparison of POSIX and System V Message Queues</h2></div></div></div><p><a class="xref" href="ch51.html#comparison_of_system_v_ipc_and_posix_ipc" title="Comparison of System V IPC and POSIX IPC">Comparison of System V IPC and POSIX IPC</a> listed various
+                advantages of the POSIX IPC interface over the System V IPC interface: the POSIX IPC
+                interface is simpler and more consistent with the traditional UNIX file model, and
+                POSIX IPC objects are reference counted, which simplifies the task of determining
+                when to delete an object. These general advantages also apply to POSIX message
+                    queues.<a id="IDX-CHP-52-7051" class="indexterm"/><a id="IDX-CHP-52-7052" class="indexterm"/><a id="IDX-CHP-52-7053" class="indexterm"/><a id="IDX-CHP-52-7054" class="indexterm"/><a id="IDX-CHP-52-7055" class="indexterm"/><a id="IDX-CHP-52-7056" class="indexterm"/></p><p>POSIX message queues also have the following specific advantages over System V
+                message queues:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The message notification feature allows a (single) process to be
+                        asynchronously notified via a signal or the instantiation of a thread when a
+                        message arrives on a previously empty queue.</p></li><li class="listitem"><p>On Linux (but not other UNIX implementations), POSIX message queues can be
+                        monitored using <span class="emphasis"><em>poll()</em></span>, <span class="emphasis"><em>select()</em></span>,
+                        and <span class="emphasis"><em>epoll</em></span>. System V message queues don’t provide this
+                        feature.</p></li></ul></div><p>However, POSIX message queues also have some disadvantages compared to System V
+                message queues:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>POSIX message queues are less portable. This problem applies even across
+                        Linux systems, since message queue support is available only since kernel
+                        2.6.6.</p></li><li class="listitem"><p>The facility to select System V messages by type provides slightly greater
+                        flexibility than the strict priority ordering of POSIX messages.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>There is a wide variation in the manner in which POSIX message queues are
+                    implemented on UNIX systems. Some systems provide implementations in user space,
+                    and on at least one such implementation (Solaris 10), the
+                        <span class="emphasis"><em>mq_open()</em></span> manual page explicitly notes that the
+                    implementation can’t be considered secure. On Linux, one of the motives for
+                    selecting a kernel implementation of message queues was that it was not deemed
+                    possible to provide a secure user-space implementation.</p></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id51">Summary</h2></div></div></div><p>POSIX message queues allow processes to exchange data in the form of messages.
+                Each message has an associated integer priority, and messages are queued (and thus
+                received) in order of priority.<a id="IDX-CHP-52-7057" class="indexterm"/><a id="IDX-CHP-52-7058" class="indexterm"/></p><p>POSIX message queues have some advantages over System V message queues, notably
+                that they are reference counted and that a process can be asynchronously notified of
+                the arrival of a message on an empty queue. However, POSIX message queues are less
+                portable than System V message queues.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id69"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id70">Further information</h4></div></div></div><p>[Stevens, 1999] provides an alternative presentation of POSIX message
+                        queues and shows a user-space implementation using memory-mapped files.
+                        POSIX message queues are also described in some detail in [Gallmeister,
+                        1995].</p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id36">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Modify the program in <a class="xref" href="ch52.html#reading_a_message_from_a_posix_message_q" title="Example 52-5. Reading a message from a POSIX message queue">Example 52-5</a> (<code class="literal">pmsg_receive.c</code>) to accept a timeout (a
+                        relative number of seconds) on the command line, and use
+                            <span class="emphasis"><em>mq_timedreceive()</em></span> instead of
+                            <span class="emphasis"><em>mq_receive()</em></span>.</p></li><li class="listitem"><p>Recode the sequence-number client-server application of <a class="xref" href="ch44.html#a_client-server_application_using_fifos" title="A Client-Server Application Using FIFOs">A Client-Server Application Using FIFOs</a> to use POSIX message
+                        queues.</p></li><li class="listitem"><p>Rewrite the file-server application of <a class="xref" href="ch46.html#a_file-server_application_using_message" title="A File-Server Application Using Message Queues">A File-Server Application Using Message Queues</a> to use POSIX message
+                        queues instead of System V message queues.</p></li><li class="listitem"><p>Write a simple chat program (similar to <span class="emphasis"><em>talk(1)</em></span>, but
+                        without the <span class="emphasis"><em>curses</em></span> interface) using POSIX messages
+                        queues.</p></li><li class="listitem"><p>Modify the program in <a class="xref" href="ch52.html#receiving_message_notification_via_a_sig" title="Example 52-6. Receiving message notification via a signal">Example 52-6</a> (<code class="literal">mq_notify_sig.c</code>) to demonstrate that message
+                        notification established by <span class="emphasis"><em>mq_notify()</em></span> occurs just
+                        once. This can be done by removing the <span class="emphasis"><em>mq_notify()</em></span> call
+                        inside the <code class="literal">for</code> loop.</p></li><li class="listitem"><p>Replace the use of a signal handler in <a class="xref" href="ch52.html#receiving_message_notification_via_a_sig" title="Example 52-6. Receiving message notification via a signal">Example 52-6</a> (<code class="literal">mq_notify_sig.c</code>) with the use of
+                            <span class="emphasis"><em>sigwaitinfo()</em></span>. Upon return from
+                            <span class="emphasis"><em>sigwaitinfo()</em></span>, display the values in the returned
+                            <span class="emphasis"><em>siginfo_t</em></span> structure. How could the program obtain
+                        the message queue descriptor in the <span class="emphasis"><em>siginfo_t</em></span> structure
+                        returned by <span class="emphasis"><em>sigwaitinfo()</em></span>?</p></li><li class="listitem"><p>In <a class="xref" href="ch52.html#receiving_message_notification_via_a_thr" title="Example 52-7. Receiving message notification via a thread">Example 52-7</a>, could
+                            <span class="emphasis"><em>buffer</em></span> be made a global variable and its memory
+                        allocated just once (in the main program)? Explain your answer.</p></li></ol></div></div></section></body></html>

@@ -1,0 +1,851 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 30. Threads: Thread Synchronization</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch29.html" title="Chapter 29. Threads: Introduction"/><link rel="next" href="ch31.html" title="Chapter 31. Threads: Thread Safety and Per-Thread Storage"/></head><body><section class="chapter" title="Chapter 30. Threads: Thread Synchronization" epub:type="chapter" id="threads_colon_thread_synchronization"><div class="titlepage"><div><div><h2 class="title">Chapter 30. Threads: Thread Synchronization</h2></div></div></div><p>In this chapter, we describe two tools that threads can use to synchronize their
+            actions: mutexes and condition variables. Mutexes allow threads to synchronize their use
+            of a shared resource, so that, for example, one thread doesn’t try to access a shared
+            variable at the same time as another thread is modifying it. Condition variables perform
+            a complementary task: they allow threads to inform each other that a shared variable (or
+            other shared resource) has changed state.</p><div class="sect1" title="Protecting Accesses to Shared Variables: Mutexes"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="protecting_accesses_to_shared_variables">Protecting Accesses to Shared Variables: Mutexes</h2></div></div></div><p>One of the principal advantages of threads is that they can share information via
+                global variables. However, this easy sharing comes at a cost: we must take care that
+                multiple threads do not attempt to modify the same variable at the same time, or
+                that one thread doesn’t try to read the value of a variable while another thread is
+                modifying it. The term <span class="emphasis"><em>critical section</em></span> is used to refer to a
+                section of code that accesses a shared resource and whose execution should be
+                    <span class="emphasis"><em>atomic</em></span>; that is, its execution should not be interrupted by
+                another thread that simultaneously accesses the same shared resource.<a id="IDX-CHP-30-4455" class="indexterm"/><a id="IDX-CHP-30-4456" class="indexterm"/><a id="IDX-CHP-30-4457" class="indexterm"/><a id="IDX-CHP-30-4458" class="indexterm"/></p><p><a class="xref" href="ch30.html#incorrectly_incrementing_a_global_variab" title="Example 30-1. Incorrectly incrementing a global variable from two threads">Example 30-1</a> provides a simple
+                example of the kind of problems that can occur when shared resources are not
+                accessed atomically. This program creates two threads, each of which executes the
+                same function. The function executes a loop that repeatedly increments a global
+                variable, <span class="emphasis"><em>glob</em></span>, by copying <span class="emphasis"><em>glob</em></span> into the
+                local variable <span class="emphasis"><em>loc</em></span>, incrementing <span class="emphasis"><em>loc</em></span>, and
+                copying <span class="emphasis"><em>loc</em></span> back to <span class="emphasis"><em>glob</em></span>. (Since
+                    <span class="emphasis"><em>loc</em></span> is an automatic variable allocated on the per-thread
+                stack, each thread has its own copy of this variable.) The number of iterations of
+                the loop is determined by the command-line argument supplied to the program, or by a
+                default value, if no argument is supplied.</p><div class="example"><a id="incorrectly_incrementing_a_global_variab"/><div class="example-title">Example 30-1. Incorrectly incrementing a global variable from two threads</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>threads/thread_incr.c</code></strong>
+#include &lt;pthread.h&gt;
+#include "tlpi_hdr.h"
+
+static int glob = 0;
+
+static void *                   /* Loop ’arg’ times incrementing ’glob’ */
+threadFunc(void *arg)
+{
+    int loops = *((int *) arg);
+    int loc, j;
+
+    for (j = 0; j &lt; loops; j++) {
+        loc = glob;
+        loc++;
+        glob = loc;
+    }
+
+    return NULL;
+}
+
+int
+main(int argc, char *argv[])
+{
+    pthread_t t1, t2;
+    int loops, s;
+
+    loops = (argc &gt; 1) ? getInt(argv[1], GN_GT_0, "num-loops") : 10000000;
+
+    s = pthread_create(&amp;t1, NULL, threadFunc, &amp;loops);
+    if (s != 0)
+        errExitEN(s, "pthread_create");
+    s = pthread_create(&amp;t2, NULL, threadFunc, &amp;loops);
+    if (s != 0)
+        errExitEN(s, "pthread_create");
+
+    s = pthread_join(t1, NULL);
+    if (s != 0)
+        errExitEN(s, "pthread_join");
+    s = pthread_join(t2, NULL);
+    if (s != 0)
+        errExitEN(s, "pthread_join");
+
+    printf("glob = %d\n", glob);
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>threads/thread_incr.c</code></strong></pre></div></div><div class="figure"><a id="two_threads_incrementing_a_global_variab"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject30_d1e85545"/><img src="figs/web/30-1_THREADS-A2-incr-scale90.png.jpg" alt="Two threads incrementing a global variable without synchronization"/></div></div><div class="figure-title">Figure 30-1. Two threads incrementing a global variable without synchronization</div></div><p>When we run the program in <a class="xref" href="ch30.html#incorrectly_incrementing_a_global_variab" title="Example 30-1. Incorrectly incrementing a global variable from two threads">Example 30-1</a> specifying that each thread
+                should increment the variable 1000 times, all seems well:</p><a id="I_programlisting30_d1e85554"/><pre class="programlisting">$ <strong class="userinput"><code>./thread_incr 1000</code></strong>
+glob = 2000</pre><p>However, what has probably happened here is that the first thread completed all of
+                its work and terminated before the second thread even started. When we ask both
+                threads to do a lot more work, we see a rather different result:</p><a id="I_programlisting30_d1e85561"/><pre class="programlisting">$ <strong class="userinput"><code>./thread_incr 10000000</code></strong>
+glob = 16517656</pre><p>At the end of this sequence, the value of <span class="emphasis"><em>glob</em></span> should have
+                been 20 million. The problem here results from execution sequences such as the
+                following (see also <a class="xref" href="ch30.html#two_threads_incrementing_a_global_variab" title="Figure 30-1. Two threads incrementing a global variable without synchronization">Figure 30-1</a>,
+                above):</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Thread 1 fetches the current value of <span class="emphasis"><em>glob</em></span> into its
+                        local variable <span class="emphasis"><em>loc</em></span>. Let’s assume that the current value
+                        of <span class="emphasis"><em>glob</em></span> is 2000.</p></li><li class="listitem"><p>The scheduler time slice for thread 1 expires, and thread 2 commences
+                        execution.</p></li><li class="listitem"><p>Thread 2 performs multiple loops in which it fetches the current value of
+                            <span class="emphasis"><em>glob</em></span> into its local variable
+                            <span class="emphasis"><em>loc</em></span>, increments <span class="emphasis"><em>loc</em></span>, and
+                        assigns the result to <span class="emphasis"><em>glob</em></span>. In the first of these
+                        loops, the value fetched from <span class="emphasis"><em>glob</em></span> will be 2000. Let’s
+                        suppose that by the time the time slice for thread 2 has expired,
+                            <span class="emphasis"><em>glob</em></span> has been increased to 3000.</p></li><li class="listitem"><p>Thread 1 receives another time slice and resumes execution where it left
+                        off. Having previously (step 1) copied the value of
+                            <span class="emphasis"><em>glob</em></span> (2000) into its <span class="emphasis"><em>loc</em></span>, it
+                        now increments <span class="emphasis"><em>loc</em></span> and assigns the result (2001) to
+                            <span class="emphasis"><em>glob</em></span>. At this point, the effect of the increment
+                        operations performed by thread 2 is lost.</p></li></ol></div><p>If we run the program in <a class="xref" href="ch30.html#incorrectly_incrementing_a_global_variab" title="Example 30-1. Incorrectly incrementing a global variable from two threads">Example 30-1</a> multiple times with the same command-line argument, we see that the printed value
+                of <span class="emphasis"><em>glob</em></span> fluctuates wildly:</p><a id="I_programlisting30_d1e85634"/><pre class="programlisting">$ <strong class="userinput"><code>./thread_incr 10000000</code></strong>
+glob = 10880429
+$ <strong class="userinput"><code>./thread_incr 10000000</code></strong>
+glob = 13493953</pre><p>This nondeterministic behavior is a consequence of the vagaries of the kernel’s
+                CPU scheduling decisions. In complex programs, this nondeterministic behavior means
+                that such errors may occur only rarely, be hard to reproduce, and therefore be
+                difficult to find.</p><p>It might seem that we could eliminate the problem by replacing the three
+                statements inside the <code class="literal">for</code> loop in the
+                    <span class="emphasis"><em>threadFunc()</em></span> function in <a class="xref" href="ch30.html#incorrectly_incrementing_a_global_variab" title="Example 30-1. Incorrectly incrementing a global variable from two threads">Example 30-1</a> with a single
+                statement:</p><a id="I_programlisting30_d1e85654"/><pre class="programlisting">glob++;             /* or: ++glob; */</pre><p>However, on many hardware architectures (e.g., RISC architectures), the compiler
+                would still need to convert this single statement into machine code whose steps are
+                equivalent to the three statements inside the loop in
+                    <span class="emphasis"><em>threadFunc()</em></span>. In other words, despite its simple
+                appearance, even a C increment operator may not be atomic, and it might demonstrate
+                the behavior that we described above.</p><p>To avoid the problems that can occur when threads try to update a shared variable,
+                we must use a <span class="emphasis"><em>mutex</em></span> (short for <span class="emphasis"><em>mutual
+                    exclusion</em></span>) to ensure that only one thread at a time can access the
+                variable. More generally, mutexes can be used to ensure atomic access to any shared
+                resource, but protecting shared variables is the most common use.<a id="IDX-CHP-30-4459" class="indexterm"/></p><p>A mutex has two states: <span class="emphasis"><em>locked</em></span> and
+                    <span class="emphasis"><em>unlocked</em></span>. At any moment, at most one thread may hold the
+                lock on a mutex. Attempting to lock a mutex that is already locked either blocks or
+                fails with an error, depending on the method used to place the lock.</p><p>When a thread locks a mutex, it becomes the owner of that mutex. Only the mutex
+                owner can unlock the mutex. This property improves the structure of code that uses
+                mutexes and also allows for some optimizations in the implementation of mutexes.
+                Because of this ownership property, the terms <span class="emphasis"><em>acquire</em></span> and
+                    <span class="emphasis"><em>release</em></span> are sometimes used synonymously for lock and
+                unlock.</p><p>In general, we employ a different mutex for each shared resource (which may
+                consist of multiple related variables), and each thread employs the following
+                protocol for accessing a resource:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>lock the mutex for the shared resource;</p></li><li class="listitem"><p>access the shared resource; and</p></li><li class="listitem"><p>unlock the mutex.</p></li></ul></div><p>If multiple threads try to execute this block of code (a <span class="emphasis"><em>critical
+                    section</em></span>), the fact that only one thread can hold the mutex (the
+                others remain blocked) means that only one thread at a time can enter the block, as
+                illustrated in <a class="xref" href="ch30.html#using_a_mutex_to_protect_a_critical_sect" title="Figure 30-2. Using a mutex to protect a critical section">Figure 30-2</a>.<a id="IDX-CHP-30-4460" class="indexterm"/></p><div class="figure"><a id="using_a_mutex_to_protect_a_critical_sect"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject30_d1e85714"/><img src="figs/web/30-2_THREADS-A2-mutex-block-scale90.png.jpg" alt="Using a mutex to protect a critical section"/></div></div><div class="figure-title">Figure 30-2. Using a mutex to protect a critical section</div></div><p>Finally, note that mutex locking is advisory, rather than mandatory. By this, we
+                mean that a thread is free to ignore the use of a mutex and simply access the
+                corresponding shared variable(s). In order to safely handle shared variables, all
+                threads must cooperate in their use of a mutex, abiding by the locking rules it
+                enforces.</p><div class="sect2" title="Statically Allocated Mutexes"><div class="titlepage"><div><div><h3 class="title" id="statically_allocated_mutexes">Statically Allocated Mutexes</h3></div></div></div><p>A mutex can either be allocated as a static variable or be created dynamically
+                    at run time (for example, in a block of memory allocated via
+                        <span class="emphasis"><em>malloc()</em></span>). Dynamic mutex creation is somewhat more
+                    complex, and we delay discussion of it until <a class="xref" href="ch30.html#dynamically_initializing_a_mutex" title="Dynamically Initializing a Mutex">Dynamically Initializing a Mutex</a>.<a id="IDX-CHP-30-4461" class="indexterm"/><a id="IDX-CHP-30-4462" class="indexterm"/></p><p>A mutex is a variable of the type <span class="emphasis"><em>pthread_mutex_t</em></span>. Before
+                    it can be used, a mutex must always be initialized. For a statically allocated
+                    mutex, we can do this by assigning it the value <code class="literal">PTHREAD_MUTEX_INITIALIZER</code>, as in the following example:<a id="IDX-CHP-30-4463" class="indexterm"/></p><a id="I_programlisting30_d1e85754"/><pre class="programlisting">pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>According to SUSv3, applying the operations that we describe in the
+                        remainder of this section to a <span class="emphasis"><em>copy</em></span> of a mutex yields
+                        results that are undefined. Mutex operations should always be performed only
+                        on the original mutex that has been statically initialized using <code class="literal">PTHREAD_MUTEX_INITIALIZER</code> or dynamically
+                        initialized using <span class="emphasis"><em>pthread_mutex_init()</em></span> (described in
+                            <a class="xref" href="ch30.html#dynamically_initializing_a_mutex" title="Dynamically Initializing a Mutex">Dynamically Initializing a Mutex</a>).</p></div></div><div class="sect2" title="Locking and Unlocking a Mutex"><div class="titlepage"><div><div><h3 class="title" id="locking_and_unlocking_a_mutex">Locking and Unlocking a Mutex</h3></div></div></div><p>After initialization, a mutex is unlocked. To lock and unlock a mutex, we use
+                    the <span class="emphasis"><em>pthread_mutex_lock()</em></span> and
+                        <span class="emphasis"><em>pthread_mutex_unlock()</em></span> functions.<a id="IDX-CHP-30-4464" class="indexterm"/><a id="IDX-CHP-30-4465" class="indexterm"/></p><a id="I_programlisting30_d1e85789"/><pre class="programlisting">#include &lt;pthread.h&gt;
+
+int <strong class="userinput"><code>pthread_mutex_lock</code></strong>(pthread_mutex_t *<span class="emphasis"><em>mutex</em></span>);
+int <strong class="userinput"><code>pthread_mutex_unlock</code></strong>(pthread_mutex_t *<span class="emphasis"><em>mutex</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Both return 0 on success, or a positive error number on error</p></div><p>To lock a mutex, we specify the mutex in a call to
+                        <span class="emphasis"><em>pthread_mutex_lock()</em></span>. If the mutex is currently
+                    unlocked, this call locks the mutex and returns immediately. If the mutex is
+                    currently locked by another thread, then
+                        <span class="emphasis"><em>pthread_mutex_lock()</em></span> blocks until the mutex is
+                    unlocked, at which point it locks the mutex and returns.</p><p>If the calling thread itself has already locked the mutex given to
+                        <span class="emphasis"><em>pthread_mutex_lock()</em></span>, then, for the default type of
+                    mutex, one of two implementation-defined possibilities may result: the thread
+                    deadlocks, blocked trying to lock a mutex that it already owns, or the call
+                    fails, returning the error <code class="literal">EDEADLK</code>. On Linux,
+                    the thread deadlocks by default. (We describe some other possible behaviors when
+                    we look at mutex types in <a class="xref" href="ch30.html#mutex_types" title="Mutex Types">Mutex Types</a>.)</p><p>The <span class="emphasis"><em>pthread_mutex_unlock()</em></span> function unlocks a mutex
+                    previously locked by the calling thread. It is an error to unlock a mutex that
+                    is not currently locked, or to unlock a mutex that is locked by another
+                    thread.</p><p>If more than one other thread is waiting to acquire the mutex unlocked by a
+                    call to <span class="emphasis"><em>pthread_mutex_unlock()</em></span>, it is indeterminate which
+                    thread will succeed in acquiring it.</p><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id42">Example program</h4></div></div></div><p><a class="xref" href="ch30.html#using_a_mutex_to_protect_access_to_a_glo" title="Example 30-2. Using a mutex to protect access to a global variable">Example 30-2</a> is a modified
+                        version of the program in <a class="xref" href="ch30.html#incorrectly_incrementing_a_global_variab" title="Example 30-1. Incorrectly incrementing a global variable from two threads">Example 30-1</a>. It uses a mutex to
+                        protect access to the global variable <span class="emphasis"><em>glob</em></span>. When we run
+                        this program with a similar command line to that used earlier, we see that
+                            <span class="emphasis"><em>glob</em></span> is always reliably incremented:<a id="IDX-CHP-30-4466" class="indexterm"/><a id="IDX-CHP-30-4467" class="indexterm"/><a id="IDX-CHP-30-4468" class="indexterm"/><a id="IDX-CHP-30-4469" class="indexterm"/><a id="IDX-CHP-30-4470" class="indexterm"/><a id="IDX-CHP-30-4471" class="indexterm"/><a id="IDX-CHP-30-4472" class="indexterm"/><a id="IDX-CHP-30-4473" class="indexterm"/></p><a id="I_programlisting30_d1e85894"/><pre class="programlisting">$ <strong class="userinput"><code>./thread_incr_mutex 10000000</code></strong>
+glob = 20000000</pre><div class="example"><a id="using_a_mutex_to_protect_access_to_a_glo"/><div class="example-title">Example 30-2. Using a mutex to protect access to a global variable</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>threads/thread_incr_mutex.c</code></strong>
+#include &lt;pthread.h&gt;
+#include "tlpi_hdr.h"
+
+static int glob = 0;
+static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static void *                   /* Loop ’arg’ times incrementing ’glob’ */
+threadFunc(void *arg)
+{
+    int loops = *((int *) arg);
+    int loc, j, s;
+
+    for (j = 0; j &lt; loops; j++) {
+        s = pthread_mutex_lock(&amp;mtx);
+        if (s != 0)
+            errExitEN(s, "pthread_mutex_lock");
+
+        loc = glob;
+        loc++;
+        glob = loc;
+
+        s = pthread_mutex_unlock(&amp;mtx);
+        if (s != 0)
+            errExitEN(s, "pthread_mutex_unlock");
+    }
+
+    return NULL;
+}
+
+int
+main(int argc, char *argv[])
+{
+    pthread_t t1, t2;
+    int loops, s;
+
+    loops = (argc &gt; 1) ? getInt(argv[1], GN_GT_0, "num-loops") : 10000000;
+
+    s = pthread_create(&amp;t1, NULL, threadFunc, &amp;loops);
+    if (s != 0)
+        errExitEN(s, "pthread_create");
+    s = pthread_create(&amp;t2, NULL, threadFunc, &amp;loops);
+    if (s != 0)
+        errExitEN(s, "pthread_create");
+
+    s = pthread_join(t1, NULL);
+    if (s != 0)
+        errExitEN(s, "pthread_join");
+    s = pthread_join(t2, NULL);
+    if (s != 0)
+        errExitEN(s, "pthread_join");
+
+    printf("glob = %d\n", glob);
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>threads/thread_incr_mutex.c</code></strong></pre></div></div></div><div class="sect3" title="pthread_mutex_trylock() and pthread_mutex_timedlock()"><div class="titlepage"><div><div><h4 class="title" id="pthread_underscore_mutex_underscore_tryl"><span class="emphasis"><em>pthread_mutex_trylock()</em></span> and
+                            <span class="emphasis"><em>pthread_mutex_timedlock()</em></span></h4></div></div></div><p>The Pthreads API provides two variants of the
+                            <span class="emphasis"><em>pthread_mutex_lock()</em></span> function:
+                            <span class="emphasis"><em>pthread_mutex_trylock()</em></span> and
+                            <span class="emphasis"><em>pthread_mutex_timedlock()</em></span>. (See the manual pages
+                        for prototypes of these functions.)<a id="IDX-CHP-30-4476" class="indexterm"/><a id="IDX-CHP-30-4477" class="indexterm"/><a id="IDX-CHP-30-4478" class="indexterm"/><a id="IDX-CHP-30-4479" class="indexterm"/><a id="IDX-CHP-30-4474" class="indexterm"/><a id="IDX-CHP-30-4475" class="indexterm"/></p><p>The <span class="emphasis"><em>pthread_mutex_trylock()</em></span> function is the same as
+                            <span class="emphasis"><em>pthread_mutex_lock()</em></span>, except that if the mutex is
+                        currently locked, <span class="emphasis"><em>pthread_mutex_trylock()</em></span> fails,
+                        returning the error <code class="literal">EBUSY</code>.</p><p>The <span class="emphasis"><em>pthread_mutex_timedlock()</em></span> function is the same as
+                            <span class="emphasis"><em>pthread_mutex_lock()</em></span>, except that the caller can
+                        specify an additional argument, <span class="emphasis"><em>abstime</em></span>, that places a
+                        limit on the time that the thread will sleep while waiting to acquire the
+                        mutex. If the time interval specified by its <span class="emphasis"><em>abstime</em></span>
+                        argument expires without the caller becoming the owner of the mutex,
+                            <span class="emphasis"><em>pthread_mutex_timedlock()</em></span> returns the error
+                            <code class="literal">ETIMEDOUT</code>.</p><p>The <span class="emphasis"><em>pthread_mutex_trylock()</em></span> and
+                            <span class="emphasis"><em>pthread_mutex_timedlock()</em></span> functions are much less
+                        frequently used than <span class="emphasis"><em>pthread_mutex_lock()</em></span>. In most
+                        well-designed applications, a thread should hold a mutex for only a short
+                        time, so that other threads are not prevented from executing in parallel.
+                        This guarantees that other threads that are blocked on the mutex will soon
+                        be granted a lock on the mutex. A thread that uses
+                            <span class="emphasis"><em>pthread_mutex_trylock()</em></span> to periodically poll the
+                        mutex to see if it can be locked risks being starved of access to the mutex
+                        while other queued threads are successively granted access to the mutex via
+                            <span class="emphasis"><em>pthread_mutex_lock()</em></span>.</p></div></div><div class="sect2" title="Performance of Mutexes"><div class="titlepage"><div><div><h3 class="title" id="performance_of_mutexes">Performance of Mutexes</h3></div></div></div><p>What is the cost of using a mutex? We have shown two different versions of a
+                    program that increments a shared variable: one without mutexes (<a class="xref" href="ch30.html#incorrectly_incrementing_a_global_variab" title="Example 30-1. Incorrectly incrementing a global variable from two threads">Example 30-1</a>) and one with mutexes
+                        (<a class="xref" href="ch30.html#using_a_mutex_to_protect_access_to_a_glo" title="Example 30-2. Using a mutex to protect access to a global variable">Example 30-2</a>). When we run
+                    these two programs on an x86-32 system running Linux 2.6.31 (with NPTL), we find
+                    that the version without mutexes requires a total of 0.35 seconds to execute 10
+                    million loops in each thread (and produces the wrong result), while the version
+                    with mutexes requires 3.1 seconds.<a id="IDX-CHP-30-4480" class="indexterm"/><a id="IDX-CHP-30-4481" class="indexterm"/><a id="IDX-CHP-30-4482" class="indexterm"/></p><p>At first, this seems expensive. But, consider the main loop executed by the
+                    version that does not employ a mutex (<a class="xref" href="ch30.html#incorrectly_incrementing_a_global_variab" title="Example 30-1. Incorrectly incrementing a global variable from two threads">Example 30-1</a>). In that version, the
+                        <span class="emphasis"><em>threadFunc()</em></span> function executes a <code class="literal">for</code> loop that increments a loop control variable,
+                    compares that variable against another variable, performs two assignments and
+                    another increment operation, and then branches back to the top of the loop. The
+                    version that uses a mutex (<a class="xref" href="ch30.html#using_a_mutex_to_protect_access_to_a_glo" title="Example 30-2. Using a mutex to protect access to a global variable">Example 30-2</a>) performs the same
+                    steps, and locks and unlocks the mutex each time around the loop. In other
+                    words, the cost of locking and unlocking a mutex is somewhat less than ten times
+                    the cost of the operations that we listed for the first program. This is
+                    relatively cheap. Furthermore, in the typical case, a thread would spend much
+                    more time doing other work, and perform relatively fewer mutex lock and unlock
+                    operations, so that the performance impact of using a mutex is not significant
+                    in most applications.<a id="IDX-CHP-30-4483" class="indexterm"/></p><p>To put this further in perspective, running some simple test programs on the
+                    same system showed that 20 million loops locking and unlocking a file region
+                    using <span class="emphasis"><em>fcntl()</em></span> (<a class="xref" href="ch55.html#record_locking_with_fcntl_open_parenthes" title="Record Locking with fcntl()">Record Locking with <span class="emphasis"><em>fcntl()</em></span></a>) require 44 seconds,
+                    and 20 million loops incrementing and decrementing a System V semaphore (<a class="xref" href="ch47.html" title="Chapter 47. System V Semaphores">Chapter 47</a>) require 28 seconds. The problem with file
+                    locks and semaphores is that they always require a system call for the lock and
+                    unlock operations, and each system call has a small, but appreciable, cost
+                        (<a class="xref" href="ch03.html#system_calls" title="System Calls">System Calls</a>). By contrast, mutexes are implemented using
+                    atomic machine-language operations (performed on memory locations visible to all
+                    threads) and require system calls only in case of lock contention.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On Linux, mutexes are implemented using <span class="emphasis"><em>futexes</em></span> (an
+                        acronym derived from <span class="emphasis"><em>fast user space mutexes</em></span>), and lock
+                        contentions are dealt with using the <span class="emphasis"><em>futex()</em></span> system
+                        call. We don’t describe futexes in this book (they are not intended for
+                        direct use in user-space applications), but details can be found in
+                        [Drepper, 2004 (a)], which also describes how mutexes are implemented using
+                        futexes. [Franke et al., 2002] is a (now outdated) paper written by the
+                        developers of futexes, which describes the early futex implementation and
+                        looks at the performance gains derived from futexes.<a id="IDX-CHP-30-4484" class="indexterm"/></p></div></div><div class="sect2" title="Mutex Deadlocks"><div class="titlepage"><div><div><h3 class="title" id="mutex_deadlocks">Mutex Deadlocks</h3></div></div></div><p>Sometimes, a thread needs to simultaneously access two or more different
+                    shared resources, each of which is governed by a separate mutex. When more than
+                    one thread is locking the same set of mutexes, deadlock situations can arise.
+                        <a class="xref" href="ch30.html#a_deadlock_when_two_threads_lock_two_mut" title="Figure 30-3. A deadlock when two threads lock two mutexes">Figure 30-3</a> shows an example
+                    of a deadlock in which each thread successfully locks one mutex, and then tries
+                    to lock the mutex that the other thread has already locked. Both threads will
+                    remain blocked indefinitely.<a id="IDX-CHP-30-4485" class="indexterm"/><a id="IDX-CHP-30-4486" class="indexterm"/></p><div class="figure"><a id="a_deadlock_when_two_threads_lock_two_mut"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject30_d1e86091"/><img src="figs/web/30-3_THREADS-A2-mutex-deadlock-scale90.png.jpg" alt="A deadlock when two threads lock two mutexes"/></div></div><div class="figure-title">Figure 30-3. A deadlock when two threads lock two mutexes</div></div><p>The simplest way to avoid such deadlocks is to define a mutex hierarchy. When
+                    threads can lock the same set of mutexes, they should always lock them in the
+                    same order. For example, in the scenario in <a class="xref" href="ch30.html#a_deadlock_when_two_threads_lock_two_mut" title="Figure 30-3. A deadlock when two threads lock two mutexes">Figure 30-3</a>, the deadlock could be
+                    avoided if the two threads always lock the mutexes in the order
+                        <span class="emphasis"><em>mutex1</em></span> followed by <span class="emphasis"><em>mutex2</em></span>.
+                    Sometimes, there is a logically obvious hierarchy of mutexes. However, even if
+                    there isn’t, it may be possible to devise an arbitrary hierarchical order that
+                    all threads should follow.</p><p>An alternative strategy that is less frequently used is “try, and then back
+                    off.” In this strategy, a thread locks the first mutex using
+                        <span class="emphasis"><em>pthread_mutex_lock()</em></span>, and then locks the remaining
+                    mutexes using <span class="emphasis"><em>pthread_mutex_trylock()</em></span>. If any of the
+                        <span class="emphasis"><em>pthread_mutex_trylock()</em></span> calls fails (with <code class="literal">EBUSY</code>), then the thread releases all mutexes, and
+                    then tries again, perhaps after a delay interval. This approach is less
+                    efficient than a lock hierarchy, since multiple iterations may be required. On
+                    the other hand, it can be more flexible, since it doesn’t require a rigid mutex
+                    hierarchy. An example of this strategy is shown in [Butenhof, 1996].<a id="IDX-CHP-30-4487" class="indexterm"/></p></div><div class="sect2" title="Dynamically Initializing a Mutex"><div class="titlepage"><div><div><h3 class="title" id="dynamically_initializing_a_mutex">Dynamically Initializing a Mutex</h3></div></div></div><p>The static initializer value <code class="literal">PTHREAD_MUTEX_INITIALIZER</code> can be used only for initializing a
+                    statically allocated mutex with default attributes. In all other cases, we must
+                    dynamically initialize the mutex using
+                        <span class="emphasis"><em>pthread_mutex_init()</em></span>.<a id="IDX-CHP-30-4488" class="indexterm"/><a id="IDX-CHP-30-4489" class="indexterm"/><a id="IDX-CHP-30-4490" class="indexterm"/><a id="IDX-CHP-30-4491" class="indexterm"/><a id="IDX-CHP-30-4492" class="indexterm"/><a id="IDX-CHP-30-4493" class="indexterm"/><a id="IDX-CHP-30-4494" class="indexterm"/></p><a id="I_programlisting30_d1e86173"/><pre class="programlisting">#include &lt;pthread.h&gt;
+
+int <strong class="userinput"><code>pthread_mutex_init</code></strong>(pthread_mutex_t *<span class="emphasis"><em>mutex</em></span>, const pthread_mutexattr_t *<span class="emphasis"><em>attr</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or a positive error number on error</p></div><p>The <span class="emphasis"><em>mutex</em></span> argument identifies the mutex to be
+                    initialized. The <span class="emphasis"><em>attr</em></span> argument is a pointer to a
+                        <span class="emphasis"><em>pthread_mutexattr_t</em></span> object that has previously been
+                    initialized to define the attributes for the mutex. (We say some more about
+                    mutex attributes in the next section.) If <span class="emphasis"><em>attr</em></span> is specified
+                    as <code class="literal">NULL</code>, then the mutex is assigned various
+                    default attributes.</p><p>SUSv3 specifies that initializing an already initialized mutex results in
+                    undefined behavior; we should not do this.</p><p>Among the cases where we must use <span class="emphasis"><em>pthread_mutex_init()</em></span>
+                    rather than a static initializer are the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The mutex was dynamically allocated on the heap. For example, suppose
+                            that we create a dynamically allocated linked list of structures, and
+                            each structure in the list includes a
+                                <span class="emphasis"><em>pthread_mutex_t</em></span> field that holds a mutex that
+                            is used to protect access to that structure.</p></li><li class="listitem"><p>The mutex is an automatic variable allocated on the stack.</p></li><li class="listitem"><p>We want to initialize a statically allocated mutex with attributes
+                            other than the defaults.<a id="IDX-CHP-30-4495" class="indexterm"/></p></li></ul></div><p>When an automatically or dynamically allocated mutex is no longer required, it
+                    should be destroyed using <span class="emphasis"><em>pthread_mutex_destroy()</em></span>. (It is
+                    not necessary to call <span class="emphasis"><em>pthread_mutex_destroy()</em></span> on a mutex
+                    that was statically initialized using <code class="literal">PTHREAD_MUTEX_INITIALIZER</code>.)<a id="IDX-CHP-30-4496" class="indexterm"/></p><a id="I_programlisting30_d1e86244"/><pre class="programlisting">#include &lt;pthread.h&gt;
+
+int <strong class="userinput"><code>pthread_mutex_destroy</code></strong>(pthread_mutex_t *<span class="emphasis"><em>mutex</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or a positive error number on error</p></div><p>It is safe to destroy a mutex only when it is unlocked, and no thread will
+                    subsequently try to lock it. If the mutex resides in a region of dynamically
+                    allocated memory, then it should be destroyed before freeing that memory region.
+                    An automatically allocated mutex should be destroyed before its host function
+                    returns.</p><p>A mutex that has been destroyed with
+                        <span class="emphasis"><em>pthread_mutex_destroy()</em></span> can subsequently be
+                    reinitialized by <span class="emphasis"><em>pthread_mutex_init()</em></span>.</p></div><div class="sect2" title="Mutex Attributes"><div class="titlepage"><div><div><h3 class="title" id="mutex_attributes">Mutex Attributes</h3></div></div></div><p>As noted earlier, the <span class="emphasis"><em>pthread_mutex_init() attr</em></span> argument
+                    can be used to specify a <span class="emphasis"><em>pthread_mutexattr_t</em></span> object that
+                    defines the attributes of a mutex. Various Pthreads functions can be used to
+                    initialize and retrieve the attributes in a
+                        <span class="emphasis"><em>pthread_mutexattr_t</em></span> object. We won’t go into all of the
+                    details of mutex attributes or show the prototypes of the various functions that
+                    can be used to initialize the attributes in a
+                        <span class="emphasis"><em>pthread_mutexattr_t</em></span> object. However, we’ll describe one
+                    of the attributes that can be set for a mutex: its type.<a id="IDX-CHP-30-4497" class="indexterm"/><a id="IDX-CHP-30-4498" class="indexterm"/><a id="IDX-CHP-30-4499" class="indexterm"/><a id="IDX-CHP-30-4500" class="indexterm"/><a id="IDX-CHP-30-4501" class="indexterm"/><a id="IDX-CHP-30-4502" class="indexterm"/></p></div><div class="sect2" title="Mutex Types"><div class="titlepage"><div><div><h3 class="title" id="mutex_types">Mutex Types</h3></div></div></div><p>In the preceding pages, we made a number of statements about the behavior of
+                        mutexes:<a id="IDX-CHP-30-4503" class="indexterm"/><a id="IDX-CHP-30-4504" class="indexterm"/><a id="IDX-CHP-30-4505" class="indexterm"/><a id="IDX-CHP-30-4506" class="indexterm"/><a id="IDX-CHP-30-4507" class="indexterm"/><a id="IDX-CHP-30-4508" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>A single thread may not lock the same mutex twice.</p></li><li class="listitem"><p>A thread may not unlock a mutex that it doesn’t currently own (i.e.,
+                            that it did not lock).</p></li><li class="listitem"><p>A thread may not unlock a mutex that is not currently locked.</p></li></ul></div><p>Precisely what happens in each of these cases depends on the
+                        <span class="emphasis"><em>type</em></span> of the mutex. SUSv3 defines the following mutex
+                    types:</p><div class="variablelist"><dl><dt><span class="term">
+                            <code class="literal">PTHREAD_MUTEX_NORMAL</code>
+                        </span></dt><dd><p>(Self-)deadlock detection is not provided for this type of mutex.
+                                If a thread tries to lock a mutex that it has already locked, then
+                                deadlock results. Unlocking a mutex that is not locked or that is
+                                locked by another thread produces undefined results. (On Linux, both
+                                of these operations succeed for this mutex type.)</p></dd><dt><span class="term">
+                            <code class="literal">PTHREAD_MUTEX_ERRORCHECK</code>
+                        </span></dt><dd><p>Error checking is performed on all operations. All three of the
+                                above scenarios cause the relevant Pthreads function to return an
+                                error. This type of mutex is typically slower than a normal mutex,
+                                but can be useful as a debugging tool to discover where an
+                                application is violating the rules about how a mutex should be
+                                used.</p></dd><dt><span class="term">
+                            <code class="literal">PTHREAD_MUTEX_RECURSIVE</code>
+                        </span></dt><dd><p>A recursive mutex maintains the concept of a lock count. When a
+                                thread first acquires the mutex, the lock count is set to 1. Each
+                                subsequent lock operation by the same thread increments the lock
+                                count, and each unlock operation decrements the count. The mutex is
+                                released (i.e., made available for other threads to acquire) only
+                                when the lock count falls to 0. Unlocking an unlocked mutex fails,
+                                as does unlocking a mutex that is currently locked by another
+                                thread.</p></dd></dl></div><p>The Linux threading implementation provides nonstandard static initializers
+                    for each of the above mutex types (e.g., <code class="literal">PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP</code>), so that the use of
+                        <span class="emphasis"><em>pthread_mutex_init()</em></span> is not required to initialize
+                    these mutex types for statically allocated mutexes. However, portable
+                    applications should avoid the use of these initializers.</p><p>In addition to the above mutex types, SUSv3 defines the <code class="literal">PTHREAD_MUTEX_DEFAULT</code> type, which is the default
+                    type of mutex if we use <code class="literal">PTHREAD_MUTEX_INITIALIZER</code> or specify <span class="emphasis"><em>attr</em></span> as
+                        <code class="literal">NULL</code> in a call to
+                        <span class="emphasis"><em>pthread_mutex_init()</em></span>. The behavior of this mutex type
+                    is deliberately undefined in all three of the scenarios described at the start
+                    of this section, which allows maximum flexibility for efficient implementation
+                    of mutexes. On Linux, a <code class="literal">PTHREAD_MUTEX_DEFAULT</code>
+                    mutex behaves like a <code class="literal">PTHREAD_MUTEX_NORMAL</code>
+                    mutex.</p><p>The code shown in <a class="xref" href="ch30.html#setting_the_mutex_type" title="Example 30-3. Setting the mutex type">Example 30-3</a> demonstrates how to
+                    set the type of a mutex, in this case to create an
+                        <span class="emphasis"><em>error-checking</em></span> mutex.</p><div class="example"><a id="setting_the_mutex_type"/><div class="example-title">Example 30-3. Setting the mutex type</div><div class="example-contents"><pre class="programlisting">pthread_mutex_t mtx;
+    pthread_mutexattr_t mtxAttr;
+    int s, type;
+
+    s = pthread_mutexattr_init(&amp;mtxAttr);
+    if (s != 0)
+        errExitEN(s, "pthread_mutexattr_init");
+
+    s = pthread_mutexattr_settype(&amp;mtxAttr, PTHREAD_MUTEX_ERRORCHECK);
+    if (s != 0)
+        errExitEN(s, "pthread_mutexattr_settype");
+
+    s = pthread_mutex_init(&amp;mtx, &amp;mtxAttr);
+    if (s != 0)
+        errExitEN(s, "pthread_mutex_init");
+
+    s = pthread_mutexattr_destroy(&amp;mtxAttr);        /* No longer needed */
+    if (s != 0)
+        errExitEN(s, "pthread_mutexattr_destroy");</pre></div></div></div></div><div class="sect1" title="Signaling Changes of State: Condition Variables"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="signaling_changes_of_state_colon_conditi">Signaling Changes of State: Condition Variables</h2></div></div></div><p>A mutex prevents multiple threads from accessing a shared variable at the same
+                time. A condition variable allows one thread to inform other threads about changes
+                in the state of a shared variable (or other shared resource) and allows the other
+                threads to wait (block) for such notification.<a id="IDX-CHP-30-4509" class="indexterm"/><a id="IDX-CHP-30-4510" class="indexterm"/><a id="IDX-CHP-30-4511" class="indexterm"/><a id="IDX-CHP-30-4512" class="indexterm"/><a id="IDX-CHP-30-4513" class="indexterm"/></p><p>A simple example that doesn’t use condition variables serves to demonstrate why
+                they are useful. Suppose that we have a number of threads that produce some “result
+                units” that are consumed by the main thread, and that we use a mutex-protected
+                variable, <span class="emphasis"><em>avail</em></span>, to represent the number of produced units
+                awaiting consumption:</p><a id="I_programlisting30_d1e86463"/><pre class="programlisting">static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static int avail = 0;</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>The code segments shown in this section can be found in the file <code class="literal">threads/prod_no_condvar.c</code> in the source code
+                    distribution for this book.</p></div><p>In the producer threads, we would have code such as the following:</p><a id="I_programlisting30_d1e86473"/><pre class="programlisting">/* Code to produce a unit omitted */
+
+s = pthread_mutex_lock(&amp;mtx);
+if (s != 0)
+    errExitEN(s, "pthread_mutex_lock");
+
+avail++;    /* Let consumer know another unit is available */
+
+s = pthread_mutex_unlock(&amp;mtx);
+if (s != 0)
+    errExitEN(s, "pthread_mutex_unlock");</pre><p>And in the main (consumer) thread, we could employ the following code:</p><a id="I_programlisting30_d1e86477"/><pre class="programlisting">for (;;) {
+    s = pthread_mutex_lock(&amp;mtx);
+    if (s != 0)
+        errExitEN(s, "pthread_mutex_lock");
+
+    while (avail &gt; 0) {         /* Consume all available units */
+        /* Do something with produced unit */
+        avail--;
+    }
+
+    s = pthread_mutex_unlock(&amp;mtx);
+    if (s != 0)
+        errExitEN(s, "pthread_mutex_unlock");
+}</pre><p>The above code works, but it wastes CPU time, because the main thread continually
+                loops, checking the state of the variable <span class="emphasis"><em>avail</em></span>. A
+                    <span class="emphasis"><em>condition variable</em></span> remedies this problem. It allows a
+                thread to sleep (wait) until another thread notifies (signals) it that it must do
+                something (i.e., that some “condition” has arisen that the sleeper must now respond
+                to).</p><p>A condition variable is always used in conjunction with a mutex. The mutex
+                provides mutual exclusion for accessing the shared variable, while the condition
+                variable is used to signal changes in the variable’s state. (The use of the term
+                    <span class="emphasis"><em>signal</em></span> here has nothing to do with the signals described in
+                    <a class="xref" href="ch20.html" title="Chapter 20. Signals: Fundamental Concepts">Chapter 20</a> to <a class="xref" href="ch22.html" title="Chapter 22. Signals: Advanced Features">Chapter 22</a>; rather, it is used in the sense of
+                    <span class="emphasis"><em>indicate</em></span>.)</p><div class="sect2" title="Statically Allocated Condition Variables"><div class="titlepage"><div><div><h3 class="title" id="statically_allocated_condition_variables">Statically Allocated Condition Variables</h3></div></div></div><p>As with mutexes, condition variables can be allocated statically or
+                    dynamically. We defer discussion of dynamically allocated condition variables
+                    until <a class="xref" href="ch30.html#dynamically_allocated_condition_variable" title="Dynamically Allocated Condition Variables">Dynamically Allocated Condition Variables</a>, and consider
+                    statically allocated condition variables here.<a id="IDX-CHP-30-4514" class="indexterm"/><a id="IDX-CHP-30-4515" class="indexterm"/><a id="IDX-CHP-30-4516" class="indexterm"/><a id="IDX-CHP-30-4517" class="indexterm"/><a id="IDX-CHP-30-4518" class="indexterm"/></p><p>A condition variable has the type <span class="emphasis"><em>pthread_cond_t</em></span>. As with
+                    a mutex, a condition variable must be initialized before use. For a statically
+                    allocated condition variable, this is done by assigning it the value <code class="literal">PTHREAD_COND_INITIALIZER</code>, as in the following
+                    example:</p><a id="I_programlisting30_d1e86540"/><pre class="programlisting">pthread_cond_t cond = PTHREAD_COND_INITIALIZER;</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>According to SUSv3, applying the operations that we describe in the
+                        remainder of this section to a <span class="emphasis"><em>copy</em></span> of a condition
+                        variable yields results that are undefined. Operations should always be
+                        performed only on the original condition variable that has been statically
+                        initialized using <code class="literal">PTHREAD_COND_INITIALIZER</code> or dynamically initialized using
+                            <span class="emphasis"><em>pthread_cond_init()</em></span> (described in <a class="xref" href="ch30.html#dynamically_allocated_condition_variable" title="Dynamically Allocated Condition Variables">Dynamically Allocated Condition Variables</a>).</p></div></div><div class="sect2" title="Signaling and Waiting on Condition Variables"><div class="titlepage"><div><div><h3 class="title" id="signaling_and_waiting_on_condition_varia">Signaling and Waiting on Condition Variables</h3></div></div></div><p>The principal condition variable operations are <span class="emphasis"><em>signal</em></span>
+                    and <span class="emphasis"><em>wait</em></span>. The signal operation is a notification to one or
+                    more waiting threads that a shared variable’s state has changed. The wait
+                    operation is the means of blocking until such a notification is
+                        received.<a id="IDX-CHP-30-4519" class="indexterm"/><a id="IDX-CHP-30-4520" class="indexterm"/><a id="IDX-CHP-30-4521" class="indexterm"/><a id="IDX-CHP-30-4522" class="indexterm"/><a id="IDX-CHP-30-4523" class="indexterm"/></p><p>The <span class="emphasis"><em>pthread_cond_signal()</em></span> and
+                        <span class="emphasis"><em>pthread_cond_broadcast()</em></span> functions both signal the
+                    condition variable specified by <span class="emphasis"><em>cond</em></span>. The
+                        <span class="emphasis"><em>pthread_cond_wait()</em></span> function blocks a thread until the
+                    condition variable <span class="emphasis"><em>cond</em></span> is signaled.<a id="IDX-CHP-30-4524" class="indexterm"/><a id="IDX-CHP-30-4525" class="indexterm"/><a id="IDX-CHP-30-4526" class="indexterm"/></p><a id="I_programlisting30_d1e86628"/><pre class="programlisting">#include &lt;pthread.h&gt;
+
+int <strong class="userinput"><code>pthread_cond_signal</code></strong>(pthread_cond_t *<span class="emphasis"><em>cond</em></span>);
+int <strong class="userinput"><code>pthread_cond_broadcast</code></strong>(pthread_cond_t *<span class="emphasis"><em>cond</em></span>);
+int <strong class="userinput"><code>pthread_cond_wait</code></strong>(pthread_cond_t *<span class="emphasis"><em>cond</em></span>, pthread_mutex_t *<span class="emphasis"><em>mutex</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>All return 0 on success, or a positive error number on error</p></div><p>The difference between <span class="emphasis"><em>pthread_cond_signal()</em></span> and
+                        <span class="emphasis"><em>pthread_cond_broadcast()</em></span> lies in what happens if
+                    multiple threads are blocked in <span class="emphasis"><em>pthread_cond_wait()</em></span>. With
+                        <span class="emphasis"><em>pthread_cond_signal()</em></span>, we are simply guaranteed that at
+                    least one of the blocked threads is woken up; with
+                        <span class="emphasis"><em>pthread_cond_broadcast()</em></span>, all blocked threads are woken
+                    up.</p><p>Using <span class="emphasis"><em>pthread_cond_broadcast()</em></span> always yields correct
+                    results (since all threads should be programmed to handle redundant and spurious
+                    wake-ups), but <span class="emphasis"><em>pthread_cond_signal()</em></span> can be more efficient.
+                    However, <span class="emphasis"><em>pthread_cond_signal()</em></span> should be used only if just
+                    one of the waiting threads needs to be woken up to handle the change in state of
+                    the shared variable, and it doesn’t matter which one of the waiting threads is
+                    woken up. This scenario typically applies when all of the waiting threads are
+                    designed to perform the exactly same task. Given these assumptions,
+                        <span class="emphasis"><em>pthread_cond_signal()</em></span> can be more efficient than
+                        <span class="emphasis"><em>pthread_cond_broadcast()</em></span>, because it avoids the
+                    following possibility:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>All waiting threads are awoken.</p></li><li class="listitem"><p>One thread is scheduled first. This thread checks the state of the
+                            shared variable(s) (under protection of the associated mutex) and sees
+                            that there is work to be done. The thread performs the required work,
+                            changes the state of the shared variable(s) to indicate that the work
+                            has been done, and unlocks the associated mutex.</p></li><li class="listitem"><p>Each of the remaining threads in turn locks the mutex and tests the
+                            state of the shared variable. However, because of the change made by the
+                            first thread, these threads see that there is no work to be done, and so
+                            unlock the mutex and go back to sleep (i.e., call
+                                <span class="emphasis"><em>pthread_cond_wait()</em></span> once more).</p></li></ol></div><p>By contrast, <span class="emphasis"><em>pthread_cond_broadcast()</em></span> handles the case
+                    where the waiting threads are designed to perform different tasks (in which case
+                    they probably have different predicates associated with the condition
+                    variable).</p><p>A condition variable holds no state information. It is simply a mechanism for
+                    communicating information about the application’s state. If no thread is waiting
+                    on the condition variable at the time that it is signaled, then the signal is
+                    lost. A thread that later waits on the condition variable will unblock only when
+                    the variable is signaled once more.</p><p>The <span class="emphasis"><em>pthread_cond_timedwait()</em></span> function is the same as
+                        <span class="emphasis"><em>pthread_cond_wait()</em></span>, except that the
+                        <span class="emphasis"><em>abstime</em></span> argument specifies an upper limit on the time
+                    that the thread will sleep while waiting for the condition variable to be
+                        signaled.<a id="IDX-CHP-30-4527" class="indexterm"/></p><a id="I_programlisting30_d1e86725"/><pre class="programlisting">#include &lt;pthread.h&gt;
+
+int <strong class="userinput"><code>pthread_cond_timedwait</code></strong>(pthread_cond_t *<span class="emphasis"><em>cond</em></span>, pthread_mutex_t *<span class="emphasis"><em>mutex</em></span>,
+                           const struct timespec *<span class="emphasis"><em>abstime</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or a positive error number on error</p></div><p>The <span class="emphasis"><em>abstime</em></span> argument is a <span class="emphasis"><em>timespec</em></span>
+                    structure (<a class="xref" href="ch23.html#high-resolution_sleeping_colon_nanosleep" title="High-Resolution Sleeping: nanosleep()">High-Resolution Sleeping: <span class="emphasis"><em>nanosleep()</em></span></a>)
+                    specifying an absolute time expressed as seconds and nanoseconds since the Epoch
+                        (<a class="xref" href="ch10.html#calendar_time" title="Calendar Time">Calendar Time</a>). If the time interval specified by
+                        <span class="emphasis"><em>abstime</em></span> expires without the condition variable being
+                    signaled, then <span class="emphasis"><em>pthread_cond_timedwait()</em></span> returns the error
+                        <code class="literal">ETIMEDOUT</code>.<a id="IDX-CHP-30-4528" class="indexterm"/></p><div class="sect3" title="Using a condition variable in the producer-consumer example"><div class="titlepage"><div><div><h4 class="title" id="using_a_condition_variable_in_the_produc">Using a condition variable in the producer-consumer example</h4></div></div></div><p>Let’s revise our previous example to use a condition variable. The
+                        declarations of our global variable and associated mutex and condition
+                        variable are as follows:<a id="IDX-CHP-30-4529" class="indexterm"/><a id="IDX-CHP-30-4530" class="indexterm"/><a id="IDX-CHP-30-4531" class="indexterm"/><a id="IDX-CHP-30-4532" class="indexterm"/><a id="IDX-CHP-30-4533" class="indexterm"/><a id="IDX-CHP-30-4534" class="indexterm"/><a id="IDX-CHP-30-4535" class="indexterm"/><a id="IDX-CHP-30-4536" class="indexterm"/></p><a id="I_programlisting30_d1e86817"/><pre class="programlisting">static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+
+static int avail = 0;</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>The code segments shown in this section can be found in the file
+                                <code class="literal">threads/prod_condvar.c</code> in the
+                            source code distribution for this book.</p></div><p>The code in the producer threads is the same as before, except that we add
+                        a call to <span class="emphasis"><em>pthread_cond_signal()</em></span>:</p><a id="I_programlisting30_d1e86830"/><pre class="programlisting">s = pthread_mutex_lock(&amp;mtx);
+if (s != 0)
+    errExitEN(s, "pthread_mutex_lock");
+
+avail++;                /* Let consumer know another unit is available */
+
+s = pthread_mutex_unlock(&amp;mtx);
+if (s != 0)
+    errExitEN(s, "pthread_mutex_unlock");
+
+s = pthread_cond_signal(&amp;cond);         /* Wake sleeping consumer */
+if (s != 0)
+    errExitEN(s, "pthread_cond_signal");</pre><p>Before considering the code of the consumer, we need to explain
+                            <span class="emphasis"><em>pthread_cond_wait()</em></span> in greater detail. We noted
+                        earlier that a condition variable always has an associated mutex. Both of
+                        these objects are passed as arguments to
+                            <span class="emphasis"><em>pthread_cond_wait()</em></span>, which performs the following
+                        steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>unlock the mutex specified by <span class="emphasis"><em>mutex</em></span>;</p></li><li class="listitem"><p>block the calling thread until another thread signals the
+                                condition variable <span class="emphasis"><em>cond</em></span>; and</p></li><li class="listitem"><p>relock <span class="emphasis"><em>mutex</em></span>.</p></li></ul></div><p>The <span class="emphasis"><em>pthread_cond_wait()</em></span> function is designed to
+                        perform these steps because, normally, we access a shared variable in the
+                        following manner:</p><a id="I_programlisting30_d1e86864"/><pre class="programlisting">s = pthread_mutex_lock(&amp;mtx);
+if (s != 0)
+    errExitEN(s, "pthread_mutex_lock");
+
+while (/* Check that shared variable is not in state we want */)
+    pthread_cond_wait(&amp;cond, &amp;mtx);
+
+/* Now shared variable is in desired state; do some work */
+
+s = pthread_mutex_unlock(&amp;mtx);
+if (s != 0)
+    errExitEN(s, "pthread_mutex_unlock");</pre><p>(We explain why the <span class="emphasis"><em>pthread_cond_wait()</em></span> call is
+                        placed within a <code class="literal">while</code> loop rather than an
+                            <code class="literal">if</code> statement in the next
+                        section.)</p><p>In the above code, both accesses to the shared variable must be
+                        mutex-protected for the reasons that we explained earlier. In other words,
+                        there is a natural association of a mutex with a condition variable:</p><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>The thread locks the mutex in preparation for checking the state
+                                of the shared variable.</p></li><li class="listitem"><p>The state of the shared variable is checked.</p></li><li class="listitem"><p>If the shared variable is not in the desired state, then the
+                                thread must unlock the mutex (so that other threads can access the
+                                shared variable) before it goes to sleep on the condition
+                                variable.</p></li><li class="listitem"><p>When the thread is reawakened because the condition variable has
+                                been signaled, the mutex must once more be locked, since, typically,
+                                the thread then immediately accesses the shared variable.</p></li></ol></div><p>The <span class="emphasis"><em>pthread_cond_wait()</em></span> function automatically
+                        performs the mutex unlocking and locking required in the last two of these
+                        steps. In the third step, releasing the mutex and blocking on the condition
+                        variable are performed atomically. In other words, it is not possible for
+                        some other thread to acquire the mutex and signal the condition variable
+                        before the thread calling <span class="emphasis"><em>pthread_cond_wait()</em></span> has
+                        blocked on the condition variable.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>There is a corollary to the observation that there is a natural
+                            relationship between a condition variable and a mutex: all threads that
+                            concurrently wait on a particular condition variable must specify the
+                            same mutex in their <span class="emphasis"><em>pthread_cond_wait()</em></span> (or
+                                <span class="emphasis"><em>pthread_cond_timedwait()</em></span>) calls. In effect, a
+                                <span class="emphasis"><em>pthread_cond_wait()</em></span> call dynamically binds a
+                            condition variable to a unique mutex for the duration of the call. SUSv3
+                            notes that the result of using more than one mutex for concurrent
+                                <span class="emphasis"><em>pthread_cond_wait()</em></span> calls on the same condition
+                            variable is undefined.</p></div><p>Putting the above details together, we can now modify the main (consumer)
+                        thread to use <span class="emphasis"><em>pthread_cond_wait()</em></span>, as follows:</p><a id="I_programlisting30_d1e86921"/><pre class="programlisting">for (;;) {
+    s = pthread_mutex_lock(&amp;mtx);
+    if (s != 0)
+        errExitEN(s, "pthread_mutex_lock");
+
+    while (avail == 0) {            /* Wait for something to consume */
+        s = pthread_cond_wait(&amp;cond, &amp;mtx);
+        if (s != 0)
+            errExitEN(s, "pthread_cond_wait");
+    }
+
+    while (avail &gt; 0) {             /* Consume all available units */
+        /* Do something with produced unit */
+        avail--;
+    }
+
+    s = pthread_mutex_unlock(&amp;mtx);
+    if (s != 0)
+        errExitEN(s, "pthread_mutex_unlock");
+
+    /* Perhaps do other work here that doesn’t require mutex lock */
+}</pre><p>We conclude with one final observation about the use of
+                            <span class="emphasis"><em>pthread_cond_signal()</em></span> (and
+                            <span class="emphasis"><em>pthread_cond_broadcast()</em></span>). In the producer code
+                        shown earlier, we called <span class="emphasis"><em>pthread_mutex_unlock()</em></span>, and
+                        then called <span class="emphasis"><em>pthread_cond_signal()</em></span>; that is, we first
+                        unlocked the mutex associated with the shared variable, and then signaled
+                        the corresponding condition variable. We could have reversed these two
+                        steps; SUSv3 permits them to be done in either order.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>[Butenhof, 1996] points out that, on some implementations, unlocking
+                            the mutex and then signaling the condition variable may yield better
+                            performance than performing these steps in the reverse sequence. If the
+                            mutex is unlocked only after the condition variable is signaled, the
+                            thread performing <span class="emphasis"><em>pthread_cond_wait()</em></span> may wake up
+                            while the mutex is still locked, and then immediately go back to sleep
+                            again when it finds that the mutex is locked. This results in two
+                            superfluous context switches. Some implementations eliminate this
+                            problem by employing a technique called <span class="emphasis"><em>wait
+                                morphing</em></span>, which moves the signaled thread from the
+                            condition variable wait queue to the mutex wait queue without performing
+                            a context switch if the mutex is locked.<a id="IDX-CHP-30-4537" class="indexterm"/></p></div></div></div><div class="sect2" title="Testing a Condition Variable’s Predicate"><div class="titlepage"><div><div><h3 class="title" id="testing_a_condition_variable_number_symb">Testing a Condition Variable’s Predicate</h3></div></div></div><p>Each condition variable has an associated predicate involving one or more
+                    shared variables. For example, in the code segment in the preceding section, the
+                    predicate associated with <span class="emphasis"><em>cond</em></span> is <span class="emphasis"><em>(avail ==
+                        0)</em></span>. This code segment demonstrates a general design principle: a
+                        <span class="emphasis"><em>pthread_cond_wait()</em></span> call must be governed by a <code class="literal">while</code> loop rather than an <code class="literal">if</code> statement. This is so because, on return from
+                        <span class="emphasis"><em>pthread_cond_wait()</em></span>, there are no guarantees about the
+                    state of the predicate; therefore, we should immediately recheck the predicate
+                    and resume sleeping if it is not in the desired state.<a id="IDX-CHP-30-4538" class="indexterm"/><a id="IDX-CHP-30-4539" class="indexterm"/><a id="IDX-CHP-30-4540" class="indexterm"/><a id="IDX-CHP-30-4541" class="indexterm"/></p><p>We can’t make any assumptions about the state of the predicate upon return
+                    from <span class="emphasis"><em>pthread_cond_wait()</em></span>, for the following reasons:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>Other threads may be woken up first</em></span>. Perhaps
+                            several threads were waiting to acquire the mutex associated with the
+                            condition variable. Even if the thread that signaled the mutex set the
+                            predicate to the desired state, it is still possible that another thread
+                            might acquire the mutex first and change the state of the associated
+                            shared variable(s), and thus the state of the predicate.</p></li><li class="listitem"><p><span class="emphasis"><em>Designing for “loose” predicates may be simpler</em></span>.
+                            Sometimes, it is easier to design applications based on condition
+                            variables that indicate <span class="emphasis"><em>possibility</em></span> rather than
+                                <span class="emphasis"><em>certainty</em></span>. In other words, signaling a
+                            condition variable would mean “there <span class="emphasis"><em>may be</em></span>
+                            something” for the signaled thread to do, rather than “there
+                                <span class="emphasis"><em>is</em></span> something” to do. Using this approach, the
+                            condition variable can be signaled based on approximations of the
+                            predicate’s state, and the signaled thread can ascertain if there really
+                            is something to do by rechecking the predicate.</p></li><li class="listitem"><p><span class="emphasis"><em>Spurious wake-ups can occur</em></span>. On some
+                            implementations, a thread waiting on a condition variable may be woken
+                            up even though no other thread actually signaled the condition variable.
+                            Such spurious wake-ups are a (rare) consequence of the techniques
+                            required for efficient implementation on some multiprocessor systems,
+                            and are explicitly permitted by SUSv3.</p></li></ul></div></div><div class="sect2" title="Example Program: Joining Any Terminated Thread"><div class="titlepage"><div><div><h3 class="title" id="example_program_colon_joining_any_termin">Example Program: Joining Any Terminated Thread</h3></div></div></div><p>We noted earlier that <span class="emphasis"><em>pthread_join()</em></span> can be used to join
+                    with only a specific thread. It provides no mechanism for joining with
+                        <span class="emphasis"><em>any</em></span> terminated thread. We now show how a condition
+                    variable can be used to circumvent this restriction.<a id="IDX-CHP-30-4542" class="indexterm"/><a id="IDX-CHP-30-4543" class="indexterm"/><a id="IDX-CHP-30-4544" class="indexterm"/><a id="IDX-CHP-30-4545" class="indexterm"/><a id="IDX-CHP-30-4546" class="indexterm"/></p><p>The program in <a class="xref" href="ch30.html#a_main_thread_that_can_join_with_any_ter" title="Example 30-4. A main thread that can join with any terminated thread">Example 30-4</a>
+                    creates one thread for each of its command-line arguments. Each thread sleeps
+                    for the number of seconds specified in the corresponding command-line argument
+                    and then terminates. The sleep interval is our means of simulating the idea of a
+                    thread that does work for a period of time.</p><p>The program maintains a set of global variables recording information about
+                    all of the threads that have been created. For each thread, an element in the
+                    global <span class="emphasis"><em>thread</em></span> array records the ID of the thread (the
+                        <span class="emphasis"><em>tid</em></span> field) and its current state (the
+                        <span class="emphasis"><em>state</em></span> field). The <span class="emphasis"><em>state</em></span> field has
+                    one of the following values: <code class="literal">TS_ALIVE</code>,
+                    meaning the thread is alive; <code class="literal">TS_TERMINATED</code>,
+                    meaning the thread has terminated but not yet been joined; or <code class="literal">TS_JOINED</code>, meaning the thread has terminated and
+                    been joined.</p><p>As each thread terminates, it assigns the value <code class="literal">TS_TERMINATED</code> to the <span class="emphasis"><em>state</em></span> field for its
+                    element in the <span class="emphasis"><em>thread</em></span> array, increments a global counter of
+                    terminated but as yet unjoined threads (<span class="emphasis"><em>numUnjoined</em></span>), and
+                    signals the condition variable <span class="emphasis"><em>threadDied</em></span>.</p><p>The main thread employs a loop that continuously waits on the condition
+                    variable <span class="emphasis"><em>threadDied</em></span>. Whenever
+                        <span class="emphasis"><em>threadDied</em></span> is signaled and there are terminated threads
+                    that have not been joined, the main thread scans the <span class="emphasis"><em>thread</em></span>
+                    array, looking for elements with <span class="emphasis"><em>state</em></span> set to <code class="literal">TS_TERMINATED</code>. For each thread in this state,
+                        <span class="emphasis"><em>pthread_join()</em></span> is called using the corresponding
+                        <span class="emphasis"><em>tid</em></span> field from the <span class="emphasis"><em>thread</em></span> array,
+                    and then the <span class="emphasis"><em>state</em></span> is set to <code class="literal">TS_JOINED</code>. The main loop terminates when all of the threads
+                    created by the main thread have died—that is, when the global variable
+                        <span class="emphasis"><em>numLive</em></span> is 0.</p><p>The following shell session log demonstrates the use of the program in <a class="xref" href="ch30.html#a_main_thread_that_can_join_with_any_ter" title="Example 30-4. A main thread that can join with any terminated thread">Example 30-4</a>:</p><a id="I_programlisting30_d1e87152"/><pre class="programlisting">$ <strong class="userinput"><code>./thread_multijoin 1 1 2 3 3</code></strong>              <em class="lineannotation"><span class="lineannotation">Create 5 threads</span></em>
+Thread 0 terminating
+Thread 1 terminating
+Reaped thread 0 (numLive=4)
+Reaped thread 1 (numLive=3)
+Thread 2 terminating
+Reaped thread 2 (numLive=2)
+Thread 3 terminating
+Thread 4 terminating
+Reaped thread 3 (numLive=1)
+Reaped thread 4 (numLive=0)</pre><p>Finally, note that although the threads in the example program are created as
+                    joinable and are immediately reaped on termination using
+                        <span class="emphasis"><em>pthread_join()</em></span>, we don’t need to use this approach in
+                    order to find out about thread termination. We could have made the threads
+                    detached, removed the use of <span class="emphasis"><em>pthread_join()</em></span>, and simply
+                    used the <span class="emphasis"><em>thread</em></span> array (and associated global variables) as
+                    the means of recording the termination of each thread.</p><div class="example"><a id="a_main_thread_that_can_join_with_any_ter"/><div class="example-title">Example 30-4. A main thread that can join with any terminated thread</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>threads/thread_multijoin.c</code></strong>
+#include &lt;pthread.h&gt;
+#include "tlpi_hdr.h"
+
+static pthread_cond_t threadDied = PTHREAD_COND_INITIALIZER;
+static pthread_mutex_t threadMutex = PTHREAD_MUTEX_INITIALIZER;
+                /* Protects all of the following global variables */
+
+static int totThreads = 0;      /* Total number of threads created */
+static int numLive = 0;         /* Total number of threads still alive or
+                                   terminated but not yet joined */
+static int numUnjoined = 0;     /* Number of terminated threads that
+                                   have not yet been joined */
+enum tstate {                   /* Thread states */
+    TS_ALIVE,                   /* Thread is alive */
+    TS_TERMINATED,              /* Thread terminated, not yet joined */
+    TS_JOINED                   /* Thread terminated, and joined */
+};
+
+static struct {                 /* Info about each thread */
+    pthread_t tid;              /* ID of this thread */
+    enum tstate state;          /* Thread state (TS_* constants above) */
+    int sleepTime;              /* Number seconds to live before terminating */
+} *thread;
+
+static void *                   /* Start function for thread */
+threadFunc(void *arg)
+{
+    int idx = *((int *) arg);
+    int s;
+
+    sleep(thread[idx].sleepTime);       /* Simulate doing some work */
+    printf("Thread %d terminating\n", idx);
+
+    s = pthread_mutex_lock(&amp;threadMutex);
+    if (s != 0)
+        errExitEN(s, "pthread_mutex_lock");
+
+    numUnjoined++;
+    thread[idx].state = TS_TERMINATED;
+
+    s = pthread_mutex_unlock(&amp;threadMutex);
+    if (s != 0)
+        errExitEN(s, "pthread_mutex_unlock");
+    s = pthread_cond_signal(&amp;threadDied);
+    if (s != 0)
+        errExitEN(s, "pthread_cond_signal");
+
+    return NULL;
+}
+
+int
+main(int argc, char *argv[])
+{
+    int s, idx;
+
+    if (argc &lt; 2 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s nsecs...\n", argv[0]);
+
+    thread = calloc(argc - 1, sizeof(*thread));
+    if (thread == NULL)
+        errExit("calloc");
+
+    /* Create all threads */
+
+    for (idx = 0; idx &lt; argc - 1; idx++) {
+        thread[idx].sleepTime = getInt(argv[idx + 1], GN_NONNEG, NULL);
+        thread[idx].state = TS_ALIVE;
+        s = pthread_create(&amp;thread[idx].tid, NULL, threadFunc, &amp;idx);
+        if (s != 0)
+            errExitEN(s, "pthread_create");
+    }
+
+    totThreads = argc - 1;
+    numLive = totThreads;
+
+    /* Join with terminated threads */
+
+    while (numLive &gt; 0) {
+        s = pthread_mutex_lock(&amp;threadMutex);
+        if (s != 0)
+            errExitEN(s, "pthread_mutex_lock");
+
+        while (numUnjoined == 0) {
+            s = pthread_cond_wait(&amp;threadDied, &amp;threadMutex);
+            if (s != 0)
+                errExitEN(s, "pthread_cond_wait");
+        }
+
+        for (idx = 0; idx &lt; totThreads; idx++) {
+            if (thread[idx].state == TS_TERMINATED){
+                s = pthread_join(thread[idx].tid, NULL);
+                if (s != 0)
+                    errExitEN(s, "pthread_join");
+
+                thread[idx].state = TS_JOINED;
+                numLive--;
+                numUnjoined--;
+
+                printf("Reaped thread %d (numLive=%d)\n", idx, numLive);
+            }
+        }
+
+        s = pthread_mutex_unlock(&amp;threadMutex);
+        if (s != 0)
+            errExitEN(s, "pthread_mutex_unlock");
+    }
+
+    exit(EXIT_SUCCESS);
+}
+      <strong class="userinput"><code>threads/thread_multijoin.c</code></strong></pre></div></div></div><div class="sect2" title="Dynamically Allocated Condition Variables"><div class="titlepage"><div><div><h3 class="title" id="dynamically_allocated_condition_variable">Dynamically Allocated Condition Variables</h3></div></div></div><p>The <span class="emphasis"><em>pthread_cond_init()</em></span> function is used to dynamically
+                    initialize a condition variable. The circumstances in which we need to use
+                        <span class="emphasis"><em>pthread_cond_init()</em></span> are analogous to those where
+                        <span class="emphasis"><em>pthread_mutex_init()</em></span> is needed to dynamically
+                    initialize a mutex (<a class="xref" href="ch30.html#dynamically_initializing_a_mutex" title="Dynamically Initializing a Mutex">Dynamically Initializing a Mutex</a>); that
+                    is, we must use <span class="emphasis"><em>pthread_cond_init()</em></span> to initialize
+                    automatically and dynamically allocated condition variables, and to initialize a
+                    statically allocated condition variable with attributes other than the
+                        defaults.<a id="IDX-CHP-30-4547" class="indexterm"/><a id="IDX-CHP-30-4548" class="indexterm"/><a id="IDX-CHP-30-4549" class="indexterm"/><a id="IDX-CHP-30-4550" class="indexterm"/><a id="IDX-CHP-30-4551" class="indexterm"/><a id="IDX-CHP-30-4552" class="indexterm"/><a id="IDX-CHP-30-4553" class="indexterm"/><a id="IDX-CHP-30-4554" class="indexterm"/></p><a id="I_programlisting30_d1e87247"/><pre class="programlisting">#include &lt;pthread.h&gt;
+
+int <strong class="userinput"><code>pthread_cond_init</code></strong>(pthread_cond_t *<span class="emphasis"><em>cond</em></span>, const pthread_condattr_t *<span class="emphasis"><em>attr</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or a positive error number on error</p></div><p>The <span class="emphasis"><em>cond</em></span> argument identifies the condition variable to be
+                    initialized. As with mutexes, we can specify an <span class="emphasis"><em>attr</em></span>
+                    argument that has been previously initialized to determine attributes for the
+                    condition variable. Various Pthreads functions can be used to initialize the
+                    attributes in the <span class="emphasis"><em>pthread_condattr_t</em></span> object pointed to by
+                        <span class="emphasis"><em>attr</em></span>. If <span class="emphasis"><em>attr</em></span> is <code class="literal">NULL</code>, a default set of attributes is assigned to
+                    the condition variable.</p><p>SUSv3 specifies that initializing an already initialized condition variable
+                    results in undefined behavior; we should not do this.</p><p>When an automatically or dynamically allocated condition variable is no longer
+                    required, then it should be destroyed using
+                        <span class="emphasis"><em>pthread_cond_destroy()</em></span>. It is not necessary to call
+                        <span class="emphasis"><em>pthread_cond_destroy()</em></span> on a condition variable that was
+                    statically initialized using <code class="literal">PTHREAD_COND_INITIALIZER</code>.<a id="IDX-CHP-30-4555" class="indexterm"/></p><a id="I_programlisting30_d1e87299"/><pre class="programlisting">#include &lt;pthread.h&gt;
+
+int <strong class="userinput"><code>pthread_cond_destroy</code></strong>(pthread_cond_t *<span class="emphasis"><em>cond</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or a positive error number on error</p></div><p>It is safe to destroy a condition variable only when no threads are waiting on
+                    it. If the condition variable resides in a region of dynamically allocated
+                    memory, then it should be destroyed before freeing that memory region. An
+                    automatically allocated condition variable should be destroyed before its host
+                    function returns.</p><p>A condition variable that has been destroyed with
+                        <span class="emphasis"><em>pthread_cond_destroy()</em></span> can subsequently be
+                    reinitialized by <span class="emphasis"><em>pthread_cond_init()</em></span>.</p></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id29">Summary</h2></div></div></div><p>The greater sharing provided by threads comes at a cost. Threaded applications
+                must employ synchronization primitives such as mutexes and condition variables in
+                order to coordinate access to shared variables. A mutex provides exclusive access to
+                a shared variable. A condition variable allows one or more threads to wait for
+                notification that some other thread has changed the state of a shared
+                    variable.<a id="IDX-CHP-30-4556" class="indexterm"/><a id="IDX-CHP-30-4557" class="indexterm"/><a id="IDX-CHP-30-4558" class="indexterm"/></p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id37"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id38">Further information</h4></div></div></div><p>Refer to the sources of further information listed in <a class="xref" href="ch29.html#summary-id28" title="Summary">Summary</a>.</p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id19">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Modify the program in <a class="xref" href="ch30.html#incorrectly_incrementing_a_global_variab" title="Example 30-1. Incorrectly incrementing a global variable from two threads">Example 30-1</a> (<code class="literal">thread_incr.c</code>) so that each loop in the
+                        thread’s start function outputs the current value of
+                            <span class="emphasis"><em>glob</em></span> and some identifier that uniquely identifies
+                        the thread. The unique identifier for the thread could be specified as an
+                        argument to the <span class="emphasis"><em>pthread_create()</em></span> call used to create
+                        the thread. For this program, that would require changing the argument of
+                        the thread’s start function to be a pointer to a structure containing the
+                        unique identifier and a loop limit value. Run the program, redirecting
+                        output to a file, and then inspect the file to see what happens to
+                            <span class="emphasis"><em>glob</em></span> as the kernel scheduler alternates execution
+                        between the two threads.</p></li><li class="listitem"><p>Implement a set of thread-safe functions that update and search an
+                        unbalanced binary tree. This library should include functions (with the
+                        obvious purposes) of the following form:</p><a id="I_programlisting30_d1e87375"/><pre class="programlisting">initialize(tree);
+add(tree, char *key, void *value);
+delete(tree, char *key)
+Boolean lookup(char *key, void **value)</pre><p>In the above prototypes, <span class="emphasis"><em>tree</em></span> is a structure that
+                        points to the root of the tree (you will need to define a suitable structure
+                        for this purpose). Each element of the tree holds a key-value pair. You will
+                        also need to define the structure for each element to include a mutex that
+                        protects that element so that only one thread at a time can access it. The
+                            <span class="emphasis"><em>initialize()</em></span>, <span class="emphasis"><em>add()</em></span>, and
+                            <span class="emphasis"><em>lookup()</em></span> functions are relatively simple to
+                        implement. The <span class="emphasis"><em>delete()</em></span> operation requires a little
+                        more effort.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Removing the need to maintain a balanced tree greatly simplifies the
+                            locking requirements of the implementation, but carries the risk that
+                            certain patterns of input would result in a tree that performs poorly.
+                            Maintaining a balanced tree necessitates moving nodes between subtrees
+                            during the <span class="emphasis"><em>add()</em></span> and <span class="emphasis"><em>delete()</em></span>
+                            operations, which requires much more complex locking strategies.</p></div></li></ol></div></div></section></body></html>

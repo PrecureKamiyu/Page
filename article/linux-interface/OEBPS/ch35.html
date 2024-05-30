@@ -1,0 +1,778 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 35. Process Priorities and Scheduling</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch34.html" title="Chapter 34. Process Groups, Sessions, and Job Control"/><link rel="next" href="ch36.html" title="Chapter 36. Process Resources"/></head><body><section class="chapter" title="Chapter 35. Process Priorities and Scheduling" epub:type="chapter" id="process_priorities_and_scheduling"><div class="titlepage"><div><div><h2 class="title">Chapter 35. Process Priorities and Scheduling</h2></div></div></div><p>This chapter discusses various system calls and process attributes that determine when
+            and which processes obtain access to the CPU(s). We begin by describing the
+                <span class="emphasis"><em>nice</em></span> value, a process characteristic that influences the amount
+            of CPU time that a process is allocated by the kernel scheduler. We follow this with a
+            description of the POSIX realtime scheduling API. This API allows us to define the
+            policy and priority used for scheduling processes, giving us much tighter control over
+            how processes are allocated to the CPU. We conclude with a discussion of the system
+            calls for setting a process’s CPU affinity mask, which determines the set of CPUs on
+            which a process running on a multiprocessor system will run.</p><div class="sect1" title="Process Priorities (Nice Values)"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="process_priorities_open_parenthesis_nice">Process Priorities (Nice Values)</h2></div></div></div><p>On Linux, as with most other UNIX implementations, the default model for
+                scheduling processes for use of the CPU is <span class="emphasis"><em>round-robin
+                    time-sharing</em></span>. Under this model, each process in turn is permitted to
+                use the CPU for a brief period of time, known as a <span class="emphasis"><em>time slice</em></span>
+                or <span class="emphasis"><em>quantum</em></span>. Round-robin time-sharing satisfies two important
+                requirements of an interactive multitasking system:<a id="IDX-CHP-35-5123" class="indexterm"/><a id="IDX-CHP-35-5124" class="indexterm"/><a id="IDX-CHP-35-5125" class="indexterm"/><a id="IDX-CHP-35-5126" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>Fairness</em></span>: Each process gets a share of the
+                        CPU.</p></li><li class="listitem"><p><span class="emphasis"><em>Responsiveness</em></span>: A process doesn’t need to wait for
+                        long periods before it receives use of the CPU.</p></li></ul></div><p>Under the round-robin time-sharing algorithm, processes can’t exercise direct
+                control over when and for how long they will be able to use the CPU. By default,
+                each process in turn receives use of the CPU until its time slice runs out or it
+                voluntarily gives up the CPU (for example, by putting itself to sleep or performing
+                a disk read). If all processes attempt to use the CPU as much as possible (i.e., no
+                process ever sleeps or blocks on an I/O operation), then they will receive a roughly
+                equal share of the CPU.</p><p>However, one process attribute, the <span class="emphasis"><em>nice value</em></span>, allows a
+                process to indirectly influence the kernel’s scheduling algorithm. Each process has
+                a nice value in the range -20 (high priority) to +19 (low priority); the default is
+                0 (refer to <a class="xref" href="ch35.html#range_and_interpretation_of_the_process" title="Figure 35-1. Range and interpretation of the process nice value">Figure 35-1</a>). In
+                traditional UNIX implementations, only privileged processes can assign themselves
+                (or other processes) a negative (high) priority. (We’ll explain some Linux
+                differences in <a class="xref" href="ch35.html#modifying_and_retrieving_policies_and_pr" title="Modifying and Retrieving Policies and Priorities">Modifying and Retrieving Policies and Priorities</a>.)
+                Unprivileged processes can only lower their priority, by assuming a nice value
+                greater than the default of 0. By doing this, they are being “nice” to other
+                processes, and this fact gives the attribute its name.</p><p>The nice value is inherited by a child created via <span class="emphasis"><em>fork()</em></span> and
+                preserved across an <span class="emphasis"><em>exec()</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Rather than returning the actual nice value, the
+                        <span class="emphasis"><em>getpriority()</em></span> system call service routine returns a
+                    number in the range 1 (low priority) to 40 (high priority), calculated according
+                    to the formula <span class="emphasis"><em>unice = 20 - knice</em></span>. This is done to avoid
+                    having a negative return value from a system call service routine, which is used
+                    to indicate an error. (See the description of system call service routines in
+                    Section 3.1.) Applications are unaware of the manipulated value returned by the
+                    system call service routine, since the C library
+                        <span class="emphasis"><em>getpriority()</em></span> wrapper function reverses the
+                    calculation, returning the value <span class="emphasis"><em>20 - unice</em></span> to the calling
+                    program.</p></div><div class="figure"><a id="range_and_interpretation_of_the_process"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject35_d1e96820"/><img src="figs/web/35-1_PROCPRI-nice-scale90.png.jpg" alt="Range and interpretation of the process nice value"/></div></div><div class="figure-title">Figure 35-1. Range and interpretation of the process nice value</div></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="effect_of_the_nice_value"/></div></div></div><div class="sect3" title="Effect of the nice value"><div class="titlepage"><div><div><h4 class="title" id="effect_of_the_nice_value-id1">Effect of the nice value</h4></div></div></div><p>Processes are not scheduled in a strict hierarchy by nice value; rather,
+                        the nice value acts as weighting factor that causes the kernel scheduler to
+                        favor processes with higher priorities. Giving a process a low priority
+                        (i.e., high nice value) won’t cause it to be completely starved of the CPU,
+                        but causes it to receive relatively less CPU time. The extent to which the
+                        nice value influences the scheduling of a process has varied across Linux
+                        kernel versions, as well as across UNIX systems.<a id="IDX-CHP-35-5127" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Starting in kernel 2.6.23, a new kernel scheduling algorithm means
+                            that relative differences in nice values have a much stronger effect
+                            than in previous kernels. As a result, processes with low nice values
+                            receive less CPU than before, and processes with high nice values obtain
+                            a greater proportion of the CPU.</p></div></div><div class="sect3" title="Retrieving and modifying priorities"><div class="titlepage"><div><div><h4 class="title" id="retrieving_and_modifying_priorities">Retrieving and modifying priorities</h4></div></div></div><p>The <span class="emphasis"><em>getpriority()</em></span> and
+                            <span class="emphasis"><em>setpriority()</em></span> system calls allow a process to
+                        retrieve and change its own nice value or that of another process.<a id="IDX-CHP-35-5128" class="indexterm"/><a id="IDX-CHP-35-5129" class="indexterm"/><a id="IDX-CHP-35-5130" class="indexterm"/><a id="IDX-CHP-35-5131" class="indexterm"/><a id="IDX-CHP-35-5132" class="indexterm"/><a id="IDX-CHP-35-5133" class="indexterm"/><a id="IDX-CHP-35-5134" class="indexterm"/><a id="IDX-CHP-35-5135" class="indexterm"/><a id="IDX-CHP-35-5136" class="indexterm"/><a id="IDX-CHP-35-5137" class="indexterm"/><a id="IDX-CHP-35-5138" class="indexterm"/><a id="IDX-CHP-35-5139" class="indexterm"/><a id="IDX-CHP-35-5140" class="indexterm"/></p><a id="I_programlisting35_d1e96918"/><pre class="programlisting">#include &lt;sys/resource.h&gt;
+
+int <strong class="userinput"><code>getpriority</code></strong>(int <span class="emphasis"><em>which</em></span>, id_t <span class="emphasis"><em>who</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns (possibly negative) nice value of specified process on
+                            success, or -1 on error</p></div><a id="I_programlisting35_d1e96932"/><pre class="programlisting">int <strong class="userinput"><code>setpriority</code></strong>(int <span class="emphasis"><em>which</em></span>, id_t <span class="emphasis"><em>who</em></span>, int <span class="emphasis"><em>prio</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>Both system calls take the arguments <span class="emphasis"><em>which</em></span> and
+                            <span class="emphasis"><em>who</em></span>, identifying the process(es) whose priority is
+                        to be retrieved or modified. The <span class="emphasis"><em>which</em></span> argument
+                        determines how <span class="emphasis"><em>who</em></span> is interpreted. This argument takes
+                        one of the following values:</p><div class="variablelist"><dl><dt><span class="term">
+                                <code class="literal">PRIO_PROCESS</code>
+                            </span></dt><dd><p>Operate on the process whose process ID equals
+                                        <span class="emphasis"><em>who</em></span>. If <span class="emphasis"><em>who</em></span> is 0,
+                                    use the caller’s process ID.</p></dd><dt><span class="term">
+                                <code class="literal">PRIO_PGRP</code>
+                            </span></dt><dd><p>Operate on all of the members of the process group whose
+                                    process group ID equals <span class="emphasis"><em>who</em></span>. If
+                                        <span class="emphasis"><em>who</em></span> is 0, use the caller’s process
+                                    group.</p></dd><dt><span class="term">
+                                <code class="literal">PRIO_USER</code>
+                            </span></dt><dd><p>Operate on all processes whose real user ID equals
+                                        <span class="emphasis"><em>who</em></span>. If <span class="emphasis"><em>who</em></span> is 0,
+                                    use the caller’s real user ID.</p></dd></dl></div><p>The <span class="emphasis"><em>id_t</em></span> data type, used for the
+                            <span class="emphasis"><em>who</em></span> argument, is an integer type of sufficient size
+                        to accommodate a process ID or a user ID.<a id="IDX-CHP-35-5141" class="indexterm"/></p><p>The <span class="emphasis"><em>getpriority()</em></span> system call returns the nice value
+                        of the process specified by <span class="emphasis"><em>which</em></span> and
+                            <span class="emphasis"><em>who</em></span>. If multiple processes match the criteria
+                        specified (which may occur if <span class="emphasis"><em>which</em></span> is <code class="literal">PRIO_PGRP</code> or <code class="literal">PRIO_USER</code>), then the nice value of the process with the
+                        highest priority (i.e., lowest numerical value) is returned. Since
+                            <span class="emphasis"><em>getpriority()</em></span> may legitimately return a value of -1
+                        on a successful call, we must test for an error by setting
+                            <span class="emphasis"><em>errno</em></span> to 0 prior to the call, and then checking for
+                        a -1 return status and a nonzero <span class="emphasis"><em>errno</em></span> value after the
+                        call.</p><p>The <span class="emphasis"><em>setpriority()</em></span> system call sets the nice value of
+                        the process(es) specified by <span class="emphasis"><em>which</em></span> and
+                            <span class="emphasis"><em>who</em></span> to the value specified in
+                            <span class="emphasis"><em>prio</em></span>. Attempts to set a nice value to a number
+                        outside the permitted range (-20 to +19) are silently bounded to this
+                        range.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Historically, the nice value was changed using the call
+                                <span class="emphasis"><em>nice(incr)</em></span>, which added
+                                <span class="emphasis"><em>incr</em></span> to the calling process’s nice value. This
+                            function is still available, but it is superseded by the more general
+                                <span class="emphasis"><em>setpriority()</em></span> system call.</p><p>The command-line analogs of <span class="emphasis"><em>setpriority()</em></span> are
+                                <span class="emphasis"><em>nice(1)</em></span>, which can be used by unprivileged
+                            users to run a command with a lower priority or by privileged users to
+                            run a command with a raised priority, and
+                            <span class="emphasis"><em>renice(8)</em></span>, which can be used by the superuser to
+                            change the nice value of an existing process.</p></div><p>A privileged (<code class="literal">CAP_SYS_NICE</code>) process can
+                        change the priority of any process. An unprivileged process may change its
+                        own priority (by specifying <span class="emphasis"><em>which</em></span> as <code class="literal">PRIO_PROCESS</code>, and <span class="emphasis"><em>who</em></span> as
+                        0) or the priority of another (target) process, if its effective user ID
+                        matches the real or effective user ID of the target process. The Linux
+                        permission rules for <span class="emphasis"><em>setpriority()</em></span> differ from SUSv3,
+                        which specifies that an unprivileged process can change the priority of
+                        another process if its real or effective user ID matches the effective user
+                        ID of the target process. UNIX implementations show some variation on this
+                        point. Some follow the SUSv3 rules, but others—notably the BSDs—behave in
+                        the same way as Linux.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>In Linux kernels before 2.6.12, the permission rules for calls to
+                                <span class="emphasis"><em>setpriority()</em></span> by unprivileged processes are
+                            different from later kernels (and also deviate from SUSv3). An
+                            unprivileged process can change the priority of another process if its
+                            real or effective user ID matches the real user ID of the target
+                            process. From Linux 2.6.12 onward, the permissions checks were changed
+                            to be consistent with other similar APIs available on Linux, such as
+                                <span class="emphasis"><em>sched_setscheduler()</em></span> and
+                                <span class="emphasis"><em>sched_setaffinity()</em></span>.</p></div><p>In Linux kernels before 2.6.12, an unprivileged process may use
+                            <span class="emphasis"><em>setpriority()</em></span> only to (irreversibly) lower its own
+                        or another process’s nice value. A privileged (<code class="literal">CAP_SYS_NICE</code>) process can use
+                            <span class="emphasis"><em>setpriority()</em></span> to raise nice values.</p><p>Since kernel 2.6.12, Linux provides the <code class="literal">RLIMIT_NICE</code> resource limit, which permits unprivileged
+                        processes to increase nice values. An unprivileged process can raise its own
+                        nice value to the maximum specified by the formula <span class="emphasis"><em>20 -
+                            rlim_cur</em></span>, where <span class="emphasis"><em>rlim_cur</em></span> is the current
+                            <code class="literal">RLIMIT_NICE</code> soft resource limit. As
+                        an example, if a process’s <code class="literal">RLIMIT_NICE</code>
+                        soft limit is 25, then its nice value can be raised to -5. From this
+                        formula, and the knowledge that the nice value has the range +19 (low) to
+                        -20 (high), we can deduce that the effectively useful range of the <code class="literal">RLIMIT_NICE</code> limit is 1 (low) to 40 (high).
+                            (<code class="literal">RLIMIT_NICE</code> doesn’t use the number
+                        range +19 to -20 because some negative resource-limit values have special
+                        meanings—for example, <code class="literal">RLIM_INFINITY</code> has
+                        the same representation as -1.)<a id="IDX-CHP-35-5142" class="indexterm"/></p><p>An unprivileged process can make a <span class="emphasis"><em>setpriority()</em></span> call
+                        to change the nice value of another (target) process, if the effective user
+                        ID of the process calling <span class="emphasis"><em>setpriority()</em></span> matches the
+                        real or effective user ID of the target process, and the change to the nice
+                        value is consistent with the target process’s <code class="literal">RLIMIT_NICE</code> limit.</p><p>The program in <a class="xref" href="ch35.html#modifying_and_retrieving_a_process_numbe" title="Example 35-1. Modifying and retrieving a process’s nice value">Example 35-1</a>
+                        uses <span class="emphasis"><em>setpriority()</em></span> to change the nice value of the
+                        process(es) specified by its command-line arguments (which correspond to the
+                        arguments of <span class="emphasis"><em>setpriority()</em></span>), and then calls
+                            <span class="emphasis"><em>getpriority()</em></span> to verify the change.</p><div class="example"><a id="modifying_and_retrieving_a_process_numbe"/><div class="example-title">Example 35-1. Modifying and retrieving a process’s nice value</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procpri/t_setpriority.c</code></strong>
+#include &lt;sys/time.h&gt;
+#include &lt;sys/resource.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int which, prio;
+    id_t who;
+    if (argc != 4 || strchr("pgu", argv[1][0]) == NULL)
+        usageErr("%s {p|g|u} who priority\n"
+                "    set priority of: p=process; g=process group; "
+                "u=processes for user\n", argv[0]);
+
+    /* Set nice value according to command-line arguments */
+
+    which = (argv[1][0] == 'p') ? PRIO_PROCESS :
+                (argv[1][0] == 'g') ? PRIO_PGRP : PRIO_USER;
+    who = getLong(argv[2], 0, "who");
+    prio = getInt(argv[3], 0, "prio");
+
+    if (setpriority(which, who, prio) == -1)
+        errExit("getpriority");
+
+    /* Retrieve nice value to check the change */
+
+    errno = 0;                  /* Because successful call may return -1 */
+    prio = getpriority(which, who);
+    if (prio == -1 &amp;&amp; errno != 0)
+        errExit("getpriority");
+
+    printf("Nice value = %d\n", prio);
+
+    exit(EXIT_SUCCESS);
+}
+      <strong class="userinput"><code>procpri/t_setpriority.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="Overview of Realtime Process Scheduling"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="overview_of_realtime_process_scheduling">Overview of Realtime Process Scheduling</h2></div></div></div><p>The standard kernel scheduling algorithm usually provides adequate performance and
+                responsiveness for the mixture of interactive and background processes typically run
+                on a system. However, realtime applications have more stringent requirements of a
+                scheduler, including the following:<a id="IDX-CHP-35-5143" class="indexterm"/><a id="IDX-CHP-35-5144" class="indexterm"/><a id="IDX-CHP-35-5145" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>A realtime application must provide a guaranteed maximum response time for
+                        external inputs. In many cases, these guaranteed maximum response times must
+                        be quite small (e.g., of the order of a fraction of a second). For example,
+                        a slow response by a vehicle navigation system could be catastrophic. To
+                        satisfy this requirement, the kernel must provide the facility for a
+                        high-priority process to obtain control of the CPU in a timely fashion,
+                        preempting any process that may currently be running.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>A time-critical application may need to take other steps to avoid
+                            unacceptable delays. For example, to avoid being delayed by a page
+                            fault, an application can lock all of its virtual memory into RAM using
+                                <span class="emphasis"><em>mlock()</em></span> or <span class="emphasis"><em>mlockall()</em></span>
+                            (described in <a class="xref" href="ch50.html#memory_locking_colon_mlock_open_parenthe" title="Memory Locking: mlock() and mlockall()">Memory Locking: <span class="emphasis"><em>mlock()</em></span> and
+                <span class="emphasis"><em>mlockall()</em></span></a>).</p></div></li><li class="listitem"><p>A high-priority process should be able to maintain exclusive access to the
+                        CPU until it completes or voluntarily relinquishes the CPU.</p></li><li class="listitem"><p>A realtime application should be able to control the precise order in
+                        which its component processes are scheduled.</p></li></ul></div><p>SUSv3 specifies a realtime process scheduling API (originally defined in POSIX.1b)
+                that partly addresses these requirements. This API provides two realtime scheduling
+                policies: <code class="literal">SCHED_RR</code> and <code class="literal">SCHED_FIFO</code>. Processes operating under either of these policies always
+                have priority over processes scheduled using the standard round-robin time-sharing
+                policy described in <a class="xref" href="ch35.html#process_priorities_open_parenthesis_nice" title="Process Priorities (Nice Values)">Process Priorities (Nice Values)</a>,
+                which the realtime scheduling API identifies using the constant <code class="literal">SCHED_OTHER</code>.<a id="IDX-CHP-35-5146" class="indexterm"/><a id="IDX-CHP-35-5147" class="indexterm"/><a id="IDX-CHP-35-5148" class="indexterm"/></p><p>Each of the realtime policies allows for a range of priority levels. SUSv3
+                requires that an implementation provide at least 32 discrete priorities for the
+                realtime policies. In each scheduling policy, runnable processes with higher
+                priority always have precedence over lower-priority processes when seeking access to
+                the CPU.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The statement that runnable processes with higher priority always have
+                    precedence over lower-priority processes needs to be qualified for
+                    multiprocessor Linux systems (including hyperthreaded systems). On a
+                    multiprocessor system, each CPU has a separate run queue (this provides better
+                    performance than a single system-wide run queue), and processes are prioritized
+                    only per CPU run queue. For example, on a dual-processor system with three
+                    processes, process A with realtime priority 20 could be queued waiting for CPU
+                    0, which is currently running process B with priority 30, even though CPU 1 is
+                    running process C with a priority of 10.</p><p>Realtime applications that employ multiple processes (or threads) can use the
+                    CPU affinity API described in <a class="xref" href="ch35.html#cpu_affinity" title="CPU Affinity">CPU Affinity</a> to avoid any
+                    problems that might result from this scheduling behavior. For example, on a
+                    four-processor system, all noncritical processes could be isolated onto a single
+                    CPU, leaving the other three CPUs available for use by the application.</p></div><p>Linux provides 99 realtime priority levels, numbered 1 (lowest) to 99 (highest),
+                and this range applies in both realtime scheduling policies. The priorities in each
+                policy are equivalent. This means that, given two processes with the same priority,
+                one operating under the <code class="literal">SCHED_RR</code> policy and the
+                other under <code class="literal">SCHED_FIFO</code>, either may be the next
+                one eligible for execution, depending on the order in which they were scheduled. In
+                effect, each priority level maintains a queue of runnable processes, and the next
+                process to run is selected from the front of the highest-priority nonempty
+                queue.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="posix_realtime_versus_hard_realtime"/></div></div></div><div class="sect3" title="POSIX realtime versus hard realtime"><div class="titlepage"><div><div><h4 class="title" id="posix_realtime_versus_hard_realtime-id1">POSIX realtime versus hard realtime</h4></div></div></div><p>Applications with all of the requirements listed at the start of this
+                        section are sometimes referred to as <span class="emphasis"><em>hard</em></span> realtime
+                        applications. However, the POSIX realtime process scheduling API doesn’t
+                        satisfy all of these requirements. In particular, it provides no way for an
+                        application to guarantee response times for handling input. To make such
+                        guarantees requires operating system features that are not part of the
+                        mainline Linux kernel (nor most other standard operating systems). The POSIX
+                        API merely provides us with so-called <span class="emphasis"><em>soft</em></span> realtime,
+                        allowing us to control which processes are scheduled for use of the
+                            CPU.<a id="IDX-CHP-35-5150" class="indexterm"/><a id="IDX-CHP-35-5151" class="indexterm"/><a id="IDX-CHP-35-5149" class="indexterm"/></p><p>Adding support for hard realtime applications is difficult to achieve
+                        without imposing an overhead on the system that conflicts with the
+                        performance requirements of the time-sharing applications that form the
+                        majority of applications on typical desktop and server systems. This is why
+                        most UNIX kernels—including, historically, Linux—have not natively supported
+                        realtime applications. Nevertheless, starting from around version 2.6.18,
+                        various features have been added to the Linux kernel with the eventual aim
+                        of allowing Linux to natively provide full support for hard realtime
+                        applications, without imposing the aforementioned overhead for time-sharing
+                        operation.</p></div></div><div class="sect2" title="The SCHED_RR Policy"><div class="titlepage"><div><div><h3 class="title" id="the_sched_underscore_rr_policy">The <code class="literal">SCHED_RR</code> Policy</h3></div></div></div><p>Under the <code class="literal">SCHED_RR</code> (round-robin) policy,
+                    processes of equal priority are executed in a round-robin time-sharing fashion.
+                    A process receives a fixed-length time slice each time it uses the CPU. Once
+                    scheduled, a process employing the <code class="literal">SCHED_RR</code>
+                    policy maintains control of the CPU until either:<a id="IDX-CHP-35-5152" class="indexterm"/><a id="IDX-CHP-35-5153" class="indexterm"/><a id="IDX-CHP-35-5154" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>it reaches the end of its time slice;</p></li><li class="listitem"><p>it voluntarily relinquishes the CPU, either by performing a blocking
+                            system call or by calling the <span class="emphasis"><em>sched_yield()</em></span> system
+                            call (described in <a class="xref" href="ch35.html#relinquishing_the_cpu" title="Relinquishing the CPU">Relinquishing the CPU</a>);</p></li><li class="listitem"><p>it terminates; or</p></li><li class="listitem"><p>it is preempted by a higher-priority process.</p></li></ul></div><p>For the first two events above, when a process running under the <code class="literal">SCHED_RR</code> policy loses access to the CPU, it is
+                    placed at the back of the queue for its priority level. In the final case, when
+                    the higher-priority process has ceased execution, the preempted process
+                    continues execution, consuming the remainder of its time slice (i.e., the
+                    preempted process remains at the head of the queue for its priority
+                    level).</p><p>In both the <code class="literal">SCHED_RR</code> and the <code class="literal">SCHED_FIFO</code> policies, the currently running process
+                    may be preempted for one of the following reasons:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>a higher-priority process that was blocked became unblocked (e.g., an
+                            I/O operation on which it was waiting completed);</p></li><li class="listitem"><p>the priority of another process was raised to a higher level than the
+                            currently running process; or</p></li><li class="listitem"><p>the priority of the currently running process was decreased to a lower
+                            value than that of some other runnable process.</p></li></ul></div><p>The <code class="literal">SCHED_RR</code> policy is similar to the
+                    standard round-robin time-sharing scheduling algorithm (<code class="literal">SCHED_OTHER</code>), in that it allows a group of processes with the
+                    same priority to share access to the CPU. The most notable difference is the
+                    existence of strictly distinct priority levels, with higher-priority processes
+                    always taking precedence over lower-priority processes. By contrast, a low nice
+                    value (i.e., high priority) doesn’t give a process exclusive access to the CPU;
+                    it merely gives the process a favorable weighting in scheduling decisions. As
+                    noted in <a class="xref" href="ch35.html#process_priorities_open_parenthesis_nice" title="Process Priorities (Nice Values)">Process Priorities (Nice Values)</a>, a process
+                    with a low priority (i.e., high nice value) always receives at least some CPU
+                    time. The other important difference is that the <code class="literal">SCHED_RR</code> policy allows us to precisely control the order in which
+                    processes are scheduled.</p></div><div class="sect2" title="The SCHED_FIFO Policy"><div class="titlepage"><div><div><h3 class="title" id="the_sched_underscore_fifo_policy">The <code class="literal">SCHED_FIFO</code> Policy</h3></div></div></div><p>The <code class="literal">SCHED_FIFO</code> (first-in, first-out) policy
+                    is similar to the <code class="literal">SCHED_RR</code> policy. The major
+                    difference is that there is no time slice. Once a <code class="literal">SCHED_FIFO</code> process gains access to the CPU, it executes until
+                    either:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>it voluntarily relinquishes the CPU (in the same manner as described
+                            for the <code class="literal">SCHED_FIFO</code> policy
+                            above);</p></li><li class="listitem"><p>it terminates; or</p></li><li class="listitem"><p>it is preempted by a higher-priority process (in the same
+                            circumstances as described for the <code class="literal">SCHED_FIFO</code> policy above).<a id="IDX-CHP-35-5155" class="indexterm"/></p></li></ul></div><p>In the first case, the process is placed at the back of the queue for its
+                    priority level. In the last case, when the higher-priority process has ceased
+                    execution (by blocking or terminating), the preempted process continues
+                    execution (i.e., the preempted process remains at the head of the queue for its
+                    priority level).</p></div><div class="sect2" title="The SCHED_BATCH and SCHED_IDLE Policies"><div class="titlepage"><div><div><h3 class="title" id="the_sched_underscore_batch_and_sched_und">The <code class="literal">SCHED_BATCH</code> and <code class="literal">SCHED_IDLE</code> Policies</h3></div></div></div><p>The Linux 2.6 kernel series added two nonstandard scheduling policies:
+                        <code class="literal">SCHED_BATCH</code> and <code class="literal">SCHED_IDLE</code>. Although these policies are set via the POSIX
+                    realtime scheduling API, they are not actually realtime policies.<a id="IDX-CHP-35-5156" class="indexterm"/><a id="IDX-CHP-35-5157" class="indexterm"/><a id="IDX-CHP-35-5158" class="indexterm"/><a id="IDX-CHP-35-5159" class="indexterm"/></p><p>The <code class="literal">SCHED_BATCH</code> policy, added in kernel
+                    2.6.16, is similar to the default <code class="literal">SCHED_OTHER</code>
+                    policy. The difference is that the <code class="literal">SCHED_BATCH</code> policy causes jobs that frequently wake up to be
+                    scheduled less often. This policy is intended for batch-style execution of
+                    processes.</p><p>The <code class="literal">SCHED_IDLE</code> policy, added in kernel
+                    2.6.23, is also similar to <code class="literal">SCHED_OTHER</code>, but
+                    provides functionality equivalent to a very low nice value (i.e., lower than
+                    +19). The process nice value has no meaning for this policy. It is intended for
+                    running low-priority jobs that will receive a significant proportion of the CPU
+                    only if no other job on the system requires the CPU.</p></div></div><div class="sect1" title="Realtime Process Scheduling API"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="realtime_process_scheduling_api">Realtime Process Scheduling API</h2></div></div></div><p>We now look at the various system calls constituting the realtime process
+                scheduling API. These system calls allow us to control process scheduling policies
+                and priorities.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Although realtime scheduling has been a part of Linux since version 2.0 of the
+                    kernel, several problems persisted for a long time in the implementation. A
+                    number of features of the implementation remained broken in the 2.2 kernel, and
+                    even in early 2.4 kernels. Most of these problems were rectified by about kernel
+                    2.4.20.</p></div><div class="sect2" title="Realtime Priority Ranges"><div class="titlepage"><div><div><h3 class="title" id="realtime_priority_ranges">Realtime Priority Ranges</h3></div></div></div><p>The <span class="emphasis"><em>sched_get_priority_min()</em></span> and
+                        <span class="emphasis"><em>sched_get_priority_max()</em></span> system calls return the
+                    available priority range for a scheduling policy.<a id="IDX-CHP-35-5160" class="indexterm"/><a id="IDX-CHP-35-5161" class="indexterm"/></p><a id="I_programlisting35_d1e97514"/><pre class="programlisting">#include &lt;sched.h&gt;
+
+int <strong class="userinput"><code>sched_get_priority_min</code></strong>(int <span class="emphasis"><em>policy</em></span>);
+int <strong class="userinput"><code>sched_get_priority_max</code></strong>(int <span class="emphasis"><em>policy</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Both return nonnegative integer priority on success, or -1 on error</p></div><p>For both system calls, <span class="emphasis"><em>policy</em></span> specifies the scheduling
+                    policy about which we wish to obtain information. For this argument, we specify
+                    either <code class="literal">SCHED_RR</code> or <code class="literal">SCHED_FIFO</code>. The <span class="emphasis"><em>sched_get_priority_min()</em></span>
+                    system call returns the minimum priority for the specified policy, and
+                        <span class="emphasis"><em>sched_get_priority_max()</em></span> returns the maximum priority.
+                    On Linux, these system calls return the numbers 1 and 99, respectively, for both
+                    the <code class="literal">SCHED_RR</code> and <code class="literal">SCHED_FIFO</code> policies. In other words, the priority ranges of the
+                    two realtime policies completely coincide, and <code class="literal">SCHED_RR</code> and <code class="literal">SCHED_FIFO</code>
+                    processes with the same priority are equally eligible for scheduling. (Which one
+                    is scheduled first depends on their order in the queue for that priority
+                    level.)</p><p>The range of realtime priorities differs from one UNIX implementation to
+                    another. Therefore, instead of hard-coding priority values into an application,
+                    we should specify priorities relative to the return value from one of these
+                    functions. Thus, the lowest <code class="literal">SCHED_RR</code> priority
+                    would be specified as <span class="emphasis"><em>sched_get_priority_min(SCHED_FIFO)</em></span>,
+                    the next higher priority as <span class="emphasis"><em>sched_get_priority_min(SCHED_FIFO) +
+                        1</em></span>, and so on.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>SUSv3 doesn’t require that the <code class="literal">SCHED_RR</code>
+                        and <code class="literal">SCHED_FIFO</code> policies use the same
+                        priority ranges, but they do so on most UNIX implementations. For example,
+                        on Solaris 8, the priority range for both policies is 0 to 59, and on
+                        FreeBSD 6.1, it is 0 to 31.</p></div></div><div class="sect2" title="Modifying and Retrieving Policies and Priorities"><div class="titlepage"><div><div><h3 class="title" id="modifying_and_retrieving_policies_and_pr">Modifying and Retrieving Policies and Priorities</h3></div></div></div><p>In this section, we look at the system calls that modify and retrieve
+                    scheduling policies and priorities.<a id="IDX-CHP-35-5162" class="indexterm"/><a id="IDX-CHP-35-5163" class="indexterm"/><a id="IDX-CHP-35-5164" class="indexterm"/><a id="IDX-CHP-35-5165" class="indexterm"/><a id="IDX-CHP-35-5166" class="indexterm"/><a id="IDX-CHP-35-5167" class="indexterm"/><a id="IDX-CHP-35-5168" class="indexterm"/><a id="IDX-CHP-35-5169" class="indexterm"/></p><div class="sect3" title="Modifying scheduling policies and priorities"><div class="titlepage"><div><div><h4 class="title" id="modifying_scheduling_policies_and_priori">Modifying scheduling policies and priorities</h4></div></div></div><p>The <span class="emphasis"><em>sched_setscheduler()</em></span> system call changes both the
+                        scheduling policy and the priority of the process whose process ID is
+                        specified in <span class="emphasis"><em>pid</em></span>. If <span class="emphasis"><em>pid</em></span> is
+                        specified as 0, the attributes of the calling process are changed.<a id="IDX-CHP-35-5170" class="indexterm"/><a id="IDX-CHP-35-5171" class="indexterm"/><a id="IDX-CHP-35-5172" class="indexterm"/><a id="IDX-CHP-35-5173" class="indexterm"/><a id="IDX-CHP-35-5174" class="indexterm"/><a id="IDX-CHP-35-5175" class="indexterm"/><a id="IDX-CHP-35-5176" class="indexterm"/><a id="IDX-CHP-35-5177" class="indexterm"/></p><a id="I_programlisting35_d1e97695"/><pre class="programlisting">#include &lt;sched.h&gt;
+
+int <strong class="userinput"><code>sched_setscheduler</code></strong>(pid_t <span class="emphasis"><em>pid</em></span>, int <span class="emphasis"><em>policy</em></span>,
+ const struct sched_param *<span class="emphasis"><em>param</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>param</em></span> argument is a pointer to a structure of the
+                        following form:</p><a id="I_programlisting35_d1e97717"/><pre class="programlisting">struct sched_param {
+     int sched_priority;        /* Scheduling priority */
+};</pre><p>SUSv3 defines the <span class="emphasis"><em>param</em></span> argument as a structure to
+                        allow an implementation to include additional implementation-specific
+                        fields, which may be useful if an implementation provides additional
+                        scheduling policies. However, like most UNIX implementations, Linux provides
+                        just the <span class="emphasis"><em>sched_priority</em></span> field, which specifies the
+                        scheduling priority. For the <code class="literal">SCHED_RR</code> and
+                            <code class="literal">SCHED_FIFO</code> policies, this must be a
+                        value in the range indicated by
+                            <span class="emphasis"><em>sched_get_priority_min()</em></span> and
+                            <span class="emphasis"><em>sched_get_priority_max()</em></span>; for other policies, the
+                        priority must be 0.</p><p>The <span class="emphasis"><em>policy</em></span> argument determines the scheduling policy
+                        for the process. It is specified as one of the policies shown in <a class="xref" href="ch35.html#linux_realtime_and_nonrealtime_schedulin" title="Table 35-1. Linux realtime and nonrealtime scheduling policies">Table 35-1</a>.</p><div class="table"><a id="linux_realtime_and_nonrealtime_schedulin"/><div class="table-title">Table 35-1. Linux realtime and nonrealtime scheduling policies</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Policy</p>
+                                    </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Description</p>
+                                    </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                        <p>SUSv3</p>
+                                    </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SCHED_FIFO</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Realtime first-in first-out</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>•</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SCHED_RR</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Realtime round-robin</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>•</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SCHED_OTHER</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Standard round-robin time-sharing</p>
+                                    </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                        <p>•</p>
+                                    </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SCHED_BATCH</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                        <p>Similar to <code class="literal">SCHED_OTHER</code>, but intended for batch
+                                            execution (since Linux 2.6.16)</p>
+                                    </td><td style="border-bottom: 0.5pt solid ; "> </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>
+                                            <code class="literal">SCHED_IDLE</code>
+                                        </p>
+                                    </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                        <p>Similar to <code class="literal">SCHED_OTHER</code>, but with priority even lower
+                                            than nice value +19 (since Linux 2.6.23)</p>
+                                    </td><td> </td></tr></tbody></table></div></div><p>A successful <span class="emphasis"><em>sched_setscheduler()</em></span> call moves the
+                        process specified by <span class="emphasis"><em>pid</em></span> to the back of the queue for
+                        its priority level.</p><p>SUSv3 specifies that the return value of a successful
+                            <span class="emphasis"><em>sched_setscheduler()</em></span> call should be the previous
+                        scheduling policy. However, Linux deviates from the standard in that a
+                        successful call returns 0. A portable application should test for success by
+                        checking that the return status is not -1.</p><p>The scheduling policy and priority are inherited by a child created via
+                            <span class="emphasis"><em>fork()</em></span>, and they are preserved across an
+                            <span class="emphasis"><em>exec()</em></span>.</p><p>The <span class="emphasis"><em>sched_setparam()</em></span> system call provides a subset of
+                        the functionality of <span class="emphasis"><em>sched_setscheduler()</em></span>. It modifies
+                        the scheduling priority of a process while leaving the policy
+                            unchanged.<a id="IDX-CHP-35-5178" class="indexterm"/></p><a id="I_programlisting35_d1e97857"/><pre class="programlisting">#include &lt;sched.h&gt;
+
+int <strong class="userinput"><code>sched_setparam</code></strong>(pid_t <span class="emphasis"><em>pid</em></span>, const struct sched_param *<span class="emphasis"><em>param</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>pid</em></span> and <span class="emphasis"><em>param</em></span> arguments are
+                        the same as for <span class="emphasis"><em>sched_setscheduler()</em></span>.</p><p>A successful <span class="emphasis"><em>sched_setparam()</em></span> call moves the process
+                        specified by <span class="emphasis"><em>pid</em></span> to the back of the queue for its
+                        priority level.</p><p>The program in <a class="xref" href="ch35.html#modifying_process_scheduling_policies_an" title="Example 35-2. Modifying process scheduling policies and priorities">Example 35-2</a>
+                        uses <span class="emphasis"><em>sched_setscheduler()</em></span> to set the policy and
+                        priority of the processes specified by its command-line arguments. The first
+                        argument is a letter specifying a scheduling policy, the second is an
+                        integer priority, and the remaining arguments are the process IDs of the
+                        processes whose scheduling attributes are to be changed.</p><div class="example"><a id="modifying_process_scheduling_policies_an"/><div class="example-title">Example 35-2. Modifying process scheduling policies and priorities</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procpri/sched_set.c</code></strong>
+#include &lt;sched.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int j, pol;
+    struct sched_param sp;
+
+    if (argc &lt; 3 || strchr("rfo", argv[1][0]) == NULL)
+        usageErr("%s policy priority [pid...]\n"
+                "    policy is 'r' (RR), 'f' (FIFO), "
+#ifdef SCHED_BATCH              /* Linux-specific */
+                "'b' (BATCH), "
+#endif
+#ifdef SCHED_IDLE               /* Linux-specific */
+                "'i' (IDLE), "
+#endif
+                "or 'o' (OTHER)\n",
+                argv[0]);
+
+    pol = (argv[1][0] == 'r') ? SCHED_RR :
+                (argv[1][0] == 'f') ? SCHED_FIFO :
+#ifdef SCHED_BATCH
+                (argv[1][0] == 'b') ? SCHED_BATCH :
+#endif
+#ifdef SCHED_IDLE
+                (argv[1][0] == 'i') ? SCHED_IDLE :
+#endif
+                SCHED_OTHER;
+    sp.sched_priority = getInt(argv[2], 0, "priority");
+
+    for (j = 3; j &lt; argc; j++)
+        if (sched_setscheduler(getLong(argv[j], 0, "pid"), pol, &amp;sp) == -1)
+            errExit("sched_setscheduler");
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>procpri/sched_set.c</code></strong></pre></div></div></div><div class="sect3" title="Privileges and resource limits affecting changes to scheduling parameters"><div class="titlepage"><div><div><h4 class="title" id="privileges_and_resource_limits_affecting">Privileges and resource limits affecting changes to scheduling
+                        parameters</h4></div></div></div><p>In kernels before 2.6.12, a process generally must be privileged (<code class="literal">CAP_SYS_NICE</code>) to make changes to scheduling
+                        policies and priorities. The one exception to this requirement is that an
+                        unprivileged process can change the scheduling policy of a process to
+                            <code class="literal">SCHED_OTHER</code> if the effective user ID
+                        of the caller matches either the real or effective user ID of the target
+                            process.<a id="IDX-CHP-35-5179" class="indexterm"/><a id="IDX-CHP-35-5180" class="indexterm"/><a id="IDX-CHP-35-5181" class="indexterm"/><a id="IDX-CHP-35-5182" class="indexterm"/></p><p>Since kernel 2.6.12, the rules about setting realtime scheduling policies
+                        and priorities have changed with the introduction of a new, nonstandard
+                        resource limit, <code class="literal">RLIMIT_RTPRIO</code>. As with
+                        older kernels, privileged (<code class="literal">CAP_SYS_NICE</code>)
+                        processes can make arbitrary changes to the scheduling policy and priority
+                        of any process. However, an unprivileged process can also change scheduling
+                        policies and priorities, according to the following rules:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If the process has a nonzero <code class="literal">RLIMIT_RTPRIO</code> soft limit, then it can make arbitrary
+                                changes to its scheduling policy and priority, subject to the
+                                constraint that the upper limit on the realtime priority that it may
+                                set is the maximum of its current realtime priority (if the process
+                                is currently operating under a realtime policy) and the value of its
+                                    <code class="literal">RLIMIT_RTPRIO</code> soft
+                                limit.</p></li><li class="listitem"><p>If the value of a process’s <code class="literal">RLIMIT_RTPRIO</code> soft limit is 0, then the only change
+                                that it can make is to lower its realtime scheduling priority or to
+                                switch from a realtime policy to a nonrealtime policy.</p></li><li class="listitem"><p>The <code class="literal">SCHED_IDLE</code> policy is
+                                special. A process that is operating under this policy can’t make
+                                any changes to its policy, regardless of the value of the <code class="literal">RLIMIT_RTPRIO</code> resource limit.</p></li><li class="listitem"><p>Policy and priority changes can also be performed from another
+                                unprivileged process, as long as the effective user ID of that
+                                process matches either the real or effective user ID of the target
+                                process.</p></li><li class="listitem"><p>A process’s soft <code class="literal">RLIMIT_RTPRIO</code>
+                                limit determines only what changes can be made to its own scheduling
+                                policy and priority, either by the process itself or by another
+                                unprivileged process. A nonzero limit doesn’t give an unprivileged
+                                process the ability to change the scheduling policy and priority of
+                                other processes.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>Starting with kernel 2.6.25, Linux adds the concept of realtime
+                            scheduling groups, configurable via the <code class="literal">CONFIG_RT_GROUP_SCHED</code> kernel option, which also affect
+                            the changes that can be made when setting realtime scheduling policies.
+                            See the kernel source file <code class="literal">Documentation/scheduler/sched-rt-group.txt</code> for
+                                details.<a id="IDX-CHP-35-5183" class="indexterm"/></p></div></div><div class="sect3" title="Retrieving scheduling policies and priorities"><div class="titlepage"><div><div><h4 class="title" id="retrieving_scheduling_policies_and_prior">Retrieving scheduling policies and priorities</h4></div></div></div><p>The <span class="emphasis"><em>sched_getscheduler()</em></span> and
+                            <span class="emphasis"><em>sched_getparam()</em></span> system calls retrieve the
+                        scheduling policy and priority of a process.<a id="IDX-CHP-35-5184" class="indexterm"/><a id="IDX-CHP-35-5185" class="indexterm"/><a id="IDX-CHP-35-5186" class="indexterm"/><a id="IDX-CHP-35-5187" class="indexterm"/><a id="IDX-CHP-35-5188" class="indexterm"/><a id="IDX-CHP-35-5189" class="indexterm"/><a id="IDX-CHP-35-5190" class="indexterm"/><a id="IDX-CHP-35-5191" class="indexterm"/></p><a id="I_programlisting35_d1e98051"/><pre class="programlisting">#include &lt;sched.h&gt;
+
+int <strong class="userinput"><code>sched_getscheduler</code></strong>(pid_t <span class="emphasis"><em>pid</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns scheduling policy, or -1 on error</p></div><a id="I_programlisting35_d1e98062"/><pre class="programlisting">int <strong class="userinput"><code>sched_getparam</code></strong>(pid_t <span class="emphasis"><em>pid</em></span>, struct sched_param *<span class="emphasis"><em>param</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>For both of these system calls, <span class="emphasis"><em>pid</em></span> specifies the ID
+                        of the process about which information is to be retrieved. If
+                            <span class="emphasis"><em>pid</em></span> is 0, information is retrieved about the
+                        calling process. Both system calls can be used by an unprivileged process to
+                        retrieve information about any process, regardless of credentials.</p><p>The <span class="emphasis"><em>sched_getparam()</em></span> system call returns the realtime
+                        priority of the specified process in the <span class="emphasis"><em>sched_priority</em></span>
+                        field of the <span class="emphasis"><em>sched_param</em></span> structure pointed to by
+                            <span class="emphasis"><em>param</em></span>.<a id="IDX-CHP-35-5192" class="indexterm"/></p><p>Upon successful execution, <span class="emphasis"><em>sched_getscheduler()</em></span>
+                        returns one of the policies shown earlier in <a class="xref" href="ch35.html#linux_realtime_and_nonrealtime_schedulin" title="Table 35-1. Linux realtime and nonrealtime scheduling policies">Table 35-1</a>.</p><p>The program in <a class="xref" href="ch35.html#retrieving_process_scheduling_policies_a" title="Example 35-3. Retrieving process scheduling policies and priorities">Example 35-3</a>
+                        uses <span class="emphasis"><em>sched_getscheduler()</em></span> and
+                            <span class="emphasis"><em>sched_getparam()</em></span> to retrieve the policy and
+                        priority of all of the processes whose process IDs are given as command-line
+                        arguments. The following shell session demonstrates the use of this program,
+                        as well as the program in <a class="xref" href="ch35.html#modifying_process_scheduling_policies_an" title="Example 35-2. Modifying process scheduling policies and priorities">Example 35-2</a>:</p><a id="I_programlisting35_d1e98122"/><pre class="programlisting">$ <strong class="userinput"><code>su</code></strong>                          <em class="lineannotation"><span class="lineannotation">Assume privilege so we can set realtime policies</span></em>
+Password:
+# <strong class="userinput"><code>sleep 100 &amp;</code></strong>                 <em class="lineannotation"><span class="lineannotation">Create a process</span></em>
+[1] 2006
+# <strong class="userinput"><code>./sched_view 2006</code></strong>           <em class="lineannotation"><span class="lineannotation">View initial policy and priority of</span></em>
+ <span class="emphasis"><em>sleep</em></span> <em class="lineannotation"><span class="lineannotation">process</span></em>
+2006: OTHER  0
+# <strong class="userinput"><code>./sched_set f 25 2006</code></strong>       <em class="lineannotation"><span class="lineannotation">Switch process to</span></em>
+SCHED_FIFO <em class="lineannotation"><span class="lineannotation">policy, priority 25</span></em>
+# <strong class="userinput"><code>./sched_view 2006</code></strong>           <em class="lineannotation"><span class="lineannotation">Verify change</span></em>
+2006: FIFO  25</pre><div class="example"><a id="retrieving_process_scheduling_policies_a"/><div class="example-title">Example 35-3. Retrieving process scheduling policies and priorities</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>procpri/sched_view.c</code></strong>
+#include &lt;sched.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int j, pol;
+    struct sched_param sp;
+
+    for (j = 1; j &lt; argc; j++) {
+        pol = sched_getscheduler(getLong(argv[j], 0, "pid"));
+        if (pol == -1)
+            errExit("sched_getscheduler");
+
+        if (sched_getparam(getLong(argv[j], 0, "pid"), &amp;sp) == -1)
+            errExit("sched_getparam");
+
+        printf("%s: %-5s %2d\n", argv[j],
+                (pol == SCHED_OTHER) ? "OTHER" :
+                (pol == SCHED_RR) ? "RR" :
+                (pol == SCHED_FIFO) ? "FIFO" :
+#ifdef SCHED_BATCH              /* Linux-specific */
+                (pol == SCHED_BATCH) ? "BATCH" :
+#endif
+#ifdef SCHED_IDLE               /* Linux-specific */
+                (pol == SCHED_IDLE) ? "IDLE" :
+#endif
+                "???", sp.sched_priority);
+    }
+
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>procpri/sched_view.c</code></strong></pre></div></div></div><div class="sect3" title="Preventing realtime processes from locking up the system"><div class="titlepage"><div><div><h4 class="title" id="preventing_realtime_processes_from_locki">Preventing realtime processes from locking up the system</h4></div></div></div><p>Since <code class="literal">SCHED_RR</code> and <code class="literal">SCHED_FIFO</code> processes preempt any
+                        lower-priority processes (e.g., the shell under which the program is run),
+                        when developing applications that use these policies, we need to be aware of
+                        the possibility that a runaway realtime process could lock up the system by
+                        hogging the CPU. Programmatically, there are a few of ways to avoid this
+                            possibility:<a id="IDX-CHP-35-5193" class="indexterm"/><a id="IDX-CHP-35-5194" class="indexterm"/><a id="IDX-CHP-35-5195" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>Establish a suitably low soft CPU time resource limit (<code class="literal">RLIMIT_CPU</code>, described in <a class="xref" href="ch36.html#details_of_specific_resource_limits" title="Details of Specific Resource Limits">Details of Specific Resource Limits</a>) using
+                                    <span class="emphasis"><em>setrlimit()</em></span>. If the process consumes too
+                                much CPU time, it will be sent a <code class="literal">SIGXCPU</code> signal, which kills the process by
+                                    default.<a id="IDX-CHP-35-5196" class="indexterm"/></p></li><li class="listitem"><p>Set an alarm timer using <span class="emphasis"><em>alarm()</em></span>. If the
+                                process continues running for a wall clock time that exceeds the
+                                number of seconds specified in the <span class="emphasis"><em>alarm()</em></span>
+                                call, then it will be killed by a <code class="literal">SIGALRM</code> signal.</p></li><li class="listitem"><p>Create a watchdog process that runs with a high realtime priority.
+                                This process can loop repeatedly, sleeping for a specified interval,
+                                and then waking and monitoring the status of other processes. Such
+                                monitoring could include measuring the value of the CPU time clock
+                                for each process (see the discussion of the
+                                    <span class="emphasis"><em>clock_getcpuclockid()</em></span> function in <a class="xref" href="ch23.html#obtaining_the_clock_id_of_a_specific_pro" title="Obtaining the Clock ID of a Specific Process or Thread">Obtaining the Clock ID of a Specific Process or Thread</a>) and
+                                checking its scheduling policy and priority using
+                                    <span class="emphasis"><em>sched_getscheduler()</em></span> and
+                                    <span class="emphasis"><em>sched_getparam()</em></span>. If a process is deemed to
+                                be misbehaving, the watchdog thread could lower the process’s
+                                priority, or stop or terminate it by sending an appropriate
+                                signal.</p></li><li class="listitem"><p>Since kernel 2.6.25, Linux provides a nonstandard resource limit,
+                                    <code class="literal">RLIMIT_RTTIME</code>, for
+                                controlling the amount of CPU time that can be consumed in a single
+                                burst by a process running under a realtime scheduling policy.
+                                Specified in microseconds, <code class="literal">RLIMIT_RTTIME</code> limits the amount of CPU time that the
+                                process may consume without performing a system call that blocks.
+                                When the process does perform such a call, the count of consumed CPU
+                                time is reset to 0. The count of consumed CPU time is not reset if
+                                the process is preempted by a higher-priority process, is scheduled
+                                off the CPU because its time slice expired (for a <code class="literal">SCHED_RR</code> process), or calls
+                                    <span class="emphasis"><em>sched_yield()</em></span> (<a class="xref" href="ch35.html#relinquishing_the_cpu" title="Relinquishing the CPU">Relinquishing the CPU</a>). If the process reaches its
+                                limit of CPU time, then, as with <code class="literal">RLIMIT_CPU</code>, it will be sent a <code class="literal">SIGXCPU</code> signal, which kills the
+                                process by default.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>The changes in kernel 2.6.25 can also help prevent runaway realtime
+                            processes from locking up the system. For details, see the kernel source
+                            file <code class="literal">Documentation/scheduler/sched-rt-group.txt</code>.</p></div></div><div class="sect3" title="Preventing child processes from inheriting privileged scheduling policies"><div class="titlepage"><div><div><h4 class="title" id="preventing_child_processes_from_inheriti">Preventing child processes from inheriting privileged scheduling
+                        policies</h4></div></div></div><p>Linux 2.6.32 added <code class="literal">SCHED_RESET_ON_FORK</code>
+                        as a value that can be specified in <span class="emphasis"><em>policy</em></span> when calling
+                            <span class="emphasis"><em>sched_setscheduler()</em></span>. This is a flag value that is
+                        ORed with one of the policies in <a class="xref" href="ch35.html#linux_realtime_and_nonrealtime_schedulin" title="Table 35-1. Linux realtime and nonrealtime scheduling policies">Table 35-1</a>. If this flag is
+                        set, then children that are created by this process using
+                            <span class="emphasis"><em>fork()</em></span> do not inherit privileged scheduling
+                        policies and priorities. The rules are as follows:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If the calling process has a realtime scheduling policy (<code class="literal">SCHED_RR</code> or <code class="literal">SCHED_FIFO</code>), then the policy in child processes is
+                                reset to the standard round-robin time-sharing policy, <code class="literal">SCHED_OTHER</code>.</p></li><li class="listitem"><p>If the process has a negative (i.e., high) nice value, then the
+                                nice value in child processes is reset to 0.</p></li></ul></div><p>The <code class="literal">SCHED_RESET_ON_FORK</code> flag was
+                        designed to be used in media-playback applications. It permits the creation
+                        of single processes that have realtime scheduling policies that can’t be
+                        passed to child processes. Using the <code class="literal">SCHED_RESET_ON_FORK</code> flag prevents the creation of fork bombs
+                        that try to evade the ceiling set by the <code class="literal">RLIMIT_RTTIME</code> resource limit by creating multiple children
+                        running under realtime scheduling policies.</p><p>Once the <code class="literal">SCHED_RESET_ON_FORK</code> flag has
+                        been enabled for a process, only a privileged process (<code class="literal">CAP_SYS_NICE</code>) can disable it. When a child
+                        process is created, its reset-on-fork flag is disabled.</p></div></div><div class="sect2" title="Relinquishing the CPU"><div class="titlepage"><div><div><h3 class="title" id="relinquishing_the_cpu">Relinquishing the CPU</h3></div></div></div><p>A realtime process may voluntarily relinquish the CPU in two ways: by invoking
+                    a system call that blocks the process (e.g., a <span class="emphasis"><em>read()</em></span> from
+                    a terminal) or by calling <span class="emphasis"><em>sched_yield()</em></span>.<a id="IDX-CHP-35-5197" class="indexterm"/><a id="IDX-CHP-35-5198" class="indexterm"/><a id="IDX-CHP-35-5199" class="indexterm"/><a id="IDX-CHP-35-5200" class="indexterm"/><a id="IDX-CHP-35-5201" class="indexterm"/><a id="IDX-CHP-35-5202" class="indexterm"/><a id="IDX-CHP-35-5203" class="indexterm"/><a id="IDX-CHP-35-5204" class="indexterm"/></p><a id="I_programlisting35_d1e98389"/><pre class="programlisting">#include &lt;sched.h&gt;
+
+int <strong class="userinput"><code>sched_yield</code></strong>(void);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The operation of <span class="emphasis"><em>sched_yield()</em></span> is simple. If there are
+                    any other queued runnable processes at the same priority level as the calling
+                    process, then the calling process is placed at the back of the queue, and the
+                    process at the head of the queue is scheduled to use the CPU. If no other
+                    runnable processes are queued at this priority, then
+                        <span class="emphasis"><em>sched_yield()</em></span> does nothing; the calling process simply
+                    continues using the CPU.</p><p>Although SUSv3 permits a possible error return from
+                        <span class="emphasis"><em>sched_yield()</em></span>, this system call always succeeds on
+                    Linux, as well as on many other UNIX implementations. Portable applications
+                    should nevertheless always check for an error return.</p><p>The use of <span class="emphasis"><em>sched_yield()</em></span> for nonrealtime processes is
+                    undefined.</p></div><div class="sect2" title="The SCHED_RR Time Slice"><div class="titlepage"><div><div><h3 class="title" id="the_sched_underscore_rr_time_slice">The <code class="literal">SCHED_RR</code> Time Slice</h3></div></div></div><p>The <span class="emphasis"><em>sched_rr_get_interval()</em></span> system call enables us to
+                    find out the length of the time slice allocated to a <code class="literal">SCHED_RR</code> process each time it is granted use of the
+                        CPU.<a id="IDX-CHP-35-5205" class="indexterm"/></p><a id="I_programlisting35_d1e98433"/><pre class="programlisting">#include &lt;sched.h&gt;
+
+int <strong class="userinput"><code>sched_rr_get_interval</code></strong>(pid_t <span class="emphasis"><em>pid</em></span>, struct timespec *<span class="emphasis"><em>tp</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>As with the other process scheduling system calls, <span class="emphasis"><em>pid</em></span>
+                    identifies the process about which we want to obtain information, and specifying
+                        <span class="emphasis"><em>pid</em></span> as 0 means the calling process. The time slice is
+                    returned in the <span class="emphasis"><em>timespec</em></span> structure pointed to by
+                        <span class="emphasis"><em>tp</em></span>:<a id="IDX-CHP-35-5206" class="indexterm"/></p><a id="I_programlisting35_d1e98466"/><pre class="programlisting">struct timespec {
+    time_t tv_sec;          /* Seconds */
+    long   tv_nsec;         /* Nanoseconds */
+};</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>On recent 2.6 kernels, the realtime round-robin time slice is 0.1
+                            seconds.<a id="IDX-CHP-35-5207" class="indexterm"/></p></div></div></div><div class="sect1" title="CPU Affinity"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="cpu_affinity">CPU Affinity</h2></div></div></div><p>When a process is rescheduled to run on a multiprocessor system, it doesn’t
+                necessarily run on the same CPU on which it last executed. The usual reason it may
+                run on another CPU is that the original CPU is already busy.<a id="IDX-CHP-35-5208" class="indexterm"/><a id="IDX-CHP-35-5209" class="indexterm"/><a id="IDX-CHP-35-5210" class="indexterm"/><a id="IDX-CHP-35-5211" class="indexterm"/><a id="IDX-CHP-35-5212" class="indexterm"/><a id="IDX-CHP-35-5213" class="indexterm"/><a id="IDX-CHP-35-5214" class="indexterm"/><a id="IDX-CHP-35-5215" class="indexterm"/><a id="IDX-CHP-35-5216" class="indexterm"/></p><p>When a process changes CPUs, there is a performance impact: in order for a line of
+                the process’s data to be loaded into the cache of the new CPU, it must first be
+                invalidated (i.e., either discarded if it is unmodified, or flushed to main memory
+                if it was modified), if present in the cache of the old CPU. (To prevent cache
+                inconsistencies, multiprocessor architectures allow data to be kept in only one CPU
+                cache at a time.) This invalidation costs execution time. Because of this
+                performance impact, the Linux (2.6) kernel tries to ensure <span class="emphasis"><em>soft</em></span>
+                CPU affinity for a process—wherever possible, the process is rescheduled to run on
+                the same CPU.<a id="IDX-CHP-35-5217" class="indexterm"/><a id="IDX-CHP-35-5218" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>A <span class="emphasis"><em>cache line</em></span> is the cache analog of a page in a virtual
+                    memory management system. It is the size of the unit used for transfers between
+                    the CPU cache and main memory. Typical line sizes range from 32 to 128 bytes.
+                    For further information, see [Schimmel, 1994] and [Drepper, 2007].<a id="IDX-CHP-35-5219" class="indexterm"/></p><p>One of the fields in the Linux-specific <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/stat</code> file displays the number of the CPU on which a process is
+                    currently executing or last executed. See the <span class="emphasis"><em>proc(5)</em></span>
+                    manual page for details.<a id="IDX-CHP-35-5220" class="indexterm"/></p></div><p>Sometimes, it is desirable to set <span class="emphasis"><em>hard</em></span> CPU affinity for a
+                process, so that it is explicitly restricted to always running on one, or a subset,
+                of the available CPUs. Among the reasons we may want to do this are the
+                following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>We can avoid the performance impacts caused by invalidation of cached
+                        data.</p></li><li class="listitem"><p>If multiple threads (or processes) are accessing the same data, then we
+                        may obtain performance benefits by confining them all to the same CPU, so
+                        that they don’t contend for the data and thus cause cache misses.</p></li><li class="listitem"><p>For a time-critical application, it may be desirable to confine most
+                        processes on the system to other CPUs, while reserving one or more CPUs for
+                        the time-critical application.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>isolcpus</em></span> kernel boot option can be used to isolate
+                    one or more CPUs from the normal kernel scheduling algorithms. The only way to
+                    move a process on or off a CPU that has been isolated is via the CPU affinity
+                    system calls described in this section. The <span class="emphasis"><em>isolcpus</em></span> boot
+                    option is the preferred method of implementing the last of the scenarios listed
+                    above. For details, see the kernel source file <code class="literal">Documentation/kernel-parameters.txt</code>.</p><p>Linux also provides a <span class="emphasis"><em>cpuset</em></span> kernel option, which can be
+                    used on systems containing large numbers of CPUs to achieve more sophisticated
+                    control over how the CPUs and memory are allocated to processes. For details,
+                    see the kernel source file <code class="literal">Documentation/cpusets.txt</code>.</p></div><p>Linux 2.6 provides a pair of nonstandard system calls to modify and retrieve the
+                hard CPU affinity of a process: <span class="emphasis"><em>sched_setaffinity()</em></span> and
+                    <span class="emphasis"><em>sched_getaffinity()</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>Many other UNIX implementations provide interfaces for controlling CPU
+                    affinity. For example, HP-UX and Solaris provide a
+                        <span class="emphasis"><em>pset_bind()</em></span> system call.<a id="IDX-CHP-35-5221" class="indexterm"/></p></div><p>The <span class="emphasis"><em>sched_setaffinity()</em></span> system call sets the CPU affinity of
+                the process specified by <span class="emphasis"><em>pid</em></span>. If <span class="emphasis"><em>pid</em></span> is 0,
+                the CPU affinity of the calling process is changed.<a id="IDX-CHP-35-5222" class="indexterm"/></p><a id="I_programlisting35_d1e98643"/><pre class="programlisting">#define _GNU_SOURCE
+#include &lt;sched.h&gt;
+
+int <strong class="userinput"><code>sched_setaffinity</code></strong>(pid_t <span class="emphasis"><em>pid</em></span>, size_t <span class="emphasis"><em>len</em></span>, cpu_set_t *<span class="emphasis"><em>set</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The CPU affinity to be assigned to the process is specified in the
+                    <span class="emphasis"><em>cpu_set_t</em></span> structure pointed to by
+                <span class="emphasis"><em>set</em></span>.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>CPU affinity is actually a per-thread attribute that can be adjusted
+                    independently for each of the threads in a thread group. If we want to change
+                    the CPU affinity of a specific thread in a multithreaded process, we can specify
+                        <span class="emphasis"><em>pid</em></span> as the value returned by a call to
+                        <span class="emphasis"><em>gettid()</em></span> in that thread. Specifying
+                        <span class="emphasis"><em>pid</em></span> as 0 means the calling thread.<a id="IDX-CHP-35-5223" class="indexterm"/></p></div><p>Although the <span class="emphasis"><em>cpu_set_t</em></span> data type is implemented as a bit
+                mask, we should treat it as an opaque structure. All manipulations of the structure
+                should be done using the macros <code class="literal">CPU_ZERO()</code>,
+                    <code class="literal">CPU_SET()</code>, <code class="literal">CPU_CLR()</code>, and <code class="literal">CPU_ISSET()</code>.<a id="IDX-CHP-35-5224" class="indexterm"/><a id="IDX-CHP-35-5225" class="indexterm"/><a id="IDX-CHP-35-5226" class="indexterm"/><a id="IDX-CHP-35-5227" class="indexterm"/></p><a id="I_programlisting35_d1e98719"/><pre class="programlisting">#define _GNU_SOURCE
+#include &lt;sched.h&gt;
+
+void <strong class="userinput"><code>CPU_ZERO</code></strong>(cpu_set_t *<span class="emphasis"><em>set</em></span>);
+void <strong class="userinput"><code>CPU_SET</code></strong>(int <span class="emphasis"><em>cpu</em></span>, cpu_set_t *<span class="emphasis"><em>set</em></span>);
+void <strong class="userinput"><code>CPU_CLR</code></strong>(int <span class="emphasis"><em>cpu</em></span>, cpu_set_t *<span class="emphasis"><em>set</em></span>);
+
+int <strong class="userinput"><code>CPU_ISSET</code></strong>(int <span class="emphasis"><em>cpu</em></span>, cpu_set_t *<span class="emphasis"><em>set</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns true (1) if <span class="emphasis"><em>cpu</em></span> is in <span class="emphasis"><em>set</em></span>,
+                    or false (0) otherwise</p></div><p>These macros operate on the CPU set pointed to by <span class="emphasis"><em>set</em></span> as
+                follows:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><code class="literal">CPU_ZERO()</code> initializes
+                            <span class="emphasis"><em>set</em></span> to be empty.</p></li><li class="listitem"><p><code class="literal">CPU_SET()</code> adds the CPU
+                            <span class="emphasis"><em>cpu</em></span> to <span class="emphasis"><em>set</em></span>.</p></li><li class="listitem"><p><code class="literal">CPU_CLR()</code> removes the CPU
+                            <span class="emphasis"><em>cpu</em></span> from <span class="emphasis"><em>set</em></span>.</p></li><li class="listitem"><p><code class="literal">CPU_ISSET()</code> returns true if the CPU
+                            <span class="emphasis"><em>cpu</em></span> is a member of <span class="emphasis"><em>set</em></span>.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>The GNU C library also provides a number of other macros for working with CPU
+                    sets. See the <span class="emphasis"><em>CPU_SET(3)</em></span> manual page for details.</p></div><p>The CPUs in a CPU set are numbered starting at 0. The <code class="literal">&lt;sched.h&gt;</code> header file defines the constant <code class="literal">CPU_SETSIZE</code> to be one greater than the maximum CPU
+                number that can be represented in a <span class="emphasis"><em>cpu_set_t</em></span> variable.
+                    <code class="literal">CPU_SETSIZE</code> has the value 1024.</p><p>The <span class="emphasis"><em>len</em></span> argument given to
+                    <span class="emphasis"><em>sched_setaffinity()</em></span> should specify the number of bytes in
+                the <span class="emphasis"><em>set</em></span> argument (i.e.,
+                <span class="emphasis"><em>sizeof(cpu_set_t)</em></span>).</p><p>The following code confines the process identified by <span class="emphasis"><em>pid</em></span> to
+                running on any CPU other than the first CPU of a four-processor system:</p><a id="I_programlisting35_d1e98851"/><pre class="programlisting">cpu_set_t set;
+
+CPU_ZERO(&amp;set);
+CPU_SET(1, &amp;set);
+CPU_SET(2, &amp;set);
+CPU_SET(3, &amp;set);
+
+sched_setaffinity(pid, CPU_SETSIZE, &amp;set);</pre><p>If the CPUs specified in <span class="emphasis"><em>set</em></span> don’t correspond to any CPUs on
+                the system, then <span class="emphasis"><em>sched_setaffinity()</em></span> fails with the error
+                    <code class="literal">EINVAL</code>.</p><p>If <span class="emphasis"><em>set</em></span> doesn’t include the CPU on which the calling process
+                is currently running, then the process is migrated to one of the CPUs in
+                    <span class="emphasis"><em>set</em></span>.</p><p>An unprivileged process may set the CPU affinity of another process only if its
+                effective user ID matches the real or effective user ID of the target process. A
+                privileged (<code class="literal">CAP_SYS_NICE</code>) process may set the CPU
+                affinity of any process.</p><p>The <span class="emphasis"><em>sched_getaffinity()</em></span> system call retrieves the CPU
+                affinity mask of the process specified by <span class="emphasis"><em>pid</em></span>. If
+                    <span class="emphasis"><em>pid</em></span> is 0, the CPU affinity mask of the calling process is
+                    returned.<a id="IDX-CHP-35-5228" class="indexterm"/></p><a id="I_programlisting35_d1e98892"/><pre class="programlisting">#define _GNU_SOURCE
+#include &lt;sched.h&gt;
+
+int <strong class="userinput"><code>sched_getaffinity</code></strong>(pid_t <span class="emphasis"><em>pid</em></span>, size_t <span class="emphasis"><em>len</em></span>, cpu_set_t *<span class="emphasis"><em>set</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The CPU affinity mask is returned in the <span class="emphasis"><em>cpu_set_t</em></span> structure
+                pointed to by <span class="emphasis"><em>set</em></span>. The <span class="emphasis"><em>len</em></span> argument should
+                be set to indicate the number of bytes in this structure (i.e.,
+                    <span class="emphasis"><em>sizeof(cpu_set_t)</em></span>). We can use the <code class="literal">CPU_ISSET()</code> macro to determine which CPUs are in the returned
+                    <span class="emphasis"><em>set</em></span>.</p><p>If the CPU affinity mask of the target process has not otherwise been modified,
+                    <span class="emphasis"><em>sched_getaffinity()</em></span> returns a set containing all of the
+                CPUs on the system.</p><p>No permission checking is performed by <span class="emphasis"><em>sched_getaffinity()</em></span>;
+                an unprivileged process can retrieve the CPU affinity mask of any process on the
+                system.</p><p>A child process created by <span class="emphasis"><em>fork()</em></span> inherits its parent’s CPU
+                affinity mask, and this mask is preserved across an
+                <span class="emphasis"><em>exec()</em></span>.</p><p>The <span class="emphasis"><em>sched_setaffinity()</em></span> and
+                    <span class="emphasis"><em>sched_getaffinity()</em></span> system calls are Linux-specific.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <code class="literal">t_sched_setaffinity.c</code> and <code class="literal">t_sched_getaffinity.c</code> programs in the <code class="literal">procpri</code> subdirectory in the source code
+                    distribution for this book demonstrate the use of
+                        <span class="emphasis"><em>sched_setaffinity()</em></span> and
+                        <span class="emphasis"><em>sched_getaffinity()</em></span>.<a id="IDX-CHP-35-5229" class="indexterm"/><a id="IDX-CHP-35-5230" class="indexterm"/></p></div></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id34">Summary</h2></div></div></div><p>The default kernel scheduling algorithm employs a round-robin time-sharing policy.
+                By default, all processes have equal access to the CPU under this policy, but we can
+                set a process’s nice value to a number in the range -20 (high priority) to +19 (low
+                priority) to cause the scheduler to favor or disfavor that process. However, even if
+                we give a process the lowest priority, it is not completely starved of the
+                CPU.</p><p>Linux also implements the POSIX realtime scheduling extensions. These allow an
+                application to precisely control the allocation of the CPU to processes. Processes
+                operating under the two realtime scheduling policies, <code class="literal">SCHED_RR</code> (round-robin) and <code class="literal">SCHED_FIFO</code> (first-in, first-out), always have priority over processes
+                operating under nonrealtime policies. Realtime processes have priorities in the
+                range 1 (low) to 99 (high). As long as it is runnable, a higher-priority process
+                completely excludes lower-priority processes from the CPU. A process operating under
+                the <code class="literal">SCHED_FIFO</code> policy maintains exclusive access
+                to the CPU until either it terminates, it voluntarily relinquishes the CPU, or it is
+                preempted because a higher-priority process became runnable. Similar rules apply to
+                the <code class="literal">SCHED_RR</code> policy, with the addition that if
+                multiple processes are running at the same priority, then the CPU is shared among
+                these processes in a round-robin fashion.</p><p>A process’s CPU affinity mask can be used to restrict the process to running on a
+                subset of the CPUs available on a multiprocessor system. This can improve the
+                performance of certain types of applications.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id47"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id48">Further information</h4></div></div></div><p>[Love, 2010] provides background detail on process priorities and
+                        scheduling on Linux. [Gallmeister, 1995] provides further information about
+                        the POSIX realtime scheduling API. Although targeted at POSIX threads, much
+                        of the discussion of the realtime scheduling API in [Butenhof, 1996] is
+                        useful background to the realtime scheduling discussion in this
+                            chapter.<a id="IDX-CHP-35-5231" class="indexterm"/><a id="IDX-CHP-35-5232" class="indexterm"/><a id="IDX-CHP-35-5233" class="indexterm"/></p><p>For further information about CPU affinity and controlling the allocation
+                        of threads to CPUs and memory nodes on multiprocessor systems, see the
+                        kernel source file <code class="literal">Documentation/cpusets.txt</code>, and the
+                            <span class="emphasis"><em>mbind(2)</em></span>, <span class="emphasis"><em>set_mempolicy(2)</em></span>,
+                        and <span class="emphasis"><em>cpuset(7)</em></span> manual pages.</p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id23">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>Implement the <span class="emphasis"><em>nice(1)</em></span> command.</p></li><li class="listitem"><p>Write a set-user-ID-<span class="emphasis"><em>root</em></span> program that is the realtime
+                        scheduling analog of <span class="emphasis"><em>nice(1)</em></span>. The command-line
+                        interface of this program should be as follows:</p><a id="I_programlisting35_d1e99054"/><pre class="programlisting"># <strong class="userinput"><code>./rtsched</code></strong> <strong class="userinput"><code><em class="replaceable"><code>policy priority command arg...</code></em></code></strong></pre><p>In the above command, <span class="emphasis"><em>policy</em></span> is
+                            <span class="emphasis"><em>r</em></span> for <code class="literal">SCHED_RR</code>
+                        or <span class="emphasis"><em>f</em></span> for <code class="literal">SCHED_FIFO</code>.
+                        This program should drop its privileged ID before execing the command, for
+                        the reasons described in <a class="xref" href="ch09.html#retrieving_and_modifying_real_comma_effe" title="Retrieving and Modifying Real, Effective, and Saved Set IDs">Retrieving and Modifying Real, Effective, and Saved Set IDs</a> and <a class="xref" href="ch38.html#be_careful_when_executing_a_program" title="Be Careful When Executing a Program">Be Careful When Executing a Program</a>.</p></li><li class="listitem"><p>Write a program that places itself under the <code class="literal">SCHED_FIFO</code> scheduling policy and then creates a child
+                        process. Both processes should execute a function that causes the process to
+                        consume a maximum of 3 seconds of CPU time. (This can be done by using a
+                        loop in which the <span class="emphasis"><em>times()</em></span> system call is repeatedly
+                        called to determine the amount of CPU time so far consumed.) After each
+                        quarter of a second of consumed CPU time, the function should print a
+                        message that displays the process ID and the amount of CPU time so far
+                        consumed. After each second of consumed CPU time, the function should call
+                            <span class="emphasis"><em>sched_yield()</em></span> to yield the CPU to the other
+                        process. (Alternatively, the processes could raise each other’s scheduling
+                        priority using <span class="emphasis"><em>sched_setparam()</em></span>.) The program’s output
+                        should demonstrate that the two processes alternately execute for 1 second
+                        of CPU time. (Note carefully the advice given in <a class="xref" href="ch35.html#modifying_and_retrieving_policies_and_pr" title="Modifying and Retrieving Policies and Priorities">Modifying and Retrieving Policies and Priorities</a> about preventing a
+                        runaway realtime process from hogging the CPU.)</p></li><li class="listitem"><p>If two processes use a pipe to exchange a large amount of data on a
+                        multiprocessor system, the communication should be faster if the processes
+                        run on the same CPU than if they run on different CPUs. The reason is that
+                        when the two processes run on the same CPU, the pipe data will be more
+                        quickly accessed because it can remain in that CPU’s cache. By contrast,
+                        when the processes run on separate CPUs, the benefits of the CPU cache are
+                        lost. If you have access to a multiprocessor system, write a program that
+                        uses <span class="emphasis"><em>sched_setaffinity()</em></span> to demonstrate this effect, by
+                        forcing the processes either onto the same CPUs or onto different CPUs.
+                            (<a class="xref" href="ch44.html" title="Chapter 44. Pipes and FIFOs">Chapter 44</a> describes the use of pipes.)</p></li></ol></div><div class="note" title="Note"><h3 class="title">Note</h3><p>The advantage in favor of processes running on the same CPU won’t hold true on
+                    hyperthreaded systems and on some modern multiprocessor architectures where the
+                    CPUs do share the cache. In these cases, the advantage will be in favor of
+                    processes running on different CPUs. Information about the CPU topology of a
+                    multiprocessor system can be obtained by inspecting the contents of the
+                    Linux-specific <code class="literal">/proc/cpuinfo</code> file.<a id="IDX-CHP-35-5234" class="indexterm"/></p></div></div></section></body></html>

@@ -1,0 +1,1620 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xmlns:m="http://www.w3.org/1998/Math/MathML" xmlns:pls="http://www.w3.org/2005/01/pronunciation-lexicon" xmlns:ssml="http://www.w3.org/2001/10/synthesis" xmlns:svg="http://www.w3.org/2000/svg"><head><title>Chapter 20. Signals: Fundamental Concepts</title><link rel="stylesheet" type="text/css" href="core.css"/><meta name="generator" content="DocBook XSL Stylesheets V1.76.1"/><link rel="up" href="index.html" title="The Linux Programming Interface"/><link rel="prev" href="ch19.html" title="Chapter 19. Monitoring File Events"/><link rel="next" href="ch21.html" title="Chapter 21. Signals: Signal Handlers"/></head><body><section class="chapter" title="Chapter 20. Signals: Fundamental Concepts" epub:type="chapter" id="signals_colon_fundamental_concepts"><div class="titlepage"><div><div><h2 class="title">Chapter 20. Signals: Fundamental Concepts</h2></div></div></div><p>This chapter and the next two chapters discuss signals. Although the fundamental
+            concepts are simple, our discussion is quite lengthy, since there are many details to
+            cover.</p><p>This chapter covers the following topics:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>the various different signals and their purposes;</p></li><li class="listitem"><p>the circumstances in which the kernel may generate a signal for a process, and
+                    the system calls that one process may use to send a signal to another
+                        process;<a id="IDX-CHP-20-2717" class="indexterm"/></p></li><li class="listitem"><p>how a process responds to a signal by default, and the means by which a
+                    process can change its response to a signal, in particular, through the use of a
+                    signal handler, a programmer-defined function that is automatically invoked on
+                    receipt of a signal;</p></li><li class="listitem"><p>the use of the process signal mask to block signals, and the associated notion
+                    of pending signals; and</p></li><li class="listitem"><p>how a process can suspend execution and wait for the delivery of a
+                    signal.</p></li></ul></div><div class="sect1" title="Concepts and Overview"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="concepts_and_overview">Concepts and Overview</h2></div></div></div><p>A <span class="emphasis"><em>signal</em></span> is a notification to a process that an event has
+                occurred. Signals are sometimes described as <span class="emphasis"><em>software
+                    interrupts</em></span>. Signals are analogous to hardware interrupts in that they
+                interrupt the normal flow of execution of a program; in most cases, it is not
+                possible to predict exactly when a signal will arrive.<a id="IDX-CHP-20-2718" class="indexterm"/><a id="IDX-CHP-20-2719" class="indexterm"/></p><p>One process can (if it has suitable permissions) send a signal to another process.
+                In this use, signals can be employed as a synchronization technique, or even as a
+                primitive form of interprocess communication (IPC). It is also possible for a
+                process to send a signal to itself. However, the usual source of many signals sent
+                to a process is the kernel. Among the types of events that cause the kernel to
+                generate a signal for a process are the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>A hardware exception occurred, meaning that the hardware detected a fault
+                        condition that was notified to the kernel, which in turn sent a
+                        corresponding signal to the process concerned. Examples of hardware
+                        exceptions include executing a malformed machine-language instruction,
+                        dividing by 0, or referencing a part of memory that is inaccessible.</p></li><li class="listitem"><p>The user typed one of the terminal special characters that generate
+                        signals. These characters include the <span class="emphasis"><em>interrupt</em></span>
+                        character (usually <span class="emphasis"><em>Control-C</em></span>) and the
+                            <span class="emphasis"><em>suspend</em></span> character (usually
+                            <span class="emphasis"><em>Control-Z</em></span>).</p></li><li class="listitem"><p>A software event occurred. For example, input became available on a file
+                        descriptor, the terminal window was resized, a timer went off, the process’s
+                        CPU time limit was exceeded, or a child of this process terminated.</p></li></ul></div><p>Each signal is defined as a unique (small) integer, starting sequentially from 1.
+                These integers are defined in <code class="literal">&lt;signal.h&gt;</code> with symbolic names of the form <code class="literal">SIGxxxx</code>. Since the actual numbers used for each signal
+                vary across implementations, it is these symbolic names that are always used in
+                programs. For example, when the user types the <span class="emphasis"><em>interrupt</em></span>
+                character, <code class="literal">SIGINT</code> (signal number 2) is delivered
+                to a process.</p><p>Signals fall into two broad categories. The first set constitutes the
+                    <span class="emphasis"><em>traditional</em></span> or <span class="emphasis"><em>standard</em></span> signals, which
+                are used by the kernel to notify processes of events. On Linux, the standard signals
+                are numbered from 1 to 31. We describe the standard signals in this chapter. The
+                other set of signals consists of the <span class="emphasis"><em>realtime</em></span> signals, whose
+                differences from standard signals are described in Section 22.8.</p><p>A signal is said to be <span class="emphasis"><em>generated</em></span> by some event. Once
+                generated, a signal is later <span class="emphasis"><em>delivered</em></span> to a process, which then
+                takes some action in response to the signal. Between the time it is generated and
+                the time it is delivered, a signal is said to be
+                    <span class="emphasis"><em>pending</em></span>.<a id="IDX-CHP-20-2720" class="indexterm"/></p><p>Normally, a pending signal is delivered to a process as soon as it is next
+                scheduled to run, or immediately if the process is already running (e.g., if the
+                process sent a signal to itself). Sometimes, however, we need to ensure that a
+                segment of code is not interrupted by the delivery of a signal. To do this, we can
+                add a signal to the process’s <span class="emphasis"><em>signal mask</em></span>—a set of signals
+                whose delivery is currently <span class="emphasis"><em>blocked</em></span>. If a signal is generated
+                while it is blocked, it remains pending until it is later unblocked (removed from
+                the signal mask). Various system calls allow a process to add and remove signals
+                from its signal mask.<a id="IDX-CHP-20-2721" class="indexterm"/><a id="IDX-CHP-20-2722" class="indexterm"/><a id="IDX-CHP-20-2723" class="indexterm"/><a id="IDX-CHP-20-2724" class="indexterm"/><a id="IDX-CHP-20-2725" class="indexterm"/></p><p>Upon delivery of a signal, a process carries out one of the following default
+                actions, depending on the signal:<a id="IDX-CHP-20-2726" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The signal is <span class="emphasis"><em>ignored</em></span>; that is, it is discarded by
+                        the kernel and has no effect on the process. (The process never even knows
+                        that it occurred.)<a id="IDX-CHP-20-2727" class="indexterm"/></p></li><li class="listitem"><p>The process is <span class="emphasis"><em>terminated</em></span> (killed). This is sometimes
+                        referred to as <span class="emphasis"><em>abnormal process termination</em></span>, as opposed
+                        to the normal process termination that occurs when a process terminates
+                        using <span class="emphasis"><em>exit()</em></span>.<a id="IDX-CHP-20-2728" class="indexterm"/></p></li><li class="listitem"><p>A <span class="emphasis"><em>core dump file</em></span> is generated, and the process is
+                        terminated. A core dump file contains an image of the virtual memory of the
+                        process, which can be loaded into a debugger in order to inspect the state
+                        of the process at the time that it terminated.<a id="IDX-CHP-20-2729" class="indexterm"/></p></li><li class="listitem"><p>The process is <span class="emphasis"><em>stopped</em></span>—execution of the process is
+                        suspended.</p></li><li class="listitem"><p>Execution of the process is <span class="emphasis"><em>resumed</em></span> after previously
+                        being stopped.</p></li></ul></div><p>Instead of accepting the default for a particular signal, a program can change the
+                action that occurs when the signal is delivered. This is known as setting the
+                    <span class="emphasis"><em>disposition</em></span> of the signal. A program can set one of the
+                following dispositions for a signal:<a id="IDX-CHP-20-2730" class="indexterm"/></p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>default action</em></span> should occur. This is useful to
+                        undo an earlier change of the disposition of the signal to something other
+                        than its default.<a id="IDX-CHP-20-2731" class="indexterm"/></p></li><li class="listitem"><p>The signal is <span class="emphasis"><em>ignored</em></span>. This is useful for a signal
+                        whose default action would be to terminate the process.</p></li><li class="listitem"><p>A <span class="emphasis"><em>signal handler</em></span> is executed.<a id="IDX-CHP-20-2732" class="indexterm"/></p></li></ul></div><p>A signal handler is a function, written by the programmer, that performs
+                appropriate tasks in response to the delivery of a signal. For example, the shell
+                has a handler for the <code class="literal">SIGINT</code> signal (generated by
+                the <span class="emphasis"><em>interrupt</em></span> character, <span class="emphasis"><em>Control-C</em></span>) that
+                causes it to stop what it is currently doing and return control to the main input
+                loop, so that the user is once more presented with the shell prompt. Notifying the
+                kernel that a handler function should be invoked is usually referred to as
+                    <span class="emphasis"><em>installing</em></span> or <span class="emphasis"><em>establishing</em></span> a signal
+                handler. When a signal handler is invoked in response to the delivery of a signal,
+                we say that the signal has been <span class="emphasis"><em>handled</em></span> or, synonymously,
+                    <span class="emphasis"><em>caught</em></span>.<a id="IDX-CHP-20-2733" class="indexterm"/></p><p>Note that it isn’t possible to set the disposition of a signal to
+                    <span class="emphasis"><em>terminate</em></span> or <span class="emphasis"><em>dump core</em></span> (unless one of
+                these is the default disposition of the signal). The nearest we can get to this is
+                to install a handler for the signal that then calls either
+                    <span class="emphasis"><em>exit()</em></span> or <span class="emphasis"><em>abort()</em></span>. The
+                    <span class="emphasis"><em>abort()</em></span> function (<a class="xref" href="ch21.html#terminating_a_process_abnormally_colon_a" title="Terminating a Process Abnormally: abort()">Terminating a Process Abnormally: <span class="emphasis"><em>abort()</em></span></a>) generates a <code class="literal">SIGABRT</code> signal for the process, which causes it to
+                dump core and terminate.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The Linux-specific <code class="literal">/proc/</code><span class="emphasis"><em>PID</em></span><code class="literal">/status</code> file contains various bit-mask fields that can be
+                    inspected to determine a process’s treatment of signals. The bit masks are
+                    displayed as hexadecimal numbers, with the least significant bit representing
+                    signal 1, the next bit to the left representing signal 2, and so on. These
+                    fields are <span class="emphasis"><em>SigPnd</em></span> (per-thread pending signals),
+                        <span class="emphasis"><em>ShdPnd</em></span> (process-wide pending signals; since Linux 2.6),
+                        <span class="emphasis"><em>SigBlk</em></span> (blocked signals), <span class="emphasis"><em>SigIgn</em></span>
+                    (ignored signals), and <span class="emphasis"><em>SigCgt</em></span> (caught signals). (The
+                    difference between the <span class="emphasis"><em>SigPnd</em></span> and
+                        <span class="emphasis"><em>ShdPnd</em></span> fields will become clear when we describe the
+                    handling of signals in multithreaded processes in Section 33.2.) The same
+                    information can also be obtained using various options to the
+                        <span class="emphasis"><em>ps(1)</em></span> command.<a id="IDX-CHP-20-2734" class="indexterm"/><a id="IDX-CHP-20-2735" class="indexterm"/></p></div><p>Signals appeared in very early UNIX implementations, but have gone through some
+                significant changes since their inception. In early implementations, signals could
+                be lost (i.e., not delivered to the target process) in certain circumstances.
+                Furthermore, although facilities were provided to block delivery of signals while
+                critical code was executed, in some circumstances, blocking was not reliable. These
+                problems were remedied in 4.2BSD, which provided so-called <span class="emphasis"><em>reliable
+                    signals</em></span>. (One further BSD innovation was the addition of extra
+                signals to support shell job control, which we describe in Section 34.7.)<a id="IDX-CHP-20-2736" class="indexterm"/><a id="IDX-CHP-20-2737" class="indexterm"/></p><p>System V also added reliable semantics to signals, but employed a model
+                incompatible with BSD. These incompatibilities were resolved only with the arrival
+                of the POSIX.1-1990 standard, which adopted a specification for reliable signals
+                largely based on the BSD model.</p><p>We consider the details of reliable and unreliable signals in <a class="xref" href="ch22.html#implementation_and_portability_of_signal" title="Implementation and Portability of signal()">Implementation and Portability of <span class="emphasis"><em>signal()</em></span></a>, and briefly describe the
+                older BSD and System V signal APIs in <a class="xref" href="ch22.html#earlier_signal_apis_open_parenthesis_sys" title="Earlier Signal APIs (System V and BSD)">Earlier Signal APIs (System V and BSD)</a>.</p></div><div class="sect1" title="Signal Types and Default Actions"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="signal_types_and_default_actions">Signal Types and Default Actions</h2></div></div></div><p>Earlier, we mentioned that the standard signals are numbered from 1 to 31 on
+                Linux. However, the Linux <span class="emphasis"><em>signal(7)</em></span> manual page lists more than
+                31 signal names. The excess names can be accounted for in a variety of ways. Some of
+                the names are simply synonyms for other names, and are defined for source
+                compatibility with other UNIX implementations. Other names are defined but unused.
+                The following list describes the various signals:<a id="IDX-CHP-20-2738" class="indexterm"/><a id="IDX-CHP-20-2739" class="indexterm"/><a id="IDX-CHP-20-2740" class="indexterm"/><a id="IDX-CHP-20-2741" class="indexterm"/><a id="IDX-CHP-20-2742" class="indexterm"/><a id="IDX-CHP-20-2743" class="indexterm"/><a id="IDX-CHP-20-2744" class="indexterm"/><a id="IDX-CHP-20-2745" class="indexterm"/><a id="IDX-CHP-20-2746" class="indexterm"/><a id="IDX-CHP-20-2747" class="indexterm"/><a id="IDX-CHP-20-2748" class="indexterm"/><a id="IDX-CHP-20-2749" class="indexterm"/><a id="IDX-CHP-20-2750" class="indexterm"/><a id="IDX-CHP-20-2751" class="indexterm"/><a id="IDX-CHP-20-2752" class="indexterm"/><a id="IDX-CHP-20-2753" class="indexterm"/><a id="IDX-CHP-20-2754" class="indexterm"/><a id="IDX-CHP-20-2755" class="indexterm"/><a id="IDX-CHP-20-2756" class="indexterm"/><a id="IDX-CHP-20-2757" class="indexterm"/><a id="IDX-CHP-20-2758" class="indexterm"/><a id="IDX-CHP-20-2759" class="indexterm"/><a id="IDX-CHP-20-2760" class="indexterm"/><a id="IDX-CHP-20-2761" class="indexterm"/><a id="IDX-CHP-20-2762" class="indexterm"/><a id="IDX-CHP-20-2763" class="indexterm"/><a id="IDX-CHP-20-2764" class="indexterm"/><a id="IDX-CHP-20-2765" class="indexterm"/><a id="IDX-CHP-20-2766" class="indexterm"/><a id="IDX-CHP-20-2767" class="indexterm"/><a id="IDX-CHP-20-2768" class="indexterm"/><a id="IDX-CHP-20-2769" class="indexterm"/><a id="IDX-CHP-20-2770" class="indexterm"/><a id="IDX-CHP-20-2771" class="indexterm"/><a id="IDX-CHP-20-2772" class="indexterm"/><a id="IDX-CHP-20-2773" class="indexterm"/><a id="IDX-CHP-20-2774" class="indexterm"/><a id="IDX-CHP-20-2775" class="indexterm"/><a id="IDX-CHP-20-2776" class="indexterm"/><a id="IDX-CHP-20-2777" class="indexterm"/><a id="IDX-CHP-20-2778" class="indexterm"/><a id="IDX-CHP-20-2779" class="indexterm"/><a id="IDX-CHP-20-2780" class="indexterm"/><a id="IDX-CHP-20-2781" class="indexterm"/><a id="IDX-CHP-20-2782" class="indexterm"/><a id="IDX-CHP-20-2783" class="indexterm"/><a id="IDX-CHP-20-2784" class="indexterm"/><a id="IDX-CHP-20-2785" class="indexterm"/><a id="IDX-CHP-20-2786" class="indexterm"/><a id="IDX-CHP-20-2787" class="indexterm"/><a id="IDX-CHP-20-2788" class="indexterm"/><a id="IDX-CHP-20-2789" class="indexterm"/><a id="IDX-CHP-20-2790" class="indexterm"/><a id="IDX-CHP-20-2791" class="indexterm"/><a id="IDX-CHP-20-2792" class="indexterm"/><a id="IDX-CHP-20-2793" class="indexterm"/><a id="IDX-CHP-20-2794" class="indexterm"/><a id="IDX-CHP-20-2795" class="indexterm"/><a id="IDX-CHP-20-2796" class="indexterm"/><a id="IDX-CHP-20-2797" class="indexterm"/><a id="IDX-CHP-20-2798" class="indexterm"/><a id="IDX-CHP-20-2799" class="indexterm"/><a id="IDX-CHP-20-2800" class="indexterm"/><a id="IDX-CHP-20-2801" class="indexterm"/><a id="IDX-CHP-20-2802" class="indexterm"/><a id="IDX-CHP-20-2803" class="indexterm"/><a id="IDX-CHP-20-2804" class="indexterm"/><a id="IDX-CHP-20-2805" class="indexterm"/><a id="IDX-CHP-20-2806" class="indexterm"/><a id="IDX-CHP-20-2807" class="indexterm"/><a id="IDX-CHP-20-2808" class="indexterm"/><a id="IDX-CHP-20-2809" class="indexterm"/><a id="IDX-CHP-20-2810" class="indexterm"/><a id="IDX-CHP-20-2811" class="indexterm"/><a id="IDX-CHP-20-2812" class="indexterm"/><a id="IDX-CHP-20-2813" class="indexterm"/><a id="IDX-CHP-20-2814" class="indexterm"/><a id="IDX-CHP-20-2815" class="indexterm"/><a id="IDX-CHP-20-2816" class="indexterm"/><a id="IDX-CHP-20-2817" class="indexterm"/><a id="IDX-CHP-20-2818" class="indexterm"/><a id="IDX-CHP-20-2819" class="indexterm"/><a id="IDX-CHP-20-2820" class="indexterm"/><a id="IDX-CHP-20-2821" class="indexterm"/><a id="IDX-CHP-20-2822" class="indexterm"/><a id="IDX-CHP-20-2823" class="indexterm"/><a id="IDX-CHP-20-2824" class="indexterm"/><a id="IDX-CHP-20-2825" class="indexterm"/></p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">SIGABRT</code>
+                    </span></dt><dd><p>A process is sent this signal when it calls the
+                                <span class="emphasis"><em>abort()</em></span> function (<a class="xref" href="ch21.html#terminating_a_process_abnormally_colon_a" title="Terminating a Process Abnormally: abort()">Terminating a Process Abnormally: <span class="emphasis"><em>abort()</em></span></a>). By default,
+                            this signal terminates the process with a core dump. This achieves the
+                            intended purpose of the <span class="emphasis"><em>abort()</em></span> call: to produce a
+                            core dump for debugging.<a id="IDX-CHP-20-2826" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGALRM</code>
+                    </span></dt><dd><p>The kernel generates this signal upon the expiration of a real-time
+                            timer set by a call to <span class="emphasis"><em>alarm()</em></span> or
+                                <span class="emphasis"><em>setitimer()</em></span>. A real-time timer is one that
+                            counts according to wall clock time (i.e., the human notion of elapsed
+                            time). For further details, see Section 23.1.<a id="IDX-CHP-20-2827" class="indexterm"/><a id="IDX-CHP-20-2828" class="indexterm"/><a id="IDX-CHP-20-2829" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGBUS</code>
+                    </span></dt><dd><p>This signal (“bus error”) is generated to indicate certain kinds of
+                            memory-access errors. One such error can occur when using memory
+                            mappings created with <span class="emphasis"><em>mmap()</em></span>, if we attempt to
+                            access an address that lies beyond the end of the underlying
+                            memory-mapped file, as described in <a class="xref" href="ch49.html#boundary_cases" title="Boundary Cases">Boundary Cases</a>.</p></dd><dt><span class="term">
+                        <code class="literal">SIGCHLD</code>
+                    </span></dt><dd><p>This signal is sent (by the kernel) to a parent process when one of
+                            its children terminates (either by calling <span class="emphasis"><em>exit()</em></span>
+                            or as a result of being killed by a signal). It may also be sent to a
+                            process when one of its children is stopped or resumed by a signal. We
+                            consider <code class="literal">SIGCHLD</code> in detail in Section
+                                26.3.<a id="IDX-CHP-20-2830" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGCLD</code>
+                    </span></dt><dd><p>This is a synonym for <code class="literal">SIGCHLD</code>.</p></dd><dt><span class="term">
+                        <code class="literal">SIGCONT</code>
+                    </span></dt><dd><p>When sent to a stopped process, this signal causes the process to
+                            resume (i.e., to be rescheduled to run at some later time). When
+                            received by a process that is not currently stopped, this signal is
+                            ignored by default. A process may catch this signal, so that it carries
+                            out some action when it resumes. This signal is covered in more detail
+                            in <a class="xref" href="ch22.html#special_cases_for_delivery_comma_disposi" title="Special Cases for Delivery, Disposition, and Handling">Special Cases for Delivery, Disposition, and Handling</a> and <a class="xref" href="ch34.html#job_control" title="Job Control">Job Control</a>.</p></dd><dt><span class="term">
+                        <code class="literal">SIGEMT</code>
+                    </span></dt><dd><p>In UNIX systems generally, this signal is used to indicate an
+                            implementation-dependent hardware error. On Linux, this signal is used
+                            only in the Sun SPARC implementation. The suffix <code class="literal">EMT</code> derives from <span class="emphasis"><em>emulator
+                                trap</em></span>, an assembler mnemonic on the Digital
+                                PDP-11.<a id="IDX-CHP-20-2831" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGFPE</code>
+                    </span></dt><dd><p>This signal is generated for certain types of arithmetic errors, such
+                            as divide-by-zero. The suffix <code class="literal">FPE</code> is
+                            an abbreviation for <span class="emphasis"><em>floating-point exception</em></span>,
+                            although this signal can also be generated for integer arithmetic
+                            errors. The precise details of when this signal is generated depend on
+                            the hardware architecture and the settings of CPU control registers. For
+                            example, on x86-32, integer divide-by-zero always yields a <code class="literal">SIGFPE</code>, but the handling of floating-point
+                            divide-by-zero depends on whether the <code class="literal">FE_DIVBYZERO</code> exception has been enabled. If this
+                            exception is enabled (using <span class="emphasis"><em>feenableexcept()</em></span>), then
+                            a floating-point divide-by-zero generates <code class="literal">SIGFPE</code>; otherwise, it yields the IEEE-standard result for
+                            the operands (a floating-point representation of infinity). See the
+                                <span class="emphasis"><em>fenv(3)</em></span> manual page and <code class="literal">&lt;fenv.h&gt;</code> for further
+                                information.<a id="IDX-CHP-20-2832" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGHUP</code>
+                    </span></dt><dd><p>When a terminal disconnect (hangup) occurs, this signal is sent to the
+                            controlling process of the terminal. We describe the concept of a
+                            controlling process and the various circumstances in which <code class="literal">SIGHUP</code> is sent in Section 34.6. A second
+                            use of <code class="literal">SIGHUP</code> is with daemons (e.g.,
+                                <span class="emphasis"><em>init</em></span>, <span class="emphasis"><em>httpd</em></span>, and
+                                <span class="emphasis"><em>inetd</em></span>). Many daemons are designed to respond to
+                            the receipt of <code class="literal">SIGHUP</code> by
+                            reinitializing themselves and rereading their configuration files. The
+                            system administrator triggers these actions by manually sending <code class="literal">SIGHUP</code> to the daemon, either by using an
+                            explicit <span class="emphasis"><em>kill</em></span> command or by executing a program or
+                            script that does the same.<a id="IDX-CHP-20-2833" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGILL</code>
+                    </span></dt><dd><p>This signal is sent to a process if it tries to execute an illegal
+                            (i.e., incorrectly formed) machine-language instruction.</p></dd><dt><span class="term">
+                        <code class="literal">SIGINFO</code>
+                    </span></dt><dd><p>On Linux, this signal name is a synonym for <code class="literal">SIGPWR</code>. On BSD systems, the <code class="literal">SIGINFO</code> signal, generated by typing
+                                <span class="emphasis"><em>Control-T</em></span>, is used to obtain status information
+                            about the foreground process group.<a id="IDX-CHP-20-2834" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGINT</code>
+                    </span></dt><dd><p>When the user types the terminal <span class="emphasis"><em>interrupt</em></span>
+                            character (usually <span class="emphasis"><em>Control-C</em></span>), the terminal driver
+                            sends this signal to the foreground process group. The default action
+                            for this signal is to terminate the process.<a id="IDX-CHP-20-2835" class="indexterm"/><a id="IDX-CHP-20-2836" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGIO</code>
+                    </span></dt><dd><p>Using the <span class="emphasis"><em>fcntl()</em></span> system call, it is possible to
+                            arrange for this signal to be generated when an I/O event (e.g., input
+                            becoming available) occurs on certain types of open file descriptors,
+                            such as those for terminals and sockets. This feature is described
+                            further in Section 63.3.</p></dd><dt><span class="term">
+                        <code class="literal">SIGIOT</code>
+                    </span></dt><dd><p>On Linux, this is a synonym for <code class="literal">SIGABRT</code>. On some other UNIX implementations, this signal
+                            indicates an implementation-defined hardware fault.</p></dd><dt><span class="term">
+                        <code class="literal">SIGKILL</code>
+                    </span></dt><dd><p>This is the sure <span class="emphasis"><em>kill</em></span> signal. It can’t be
+                            blocked, ignored, or caught by a handler, and thus always terminates a
+                            process.</p></dd><dt><span class="term">
+                        <code class="literal">SIGLOST</code>
+                    </span></dt><dd><p>This signal name exists on Linux, but is unused. On some other UNIX
+                            implementations, the NFS client sends this signal to local processes
+                            holding locks if the NSF client fails to regain locks held by the those
+                            processes following the recovery of a remote NFS server that crashed.
+                            (This feature is not standardized in NFS specifications.)</p></dd><dt><span class="term">
+                        <code class="literal">SIGPIPE</code>
+                    </span></dt><dd><p>This signal is generated when a process tries to write to a pipe, a
+                            FIFO, or a socket for which there is no corresponding reader process.
+                            This normally occurs because the reading process has closed its file
+                            descriptor for the IPC channel. See <a class="xref" href="ch44.html#creating_and_using_pipes" title="Creating and Using Pipes">Creating and Using Pipes</a> for further details.<a id="IDX-CHP-20-2837" class="indexterm"/><a id="IDX-CHP-20-2838" class="indexterm"/><a id="IDX-CHP-20-2839" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGPOLL</code>
+                    </span></dt><dd><p>This signal, which is derived from System V, is a synonym for <code class="literal">SIGIO</code> on Linux.</p></dd><dt><span class="term">
+                        <code class="literal">SIGPROF</code>
+                    </span></dt><dd><p>The kernel generates this signal upon the expiration of a profiling
+                            timer set by a call to <span class="emphasis"><em>setitimer()</em></span> (<a class="xref" href="ch23.html#interval_timers" title="Interval Timers">Interval Timers</a>). A profiling timer is one that counts
+                            the CPU time used by a process. Unlike a virtual timer (see <code class="literal">SIGVTALRM</code> below), a profiling timer counts
+                            CPU time used in both user mode and kernel mode.<a id="IDX-CHP-20-2840" class="indexterm"/><a id="IDX-CHP-20-2841" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGPWR</code>
+                    </span></dt><dd><p>This is the <span class="emphasis"><em>power failure</em></span> signal. On systems that
+                            have an uninterruptible power supply (UPS), it is possible to set up a
+                            daemon process that monitors the backup battery level in the event of a
+                            power failure. If the battery power is about to run out (after an
+                            extended power outage), then the monitoring process sends <code class="literal">SIGPWR</code> to the <span class="emphasis"><em>init</em></span>
+                            process, which interprets this signal as a request to shut down the
+                            system in a quick and orderly fashion.</p></dd><dt><span class="term">
+                        <code class="literal">SIGQUIT</code>
+                    </span></dt><dd><p>When the user types the <span class="emphasis"><em>quit</em></span> character (usually
+                                <span class="emphasis"><em>Control-\</em></span>) on the keyboard, this signal is sent
+                            to the foreground process group. By default, this signal terminates a
+                            process and causes it to produce a core dump, which can then be used for
+                            debugging. Using <code class="literal">SIGQUIT</code> in this
+                            manner is useful with a program that is stuck in an infinite loop or is
+                            otherwise not responding. By typing <span class="emphasis"><em>Control-\</em></span> and
+                            then loading the resulting core dump with the <span class="emphasis"><em>gdb</em></span>
+                            debugger and using the <span class="emphasis"><em>backtrace</em></span> command to obtain
+                            a stack trace, we can find out which part of the program code was
+                            executing. ([Matloff, 2008] describes the use of
+                                <span class="emphasis"><em>gdb</em></span>.)</p></dd><dt><span class="term">
+                        <code class="literal">SIGSEGV</code>
+                    </span></dt><dd><p>This very popular signal is generated when a program makes an invalid
+                            memory reference. A memory reference may be invalid because the
+                            referenced page doesn’t exist (e.g., it lies in an unmapped area
+                            somewhere between the heap and the stack), the process tried to update a
+                            location in read-only memory (e.g., the program text segment or a region
+                            of mapped memory marked read-only), or the process tried to access a
+                            part of kernel memory while running in user mode (<a class="xref" href="ch02.html#the_core_operating_system_colon_the_kern" title="The Core Operating System: The Kernel">The Core Operating System: The Kernel</a>). In C, these
+                            events often result from dereferencing a pointer containing a bad
+                            address (e.g., an uninitialized pointer) or passing an invalid argument
+                            in a function call. The name of this signal derives from the term
+                                <span class="emphasis"><em>segmentation violation</em></span>.<a id="IDX-CHP-20-2842" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGSTKFLT</code>
+                    </span></dt><dd><p>Documented in <span class="emphasis"><em>signal(7)</em></span> as “stack fault on
+                            coprocessor,” this signal is defined, but is unused on Linux.</p></dd><dt><span class="term">
+                        <code class="literal">SIGSTOP</code>
+                    </span></dt><dd><p>This is the <span class="emphasis"><em>sure stop</em></span> signal. It can’t be
+                            blocked, ignored, or caught by a handler; thus, it always stops a
+                            process.</p></dd><dt><span class="term">
+                        <code class="literal">SIGSYS</code>
+                    </span></dt><dd><p>This signal is generated if a process makes a “bad” system call. This
+                            means that the process executed an instruction that was interpreted as a
+                            system call trap, but the associated system call number was not valid
+                            (refer to <a class="xref" href="ch03.html#system_calls" title="System Calls">System Calls</a>).</p></dd><dt><span class="term">
+                        <code class="literal">SIGTERM</code>
+                    </span></dt><dd><p>This is the standard signal used for terminating a process and is the
+                            default signal sent by the <span class="emphasis"><em>kill</em></span> and
+                                <span class="emphasis"><em>killall</em></span> commands. Users sometimes explicitly
+                            send the <code class="literal">SIGKILL</code> signal to a process
+                            using <span class="emphasis"><em>kill -KILL</em></span> or <span class="emphasis"><em>kill -9</em></span>.
+                            However, this is generally a mistake. A well-designed application will
+                            have a handler for <code class="literal">SIGTERM</code> that
+                            causes the application to exit gracefully, cleaning up temporary files
+                            and releasing other resources beforehand. Killing a process with
+                                <code class="literal">SIGKILL</code> bypasses the <code class="literal">SIGTERM</code> handler. Thus, we should always
+                            first attempt to terminate a process using <code class="literal">SIGTERM</code>, and reserve <code class="literal">SIGKILL</code> as a last resort for killing runaway processes
+                            that don’t respond to <code class="literal">SIGTERM</code>.<a id="IDX-CHP-20-2843" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGTRAP</code>
+                    </span></dt><dd><p>This signal is used to implement debugger breakpoints and system call
+                            tracing, as performed by <span class="emphasis"><em>strace(1)</em></span> (<a class="xref" href="apa.html" title="Appendix A. Tracing System Calls">Appendix A</a>). See the
+                                <span class="emphasis"><em>ptrace(2)</em></span> manual page for further
+                            information.</p></dd><dt><span class="term">
+                        <code class="literal">SIGTSTP</code>
+                    </span></dt><dd><p>This is the job-control <span class="emphasis"><em>stop</em></span> signal, sent to stop
+                            the foreground process group when the user types the
+                                <span class="emphasis"><em>suspend</em></span> character (usually
+                                <span class="emphasis"><em>Control-Z</em></span>) on the keyboard. <a class="xref" href="ch34.html" title="Chapter 34. Process Groups, Sessions, and Job Control">Chapter 34</a> describes
+                            process groups (jobs) and job control in detail, as well as details of
+                            when and how a program may need to handle this signal. The name of this
+                            signal derives from “terminal stop.”<a id="IDX-CHP-20-2844" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGTTIN</code>
+                    </span></dt><dd><p>When running under a job-control shell, the terminal driver sends this
+                            signal to a background process group when it attempts to
+                                <span class="emphasis"><em>read()</em></span> from the terminal. This signal stops a
+                            process by default.</p></dd><dt><span class="term">
+                        <code class="literal">SIGTTOU</code>
+                    </span></dt><dd><p>This signal serves an analogous purpose to <code class="literal">SIGTTIN</code>, but for terminal output by background jobs. When
+                            running under a job-control shell, if the <code class="literal">TOSTOP</code> (<span class="emphasis"><em>terminal output stop</em></span>) option
+                            has been enabled for the terminal (perhaps via the command
+                                <span class="emphasis"><em>stty tostop</em></span>), the terminal driver sends
+                                <code class="literal">SIGTTOU</code> to a background process
+                            group when it attempts to <span class="emphasis"><em>write()</em></span> to the terminal
+                            (see <a class="xref" href="ch34.html#using_job_control_within_the_shell" title="Using Job Control Within the Shell">Using Job Control Within the Shell</a>). This signal
+                            stops a process by default.</p></dd><dt><span class="term">
+                        <code class="literal">SIGUNUSED</code>
+                    </span></dt><dd><p>As the name implies, this signal is unused. On Linux 2.4 and later,
+                            this signal name is synonymous with <code class="literal">SIGSYS</code> on many architectures. In other words, this signal
+                            number is no longer unused on those architectures, although the signal
+                            name remains for backward compatibility.</p></dd><dt><span class="term">
+                        <code class="literal">SIGURG</code>
+                    </span></dt><dd><p>This signal is sent to a process to indicate the presence of
+                                <span class="emphasis"><em>out-of-band</em></span> (also known as
+                                <span class="emphasis"><em>urgent</em></span>) data on a socket (<a class="xref" href="ch61.html#out-of-band_data" title="Out-of-Band Data">Out-of-Band Data</a>).</p></dd><dt><span class="term">
+                        <code class="literal">SIGUSR1</code>
+                    </span></dt><dd><p>This signal and <code class="literal">SIGUSR2</code> are
+                            available for programmer-defined purposes. The kernel never generates
+                            these signals for a process. Processes may use these signals to notify
+                            one another of events or to synchronize with each other. In early UNIX
+                            implementations, these were the only two signals that could be freely
+                            used in applications. (In fact, processes can send one another any
+                            signal, but this has the potential for confusion if the kernel also
+                            generates one of the signals for a process.) Modern UNIX implementations
+                            provide a large set of realtime signals that are also available for
+                            programmer-defined purposes (<a class="xref" href="ch22.html#realtime_signals" title="Realtime Signals">Realtime Signals</a>).</p></dd><dt><span class="term">
+                        <code class="literal">SIGUSR2</code>
+                    </span></dt><dd><p>See the description of <code class="literal">SIGUSR1</code>.</p></dd><dt><span class="term">
+                        <code class="literal">SIGVTALRM</code>
+                    </span></dt><dd><p>The kernel generates this signal upon expiration of a virtual timer
+                            set by a call to <span class="emphasis"><em>setitimer()</em></span> (<a class="xref" href="ch23.html#interval_timers" title="Interval Timers">Interval Timers</a>). A virtual timer is one that counts the
+                            user-mode CPU time used by a process.<a id="IDX-CHP-20-2845" class="indexterm"/><a id="IDX-CHP-20-2846" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGWINCH</code>
+                    </span></dt><dd><p>In a windowing environment, this signal is sent to the foreground
+                            process group when the terminal window size changes (as a consequence
+                            either of the user manually resizing it, or of a program resizing it via
+                            a call to <span class="emphasis"><em>ioctl()</em></span>, as described in <a class="xref" href="ch62.html#terminal_window_size" title="Terminal Window Size">Terminal Window Size</a>). By installing a handler for this
+                            signal, programs such as <span class="emphasis"><em>vi</em></span> and
+                                <span class="emphasis"><em>less</em></span> can know to redraw their output after a
+                            change in window size.<a id="IDX-CHP-20-2847" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SIGXCPU</code>
+                    </span></dt><dd><p>This signal is sent to a process when it exceeds its CPU time resource
+                            limit (<code class="literal">RLIMIT_CPU</code>, described in <a class="xref" href="ch36.html#details_of_specific_resource_limits" title="Details of Specific Resource Limits">Details of Specific Resource Limits</a>).</p></dd><dt><span class="term">
+                        <code class="literal">SIGXFSZ</code>
+                    </span></dt><dd><p>This signal is sent to a process if it attempts (using
+                                <span class="emphasis"><em>write()</em></span> or <span class="emphasis"><em>truncate()</em></span>) to
+                            increase the size of a file beyond the process’s file size resource
+                            limit (<code class="literal">RLIMIT_FSIZE</code>, described in
+                                <a class="xref" href="ch36.html#details_of_specific_resource_limits" title="Details of Specific Resource Limits">Details of Specific Resource Limits</a>).<a id="IDX-CHP-20-2848" class="indexterm"/><a id="IDX-CHP-20-2849" class="indexterm"/></p></dd></dl></div><p><a class="xref" href="ch20.html#linux_signals" title="Table 20-1. Linux signals">Table 20-1</a> summarizes a range of information about signals on
+                Linux. Note the following points about this table:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The <span class="emphasis"><em>signal number</em></span> column shows the number assigned to
+                        this signal on various hardware architectures. Except where otherwise
+                        indicated, signals have the same number on all architectures. Architectural
+                        differences in signal numbers are indicated in parentheses, and occur on the
+                        Sun SPARC and SPARC64 (S), HP/Compaq/Digital Alpha (A), MIPS (M), and HP
+                        PA-RISC (P) architectures. In this column, <span class="emphasis"><em>undef</em></span>
+                        indicates that a symbol is undefined on the indicated architectures.</p></li><li class="listitem"><p>The <span class="emphasis"><em>SUSv3</em></span> column indicates whether the signal is
+                        standardized in SUSv3.</p></li><li class="listitem"><p>The <span class="emphasis"><em>Default</em></span> column indicates the default action of
+                        the signal: <span class="emphasis"><em>term</em></span> means that the signal terminates the
+                        process, <span class="emphasis"><em>core</em></span> means that the process produces a core
+                        dump file and terminates, <span class="emphasis"><em>ignore</em></span> means that the signal
+                        is ignored, <span class="emphasis"><em>stop</em></span> means that the signal stops the
+                        process, and <span class="emphasis"><em>cont</em></span> means that the signal resumes a
+                        stopped process.</p></li></ul></div><div class="note" title="Note"><h3 class="title">Note</h3><p>Certain of the signals listed previously are not shown in <a class="xref" href="ch20.html#linux_signals" title="Table 20-1. Linux signals">Table 20-1</a>: <code class="literal">SIGCLD</code>
+                    (synonym for <code class="literal">SIGCHLD</code>), <code class="literal">SIGINFO</code> (unused), <code class="literal">SIGIOT</code> (synonym for <code class="literal">SIGABRT</code>),
+                        <code class="literal">SIGLOST</code> (unused), and <code class="literal">SIGUNUSED</code> (synonym for <code class="literal">SIGSYS</code> on many architectures).</p></div><div class="table"><a id="linux_signals"/><div class="table-title">Table 20-1. Linux signals</div><div class="table-contents"><table style="border-collapse: collapse; border-top: 0.5pt solid ; border-bottom: 0.5pt solid ; border-left: 0.5pt solid ; border-right: 0.5pt solid ; "><colgroup><col class="col1"/><col class="col2"/><col class="col3"/><col class="col4"/><col class="col5"/></colgroup><thead><tr><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Name</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Signal number</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Description</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>SUSv3</p>
+                            </td><td style="text-align: left; vertical-align: bottom; border-bottom: 0.5pt solid ; ">
+                                <p>Default</p>
+                            </td></tr></thead><tbody><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGABRT</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>6</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Abort process</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>core</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGALRM</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>14</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Real-time timer expired</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGBUS</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>7 (SAMP=10)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Memory access error</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>core</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGCHLD</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>17 (SA=20, MP=18)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Child terminated or stopped</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>ignore</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGCONT</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>18 (SA=19, M=25, P=26)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Continue if stopped</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>cont</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGEMT</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>undef (SAMP=7)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Hardware fault</p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGFPE</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>8</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Arithmetic exception</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>core</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGHUP</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>1</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Hangup</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGILL</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>4</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Illegal instruction</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>core</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGINT</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>2</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Terminal interrupt</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p><code class="literal">SIGIO</code>/<code class="literal">SIGPOLL</code></p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>29 (SA=23, MP=22)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>I/O possible</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGKILL</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>9</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Sure kill</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGPIPE</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>13</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Broken pipe</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGPROF</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>27 (M=29, P=21)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Profiling timer expired</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGPWR</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>30 (SA=29, MP=19)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Power about to fail</p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGQUIT</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>3</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Terminal quit</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>core</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGSEGV</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>11</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Invalid memory reference</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>core</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGSTKFLT</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>16 (SAM=undef, P=36)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Stack fault on coprocessor</p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGSTOP</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>19 (SA=17, M=23, P=24)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Sure stop</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>stop</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGSYS</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>31 (SAMP=12)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Invalid system call</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>core</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGTERM</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>15</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Terminate process</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGTRAP</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>5</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Trace/breakpoint trap</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>core</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGTSTP</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>20 (SA=18, M=24, P=25)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Terminal stop</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>stop</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGTTIN</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>21 (M=26, P=27)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Terminal read from BG</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>stop</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGTTOU</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>22 (M=27, P=28)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Terminal write from BG</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>stop</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGURG</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>23 (SA=16, M=21, P=29)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Urgent data on socket</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>ignore</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGUSR1</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>10 (SA=30, MP=16)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>User-defined signal 1</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGUSR2</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>12 (SA=31, MP=17)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>User-defined signal 2</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGVTALRM</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>26 (M=28, P=20)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Virtual timer expired</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>term</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGWINCH</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>28 (M=20, P=23)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>Terminal window size change</p>
+                            </td><td style="border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; "> </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>ignore</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGXCPU</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>24 (M=30, P=33)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>CPU time limit exceeded</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; border-bottom: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; border-bottom: 0.5pt solid ; ">
+                                <p>core</p>
+                            </td></tr><tr><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>
+                                    <code class="literal">SIGXFSZ</code>
+                                </p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>25 (M=31, P=34)</p>
+                            </td><td style="text-align: left; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>File size limit exceeded</p>
+                            </td><td style="text-align: center; vertical-align: top; border-right: 0.5pt solid ; ">
+                                <p>•</p>
+                            </td><td style="text-align: left; vertical-align: top; ">
+                                <p>core</p>
+                            </td></tr></tbody></table></div></div><p>Note the following points regarding the default behavior shown for certain signals
+                in <a class="xref" href="ch20.html#linux_signals" title="Table 20-1. Linux signals">Table 20-1</a>:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>On Linux 2.2, the default action for the signals <code class="literal">SIGXCPU</code>, <code class="literal">SIGXFSZ</code>, <code class="literal">SIGSYS</code>, and <code class="literal">SIGBUS</code> is to terminate the process without producing a core
+                        dump. From kernel 2.4 onward, Linux conforms to the requirements of SUSv3,
+                        with these signals causing termination with a core dump. On several other
+                        UNIX implementations, <code class="literal">SIGXCPU</code> and
+                            <code class="literal">SIGXFSZ</code> are treated in the same way
+                        as on Linux 2.2.</p></li><li class="listitem"><p><code class="literal">SIGPWR</code> is typically ignored by default
+                        on those other UNIX implementations where it appears.</p></li><li class="listitem"><p><code class="literal">SIGIO</code> is ignored by default on several
+                        UNIX implementations (particularly BSD derivatives).</p></li><li class="listitem"><p>Although not specified by any standards, <code class="literal">SIGEMT</code> appears on most UNIX implementations. However, this
+                        signal typically results in termination with a core dump on other
+                        implementations.</p></li><li class="listitem"><p>In SUSv1, the default action for <code class="literal">SIGURG</code>
+                        was specified as process termination, and this is the default in some older
+                        UNIX implementations. SUSv2 adopted the current specification
+                        (ignore).</p></li></ul></div></div><div class="sect1" title="Changing Signal Dispositions: signal()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="changing_signal_dispositions_colon_signa">Changing Signal Dispositions: <span class="emphasis"><em>signal()</em></span></h2></div></div></div><p>UNIX systems provide two ways of changing the disposition of a signal:
+                    <span class="emphasis"><em>signal()</em></span> and <span class="emphasis"><em>sigaction()</em></span>. The
+                    <span class="emphasis"><em>signal()</em></span> system call, which is described in this section,
+                was the original API for setting the disposition of a signal, and it provides a
+                simpler interface than <span class="emphasis"><em>sigaction()</em></span>. On the other hand,
+                    <span class="emphasis"><em>sigaction()</em></span> provides functionality that is not available
+                with <span class="emphasis"><em>signal()</em></span>. Furthermore, there are variations in the
+                behavior of <span class="emphasis"><em>signal()</em></span> across UNIX implementations (<a class="xref" href="ch22.html#implementation_and_portability_of_signal" title="Implementation and Portability of signal()">Implementation and Portability of <span class="emphasis"><em>signal()</em></span></a>), which mean that it should
+                never be used for establishing signal handlers in portable programs. Because of
+                these portability issues, <span class="emphasis"><em>sigaction()</em></span> is the (strongly)
+                preferred API for establishing a signal handler. After we explain the use of
+                    <span class="emphasis"><em>sigaction()</em></span> in <a class="xref" href="ch20.html#changing_signal_dispositions_colon_sigac" title="Changing Signal Dispositions: sigaction()">Changing Signal Dispositions: <span class="emphasis"><em>sigaction()</em></span></a>, we’ll always employ that
+                call when establishing signal handlers in our example programs.<a id="IDX-CHP-20-2851" class="indexterm"/><a id="IDX-CHP-20-2852" class="indexterm"/><a id="IDX-CHP-20-2853" class="indexterm"/><a id="IDX-CHP-20-2854" class="indexterm"/><a id="IDX-CHP-20-2855" class="indexterm"/><a id="IDX-CHP-20-2850" class="indexterm"/><a id="IDX-CHP-20-2856" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Although documented in section 2 of the Linux manual pages,
+                        <span class="emphasis"><em>signal()</em></span> is actually implemented in
+                        <span class="emphasis"><em>glibc</em></span> as a library function layered on top of the
+                        <span class="emphasis"><em>sigaction()</em></span> system call.</p></div><a id="I_programlisting20_d1e53965"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+void ( *<strong class="userinput"><code>signal</code></strong>(int <span class="emphasis"><em>sig</em></span>, void (*<span class="emphasis"><em>handler</em></span>)(int)) ) (int);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns previous signal disposition on success, or <code class="literal">SIG_ERR</code> on error</p></div><p>The function prototype for <span class="emphasis"><em>signal()</em></span> requires some decoding.
+                The first argument, <span class="emphasis"><em>sig</em></span>, identifies the signal whose
+                disposition we wish to change. The second argument, <span class="emphasis"><em>handler</em></span>, is
+                the address of the function that should be called when this signal is delivered.
+                This function returns nothing (<span class="emphasis"><em>void</em></span>) and takes one integer
+                argument. Thus, a signal handler has the following general form:</p><a id="I_programlisting20_d1e53996"/><pre class="programlisting">void
+handler(int sig)
+{
+    /* Code for the handler */
+}</pre><p>We describe the purpose of the <span class="emphasis"><em>sig</em></span> argument to the handler
+                function in Section 20.4.</p><p>The return value of <span class="emphasis"><em>signal()</em></span> is the previous disposition of
+                the signal. Like the <span class="emphasis"><em>handler</em></span> argument, this is a pointer to a
+                function returning nothing and taking one integer argument. In other words, we could
+                write code such as the following to temporarily establish a handler for a signal,
+                and then reset the disposition of the signal to whatever it was previously:</p><a id="I_programlisting20_d1e54011"/><pre class="programlisting">void (*oldHandler)(int);
+
+oldHandler = signal(SIGINT, newHandler);
+if (oldHandler == SIG_ERR)
+    errExit("signal");
+
+/* Do something else here. During this time, if SIGINT is
+   delivered, newHandler will be used to handle the signal. */
+
+if (signal(SIGINT, oldHandler) == SIG_ERR)
+    errExit("signal");</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>It is not possible to use <span class="emphasis"><em>signal()</em></span> to retrieve the
+                    current disposition of a signal without at the same time changing that
+                    disposition. To do that, we must use <span class="emphasis"><em>sigaction()</em></span>.</p></div><p>We can make the prototype for <span class="emphasis"><em>signal()</em></span> much more
+                comprehensible by using the following type definition for a pointer to a signal
+                handler function:<a id="IDX-CHP-20-2857" class="indexterm"/></p><a id="I_programlisting20_d1e54031"/><pre class="programlisting">typedef void (*sighandler_t)(int);</pre><p>This enables us to rewrite the prototype for <span class="emphasis"><em>signal()</em></span> as
+                follows:</p><a id="I_programlisting20_d1e54038"/><pre class="programlisting">sighandler_t signal(int sig, sighandler_t handler);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>If the <code class="literal">_GNU_SOURCE</code> feature test macro is
+                    defined, then <span class="emphasis"><em>glibc</em></span> exposes the nonstandard
+                        <span class="emphasis"><em>sighandler_t</em></span> data type in the <code class="literal">&lt;signal.h&gt;</code> header file.<a id="IDX-CHP-20-2858" class="indexterm"/></p></div><p>Instead of specifying the address of a function as the
+                    <span class="emphasis"><em>handler</em></span> argument of <span class="emphasis"><em>signal()</em></span>, we can
+                specify one of the following values:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">SIG_DFL</code>
+                    </span></dt><dd><p>Reset the disposition of the signal to its default (<a class="xref" href="ch20.html#linux_signals" title="Table 20-1. Linux signals">Table 20-1</a>). This is useful for undoing the effect of
+                            an earlier call to <span class="emphasis"><em>signal()</em></span> that changed the
+                            disposition for the signal.</p></dd><dt><span class="term">
+                        <code class="literal">SIG_IGN</code>
+                    </span></dt><dd><p>Ignore the signal. If the signal is generated for this process, the
+                            kernel silently discards it. The process never even knows that the
+                            signal occurred.</p></dd></dl></div><p>A successful call to <span class="emphasis"><em>signal()</em></span> returns the previous
+                disposition of the signal, which may be the address of a previously installed
+                handler function, or one of the constants <code class="literal">SIG_DFL</code>
+                or <code class="literal">SIG_IGN</code>. On error,
+                    <span class="emphasis"><em>signal()</em></span> returns the value <code class="literal">SIG_ERR</code>.</p></div><div class="sect1" title="Introduction to Signal Handlers"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="introduction_to_signal_handlers">Introduction to Signal Handlers</h2></div></div></div><p>A <span class="emphasis"><em>signal handler</em></span> (also called a <span class="emphasis"><em>signal
+                    catcher</em></span>) is a function that is called when a specified signal is
+                delivered to a process. We describe the fundamentals of signal handlers in this
+                section, and then go into the details in <a class="xref" href="ch21.html" title="Chapter 21. Signals: Signal Handlers">Chapter 21</a>.<a id="IDX-CHP-20-2859" class="indexterm"/><a id="IDX-CHP-20-2860" class="indexterm"/><a id="IDX-CHP-20-2861" class="indexterm"/><a id="IDX-CHP-20-2862" class="indexterm"/><a id="IDX-CHP-20-2863" class="indexterm"/><a id="IDX-CHP-20-2864" class="indexterm"/><a id="IDX-CHP-20-2865" class="indexterm"/><a id="IDX-CHP-20-2866" class="indexterm"/><a id="IDX-CHP-20-2867" class="indexterm"/><a id="IDX-CHP-20-2868" class="indexterm"/></p><p>Invocation of a signal handler may interrupt the main program flow at any time;
+                the kernel calls the handler on the process’s behalf, and when the handler returns,
+                execution of the program resumes at the point where the handler interrupted it. This
+                sequence is illustrated in <a class="xref" href="ch20.html#signal_delivery_and_handler_execution" title="Figure 20-1. Signal delivery and handler execution">Figure 20-1</a>.</p><div class="figure"><a id="signal_delivery_and_handler_execution"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject20_d1e54187"/><img src="figs/web/20-1_SIG-A-handling.png.jpg" alt="Signal delivery and handler execution"/></div></div><div class="figure-title">Figure 20-1. Signal delivery and handler execution</div></div><p>Although signal handlers can do virtually anything, they should, in general, be
+                designed to be as simple as possible. We expand on this point in Section
+                21.1.</p><div class="example"><a id="installing_a_handler_for_sigint"/><div class="example-title">Example 20-1. Installing a handler for <code class="literal">SIGINT</code></div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/ouch.c</code></strong>
+#include &lt;signal.h&gt;
+#include "tlpi_hdr.h"
+
+static void
+sigHandler(int sig)
+{
+    printf("Ouch!\n");                  /* UNSAFE (see Section 21.1.2) */
+}
+
+int
+main(int argc, char *argv[])
+{
+    int j;
+
+    if (signal(SIGINT, sigHandler) == SIG_ERR)
+        errExit("signal");
+
+    for (j = 0; ; j++) {
+        printf("%d\n", j);
+        sleep(3);                       /* Loop slowly... */
+    }
+}
+     <strong class="userinput"><code>signals/ouch.c</code></strong></pre></div></div><p><a class="xref" href="ch20.html#installing_a_handler_for_sigint" title="Example 20-1. Installing a handler for SIGINT">Example 20-1</a> (in <a class="xref" href="ch20.html#sending_signals_colon_kill_open_parenthe" title="Sending Signals: kill()">Sending Signals: <span class="emphasis"><em>kill()</em></span></a>) shows a simple example of
+                a signal handler function and a main program that establishes it as the handler for
+                the <code class="literal">SIGINT</code> signal. (The terminal driver generates
+                this signal when we type the terminal <span class="emphasis"><em>interrupt</em></span> character,
+                usually <span class="emphasis"><em>Control-C</em></span>.) The handler simply prints a message and
+                returns.</p><p>The main program continuously loops. On each iteration, the program increments a
+                counter whose value it prints, and then the program sleeps for a few seconds. (To
+                sleep in this manner, we use the <span class="emphasis"><em>sleep()</em></span> function, which
+                suspends the execution of its caller for a specified number of seconds. We describe
+                this function in <a class="xref" href="ch23.html#low-resolution_sleeping_colon_sleep_open" title="Low-Resolution Sleeping: sleep()">Low-Resolution Sleeping: <span class="emphasis"><em>sleep()</em></span></a>.)</p><p>When we run the program in <a class="xref" href="ch20.html#installing_a_handler_for_sigint" title="Example 20-1. Installing a handler for SIGINT">Example 20-1</a>, we
+                see the following:</p><a id="I_programlisting20_d1e54230"/><pre class="programlisting">$ <strong class="userinput"><code>./ouch</code></strong>
+0                         <em class="lineannotation"><span class="lineannotation">Main program loops, displaying successive integers</span></em>
+<em class="lineannotation"><span class="lineannotation">Type Control-C</span></em>
+Ouch!                     <em class="lineannotation"><span class="lineannotation">Signal handler is executed, and returns</span></em>
+1                         <em class="lineannotation"><span class="lineannotation">Control has returned to main program</span></em>
+2
+<em class="lineannotation"><span class="lineannotation">Type Control-C again</span></em>
+Ouch!
+3
+<em class="lineannotation"><span class="lineannotation">Type Control-\ (the terminal quit character)</span></em>
+Quit (core dumped)</pre><p>When the kernel invokes a signal handler, it passes the number of the signal that
+                caused the invocation as an integer argument to the handler. (This is the
+                    <span class="emphasis"><em>sig</em></span> argument in the handler of <a class="xref" href="ch20.html#installing_a_handler_for_sigint" title="Example 20-1. Installing a handler for SIGINT">Example 20-1</a>). If a signal handler catches only
+                one type of signal, then this argument is of little use. We can, however, establish
+                the same handler to catch different types of signals and use this argument to
+                determine which signal caused the handler to be invoked.</p><p>This is illustrated in <a class="xref" href="ch20.html#establishing_the_same_handler_for_two_di" title="Example 20-2. Establishing the same handler for two different signals">Example 20-2</a>,
+                a program that establishes the same handler for <code class="literal">SIGINT</code> and <code class="literal">SIGQUIT</code>. (<code class="literal">SIGQUIT</code> is generated by the terminal driver when we
+                type the terminal <span class="emphasis"><em>quit</em></span> character, usually
+                    <span class="emphasis"><em>Control-\</em></span>.) The code of the handler distinguishes the two
+                signals by examining the <span class="emphasis"><em>sig</em></span> argument, and takes different
+                actions for each signal. In the <span class="emphasis"><em>main()</em></span> function, we use
+                    <span class="emphasis"><em>pause()</em></span> (described in <a class="xref" href="ch20.html#waiting_for_a_signal_colon_pause_open_pa" title="Waiting for a Signal: pause()">Waiting for a Signal: <span class="emphasis"><em>pause()</em></span></a>) to block the process until
+                a signal is caught.</p><p>The following shell session log demonstrates the use of this program:</p><a id="I_programlisting20_d1e54295"/><pre class="programlisting">$ <strong class="userinput"><code>./intquit</code></strong>
+<em class="lineannotation"><span class="lineannotation">Type Control-C</span></em>
+Caught SIGINT (1)
+<em class="lineannotation"><span class="lineannotation">Type Control-C again</span></em>
+Caught SIGINT (2)
+<em class="lineannotation"><span class="lineannotation">and again</span></em>
+Caught SIGINT (3)
+<em class="lineannotation"><span class="lineannotation">Type Control-\</span></em>
+Caught SIGQUIT - that's all folks!</pre><p>In <a class="xref" href="ch20.html#installing_a_handler_for_sigint" title="Example 20-1. Installing a handler for SIGINT">Example 20-1</a> and <a class="xref" href="ch20.html#establishing_the_same_handler_for_two_di" title="Example 20-2. Establishing the same handler for two different signals">Example 20-2</a>, we use
+                    <span class="emphasis"><em>printf()</em></span> to display the message from the signal handler.
+                For reasons that we discuss in <a class="xref" href="ch21.html#reentrant_and_async-signal-safe_function" title="Reentrant and Async-Signal-Safe Functions">Reentrant and Async-Signal-Safe Functions</a>, real-world applications
+                should generally never call stdio functions from within a signal handler. However,
+                in various example programs, we’ll nevertheless call <span class="emphasis"><em>printf()</em></span>
+                from a signal handler as a simple means of seeing when the handler is called.</p><div class="example"><a id="establishing_the_same_handler_for_two_di"/><div class="example-title">Example 20-2. Establishing the same handler for two different signals</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/intquit.c</code></strong>
+#include &lt;signal.h&gt;
+#include "tlpi_hdr.h"
+
+static void
+sigHandler(int sig)
+{
+    static int count = 0;
+
+    /* UNSAFE: This handler uses non-async-signal-safe functions
+       (printf(), exit(); see Section 21.1.2) */
+
+    if (sig == SIGINT) {
+        count++;
+        printf("Caught SIGINT (%d)\n", count);
+        return;                 /* Resume execution at point of interruption */
+    }
+
+    /* Must be SIGQUIT - print a message and terminate the process */
+
+    printf("Caught SIGQUIT - that's all folks!\n");
+    exit(EXIT_SUCCESS);
+}
+
+int
+main(int argc, char *argv[])
+{
+    /* Establish same handler for SIGINT and SIGQUIT */
+
+    if (signal(SIGINT, sigHandler) == SIG_ERR)
+        errExit("signal");
+    if (signal(SIGQUIT, sigHandler) == SIG_ERR)
+        errExit("signal");
+
+    for (;;)                    /* Loop forever, waiting for signals */
+        pause();                /* Block until a signal is caught */
+}
+      <strong class="userinput"><code>signals/intquit.c</code></strong></pre></div></div></div><div class="sect1" title="Sending Signals: kill()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="sending_signals_colon_kill_open_parenthe">Sending Signals: <span class="emphasis"><em>kill()</em></span></h2></div></div></div><p>One process can send a signal to another process using the
+                    <span class="emphasis"><em>kill()</em></span> system call, which is the analog of the
+                    <span class="emphasis"><em>kill</em></span> shell command. (The term <span class="emphasis"><em>kill</em></span> was
+                chosen because the default action of most of the signals that were available on
+                early UNIX implementations was to terminate the process.)<a id="IDX-CHP-20-2870" class="indexterm"/><a id="IDX-CHP-20-2871" class="indexterm"/><a id="IDX-CHP-20-2872" class="indexterm"/><a id="IDX-CHP-20-2873" class="indexterm"/><a id="IDX-CHP-20-2874" class="indexterm"/><a id="IDX-CHP-20-2875" class="indexterm"/><a id="IDX-CHP-20-2876" class="indexterm"/><a id="IDX-CHP-20-2877" class="indexterm"/><a id="IDX-CHP-20-2878" class="indexterm"/><a id="IDX-CHP-20-2879" class="indexterm"/><a id="IDX-CHP-20-2880" class="indexterm"/><a id="IDX-CHP-20-2881" class="indexterm"/><a id="IDX-CHP-20-2882" class="indexterm"/><a id="IDX-CHP-20-2869" class="indexterm"/></p><a id="I_programlisting20_d1e54434"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>kill</code></strong>(pid_t <span class="emphasis"><em>pid</em></span>, int <span class="emphasis"><em>sig</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>pid</em></span> argument identifies one or more processes to which
+                the signal specified by <span class="emphasis"><em>sig</em></span> is to be sent. Four different cases
+                determine how <span class="emphasis"><em>pid</em></span> is interpreted:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>If <span class="emphasis"><em>pid</em></span> is greater than 0, the signal is sent to the
+                        process with the process ID specified by <span class="emphasis"><em>pid</em></span>.</p></li><li class="listitem"><p>If <span class="emphasis"><em>pid</em></span> equals 0, the signal is sent to every process
+                        in the same process group as the calling process, including the calling
+                        process itself. (SUSv3 states that the signal should be sent to all
+                        processes in the same process group, excluding an “unspecified set of system
+                        processes” and adds the same qualification to each of the remaining
+                        cases.)</p></li><li class="listitem"><p>If <span class="emphasis"><em>pid is</em></span> less than -1, the signal is sent to all of
+                        the processes in the process group whose ID equals the absolute value of
+                            <span class="emphasis"><em>pid</em></span>. Sending a signal to all of the processes in a
+                        process group finds particular use in shell job control (<a class="xref" href="ch34.html#job_control" title="Job Control">Job Control</a>).</p></li><li class="listitem"><p>If <span class="emphasis"><em>pid</em></span> equals -1, the signal is sent to every process
+                        for which the calling process has permission to send a signal, except
+                            <span class="emphasis"><em>init</em></span> (process ID 1) and the calling process. If a
+                        privileged process makes this call, then all processes on the system will be
+                        signaled, except for these last two. For obvious reasons, signals sent in
+                        this way are sometimes called <span class="emphasis"><em>broadcast signals</em></span>. (SUSv3
+                        doesn’t require that the calling process be excluded from receiving the
+                        signal; Linux follows the BSD semantics in this regard.)<a id="IDX-CHP-20-2883" class="indexterm"/></p></li></ul></div><p>If no process matches the specified <span class="emphasis"><em>pid</em></span>,
+                    <span class="emphasis"><em>kill()</em></span> fails and sets <span class="emphasis"><em>errno</em></span> to
+                    <code class="literal">ESRCH</code> (“No such process”).</p><p>A process needs appropriate permissions to be able send a signal to another
+                process. The permission rules are as follows:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>A privileged (<code class="literal">CAP_KILL</code>) process may
+                        send a signal to any process.</p></li><li class="listitem"><p>The <span class="emphasis"><em>init</em></span> process (process ID 1), which runs with user
+                        and group of <span class="emphasis"><em>root</em></span>, is a special case. It can be sent
+                        only signals for which it has a handler installed. This prevents the system
+                        administrator from accidentally killing <span class="emphasis"><em>init</em></span>, which is
+                        fundamental to the operation of the system.<a id="IDX-CHP-20-2884" class="indexterm"/></p></li><li class="listitem"><p>An unprivileged process can send a signal to another process if the real
+                        or effective user ID of the sending process matches the real user ID or
+                        saved set-user-ID of the receiving process, as shown in <a class="xref" href="ch20.html#permissions_required_for_an_unprivileged" title="Figure 20-2. Permissions required for an unprivileged process to send a signal">Figure 20-2</a>. This rule allows
+                        users to send signals to set-user-ID programs that they have started,
+                        regardless of the current setting of the target process’s effective user ID.
+                        Excluding the effective user ID of the target from the check serves a
+                        complementary purpose: it prevents one user from sending signals to another
+                        user’s process that is running a set-user-ID program belonging to the user
+                        trying to send the signal. (SUSv3 mandates the rules shown in <a class="xref" href="ch20.html#permissions_required_for_an_unprivileged" title="Figure 20-2. Permissions required for an unprivileged process to send a signal">Figure 20-2</a>, but Linux followed
+                        slightly different rules in kernel versions before 2.0, as described in the
+                            <span class="emphasis"><em>kill(2)</em></span> manual page.)</p></li><li class="listitem"><p>The <code class="literal">SIGCONT</code> signal is treated
+                        specially. An unprivileged process may send this signal to any other process
+                        in the same session, regardless of user ID checks. This rule allows
+                        job-control shells to restart stopped jobs (process groups), even if the
+                        processes of the job have changed their user IDs (i.e., they are privileged
+                        processes that have used the system calls described in <a class="xref" href="ch09.html#retrieving_and_modifying_process_credent" title="Retrieving and Modifying Process Credentials">Retrieving and Modifying Process Credentials</a> to change their
+                        credentials).</p></li></ul></div><div class="figure"><a id="permissions_required_for_an_unprivileged"/><div class="figure-contents"><div class="mediaobject"><a id="I_mediaobject20_d1e54564"/><img src="figs/web/20-2_SIG-A-perms-scale90.png.jpg" alt="Permissions required for an unprivileged process to send a signal"/></div></div><div class="figure-title">Figure 20-2. Permissions required for an unprivileged process to send a signal</div></div><p>If a process doesn’t have permissions to send a signal to the requested
+                    <span class="emphasis"><em>pid</em></span>, then <span class="emphasis"><em>kill()</em></span> fails, setting
+                    <span class="emphasis"><em>errno</em></span> to <code class="literal">EPERM</code>. Where
+                    <span class="emphasis"><em>pid</em></span> specifies a set of processes (i.e.,
+                    <span class="emphasis"><em>pid</em></span> is negative), <span class="emphasis"><em>kill()</em></span> succeeds if
+                at least one of them could be signaled.</p><p>We demonstrate the use of <span class="emphasis"><em>kill()</em></span> in <a class="xref" href="ch20.html#using_the_kill_open_parenthesis_close_pa" title="Example 20-3. Using the kill() system call">Example 20-3</a>.</p></div><div class="sect1" title="Checking for the Existence of a Process"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="checking_for_the_existence_of_a_process">Checking for the Existence of a Process</h2></div></div></div><p>The <span class="emphasis"><em>kill()</em></span> system call can serve another purpose. If the
+                    <span class="emphasis"><em>sig</em></span> argument is specified as 0 (the so-called
+                    <span class="emphasis"><em>null signal</em></span>), then no signal is sent. Instead,
+                    <span class="emphasis"><em>kill()</em></span> merely performs error checking to see if the process
+                can be signaled. Read another way, this means we can use the null signal to test if
+                a process with a specific process ID exists. If sending a null signal fails with the
+                error <code class="literal">ESRCH</code>, then we know the process doesn’t
+                exist. If the call fails with the error <code class="literal">EPERM</code>
+                (meaning the process exists, but we don’t have permission to send a signal to it) or
+                succeeds (meaning we do have permission to send a signal to the process), then we
+                know that the process exists.<a id="IDX-CHP-20-2885" class="indexterm"/><a id="IDX-CHP-20-2886" class="indexterm"/><a id="IDX-CHP-20-2887" class="indexterm"/><a id="IDX-CHP-20-2888" class="indexterm"/><a id="IDX-CHP-20-2889" class="indexterm"/></p><p>Verifying the existence of a particular process ID doesn’t guarantee that a
+                particular program is still running. Because the kernel recycles process IDs as
+                processes are born and die, the same process ID may, over time, refer to a different
+                process. Furthermore, a particular process ID may exist, but be a zombie (i.e., a
+                process that has died, but whose parent has not yet performed a
+                    <span class="emphasis"><em>wait()</em></span> to obtain its termination status, as described in
+                    <a class="xref" href="ch26.html#orphans_and_zombies" title="Orphans and Zombies">Orphans and Zombies</a>).</p><p>Various other techniques can also be used to check whether a particular process is
+                running, including the following:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>The wait() system calls</em></span>: These calls are described in
+                            <a class="xref" href="ch26.html" title="Chapter 26. Monitoring Child Processes">Chapter 26</a>. They can be employed only
+                        if the monitored process is a child of the caller.</p></li><li class="listitem"><p><span class="emphasis"><em>Semaphores and exclusive file locks</em></span>: If the process
+                        that is being monitored continuously holds a semaphore or a file lock, then,
+                        if we can acquire the semaphore or lock, we know the process has terminated.
+                        We describe semaphores in <a class="xref" href="ch47.html" title="Chapter 47. System V Semaphores">Chapter 47</a> and <a class="xref" href="ch53.html" title="Chapter 53. POSIX Semaphores">Chapter 53</a> and file locks in <a class="xref" href="ch55.html" title="Chapter 55. File Locking">Chapter 55</a>.</p></li><li class="listitem"><p><span class="emphasis"><em>IPC channels such as pipes and FIFOs</em></span>: We set up the
+                        monitored process so that it holds a file descriptor open for writing on the
+                        channel as long as it is alive. Meanwhile, the monitoring process holds open
+                        a read descriptor for the channel, and it knows that the monitored process
+                        has terminated when the write end of the channel is closed (because it sees
+                        end-of-file). The monitoring process can determine this either by reading
+                        from its file descriptor or by monitoring the descriptor using one of the
+                        techniques described in <a class="xref" href="ch63.html" title="Chapter 63. Alternative I/O Models">Chapter 63</a>.</p></li><li class="listitem"><p><span class="emphasis"><em>The</em></span>
+                        <code class="literal">/proc/</code><span class="emphasis"><em>PID interface</em></span>:
+                        For example, if a process with the process ID 12345 exists, then the
+                        directory <code class="literal">/proc/12345</code> will exist, and we
+                        can check this using a call such as <span class="emphasis"><em>stat()</em></span>.</p></li></ul></div><p>All of these techniques, except the last, are unaffected by recycling of process
+                IDs.</p><p><a class="xref" href="ch20.html#using_the_kill_open_parenthesis_close_pa" title="Example 20-3. Using the kill() system call">Example 20-3</a> demonstrates the use of
+                    <span class="emphasis"><em>kill()</em></span>. This program takes two command-line arguments, a
+                signal number and a process ID, and uses <span class="emphasis"><em>kill()</em></span> to send the
+                signal to the specified process. If signal 0 (the null signal) is specified, then
+                the program reports on the existence of the target process.</p></div><div class="sect1" title="Other Ways of Sending Signals: raise() and killpg()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="other_ways_of_sending_signals_colon_rais">Other Ways of Sending Signals: <span class="emphasis"><em>raise()</em></span> and
+                    <span class="emphasis"><em>killpg()</em></span></h2></div></div></div><p>Sometimes, it is useful for a process to send a signal to itself. (We see an
+                example of this in <a class="xref" href="ch34.html#handling_job-control_signals" title="Handling Job-Control Signals">Handling Job-Control Signals</a>.) The
+                    <span class="emphasis"><em>raise()</em></span> function performs this task.<a id="IDX-CHP-20-2891" class="indexterm"/><a id="IDX-CHP-20-2890" class="indexterm"/></p><a id="I_programlisting20_d1e54739"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>raise</code></strong>(int <span class="emphasis"><em>sig</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or nonzero on error</p></div><p>In a single-threaded program, a call to <span class="emphasis"><em>raise()</em></span> is equivalent
+                to the following call to <span class="emphasis"><em>kill()</em></span>:</p><a id="I_programlisting20_d1e54758"/><pre class="programlisting">kill(getpid(), sig);</pre><p>On a system that supports threads, <span class="emphasis"><em>raise(sig)</em></span> is implemented
+                as:</p><a id="I_programlisting20_d1e54765"/><pre class="programlisting">pthread_kill(pthread_self(), sig)</pre><p>We describe the <span class="emphasis"><em>pthread_kill()</em></span> function in <a class="xref" href="ch33.html#sending_a_signal_to_a_thread" title="Sending a Signal to a Thread">Sending a Signal to a Thread</a>, but for now it is sufficient to say
+                that this implementation means that the signal will be delivered to the specific
+                thread that called <span class="emphasis"><em>raise()</em></span>. By contrast, the call
+                    <span class="emphasis"><em>kill(getpid(), sig)</em></span> sends a signal to the calling
+                    <span class="emphasis"><em>process</em></span>, and that signal may be delivered to any thread in
+                the process.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>raise()</em></span> function originates from C89. The C standards
+                    don’t cover operating system details such as process IDs, but
+                        <span class="emphasis"><em>raise()</em></span> can be specified within the C standard because
+                    it doesn’t require reference to process IDs.</p></div><p>When a process sends itself a signal using <span class="emphasis"><em>raise()</em></span> (or
+                    <span class="emphasis"><em>kill()</em></span>), the signal is delivered immediately (i.e., before
+                    <span class="emphasis"><em>raise()</em></span> returns to the caller).</p><p>Note that <span class="emphasis"><em>raise()</em></span> returns a nonzero value (not necessarily
+                -1) on error. The only error that can occur with <span class="emphasis"><em>raise()</em></span> is
+                    <code class="literal">EINVAL</code>, because <span class="emphasis"><em>sig</em></span> was
+                invalid. Therefore, where we specify one of the <code class="literal">SIGxxxx</code> constants, we don’t check the return status of this
+                function.</p><div class="example"><a id="using_the_kill_open_parenthesis_close_pa"/><div class="example-title">Example 20-3. Using the <span class="emphasis"><em>kill()</em></span> system call</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/t_kill.c</code></strong>
+#include &lt;signal.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int s, sig;
+
+    if (argc != 3 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s sig-num pid\n", argv[0]);
+
+    sig = getInt(argv[2], 0, "sig-num");
+
+    s = kill(getLong(argv[1], 0, "pid"), sig);
+
+    if (sig != 0) {
+        if (s == -1)
+            errExit("kill");
+
+    } else {                    /* Null signal: process existence check */
+        if (s == 0) {
+            printf("Process exists and we can send it a signal\n");
+        } else {
+            if (errno == EPERM)
+                printf("Process exists, but we don't have "
+                       "permission to send it a signal\n");
+            else if (errno == ESRCH)
+                printf("Process does not exist\n");
+            else
+                errExit("kill");
+        }
+    }
+
+    exit(EXIT_SUCCESS);
+}
+      <strong class="userinput"><code>signals/t_kill.c</code></strong></pre></div></div><p>The <span class="emphasis"><em>killpg()</em></span> function sends a signal to all of the members of
+                a process group.<a id="IDX-CHP-20-2892" class="indexterm"/></p><a id="I_programlisting20_d1e54842"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>killpg</code></strong>(pid_t <span class="emphasis"><em>pgrp</em></span>, int <span class="emphasis"><em>sig</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>A call to <span class="emphasis"><em>killpg()</em></span> is equivalent to the following call to
+                    <span class="emphasis"><em>kill()</em></span>:</p><a id="I_programlisting20_d1e54864"/><pre class="programlisting">kill(-pgrp, sig);</pre><p>If <span class="emphasis"><em>pgrp</em></span> is specified as 0, then the signal is sent to all
+                processes in the same process group as the caller. SUSv3 leaves this point
+                unspecified, but most UNIX implementations interpret this case in the same way as
+                Linux.</p></div><div class="sect1" title="Displaying Signal Descriptions"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="displaying_signal_descriptions">Displaying Signal Descriptions</h2></div></div></div><p>Each signal has an associated printable description. These descriptions are listed
+                in the array <span class="emphasis"><em>sys_siglist</em></span>. For example, we can refer to
+                    <span class="emphasis"><em>sys_siglist[SIGPIPE]</em></span> to get the description for <code class="literal">SIGPIPE</code> (broken pipe). However, rather than using the
+                    <span class="emphasis"><em>sys_siglist</em></span> array directly, the
+                    <span class="emphasis"><em>strsignal()</em></span> function is preferable.<a id="IDX-CHP-20-2893" class="indexterm"/><a id="IDX-CHP-20-2894" class="indexterm"/></p><a id="I_programlisting20_d1e54902"/><pre class="programlisting">#define _BSD_SOURCE
+#include &lt;signal.h&gt;
+
+extern const char *const <strong class="userinput"><code>sys_siglist</code></strong>[];
+
+#define _GNU_SOURCE
+#include &lt;string.h&gt;
+
+char *<strong class="userinput"><code>strsignal</code></strong>(int <span class="emphasis"><em>sig</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns pointer to signal description string</p></div><p>The <span class="emphasis"><em>strsignal()</em></span> function performs bounds checking on the
+                    <span class="emphasis"><em>sig</em></span> argument, and then returns a pointer to a printable
+                description of the signal, or a pointer to an error string if the signal number was
+                invalid. (On some other UNIX implementations, <span class="emphasis"><em>strsignal()</em></span>
+                returns <code class="literal">NULL</code> if <span class="emphasis"><em>sig</em></span> is
+                invalid.)</p><p>Aside from bounds checking, another advantage of <span class="emphasis"><em>strsignal()</em></span>
+                over the direct use of <span class="emphasis"><em>sys_siglist</em></span> is that
+                    <span class="emphasis"><em>strsignal()</em></span> is locale-sensitive (<a class="xref" href="ch10.html#locales" title="Locales">Locales</a>), so that signal descriptions will be displayed in the local language.</p><p>An example of the use of <span class="emphasis"><em>strsignal()</em></span> is shown in <a class="xref" href="ch20.html#functions_for_displaying_signal_sets" title="Example 20-4. Functions for displaying signal sets">Example 20-4</a>.</p><p>The <span class="emphasis"><em>psignal()</em></span> function displays (on standard error) the
+                string given in its argument <span class="emphasis"><em>msg</em></span>, followed by a colon, and then
+                the signal description corresponding to <span class="emphasis"><em>sig</em></span>. Like
+                    <span class="emphasis"><em>strsignal()</em></span>, <span class="emphasis"><em>psignal()</em></span> is
+                    locale-sensitive.<a id="IDX-CHP-20-2895" class="indexterm"/></p><a id="I_programlisting20_d1e54975"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+void <strong class="userinput"><code>psignal</code></strong>(int <span class="emphasis"><em>sig</em></span>, const char *<span class="emphasis"><em>msg</em></span>);</pre><p>Although <span class="emphasis"><em>psignal()</em></span>, <span class="emphasis"><em>strsignal()</em></span>, and
+                    <span class="emphasis"><em>sys_siglist</em></span> are not standardized as part of SUSv3, they are
+                nevertheless available on many UNIX implementations. (SUSv4 adds specifications for
+                    <span class="emphasis"><em>psignal()</em></span> and <span class="emphasis"><em>strsignal()</em></span>.)</p></div><div class="sect1" title="Signal Sets"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="signal_sets">Signal Sets</h2></div></div></div><p>Many signal-related system calls need to be able to represent a group of different
+                signals. For example, <span class="emphasis"><em>sigaction()</em></span> and
+                    <span class="emphasis"><em>sigprocmask()</em></span> allow a program to specify a group of signals
+                that are to be blocked by a process, while <span class="emphasis"><em>sigpending()</em></span> returns
+                a group of signals that are currently pending for a process. (We describe these
+                system calls shortly.)<a id="IDX-CHP-20-2896" class="indexterm"/><a id="IDX-CHP-20-2897" class="indexterm"/><a id="IDX-CHP-20-2898" class="indexterm"/><a id="IDX-CHP-20-2899" class="indexterm"/><a id="IDX-CHP-20-2900" class="indexterm"/><a id="IDX-CHP-20-2901" class="indexterm"/><a id="IDX-CHP-20-2902" class="indexterm"/><a id="IDX-CHP-20-2903" class="indexterm"/><a id="IDX-CHP-20-2904" class="indexterm"/><a id="IDX-CHP-20-2905" class="indexterm"/></p><p>Multiple signals are represented using a data structure called a <span class="emphasis"><em>signal
+                    set</em></span>, provided by the system data type <span class="emphasis"><em>sigset_t</em></span>.
+                SUSv3 specifies a range of functions for manipulating signal sets, and we now
+                describe these functions.</p><div class="note" title="Note"><h3 class="title">Note</h3><p>On Linux, as on most UNIX implementations, the <span class="emphasis"><em>sigset_t</em></span>
+                    data type is a bit mask. However, SUSv3 doesn’t require this. A signal set could
+                    conceivably be represented using some other kind of structure. SUSv3 requires
+                    only that the type of <span class="emphasis"><em>sigset_t</em></span> be assignable. Thus, it must
+                    be implemented using either some scalar type (e.g., an integer) or a C structure
+                    (perhaps containing an array of integers).<a id="IDX-CHP-20-2906" class="indexterm"/></p></div><p>The <span class="emphasis"><em>sigemptyset()</em></span> function initializes a signal set to
+                contain no members. The <span class="emphasis"><em>sigfillset()</em></span> function initializes a set
+                to contain all signals (including all realtime signals).<a id="IDX-CHP-20-2907" class="indexterm"/></p><a id="I_programlisting20_d1e55113"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigemptyset</code></strong>(sigset_t *<span class="emphasis"><em>set</em></span>);
+int <strong class="userinput"><code>sigfillset</code></strong>(sigset_t *<span class="emphasis"><em>set</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Both return 0 on success, or -1 on error</p></div><p>One of <span class="emphasis"><em>sigemptyset()</em></span> or <span class="emphasis"><em>sigaddset() must</em></span>
+                be used to initialize a signal set. This is because C doesn’t initialize automatic
+                variables, and the initialization of static variables to 0 can’t portably be relied
+                upon as indicating an empty signal set, since signal sets may be implemented using
+                structures other than bit masks. (For the same reason, it is incorrect to use
+                    <span class="emphasis"><em>memset(3)</em></span> to zero the contents of a signal set in order to
+                mark it as empty.)</p><p>After initialization, individual signals can be added to a set using
+                    <span class="emphasis"><em>sigaddset()</em></span> and removed using
+                    <span class="emphasis"><em>sigdelset()</em></span>.<a id="IDX-CHP-20-2908" class="indexterm"/><a id="IDX-CHP-20-2909" class="indexterm"/></p><a id="I_programlisting20_d1e55157"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigaddset</code></strong>(sigset_t *<span class="emphasis"><em>set</em></span>, int <span class="emphasis"><em>sig</em></span>);
+int <strong class="userinput"><code>sigdelset</code></strong>(sigset_t *<span class="emphasis"><em>set</em></span>, int <span class="emphasis"><em>sig</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Both return 0 on success, or -1 on error</p></div><p>For both <span class="emphasis"><em>sigaddset()</em></span> and <span class="emphasis"><em>sigdelset()</em></span>,
+                the <span class="emphasis"><em>sig</em></span> argument is a signal number.</p><p>The <span class="emphasis"><em>sigismember()</em></span> function is used to test for membership of
+                a set.<a id="IDX-CHP-20-2910" class="indexterm"/></p><a id="I_programlisting20_d1e55202"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigismember</code></strong>(const sigset_t *<span class="emphasis"><em>set</em></span>, int <span class="emphasis"><em>sig</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 1 if <span class="emphasis"><em>sig</em></span> is a member of <span class="emphasis"><em>set</em></span>,
+                    otherwise 0</p></div><p>The <span class="emphasis"><em>sigismember()</em></span> function returns 1 (true) if
+                    <span class="emphasis"><em>sig</em></span> is a member of <span class="emphasis"><em>set</em></span>, and 0 (false)
+                otherwise.</p><p>The GNU C library implements three nonstandard functions that perform tasks that
+                are complementary to the standard signal set functions just described.</p><a id="I_programlisting20_d1e55235"/><pre class="programlisting">#define _GNU_SOURCE
+#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigandset</code></strong>(sigset_t *<span class="emphasis"><em>dest</em></span>, sigset_t *<span class="emphasis"><em>left</em></span>, sigset_t *<span class="emphasis"><em>right</em></span>);
+int <strong class="userinput"><code>sigorset</code></strong>(sigset_t *<span class="emphasis"><em>dest</em></span>, sigset_t *<span class="emphasis"><em>left</em></span>, sigset_t *<span class="emphasis"><em>right</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Both return 0 on success, or -1 on error</p></div><a id="I_programlisting20_d1e55265"/><pre class="programlisting">int <strong class="userinput"><code>sigisemptyset</code></strong>(const sigset_t *<span class="emphasis"><em>set</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 1 if <span class="emphasis"><em>sig</em></span> is empty, otherwise 0</p></div><p>These functions perform the following tasks:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p><span class="emphasis"><em>sigandset()</em></span> places the intersection of the sets
+                            <span class="emphasis"><em>left</em></span> and <span class="emphasis"><em>right</em></span> in the set
+                            <span class="emphasis"><em>dest</em></span>;<a id="IDX-CHP-20-2911" class="indexterm"/></p></li><li class="listitem"><p><span class="emphasis"><em>sigorset()</em></span> places the union of the sets
+                            <span class="emphasis"><em>left</em></span> and <span class="emphasis"><em>right</em></span> in the set
+                            <span class="emphasis"><em>dest</em></span>; and<a id="IDX-CHP-20-2912" class="indexterm"/></p></li><li class="listitem"><p><span class="emphasis"><em>sigisemptyset()</em></span> returns true if
+                            <span class="emphasis"><em>set</em></span> contains no signals.<a id="IDX-CHP-20-2913" class="indexterm"/></p></li></ul></div><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="example_program-id21"/></div></div></div><div class="sect3" title="Example program"><div class="titlepage"><div><div><h4 class="title" id="example_program-id22">Example program</h4></div></div></div><p>Using the functions described in this section, we can write the functions
+                        shown in <a class="xref" href="ch20.html#functions_for_displaying_signal_sets" title="Example 20-4. Functions for displaying signal sets">Example 20-4</a>, which we
+                        employ in various later programs. The first of these,
+                            <span class="emphasis"><em>printSigset()</em></span>, displays the signals that are
+                        members of the specified signal set. This function uses the <code class="literal">NSIG</code> constant, which is defined in <code class="literal">&lt;signal.h&gt;</code> to be one greater
+                        than the highest signal number. We use <code class="literal">NSIG</code> as the upper bound in a loop that tests all signal
+                        numbers for membership of a set.<a id="IDX-CHP-20-2914" class="indexterm"/><a id="IDX-CHP-20-2915" class="indexterm"/><a id="IDX-CHP-20-2916" class="indexterm"/><a id="IDX-CHP-20-2917" class="indexterm"/><a id="IDX-CHP-20-2918" class="indexterm"/><a id="IDX-CHP-20-2919" class="indexterm"/><a id="IDX-CHP-20-2920" class="indexterm"/></p><div class="note" title="Note"><h3 class="title">Note</h3><p>Although <code class="literal">NSIG</code> is not specified in
+                            SUSv3, it is defined on most UNIX implementations. However, it may be
+                            necessary to use implementation-specific compiler options to make it
+                            visible. For example, on Linux, we must define one of the feature test
+                            macros <code class="literal">_BSD_SOURCE</code>, <code class="literal">_SVID_SOURCE</code>, or <code class="literal">_GNU_SOURCE</code>.</p></div><p>The <span class="emphasis"><em>printSigMask()</em></span> and
+                            <span class="emphasis"><em>printPendingSigs()</em></span> functions employ
+                            <span class="emphasis"><em>printSigset()</em></span> to display, respectively, the process
+                        signal mask and the set of currently pending signals. The
+                            <span class="emphasis"><em>printSigMask()</em></span> and
+                            <span class="emphasis"><em>printPendingSigs()</em></span> functions use the
+                            <span class="emphasis"><em>sigprocmask()</em></span> and <span class="emphasis"><em>sigpending()</em></span>
+                        system calls, respectively. We describe the
+                            <span class="emphasis"><em>sigprocmask()</em></span> and <span class="emphasis"><em>sigpending()</em></span>
+                        system calls in <a class="xref" href="ch20.html#the_signal_mask_open_parenthesis_blockin" title="The Signal Mask (Blocking Signal Delivery)">The Signal Mask (Blocking Signal Delivery)</a>
+                        and <a class="xref" href="ch20.html#pending_signals" title="Pending Signals">Pending Signals</a>.<a id="IDX-CHP-20-2921" class="indexterm"/><a id="IDX-CHP-20-2922" class="indexterm"/></p><div class="example"><a id="functions_for_displaying_signal_sets"/><div class="example-title">Example 20-4. Functions for displaying signal sets</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/signal_functions.c</code></strong>
+#define _GNU_SOURCE
+#include &lt;string.h&gt;
+#include &lt;signal.h&gt;
+#include "signal_functions.h"           /* Declares functions defined here */
+#include "tlpi_hdr.h"
+
+/* NOTE: All of the following functions employ fprintf(), which
+   is not async-signal-safe (see Section 21.1.2). As such, these
+   functions are also not async-signal-safe (i.e., beware of
+   indiscriminately calling them from signal handlers). */
+
+void                    /* Print list of signals within a signal set */
+printSigset(FILE *of, const char *prefix, const sigset_t *sigset)
+{
+    int sig, cnt;
+
+    cnt = 0;
+    for (sig = 1; sig &lt; NSIG; sig++) {
+        if (sigismember(sigset, sig)) {
+            cnt++;
+            fprintf(of, "%s%d (%s)\n", prefix, sig, strsignal(sig));
+        }
+    }
+
+    if (cnt == 0)
+        fprintf(of, "%s&lt;empty signal set&gt;\n", prefix);
+}
+
+int                     /* Print mask of blocked signals for this process */
+printSigMask(FILE *of, const char *msg)
+{
+    sigset_t currMask;
+
+    if (msg != NULL)
+        fprintf(of, "%s", msg);
+
+    if (sigprocmask(SIG_BLOCK, NULL, &amp;currMask) == -1)
+        return -1;
+
+    printSigset(of, "\t\t", &amp;currMask);
+
+    return 0;
+}
+
+int                     /* Print signals currently pending for this process */
+printPendingSigs(FILE *of, const char *msg)
+{
+    sigset_t pendingSigs;
+
+    if (msg != NULL)
+        fprintf(of, "%s", msg);
+
+    if (sigpending(&amp;pendingSigs) == -1)
+        return -1;
+
+    printSigset(of, "\t\t", &amp;pendingSigs);
+
+    return 0;
+}      <strong class="userinput"><code>signals/signal_functions.c</code></strong></pre></div></div></div></div></div><div class="sect1" title="The Signal Mask (Blocking Signal Delivery)"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="the_signal_mask_open_parenthesis_blockin">The Signal Mask (Blocking Signal Delivery)</h2></div></div></div><p>For each process, the kernel maintains a <span class="emphasis"><em>signal mask</em></span>—a set of
+                signals whose delivery to the process is currently blocked. If a signal that is
+                blocked is sent to a process, delivery of that signal is delayed until it is
+                unblocked by being removed from the process signal mask. (In <a class="xref" href="ch33.html#how_the_unix_signal_model_maps_to_thread" title="How the UNIX Signal Model Maps to Threads">How the UNIX Signal Model Maps to Threads</a>, we’ll see that the signal
+                mask is actually a per-thread attribute, and that each thread in a multithreaded
+                process can independently examine and modify its signal mask using the
+                    <span class="emphasis"><em>pthread_sigmask()</em></span> function.)<a id="IDX-CHP-20-2923" class="indexterm"/><a id="IDX-CHP-20-2924" class="indexterm"/><a id="IDX-CHP-20-2925" class="indexterm"/><a id="IDX-CHP-20-2926" class="indexterm"/><a id="IDX-CHP-20-2927" class="indexterm"/><a id="IDX-CHP-20-2928" class="indexterm"/><a id="IDX-CHP-20-2929" class="indexterm"/><a id="IDX-CHP-20-2930" class="indexterm"/><a id="IDX-CHP-20-2931" class="indexterm"/></p><p>A signal may be added to the signal mask in the following ways:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>When a signal handler is invoked, the signal that caused its invocation
+                        can be automatically added to the signal mask. Whether or not this occurs
+                        depends on the flags used when the handler is established using
+                            <span class="emphasis"><em>sigaction()</em></span>.</p></li><li class="listitem"><p>When a signal handler is established with
+                        <span class="emphasis"><em>sigaction()</em></span>, it is possible to specify an additional
+                        set of signals that are to be blocked when the handler is invoked.</p></li><li class="listitem"><p>The <span class="emphasis"><em>sigprocmask()</em></span> system call can be used at any time
+                        to explicitly add signals to, and remove signals from, the signal
+                            mask.<a id="IDX-CHP-20-2932" class="indexterm"/></p></li></ul></div><p>We delay discussion of the first two cases until we examine
+                    <span class="emphasis"><em>sigaction()</em></span> in <a class="xref" href="ch20.html#changing_signal_dispositions_colon_sigac" title="Changing Signal Dispositions: sigaction()">Changing Signal Dispositions: <span class="emphasis"><em>sigaction()</em></span></a>, and discuss
+                    <span class="emphasis"><em>sigprocmask()</em></span> now.</p><a id="I_programlisting20_d1e55553"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigprocmask</code></strong>(int <span class="emphasis"><em>how</em></span>, const sigset_t *<span class="emphasis"><em>set</em></span>, sigset_t *<span class="emphasis"><em>oldset</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>We can use <span class="emphasis"><em>sigprocmask()</em></span> to change the process signal mask,
+                to retrieve the existing mask, or both. The <span class="emphasis"><em>how</em></span> argument
+                determines the changes that <span class="emphasis"><em>sigprocmask()</em></span> makes to the signal
+                mask:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">SIG_BLOCK</code>
+                    </span></dt><dd><p>The signals specified in the signal set pointed to by
+                                <span class="emphasis"><em>set</em></span> are added to the signal mask. In other
+                            words, the signal mask is set to the union of its current value and
+                                <span class="emphasis"><em>set</em></span>.</p></dd><dt><span class="term">
+                        <code class="literal">SIG_UNBLOCK</code>
+                    </span></dt><dd><p>The signals in the signal set pointed to by <span class="emphasis"><em>set</em></span>
+                            are removed from the signal mask. Unblocking a signal that is not
+                            currently blocked doesn’t cause an error to be returned.</p></dd><dt><span class="term">
+                        <code class="literal">SIG_SETMASK</code>
+                    </span></dt><dd><p>The signal set pointed to by <span class="emphasis"><em>set</em></span> is assigned to
+                            the signal mask.</p></dd></dl></div><p>In each case, if the <span class="emphasis"><em>oldset</em></span> argument is not <code class="literal">NULL</code>, it points to a <span class="emphasis"><em>sigset_t</em></span>
+                buffer that is used to return the previous signal mask.</p><p>If we want to retrieve the signal mask without changing it, then we can specify
+                    <code class="literal">NULL</code> for the <span class="emphasis"><em>set</em></span>
+                argument, in which case the <span class="emphasis"><em>how</em></span> argument is ignored.</p><p>To temporarily prevent delivery of a signal, we can use the series of calls shown
+                in <a class="xref" href="ch20.html#temporarily_blocking_delivery_of_a_signa" title="Example 20-5. Temporarily blocking delivery of a signal">Example 20-5</a> to block the signal,
+                and then unblock it by resetting the signal mask to its previous state.</p><div class="example"><a id="temporarily_blocking_delivery_of_a_signa"/><div class="example-title">Example 20-5. Temporarily blocking delivery of a signal</div><div class="example-contents"><pre class="programlisting">sigset_t blockSet, prevMask;
+
+    /* Initialize a signal set to contain SIGINT */
+
+    sigemptyset(&amp;blockSet);
+    sigaddset(&amp;blockSet, SIGINT);
+
+    /* Block SIGINT, save previous signal mask */
+
+    if (sigprocmask(SIG_BLOCK, &amp;blockSet, &amp;prevMask) == -1)
+        errExit("sigprocmask1");
+
+    /* ... Code that should not be interrupted by SIGINT ... */
+
+    /* Restore previous signal mask, unblocking SIGINT */
+
+    if (sigprocmask(SIG_SETMASK, &amp;prevMask, NULL) == -1)
+        errExit("sigprocmask2");</pre></div></div><p>SUSv3 specifies that if any pending signals are unblocked by a call to
+                    <span class="emphasis"><em>sigprocmask()</em></span>, then at least one of those signals will be
+                delivered before the call returns. In other words, if we unblock a pending signal,
+                it is delivered to the process immediately.<a id="IDX-CHP-20-2933" class="indexterm"/></p><p>Attempts to block <code class="literal">SIGKILL</code> and <code class="literal">SIGSTOP</code> are silently ignored. If we attempt to block
+                these signals, <span class="emphasis"><em>sigprocmask()</em></span> neither honors the request nor
+                generates an error. This means that we can use the following code to block all
+                signals except <code class="literal">SIGKILL</code> and <code class="literal">SIGSTOP</code>:</p><a id="I_programlisting20_d1e55674"/><pre class="programlisting">sigfillset(&amp;blockSet);
+if (sigprocmask(SIG_BLOCK, &amp;blockSet, NULL) == -1)
+    errExit("sigprocmask");</pre></div><div class="sect1" title="Pending Signals"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="pending_signals">Pending Signals</h2></div></div></div><p>If a process receives a signal that it is currently blocking, that signal is added
+                to the process’s set of pending signals. When (and if) the signal is later
+                unblocked, it is then delivered to the process. To determine which signals are
+                pending for a process, we can call <span class="emphasis"><em>sigpending()</em></span>.<a id="IDX-CHP-20-2934" class="indexterm"/><a id="IDX-CHP-20-2935" class="indexterm"/><a id="IDX-CHP-20-2936" class="indexterm"/><a id="IDX-CHP-20-2937" class="indexterm"/><a id="IDX-CHP-20-2938" class="indexterm"/><a id="IDX-CHP-20-2939" class="indexterm"/><a id="IDX-CHP-20-2940" class="indexterm"/><a id="IDX-CHP-20-2941" class="indexterm"/><a id="IDX-CHP-20-2942" class="indexterm"/><a id="IDX-CHP-20-2943" class="indexterm"/><a id="IDX-CHP-20-2944" class="indexterm"/></p><a id="I_programlisting20_d1e55756"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigpending</code></strong>(sigset_t *<span class="emphasis"><em>set</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>sigpending()</em></span> system call returns the set of signals that
+                are pending for the calling process in the <span class="emphasis"><em>sigset_t</em></span> structure
+                pointed to by <span class="emphasis"><em>set</em></span>. We can then examine <span class="emphasis"><em>set</em></span>
+                using the <span class="emphasis"><em>sigismember()</em></span> function described in Section
+                20.9.</p><p>If we change the disposition of a pending signal, then, when the signal is later
+                unblocked, it is handled according to its new disposition. Although not often used,
+                one application of this technique is to prevent the delivery of a pending signal by
+                setting its disposition to <code class="literal">SIG_IGN</code>, or to
+                    <code class="literal">SIG_DFL</code> if the default action for the signal
+                is <span class="emphasis"><em>ignore</em></span>. As a result, the signal is removed from the
+                process’s set of pending signals and thus not delivered.</p></div><div class="sect1" title="Signals Are Not Queued"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="signals_are_not_queued">Signals Are Not Queued</h2></div></div></div><p>The set of pending signals is only a mask; it indicates whether or not a signal
+                has occurred, but not how many times it has occurred. In other words, if the same
+                signal is generated multiple times while it is blocked, then it is recorded in the
+                set of pending signals, and later delivered, just once. (One of the differences
+                between standard and realtime signals is that realtime signals are queued, as
+                discussed in Section 22.8.)<a id="IDX-CHP-20-2945" class="indexterm"/><a id="IDX-CHP-20-2946" class="indexterm"/><a id="IDX-CHP-20-2947" class="indexterm"/><a id="IDX-CHP-20-2948" class="indexterm"/><a id="IDX-CHP-20-2949" class="indexterm"/><a id="IDX-CHP-20-2950" class="indexterm"/><a id="IDX-CHP-20-2951" class="indexterm"/></p><p><a class="xref" href="ch20.html#sending_multiple_signals" title="Example 20-6. Sending multiple signals">Example 20-6</a> and <a class="xref" href="ch20.html#catching_and_counting_signals" title="Example 20-7. Catching and counting signals">Example 20-7</a> show two programs that can be used to
+                observe that signals are not queued. The program in <a class="xref" href="ch20.html#sending_multiple_signals" title="Example 20-6. Sending multiple signals">Example 20-6</a> takes up to four command-line arguments, as
+                follows:</p><a id="I_programlisting20_d1e55844"/><pre class="programlisting">$ <strong class="userinput"><code>./sig_sender</code></strong> <strong class="userinput"><code><em class="replaceable"><code>PID num-sigs sig-num [sig-num-2]</code></em></code></strong></pre><p>The first argument is the process ID of a process to which the program should send
+                signals. The second argument specifies the number of signals to be sent to the
+                target process. The third argument specifies the signal number that is to be sent to
+                the target process. If a signal number is supplied as the fourth argument, then the
+                program sends one instance of that signal after sending the signals specified by the
+                previous arguments. In the example shell session below, we use this final argument
+                to send a <code class="literal">SIGINT</code> signal to the target process;
+                the purpose of sending this signal will become clear in a moment.</p><div class="example"><a id="sending_multiple_signals"/><div class="example-title">Example 20-6. Sending multiple signals</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/sig_sender.c</code></strong>
+#include &lt;signal.h&gt;
+#include "tlpi_hdr.h"
+
+int
+main(int argc, char *argv[])
+{
+    int numSigs, sig, j;
+    pid_t pid;
+
+    if (argc &lt; 4 || strcmp(argv[1], "--help") == 0)
+        usageErr("%s pid num-sigs sig-num [sig-num-2]\n", argv[0]);
+    pid = getLong(argv[1], 0, "PID");
+    numSigs = getInt(argv[2], GN_GT_0, "num-sigs");
+    sig = getInt(argv[3], 0, "sig-num");
+
+    /* Send signals to receiver */
+
+    printf("%s: sending signal %d to process %ld %d times\n",
+            argv[0], sig, (long) pid, numSigs);
+
+    for (j = 0; j &lt; numSigs; j++)
+        if (kill(pid, sig) == -1)
+            errExit("kill");
+
+    /* If a fourth command-line argument was specified, send that signal */
+
+    if (argc &gt; 4)
+        if (kill(pid, getInt(argv[4], 0, "sig-num-2")) == -1)
+            errExit("kill");
+
+    printf("%s: exiting\n", argv[0]);
+    exit(EXIT_SUCCESS);
+}
+     <strong class="userinput"><code>signals/sig_sender.c</code></strong></pre></div></div><p>The program shown in <a class="xref" href="ch20.html#catching_and_counting_signals" title="Example 20-7. Catching and counting signals">Example 20-7</a> is designed
+                to catch and report statistics on signals sent by the program in <a class="xref" href="ch20.html#sending_multiple_signals" title="Example 20-6. Sending multiple signals">Example 20-6</a>. This program performs the following
+                steps:</p><div class="itemizedlist"><ul class="itemizedlist"><li class="listitem"><p>The program sets up a single handler to catch all signals
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject20_d1e55876"/><img src="figs/web/U002.png" alt=""/></span>. (It isn’t possible to catch <code class="literal">SIGKILL</code> and <code class="literal">SIGSTOP</code>, but
+                        we ignore the error that occurs when trying to establish a handler for these
+                        signals.) For most types of signals, the handler <span class="inlinemediaobject"><a id="I_inlinemediaobject20_d1e55888"/><img src="figs/web/U001.png" alt=""/></span> simply counts the signal using an array. If <code class="literal">SIGINT</code> is received, the handler sets a flag
+                            (<span class="emphasis"><em>gotSigint</em></span>) that causes the program to exit its
+                        main loop (the <code class="literal">while</code> loop described
+                        below). (We explain the use of the <code class="literal">volatile</code> qualifier and the <span class="emphasis"><em>sig_atomic_t</em></span>
+                        data type used to declare the <span class="emphasis"><em>gotSigint</em></span> variable in
+                            <a class="xref" href="ch21.html#global_variables_and_the_sig_underscore" title="Global Variables and the sig_atomic_t Data Type">Global Variables and the <span class="emphasis"><em>sig_atomic_t</em></span> Data Type</a>.)</p></li><li class="listitem"><p>If a command-line argument was supplied to the program, then the program
+                        blocks all signals for the number of seconds specified by that argument, and
+                        then, prior to unblocking the signals, displays the set of pending signals
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject20_d1e55918"/><img src="figs/web/U003.png" alt=""/></span>. This allows us to send signals to the process before
+                        it commences the following step.</p></li><li class="listitem"><p>The program executes a <code class="literal">while</code> loop that
+                        consumes CPU time until <span class="emphasis"><em>gotSigint</em></span> is set
+                            <span class="inlinemediaobject"><a id="I_inlinemediaobject20_d1e55933"/><img src="figs/web/U004.png" alt=""/></span>. (<a class="xref" href="ch20.html#waiting_for_a_signal_colon_pause_open_pa" title="Waiting for a Signal: pause()">Waiting for a Signal: <span class="emphasis"><em>pause()</em></span></a> and <a class="xref" href="ch22.html#waiting_for_a_signal_using_a_mask_colon" title="Waiting for a Signal Using a Mask: sigsuspend()">Waiting for a Signal Using a Mask: <span class="emphasis"><em>sigsuspend()</em></span></a> describe the use of
+                            <span class="emphasis"><em>pause()</em></span> and <span class="emphasis"><em>sigsuspend()</em></span>,
+                        which are more CPU-efficient ways of waiting for the arrival of a
+                        signal.)</p></li><li class="listitem"><p>After exiting the <code class="literal">while</code> loop, the
+                        program displays counts of all signals received <span class="inlinemediaobject"><a id="I_inlinemediaobject20_d1e55956"/><img src="figs/web/U005.png" alt=""/></span>.</p></li></ul></div><p>We first use these two programs to illustrate that a blocked signal is delivered
+                only once, no matter how many times it is generated. We do this by specifying a
+                sleep interval for the receiver and sending all signals before the sleep interval
+                completes.</p><a id="I_programlisting20_d1e55964"/><pre class="programlisting">$ <strong class="userinput"><code>./sig_receiver 15 &amp;</code></strong>                     <em class="lineannotation"><span class="lineannotation">Receiver blocks signals for 15 secs</span></em>
+[1] 5368
+./sig_receiver: PID is 5368
+./sig_receiver: sleeping for 15 seconds
+$ <strong class="userinput"><code>./sig_sender 5368 1000000 10 2</code></strong>          <em class="lineannotation"><span class="lineannotation">Send</span></em> SIGUSR1  <span class="emphasis"><em>signals</em></span>, <span class="emphasis"><em>plus a</em></span> SIGINT
+./sig_sender: sending signal 10 to process 5368 1000000 times
+./sig_sender: exiting
+./sig_receiver: pending signals are:
+                2 (Interrupt)
+                10 (User defined signal 1)
+./sig_receiver: signal 10 caught 1 time
+[1]+  Done                    ./sig_receiver 15</pre><p>The command-line arguments to the sending program specified the <code class="literal">SIGUSR1</code> and <code class="literal">SIGINT</code>
+                signals, which are signals 10 and 2, respectively, on Linux/x86.</p><p>From the output above, we can see that even though one million signals were sent,
+                only one was delivered to the receiver.</p><p>Even if a process doesn’t block signals, it may receive fewer signals than are
+                sent to it. This can happen if the signals are sent so fast that they arrive before
+                the receiving process has a chance to be scheduled for execution by the kernel, with
+                the result that the multiple signals are recorded just once in the process’s pending
+                signal set. If we execute the program in <a class="xref" href="ch20.html#catching_and_counting_signals" title="Example 20-7. Catching and counting signals">Example 20-7</a> with no command-line arguments (so
+                that it doesn’t block signals and sleep), we see the following:</p><a id="I_programlisting20_d1e56000"/><pre class="programlisting">$ <strong class="userinput"><code>./sig_receiver &amp;</code></strong>
+[1] 5393
+./sig_receiver: PID is 5393
+$ <strong class="userinput"><code>./sig_sender 5393 1000000 10 2</code></strong>
+./sig_sender: sending signal 10 to process 5393 1000000 times
+./sig_sender: exiting
+./sig_receiver: signal 10 caught 52 times
+[1]+  Done                    ./sig_receiver</pre><p>Of the million signals sent, just 52 were caught by the receiving process. (The
+                precise number of signals caught will vary depending on the vagaries of decisions
+                made by the kernel scheduling algorithm.) The reason for this is that each time the
+                sending program is scheduled to run, it sends multiple signals to the receiver.
+                However, only one of these signals is marked as pending and then delivered when the
+                receiver has a chance to run.</p><div class="example"><a id="catching_and_counting_signals"/><div class="example-title">Example 20-7. Catching and counting signals</div><div class="example-contents"><pre class="programlisting"><strong class="userinput"><code>signals/sig_receiver.c</code></strong>
+    #define _GNU_SOURCE
+    #include &lt;signal.h&gt;
+    #include "signal_functions.h"           /* Declaration of printSigset() */
+    #include "tlpi_hdr.h"
+
+    static int sigCnt[NSIG];                /* Counts deliveries of each signal */
+    static volatile sig_atomic_t gotSigint = 0;
+                                            /* Set nonzero if SIGINT is delivered */
+
+    static void
+<img src="figs/web/U001.png" alt=""/> handler(int sig)
+    {
+            if (sig == SIGINT)
+            gotSigint = 1;
+        else
+            sigCnt[sig]++;
+    }
+
+    int
+    main(int argc, char *argv[])
+    {
+        int n, numSecs;
+        sigset_t pendingMask, blockingMask, emptyMask;
+
+        printf("%s: PID is %ld\n", argv[0], (long) getpid());
+
+<img src="figs/web/U002.png" alt=""/>     for (n = 1; n &lt; NSIG; n++)          /* Same handler for all signals */
+            (void) signal(n, handler);      /* Ignore errors */
+
+        /* If a sleep time was specified, temporarily block all signals,
+           sleep (while another process sends us signals), and then
+           display the mask of pending signals and unblock all signals */
+
+<img src="figs/web/U003.png" alt=""/>     if (argc &gt; 1) {
+            numSecs = getInt(argv[1], GN_GT_0, NULL);
+
+            sigfillset(&amp;blockingMask);
+            if (sigprocmask(SIG_SETMASK, &amp;blockingMask, NULL) == -1)
+                errExit("sigprocmask");
+
+            printf("%s: sleeping for %d seconds\n", argv[0], numSecs);
+            sleep(numSecs);
+
+            if (sigpending(&amp;pendingMask) == -1)
+                errExit("sigpending");
+
+            printf("%s: pending signals are: \n", argv[0]);
+            printSigset(stdout, "\t\t", &amp;pendingMask);
+
+            sigemptyset(&amp;emptyMask);        /* Unblock all signals */
+            if (sigprocmask(SIG_SETMASK, &amp;emptyMask, NULL) == -1)
+                errExit("sigprocmask");
+        }
+
+<img src="figs/web/U004.png" alt=""/>     while (!gotSigint)                  /* Loop until SIGINT caught */
+            continue;
+
+<img src="figs/web/U005.png" alt=""/>
+     for (n = 1; n &lt; NSIG; n++)          /* Display number of signals received */
+            if (sigCnt[n] != 0)
+                printf("%s: signal %d caught %d time%s\n", argv[0], n,
+                        sigCnt[n], (sigCnt[n] == 1) ? "" : "s");
+
+        exit(EXIT_SUCCESS);
+    }
+         <strong class="userinput"><code>signals/sig_receiver.c</code></strong></pre></div></div></div><div class="sect1" title="Changing Signal Dispositions: sigaction()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="changing_signal_dispositions_colon_sigac">Changing Signal Dispositions: <span class="emphasis"><em>sigaction()</em></span></h2></div></div></div><p>The <span class="emphasis"><em>sigaction()</em></span> system call is an alternative to
+                    <span class="emphasis"><em>signal()</em></span> for setting the disposition of a signal. Although
+                    <span class="emphasis"><em>sigaction()</em></span> is somewhat more complex to use than
+                    <span class="emphasis"><em>signal()</em></span>, in return it provides greater flexibility. In
+                particular, <span class="emphasis"><em>sigaction()</em></span> allows us to retrieve the disposition
+                of a signal without changing it, and to set various attributes controlling precisely
+                what happens when a signal handler is invoked. Additionally, as we’ll elaborate in
+                    <a class="xref" href="ch22.html#implementation_and_portability_of_signal" title="Implementation and Portability of signal()">Implementation and Portability of <span class="emphasis"><em>signal()</em></span></a>,
+                    <span class="emphasis"><em>sigaction()</em></span> is more portable than
+                    <span class="emphasis"><em>signal()</em></span> when establishing a signal handler.<a id="IDX-CHP-20-2953" class="indexterm"/><a id="IDX-CHP-20-2954" class="indexterm"/><a id="IDX-CHP-20-2955" class="indexterm"/><a id="IDX-CHP-20-2956" class="indexterm"/><a id="IDX-CHP-20-2957" class="indexterm"/><a id="IDX-CHP-20-2952" class="indexterm"/><a id="IDX-CHP-20-2958" class="indexterm"/></p><a id="I_programlisting20_d1e56123"/><pre class="programlisting">#include &lt;signal.h&gt;
+
+int <strong class="userinput"><code>sigaction</code></strong>(int <span class="emphasis"><em>sig</em></span>, const struct sigaction *<span class="emphasis"><em>act</em></span>, struct sigaction *<span class="emphasis"><em>oldact</em></span>);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Returns 0 on success, or -1 on error</p></div><p>The <span class="emphasis"><em>sig</em></span> argument identifies the signal whose disposition we
+                want to retrieve or change. This argument can be any signal except <code class="literal">SIGKILL</code> or <code class="literal">SIGSTOP</code>.</p><p>The <span class="emphasis"><em>act</em></span> argument is a pointer to a structure specifying a new
+                disposition for the signal. If we are interested only in finding the existing
+                disposition of the signal, then we can specify <code class="literal">NULL</code> for this argument. The <span class="emphasis"><em>oldact</em></span> argument is a
+                pointer to a structure of the same type, and is used to return information about the
+                signal’s previous disposition. If we are not interested in this information, then we
+                can specify <code class="literal">NULL</code> for this argument. The
+                structures pointed to by <span class="emphasis"><em>act</em></span> and <span class="emphasis"><em>oldact</em></span>
+                are of the following type:</p><a id="I_programlisting20_d1e56172"/><pre class="programlisting">struct sigaction {
+    void   (*sa_handler)(int);    /* Address of handler */
+    sigset_t sa_mask;             /* Signals blocked during handler
+                                     invocation */
+    int      sa_flags;            /* Flags controlling handler invocation */
+    void   (*sa_restorer)(void);  /* Not for application use */
+};</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>sigaction</em></span> structure is actually somewhat more complex
+                    than shown here. We consider further details in Section 21.4.<a id="IDX-CHP-20-2959" class="indexterm"/></p></div><p>The <span class="emphasis"><em>sa_handler</em></span> field corresponds to the
+                    <span class="emphasis"><em>handler</em></span> argument given to <span class="emphasis"><em>signal()</em></span>. It
+                specifies the address of a signal handler, or one of the constants <code class="literal">SIG_IGN</code> or <code class="literal">SIG_DFL</code>.
+                The <span class="emphasis"><em>sa_mask</em></span> and <span class="emphasis"><em>sa_flags</em></span> fields, which we
+                discuss in a moment, are interpreted only if <span class="emphasis"><em>sa_handler</em></span> is the
+                address of a signal handler—that is, a value other than <code class="literal">SIG_IGN</code> or <code class="literal">SIG_DFL</code>. The remaining
+                field, <span class="emphasis"><em>sa_restorer</em></span>, is not intended for use in applications
+                (and is not specified by SUSv3).</p><div class="note" title="Note"><h3 class="title">Note</h3><p>The <span class="emphasis"><em>sa_restorer</em></span> field is used internally to ensure that
+                    on completion of a signal handler, a call is made to the special-purpose
+                        <span class="emphasis"><em>sigreturn()</em></span> system call, which restores the process’s
+                    execution context so that it can continue execution at the point where it was
+                    interrupted by the signal handler. An example of this usage can be found in the
+                        <span class="emphasis"><em>glibc</em></span> source file <code class="literal">sysdeps/unix/sysv/linux/i386/sigaction.c</code>.</p></div><p>The <span class="emphasis"><em>sa_mask</em></span> field defines a set of signals that are to be
+                blocked during invocation of the handler defined by <span class="emphasis"><em>sa_handler</em></span>.
+                When the signal handler is invoked, any signals in this set that are not currently
+                part of the process signal mask are automatically added to the mask before the
+                handler is called. These signals remain in the process signal mask until the signal
+                handler returns, at which time they are automatically removed. The
+                    <span class="emphasis"><em>sa_mask</em></span> field allows us to specify a set of signals that
+                aren’t permitted to interrupt execution of this handler. In addition, the signal
+                that caused the handler to be invoked is automatically added to the process signal
+                mask. This means that a signal handler won’t recursively interrupt itself if a
+                second instance of the same signal arrives while the handler is executing. Because
+                blocked signals are not queued, if any of these signals are repeatedly generated
+                during the execution of the handler, they are (later) delivered only once.</p><p>The <span class="emphasis"><em>sa_flags</em></span> field is a bit mask specifying various options
+                controlling how the signal is handled. The following bits may be ORed (<code class="literal">|</code>) together in this field:</p><div class="variablelist"><dl><dt><span class="term">
+                        <code class="literal">SA_NOCLDSTOP</code>
+                    </span></dt><dd><p>If <span class="emphasis"><em>sig</em></span> is <code class="literal">SIGCHLD</code>, don’t generate this signal when a child process
+                            is stopped or resumed as a consequence of receiving a signal. Refer to
+                                <a class="xref" href="ch26.html#delivery_of_sigchld_for_stopped_children" title="Delivery of SIGCHLD for Stopped Children">Delivery of <code class="literal">SIGCHLD</code> for Stopped
+                    Children</a>.</p></dd><dt><span class="term">
+                        <code class="literal">SA_NOCLDWAIT</code>
+                    </span></dt><dd><p>(since Linux 2.6) If <span class="emphasis"><em>sig</em></span> is <code class="literal">SIGCHLD</code>, don’t transform children into
+                            zombies when they terminate. For further details, see <a class="xref" href="ch26.html#ignoring_dead_child_processes" title="Ignoring Dead Child Processes">Ignoring Dead Child Processes</a>.</p></dd><dt><span class="term">
+                        <code class="literal">SA_NODEFER</code>
+                    </span></dt><dd><p>When this signal is caught, don’t automatically add it to the process
+                            signal mask while the handler is executing. The name <code class="literal">SA_NOMASK</code> is provided as a historical
+                            synonym for <code class="literal">SA_NODEFER</code>, but the
+                            latter name is preferable because it is standardized in SUSv3.</p></dd><dt><span class="term">
+                        <code class="literal">SA_ONSTACK</code>
+                    </span></dt><dd><p>Invoke the handler for this signal using an alternate stack installed
+                            by <span class="emphasis"><em>sigaltstack()</em></span>. Refer to Section 21.3.<a id="IDX-CHP-20-2960" class="indexterm"/></p></dd><dt><span class="term">
+                        <code class="literal">SA_RESETHAND</code>
+                    </span></dt><dd><p>When this signal is caught, reset its disposition to the default
+                            (i.e., <code class="literal">SIG_DFL</code>) before invoking the
+                            handler. (By default, a signal handler remains established until it is
+                            explicitly disestablished by a further call to
+                                <span class="emphasis"><em>sigaction()</em></span>.) The name <code class="literal">SA_ONESHOT</code> is provided as a historical synonym for
+                                <code class="literal">SA_RESETHAND</code>, but the latter name
+                            is preferable because it is standardized in SUSv3.</p></dd><dt><span class="term">
+                        <code class="literal">SA_RESTART</code>
+                    </span></dt><dd><p>Automatically restart system calls interrupted by this signal handler.
+                            See Section 21.5.</p></dd><dt><span class="term">
+                        <code class="literal">SA_SIGINFO</code>
+                    </span></dt><dd><p>Invoke the signal handler with additional arguments providing further
+                            information about the signal. We describe this flag in Section
+                            21.4.</p></dd></dl></div><p>All of the above options are specified in SUSv3.</p><p>An example of the use of <span class="emphasis"><em>sigaction()</em></span> is shown in <a class="xref" href="ch21.html#calling_a_nonreentrant_function_from_bot" title="Example 21-1. Calling a nonreentrant function from both main() and a signal handler">Example 21-1</a>.</p></div><div class="sect1" title="Waiting for a Signal: pause()"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="waiting_for_a_signal_colon_pause_open_pa">Waiting for a Signal: <span class="emphasis"><em>pause()</em></span></h2></div></div></div><p>Calling <span class="emphasis"><em>pause()</em></span> suspends execution of the process until the
+                call is interrupted by a signal handler (or until an unhandled signal terminates the
+                    process).<a id="IDX-CHP-20-2961" class="indexterm"/></p><a id="I_programlisting20_d1e56370"/><pre class="programlisting">#include &lt;unistd.h&gt;
+
+int <strong class="userinput"><code>pause</code></strong>(void);</pre><div class="note" title="Note"><h3 class="title">Note</h3><p>Always returns -1 with <span class="emphasis"><em>errno</em></span> set to <code class="literal">EINTR</code></p></div><p>When a signal is handled, <span class="emphasis"><em>pause()</em></span> is interrupted and always
+                returns -1 with <span class="emphasis"><em>errno</em></span> set to <code class="literal">EINTR</code>. (We say more about the <code class="literal">EINTR</code> error in Section 21.5.)<a id="IDX-CHP-20-2962" class="indexterm"/></p><p>An example of the use of <span class="emphasis"><em>pause()</em></span> is provided in <a class="xref" href="ch20.html#establishing_the_same_handler_for_two_di" title="Example 20-2. Establishing the same handler for two different signals">Example 20-2</a>.</p><p>In <a class="xref" href="ch22.html#waiting_for_a_signal_using_a_mask_colon" title="Waiting for a Signal Using a Mask: sigsuspend()">Waiting for a Signal Using a Mask: <span class="emphasis"><em>sigsuspend()</em></span></a>, <a class="xref" href="ch22.html#synchronously_waiting_for_a_signal" title="Synchronously Waiting for a Signal">Synchronously Waiting for a Signal</a>, and <a class="xref" href="ch22.html#fetching_signals_via_a_file_descriptor" title="Fetching Signals via a File Descriptor">Fetching Signals via a File Descriptor</a>, we look at various other
+                ways that a program can suspend execution while waiting for a signal.<a id="IDX-CHP-20-2963" class="indexterm"/></p></div><div class="sect1" title="Summary"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="summary-id19">Summary</h2></div></div></div><p>A signal is a notification that some kind of event has occurred, and may be sent
+                to a process by the kernel, by another process, or by itself. There is a range of
+                standard signal types, each of which has a unique number and purpose.<a id="IDX-CHP-20-2964" class="indexterm"/></p><p>Signal delivery is typically asynchronous, meaning that the point at which the
+                signal interrupts execution of the process is unpredictable. In some cases (e.g.,
+                hardware-generated signals), signals are delivered synchronously, meaning that
+                delivery occurs predictably and reproducibly at a certain point in the execution of
+                a program.</p><p>By default, a signal either is ignored, terminates a process (with or without a
+                core dump), stops a running process, or restarts a stopped process. The particular
+                default action depends on the signal type. Alternatively, a program can use
+                    <span class="emphasis"><em>signal()</em></span> or <span class="emphasis"><em>sigaction()</em></span> to explicitly
+                ignore a signal or to establish a programmer-defined signal handler function that is
+                invoked when the signal is delivered. For portability reasons, establishing a signal
+                handler is best performed using <span class="emphasis"><em>sigaction()</em></span>.</p><p>A process (with suitable permissions) can send a signal to another process using
+                    <span class="emphasis"><em>kill()</em></span>. Sending the null signal (0) is a way of determining
+                if a particular process ID is in use.</p><p>Each process has a signal mask, which is the set of signals whose delivery is
+                currently blocked. Signals can be added to and removed from the signal mask using
+                    <span class="emphasis"><em>sigprocmask()</em></span>.</p><p>If a signal is received while it is blocked, then it remains pending until it is
+                unblocked. Standard signals can’t be queued; that is, a signal can be marked as
+                pending (and thus later delivered) only once. A process can use the
+                    <span class="emphasis"><em>sigpending()</em></span> system call to retrieve a signal set (a data
+                structure used to represent multiple different signals) identifying the signals that
+                it has pending.</p><p>The <span class="emphasis"><em>sigaction()</em></span> system call provides more control and
+                flexibility than <span class="emphasis"><em>signal()</em></span> when setting the disposition of a
+                signal. First, we can specify a set of additional signals to be blocked when a
+                handler is invoked. In addition, various flags can be used to control the actions
+                that occur when a signal handler is invoked. For example, there are flags that
+                select the older unreliable signal semantics (not blocking the signal causing
+                invocation of a handler, and having the disposition of the signal reset to its
+                default before the handler is called).</p><p>Using <span class="emphasis"><em>pause()</em></span>, a process can suspend execution until a signal
+                arrives.</p><div class="sect2"><div class="titlepage"><div><div><h3 class="title" id="further_information-id17"/></div></div></div><div class="sect3" title="Further information"><div class="titlepage"><div><div><h4 class="title" id="further_information-id18">Further information</h4></div></div></div><p>[Bovet &amp; Cesati, 2005] and [Maxwell, 1999] provide background on
+                        the implementation of signals in Linux. [Goodheart &amp; Cox, 1994]
+                        details the implementation of signals on System V Release 4. The GNU C
+                        library manual (available online at <a class="ulink" href="http://www.gnu.org/" target="_top">http://www.gnu.org/</a>)
+                        contains an extensive description of signals.<a id="IDX-CHP-20-2965" class="indexterm"/><a id="IDX-CHP-20-2966" class="indexterm"/><a id="IDX-CHP-20-2967" class="indexterm"/><a id="IDX-CHP-20-2968" class="indexterm"/></p></div></div></div><div class="sect1" title="Exercises"><div class="titlepage"><div><div><h2 class="title" style="clear: both" id="exercises-id12">Exercises</h2></div></div></div><div class="orderedlist"><ol class="orderedlist" type="1"><li class="listitem"><p>As noted in <a class="xref" href="ch20.html#changing_signal_dispositions_colon_signa" title="Changing Signal Dispositions: signal()">Changing Signal Dispositions: <span class="emphasis"><em>signal()</em></span></a>,
+                            <span class="emphasis"><em>sigaction()</em></span> is more portable than
+                            <span class="emphasis"><em>signal()</em></span> for establishing a signal handler. Replace
+                        the use of <span class="emphasis"><em>signal()</em></span> by <span class="emphasis"><em>sigaction()</em></span>
+                        in the program in <a class="xref" href="ch20.html#catching_and_counting_signals" title="Example 20-7. Catching and counting signals">Example 20-7</a> (<code class="literal">sig_receiver.c</code>).<a id="IDX-CHP-20-2969" class="indexterm"/></p></li><li class="listitem"><p>Write a program that shows that when the disposition of a pending signal
+                        is changed to be <code class="literal">SIG_IGN</code>, the program
+                        never sees (catches) the signal.</p></li><li class="listitem"><p>Write programs that verify the effect of the <code class="literal">SA_RESETHAND</code> and <code class="literal">SA_NODEFER</code> flags when establishing a signal handler with
+                            <span class="emphasis"><em>sigaction()</em></span>.</p></li><li class="listitem"><p>Implement the <span class="emphasis"><em>siginterrupt()</em></span> function described in
+                            <a class="xref" href="ch21.html#interruption_and_restarting_of_system_ca" title="Interruption and Restarting of System Calls">Interruption and Restarting of System Calls</a> using
+                            <span class="emphasis"><em>sigaction()</em></span>.<a id="IDX-CHP-20-2970" class="indexterm"/></p></li></ol></div></div></section></body></html>
